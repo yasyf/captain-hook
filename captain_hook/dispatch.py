@@ -417,7 +417,7 @@ def dispatch(
     :data:`SYNC_DEADLINE_MARGIN_SECONDS`, and a hook still running when the budget runs out has its
     verdict abandoned rather than holding the reply.
     """
-    matching = [h for h in get_matching_hooks(evt) if not h.spec.async_]
+    matching = get_matching_hooks(evt, async_=False)
     futures = start_hooks(matching, evt, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, hook_pool())
     return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
 
@@ -431,7 +431,7 @@ def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:
     :func:`background_pool`, not the one the synchronous fan-out shares: async hooks are the long
     ones, and a session's worth of them would otherwise hold every thread a blocking gate needs.
     """
-    entries = [entry for entry in get_matching_hooks(evt) if entry.spec.async_]
+    entries = get_matching_hooks(evt, async_=True)
     pool = background_pool()
     futures = [
         pool.submit(copy_context().run, run_background_group, group, entries, evt, session_dir)

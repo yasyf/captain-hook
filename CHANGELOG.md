@@ -82,6 +82,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session with registered codex rollouts no longer rewalks `~/.codex/sessions`
+  on every event.** Each registered thread id used to resolve against the whole
+  sessions tree whenever an event read the transcript, at 9-14 ms apiece. A
+  session with 85 registrations spent about 300 ms of CPU per `PostToolUse`
+  there. The worker keeps one index of the newest uncompressed rollout per
+  thread id, stamped with the modification time of every directory in the tree.
+  An event checks the stamps, 34 directories here (under 1 ms), and rescans only
+  when a directory changed. The index resolves exactly
+  what a fresh lookup would, including a newer rollout for an id already seen.
+- **Each dispatch pass evaluates only its own hooks' conditions.** The
+  synchronous pass used to evaluate `only_if`/`skip_if` for `async_=True` hooks
+  and then discard them, and the background pass did the same for synchronous
+  hooks.
+- **A list of `RanCommand` spellings walks the transcript once.** In `skip_if`
+  or `Or(...)`, each unbroken run of `RanCommand` conditions with the same
+  `subagents` flag is answered in one pass over the session, its sidechains, and
+  its attachments, instead of one pass per spelling. Conditions between runs
+  still evaluate in order, so a side-effecting condition such as `once` sees the
+  same calls it did before. The steering pack's typing nudge lists seven spellings and
+  runs on every `PostToolUse`.
+- **The general pack's multi-request nudge no longer backtracks quadratically
+  on a long prompt.** Its imperative-count signals used a leading lazy `.*?`,
+  which made every failed search retry from every offset. A 40 KB prompt with
+  only two imperatives took 46 s of CPU on each `UserPromptSubmit`. The
+  signals now start at the first imperative. They match the same prompts, and
+  the same prompt takes 10 ms.
+- **Echo damping skips the entity recognizer when it collects content
+  lemmas.** No lemma or part-of-speech rule reads entity types, so the lemma
+  sets are unchanged. On a 40 KB prompt the pass drops from 1.0 s to 0.64 s of
+  CPU.
+
 - **The host and its Python workers run at default priority.** The host
   LaunchAgent declared no `ProcessType`, so launchd applied its resource
   limits to capt-hookd and every worker it spawned, whose main threads ran at

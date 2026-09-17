@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Sequence
+from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -458,15 +459,35 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case Not(condition):
             return not check_condition(condition, evt)
         case Or(conditions):
-            return any(check_condition(sub, evt) for sub in conditions)
+            return any_condition(conditions, evt)
         case CustomCondition():
             return c.check(evt)
+    return False
+
+
+def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...]], *, subagents: bool) -> bool:
+    from cc_transcript.query import any_inputs
+
+    return any_inputs(t, lambda inputs: any(inputs.has_command(argv) for argv in argvs), subagents=subagents)
+
+
+def ran_any_in_run(run: Sequence[RanCommand], evt: BaseHookEvent) -> bool:
+    return any(
+        ran_any_command(evt.ctx.transcript, [c.argv for c in run if c.subagents is subagents], subagents=subagents)
+        for subagents in dict.fromkeys(c.subagents for c in run)
+    )
+
+
+def any_condition(conditions: Sequence[TCondition], evt: BaseHookEvent) -> bool:
+    for _, group in groupby(conditions, key=lambda c: isinstance(c, RanCommand)):
+        run = list(group)
+        commands = [c for c in run if isinstance(c, RanCommand)]
+        if ran_any_in_run(commands, evt) if commands else any(check_condition(c, evt) for c in run):
+            return True
     return False
 
 
 def matches_conditions(spec: HookSpec, evt: BaseHookEvent) -> bool:
     if any(not check_condition(c, evt) for c in spec.only_if):
         return False
-    if any(check_condition(c, evt) for c in spec.skip_if):
-        return False
-    return True
+    return not any_condition(spec.skip_if, evt)

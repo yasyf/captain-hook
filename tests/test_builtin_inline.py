@@ -139,3 +139,32 @@ def test_general_verbose_block_carries_legacy_advisory() -> None:
     assert "Legacy long comment" in reason
     # The block is the reason; the advisory rides behind the separator.
     assert reason.index("Verbose comment") < reason.index("Additional advisories") < reason.index("Legacy long comment")
+
+
+IMPERATIVE_CORPUS = [
+    "",
+    "fix",
+    "fix add",
+    "fix add update",
+    "prefix addendum updated",
+    "Fix the parser.\nAdd a test.\nUpdate the docs.",
+    "remove\nremove",
+    "please ADD it and then\n\nRENAME it, finally migrate",
+    "fixadd update change",
+    "we fixed, added, updated",
+    "- fix a\n- add b",
+    "split/merge/convert",
+]
+
+
+@pytest.mark.parametrize("count", [2, 3])
+@pytest.mark.parametrize("text", IMPERATIVE_CORPUS)
+def test_general_imperative_signals_agree_with_lazy_prefix_form(count: int, text: str) -> None:
+    import re
+
+    from captain_hook.builtin_packs.general.hooks.tasks import IMPERATIVES
+
+    lazy_prefix = rf"(?s)(?:.*?{IMPERATIVES}){{{count}}}"
+    anchored = rf"(?s){IMPERATIVES}" + rf"(?:.*?{IMPERATIVES})" * (count - 1)
+    for candidate in (text, *text.splitlines()):
+        assert bool(re.search(anchored, candidate, re.I)) is bool(re.search(lazy_prefix, candidate, re.I))

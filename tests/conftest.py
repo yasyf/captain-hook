@@ -18,6 +18,7 @@ from captain_hook.daemon.registry import MARKER_WALKS, PLUGIN_WALKS
 from captain_hook.durable import DurableStore
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
+from captain_hook.transcripts import ROLLOUT_INDEXES
 from captain_hook.util.http import github_token
 from captain_hook.util.model_cache import model_sha256, model_version
 from captain_hook.util.proc import _cold_skip_permissions
@@ -65,6 +66,7 @@ def clear_global_caches():
         MARKER_WALKS,
         PLUGIN_WALKS,
         ACTIVITY_PROBES,
+        ROLLOUT_INDEXES,
     )
     for cached in caches:
         cached.cache_clear()

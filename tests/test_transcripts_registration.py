@@ -264,6 +264,117 @@ class TestRegisteredPaths:
         (resolved,) = registered_paths(ensure_session(SessionId("s-res")))
         assert resolved.samefile(rollout)
 
+    def test_unchanged_tree_reuses_the_index_without_rescanning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from cc_transcript import codex
+
+        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ac"
+        rollout = write_apply_patch_rollout(
+            tmp_path / "codex" / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
+        )
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
+        register_transcript("s-memo", provider="codex", thread_id=thread_id)
+        session_dir = ensure_session(SessionId("s-memo"))
+        (first,) = registered_paths(session_dir)
+
+        with rollout.open("a") as appended:
+            appended.write("{}\n")
+        monkeypatch.setattr(codex, "discover", lambda *args: pytest.fail("rescanned an unchanged tree"))
+        monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
+        (second,) = registered_paths(session_dir)
+        assert second == first
+        assert second.samefile(rollout)
+
+    def test_many_thread_ids_resolve_in_one_scan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript import codex
+
+        root = tmp_path / "codex"
+        thread_ids = [f"019f6800-3b4c-7d5e-9f60-00000000010{n}" for n in range(3)]
+        rollouts = [
+            write_apply_patch_rollout(root / "2026" / "07" / "16" / f"rollout-2026-07-16T16-4{n}-00-{t}.jsonl", t)
+            for n, t in enumerate(thread_ids)
+        ]
+        newest = write_apply_patch_rollout(
+            root / "2026" / "07" / "17" / f"rollout-2026-07-17T08-00-00-{thread_ids[0]}.jsonl", thread_ids[0]
+        )
+        (root / "2026" / "07" / "18").mkdir(parents=True)
+        (root / "2026" / "07" / "18" / f"rollout-2026-07-18T08-00-00-{thread_ids[1]}.jsonl.zst").write_bytes(b"")
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
+        for thread_id in [*thread_ids, "019f6800-0000-0000-0000-000000000199"]:
+            register_transcript("s-batch", provider="codex", thread_id=thread_id)
+        expected = tuple(codex.find_transcript(SessionId(t)) for t in thread_ids)
+        assert expected == (newest, rollouts[1], rollouts[2])
+
+        scans: list[object] = []
+        discover = codex.discover
+        monkeypatch.setattr(codex, "discover", lambda *args: scans.append(args) or discover(*args))
+        monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
+        assert registered_paths(ensure_session(SessionId("s-batch"))) == expected
+        assert len(scans) == 1
+
+    @pytest.mark.parametrize(
+        "later",
+        [
+            pytest.param("2026/07/16/rollout-2026-07-16T18-00-00-{id}.jsonl", id="same_directory"),
+            pytest.param("2026/07/17/rollout-2026-07-17T09-00-00-{id}.jsonl", id="new_directory"),
+            pytest.param("2026/07/15/rollout-2026-07-17T09-00-00-{id}.jsonl", id="existing_other_directory"),
+        ],
+    )
+    def test_newer_duplicate_after_warming_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, later: str
+    ) -> None:
+        from cc_transcript import codex
+
+        root = tmp_path / "codex"
+        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ae"
+        (root / "2026" / "07" / "15").mkdir(parents=True)
+        write_apply_patch_rollout(
+            root / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
+        )
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
+        register_transcript("s-dup", provider="codex", thread_id=thread_id)
+        session_dir = ensure_session(SessionId("s-dup"))
+        assert registered_paths(session_dir) == (codex.find_transcript(SessionId(thread_id)),)
+
+        write_apply_patch_rollout(root / later.format(id=thread_id), thread_id)
+        (newest,) = registered_paths(session_dir)
+        assert newest == codex.find_transcript(SessionId(thread_id))
+        assert newest.name == Path(later.format(id=thread_id)).name
+
+    def test_rollout_written_after_warming_is_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript import codex
+
+        root = tmp_path / "codex"
+        early, late = "019f6800-3b4c-7d5e-9f60-0000000000af", "019f6800-3b4c-7d5e-9f60-0000000000b0"
+        day = root / "2026" / "07" / "16"
+        write_apply_patch_rollout(day / f"rollout-2026-07-16T16-44-00-{early}.jsonl", early)
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
+        register_transcript("s-late", provider="codex", thread_id=early)
+        register_transcript("s-late", provider="codex", thread_id=late)
+        session_dir = ensure_session(SessionId("s-late"))
+        assert len(registered_paths(session_dir)) == 1
+
+        write_apply_patch_rollout(day / f"rollout-2026-07-16T16-50-00-{late}.jsonl", late)
+        assert registered_paths(session_dir) == tuple(codex.find_transcript(SessionId(t)) for t in (early, late))
+
+    def test_pruned_rollout_resolves_afresh(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript import codex
+
+        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ad"
+        day = tmp_path / "codex" / "2026" / "07"
+        first = write_apply_patch_rollout(day / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id)
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
+        register_transcript("s-moved", provider="codex", thread_id=thread_id)
+        session_dir = ensure_session(SessionId("s-moved"))
+        assert registered_paths(session_dir) == (first,)
+
+        first.unlink()
+        assert registered_paths(session_dir) == ()
+        moved = write_apply_patch_rollout(day / "17" / f"rollout-2026-07-17T09-00-00-{thread_id}.jsonl", thread_id)
+        (resolved,) = registered_paths(session_dir)
+        assert resolved.samefile(moved)
+
     def test_unresolvable_thread_id_is_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cc_transcript import codex
 

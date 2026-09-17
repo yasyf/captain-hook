@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from captain_hook.dispatch import dispatch
-from captain_hook.state import PrimitiveState
+from captain_hook.state import ECHO_MIN_OVERLAP, ECHO_THRESHOLD, PrimitiveState
 from captain_hook.types import Event, Signal, Signals
 from tests.helpers import make_ctx, make_post_tool_event
 
@@ -24,6 +24,46 @@ def register_nudge(
     nudge(message, signals=signals, events=events, max_fires=max_fires, **kwargs)
 
 
+LEMMA_CORPUS = [
+    "The test got broken.",
+    "The tests get broken.",
+    "The tests are getting broken.",
+    "The tests should have gotten broken.",
+    "The tests need not fail.",
+    "The tests dare not fail.",
+    "The tests ought to fail.",
+    "The tests used to fail.",
+    "I need not make changes.",
+    "She dare not say anything.",
+    "The page got deleted.",
+    "The bug gets fixed.",
+    "The parser went missing.",
+    "This do be broken.",
+    "I have but one request.",
+    "I gave it to you.",
+    "I do the testing and have time.",
+    "We will work before testing because tests matter.",
+    "There is a broken test.",
+    "This is what failed.",
+    "Alice found Microsoft and London in the log.",
+    "\n   broken tests\n\n",
+    "",
+    "The tests need not fail under severe production load.",
+    "Pre-existing warnings were already there before my changes; running pyright again.",
+    "1. Add a failing test for the uncached producer path\n2. Refactor `SourceMap` identity",
+]
+
+
+def full_pipeline_lemmas(text: str) -> set[str]:
+    from captain_hook.state import RESOURCES
+
+    return {
+        tok.lemma_.lower()
+        for tok in RESOURCES.spacy(text)
+        if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
+    }
+
+
 class TestContentLemmas:
     def test_extracts_nouns_verbs_adj(self) -> None:
         lemmas = PrimitiveState.content_lemmas("The pre-existing issue was not caused by my changes")
@@ -36,6 +76,25 @@ class TestContentLemmas:
 
     def test_empty_string_returns_empty_set(self) -> None:
         assert PrimitiveState.content_lemmas("") == set()
+
+    @pytest.mark.parametrize("text", LEMMA_CORPUS)
+    def test_matches_the_full_pipeline(self, text: str) -> None:
+        assert PrimitiveState.content_lemmas(text) == full_pipeline_lemmas(text)
+
+    @pytest.mark.parametrize("seed", ["The tests fail.", "The page got deleted.", "I need not make changes."])
+    @pytest.mark.parametrize("text", LEMMA_CORPUS)
+    def test_is_echo_matches_the_full_pipeline(self, seed: str, text: str) -> None:
+        ps = PrimitiveState()
+        ps.seed_echo_window([seed], "", 1)
+        full = full_pipeline_lemmas(text)
+        overlap = full & ps.echo_lemmas
+        expected = bool(full and len(overlap) >= ECHO_MIN_OVERLAP and len(overlap) / len(full) >= ECHO_THRESHOLD)
+        assert ps.is_echo(text) is expected
+
+    def test_modal_need_is_not_a_content_verb(self) -> None:
+        ps = PrimitiveState()
+        ps.seed_echo_window(["The tests fail."], "", 1)
+        assert ps.is_echo("The tests need not fail under severe production load.") is True
 
 
 class TestIsEcho:

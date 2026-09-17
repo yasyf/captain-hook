@@ -262,11 +262,12 @@ def is_planning_agent_skip(spec: HookSpec, evt: BaseHookEvent) -> bool:
     return bool(evt.agent_type and evt.agent_type in names)
 
 
-def get_matching_hooks(evt: BaseHookEvent) -> list[RegisteredHook]:
+def get_matching_hooks(evt: BaseHookEvent, *, async_: bool | None = None) -> list[RegisteredHook]:
     return [
         h
         for h in _state.hooks
         if evt.event in h.spec.events
+        and (async_ is None or h.spec.async_ is async_)
         and not is_planning_agent_skip(h.spec, evt)
         and matches_conditions(h.spec, evt)
         and (
