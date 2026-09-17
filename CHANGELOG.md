@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Deep, subagent-spanning predicates use the incremental transcript path.**
+  cc-transcript 14.19.0 makes those hook conditions incremental: a growing
+  subagent transcript extends its held lift instead of re-parsing the whole
+  file. After a one-line growth, a deep predicate call takes ~13-30 ms by
+  sidechain size, against 22-169 ms before. It also stops re-parsing an
+  unparseable sidechain on every event.
+
 ## [12.38.0] - 2026-09-17
 
 ### Changed
