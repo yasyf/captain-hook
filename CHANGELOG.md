@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.41.1] - 2026-09-17
+
 ### Fixed
 
 - **A killed hook spawn no longer leaves a copy of the OAuth token on disk.**
