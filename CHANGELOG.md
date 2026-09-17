@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.38.0] - 2026-09-17
+
 ### Changed
 
 - **A worker loads spaCy and WordNet after its first reply.** The first
