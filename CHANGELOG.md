@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A killed hook spawn no longer leaves a copy of the OAuth token on disk.**
+  spawnllm ran its isolated `claude -p` calls against a temp config directory
+  and wrote a `.credentials.json` copy of the token into it for the child to
+  read. Every spawn killed before its cleanup left that copy behind, and Claude
+  Code migrated each one into a login-Keychain item. One machine carried 345.
+  0.13.4 passes the token through `CLAUDE_CODE_OAUTH_TOKEN`, so spawnllm writes
+  no copy at all. The floor moves from `>=0.13.2` to `>=0.13.4`: an older
+  resolution still carries the leak.
+
 ## [12.41.0] - 2026-09-17
 
 ### Added
