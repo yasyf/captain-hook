@@ -1,1 +1,1 @@
-{"v":1,"lamport":7,"ops":[{"kind":"set_criterion_status","id":"e3b942ceaeb33464356eaf0174faa19d","status":"met","note":"Both exact observed command shapes pass deterministic Block inline tests; combined general/performance dispatch denies repeat calls."}]}
+{"v":1,"lamport":8,"ops":[{"kind":"set_criterion_status","id":"0a2723393488aad2a6fffe79b1fa8835","status":"met","note":"Explicit repository roots, nested worktree roots, maxdepth 0/1/2, and scoped unfamiliar expressions pass Allow tests."}]}
