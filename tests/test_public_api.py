@@ -43,14 +43,13 @@ loaded = sorted(name for name in sys.modules if name == "spawnllm" or name.start
 assert not loaded, loaded
 """
 
-# The root-package export surface pinned to baseline ee9f7ca3 — the sorted set of names
-# bound at module level by that revision's captain_hook/__init__.py import block.
 PINNED_EXPORTS: tuple[str, ...] = (
     "Action",
     "AfterEdit",
     "Agent",
     "Allow",
     "And",
+    "Arguments",
     "Artifact",
     "Ask",
     "BackgroundTask",
@@ -64,6 +63,8 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "Cmd",
     "Command",
     "CommandLine",
+    "CommandMatches",
+    "CommandSchema",
     "Commits",
     "Content",
     "CustomCommandLineCondition",
@@ -110,8 +111,13 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "NotificationEvent",
     "NudgeVerdict",
     "Occurrence",
+    "Operand",
+    "Option",
+    "OptionIs",
     "Or",
     "OtherCall",
+    "PathMatches",
+    "PathsMatch",
     "Pattern",
     "PermissionRequestEvent",
     "Phrase",

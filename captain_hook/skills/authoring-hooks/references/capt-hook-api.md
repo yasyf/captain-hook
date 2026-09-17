@@ -11,6 +11,7 @@ Distilled surface for writing `.claude/hooks/*.py`. Everything here is importabl
 - Primitives
 - Conditions
 - The event object (`@on` handlers)
+- Command schemas and path predicates
 - CLI
 
 ## Canonical imports
@@ -235,6 +236,67 @@ ast_grep.matches(evt.command.raw, "bash", "cat $$$ARGS")                 # bool
 ast_grep.rewrite(evt.command.raw, "bash", "cat $$$ARGS", "bat $$$ARGS")  # rewritten str (unchanged when no match)
 ast_grep.capture(evt.command.raw, "bash", "sed -n $R $F")                # {"R": ..., "F": ...} | None
 ```
+
+## Command schemas and path predicates
+
+Use `CommandSchema` when a rule depends on the roles of command arguments. A schema
+binds parsed shell words to named operands and typed options. A copy command has
+sources and a destination; a search command has a pattern and roots. `Cmd.calls()`
+handles wrappers and nested calls while tracking the working directory.
+
+```python
+from captain_hook import (
+    Allow, Block, CommandMatches, CommandSchema, Event, Input,
+    Operand, PathMatches, PathsMatch, Tool, hook,
+)
+
+COPY = CommandSchema(
+    "cp",
+    operands=(Operand("sources", count="*"), Operand("destination")),
+)
+
+hook(
+    Event.PreToolUse,
+    only_if=[
+        Tool("Bash"),
+        CommandMatches(
+            COPY,
+            only_if=(PathsMatch("destination", PathMatches(("/archive/**",))),),
+        ),
+    ],
+    message="This example reserves /archive for the archival tool.",
+    block=True,
+    tests={
+        Input(command="cp first second /archive/daily"): Block(),
+        Input(command="cp /archive/daily ./restored"): Allow(),
+    },
+)
+```
+
+Declare aliases and value types with `Option("depth", ("--depth", "-D"), int)`;
+use `bool` for a flag. `OptionIs("depth", range(3))` matches a complete binding's
+last depth value. Put it in `CommandMatches.skip_if` to exempt only the invocation
+whose depth was bounded. A bounded sibling command cannot exempt an unbounded one.
+
+Schemas with a trailing expression use `options_end_operands=True`; leading options
+set `prefix=True`. `separators` names expression punctuation. Options carrying an
+embedded command declare terminator sequences such as `until=((";",), ("{}", "+"))`,
+so that command's arguments stay opaque until a complete sequence matches.
+The shared `captain_hook.command_schemas.FIND` declaration uses these features to
+keep `/` in `find src -name /` out of the search roots. Reuse that schema when
+writing another policy about `find`.
+
+Bindings retain the parser's source words and spans. Unknown options, unresolved
+values, or invalid typed values mark the binding incomplete, so they cannot
+establish an exemption.
+
+`PathMatches` checks lexical and resolved paths using whole-path globs, where `*`
+matches one segment and `**` can cross directories. Shell expansions remain unknown;
+`unresolved=True` explicitly includes them in a path match. A quoted literal such
+as `'$HOME'` remains a literal.
+
+Add missing argument syntax to the shared schema, and missing path behavior to the
+shared predicate, before composing the hook.
 
 ## CLI
 

@@ -34,6 +34,14 @@ from captain_hook.cmd import Cmd as Cmd
 from captain_hook.cmd import Expansion as Expansion
 from captain_hook.cmd import Target as Target
 from captain_hook.cmd import Targets as Targets
+from captain_hook.command_schema import Arguments as Arguments
+from captain_hook.command_schema import CommandMatches as CommandMatches
+from captain_hook.command_schema import CommandSchema as CommandSchema
+from captain_hook.command_schema import Operand as Operand
+from captain_hook.command_schema import Option as Option
+from captain_hook.command_schema import OptionIs as OptionIs
+from captain_hook.command_schema import PathMatches as PathMatches
+from captain_hook.command_schema import PathsMatch as PathsMatch
 from captain_hook.conditions import Commits as Commits
 from captain_hook.conditions import EditedSource as EditedSource
 from captain_hook.conditions import FreshSession as FreshSession
