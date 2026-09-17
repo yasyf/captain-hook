@@ -37,14 +37,21 @@ DESCRIPTOR="$ROOT/bin/hook.binrun"
 # exec'd binary cannot derive the plugin root from its own path. Export it: a tool
 # that overrides its embedded copies with plugin-root files reads this first.
 export BINRUN_PLUGIN_ROOT="$ROOT"
-RUNNER_HOME="${DAEMONKIT_HOME:-$HOME/.daemonkit}"
-RUNNER_DIR="$RUNNER_HOME/binrun/$RUNNER_TAG"
-RUNNER_BIN="$RUNNER_DIR/binrun"
 
 fail() {
   echo "hook: $1" >&2
   exit 1
 }
+
+# daemonkit's realhome: DAEMONKIT_HOME names a home directory, and its fallback is
+# the passwd home, not $HOME. binrun resolves its cache the same way.
+passwd_user="$(id -un)"
+eval "passwd_home=~$passwd_user"
+# An unexpanded tilde means the name has no passwd entry to take a home from.
+case "$passwd_home" in \~*) fail "no passwd home for '$passwd_user'" ;; esac
+RUNNER_HOME="${DAEMONKIT_HOME:-$passwd_home}/.daemonkit"
+RUNNER_DIR="$RUNNER_HOME/binrun/$RUNNER_TAG"
+RUNNER_BIN="$RUNNER_DIR/binrun"
 
 # Arm 1: an explicitly chosen runner — a dev build, named on purpose.
 if [ -n "${BINRUN_BIN:-}" ]; then
