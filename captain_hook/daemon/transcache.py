@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from captain_hook.transcripts import lift_classified, user_classifier
+from captain_hook.transcripts import transcript_session_id, user_classifier
 from captain_hook.util.caching import WeightedLRUDict
 
 if TYPE_CHECKING:
-    from cc_transcript.activity import UserClassifier
+    from cc_transcript.activity import ActivityLift, UserClassifier
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
@@ -25,6 +26,7 @@ class _Entry:
     consumed: int
     committed: list[TranscriptEvent]
     events: list[TranscriptEvent]
+    lifts: dict[int, ActivityLift] = field(default_factory=dict)
     lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
 
 
@@ -61,14 +63,29 @@ def _entry_for(path: Path) -> _Entry:
             return _store(path, entry)
         case _Entry(size=cached) if size > cached:
             try:
-                return _store(path, _grow(entry, path.read_bytes(), size, mtime_ns, ctime_ns))
+                return _store(path, _grow(entry, path, _appended(path, entry.consumed, st), size, mtime_ns, ctime_ns))
             except Exception:
                 pass
-    return _store(path, _full(path.read_bytes(), size, mtime_ns, ctime_ns))
+    with path.open("rb") as fh:
+        before = os.fstat(fh.fileno())
+        raw = fh.read(before.st_size)
+        settled = _stamp(os.fstat(fh.fileno())) == _stamp(before)
+    full = _full(raw, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    return _store(path, full) if settled else full
 
 
 def _lift(entry: _Entry, classifier: UserClassifier, path: Path) -> Session:
-    return lift_classified(entry.events, classifier, path=path)
+    from cc_transcript.activity import ActivityLift
+    from cc_transcript.query import Session
+
+    with _LOCK:
+        activity = None if (lift := entry.lifts.get(id(classifier))) is None else lift.activity
+    if activity is None:
+        lift = ActivityLift(transcript_session_id(entry.events, path=path), user_classifier=classifier)
+        activity = lift.extend(entry.events)
+        with _LOCK:
+            entry.lifts.setdefault(id(classifier), lift)
+    return Session.from_activity(activity, path=path)
 
 
 def _store(path: Path, entry: _Entry) -> _Entry:
@@ -77,12 +94,53 @@ def _store(path: Path, entry: _Entry) -> _Entry:
     return entry
 
 
-def _grow(entry: _Entry, raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
+def _appended(path: Path, offset: int, st: os.stat_result) -> bytes:
+    with path.open("rb") as fh:
+        fh.seek(offset)
+        appended = fh.read(st.st_size - offset)
+        if _stamp(os.fstat(fh.fileno())) != _stamp(st):
+            raise _ChangedUnderRead(path)
+    return appended
+
+
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
+    return st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+class _ChangedUnderRead(Exception):
+    pass
+
+
+def _grow(entry: _Entry, path: Path, appended: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
     from cc_transcript.parser import parse_events_from_bytes
 
-    consumed = raw.rfind(b"\n") + 1
-    committed = entry.committed + parse_events_from_bytes(raw[entry.consumed : consumed])
-    return _Entry(size, mtime_ns, ctime_ns, consumed, committed, committed + parse_events_from_bytes(raw[consumed:]))
+    cut = appended.rfind(b"\n") + 1
+    committed = entry.committed + parse_events_from_bytes(appended[:cut])
+    grown = _Entry(
+        size,
+        mtime_ns,
+        ctime_ns,
+        entry.consumed + cut,
+        committed,
+        committed + parse_events_from_bytes(appended[cut:]),
+    )
+    if len(entry.events) == len(entry.committed):
+        with _LOCK:
+            lifts, entry.lifts = entry.lifts, {}
+        session_id = transcript_session_id(grown.events, path=path)
+        grown.lifts = {
+            key: lift
+            for key, lift in lifts.items()
+            if lift.session_id == session_id and _fed(lift) == len(entry.events)
+        }
+        appended = grown.events[len(entry.events) :]
+        for lift in grown.lifts.values():
+            lift.extend(appended)
+    return grown
+
+
+def _fed(lift: ActivityLift) -> int:
+    return sum(len(turn.events) for turn in lift.activity.turns)
 
 
 def _full(raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:

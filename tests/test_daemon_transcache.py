@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import os
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, BinaryIO
 
 import pytest
+from cc_transcript.activity import ActivityLift, native_user_classifier
 from cc_transcript.parser import parse_events_from_bytes
 from cc_transcript.query import Session
 
 from captain_hook.app import State, use_state
 from captain_hook.daemon import transcache
-from captain_hook.transcripts import load_transcript
+from captain_hook.transcripts import lift_classified, load_transcript
 from captain_hook.util import reqenv
 from captain_hook.util.reqenv import RequestOverrides
 
 if TYPE_CHECKING:
-    from cc_transcript.models import UserEvent
+    from collections.abc import Iterator
+
+    from cc_transcript.activity import UserClassifier
+    from cc_transcript.models import TranscriptEvent, UserEvent
 
 FIXTURE = Path(__file__).parent / "fixtures" / "hook_fires" / "fire-stop.jsonl"
+TOOL_HEAVY = Path(__file__).parent / "fixtures" / "hook_fires" / "fire-misfire-complaint.jsonl"
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +39,10 @@ def clear_transcache():
 def lines() -> list[bytes]:
     raw = FIXTURE.read_bytes()
     assert raw.endswith(b"\n")
+    return split_lines(raw)
+
+
+def split_lines(raw: bytes) -> list[bytes]:
     return [line + b"\n" for line in raw.rstrip(b"\n").split(b"\n")]
 
 
@@ -196,3 +207,352 @@ class TestSourceByteBudget:
         assert list(transcache._CACHE) == [target]
         assert after == parse_events_from_bytes(full)
         assert all(a is b for a, b in zip(before, after, strict=False))
+
+
+def no_prompts(event: UserEvent) -> bool:
+    return False
+
+
+@dataclass
+class PromptsWithText:
+    def __call__(self, event: UserEvent) -> bool:
+        return bool(event.text.strip())
+
+
+def cuts(lines: list[bytes], step: str) -> Iterator[bytes]:
+    for i, line in enumerate(lines):
+        prefix = b"".join(lines[:i])
+        match step:
+            case "line":
+                yield prefix + line
+            case "three-lines" if i % 3 == 2 or i == len(lines) - 1:
+                yield prefix + line
+            case "mid-line":
+                yield prefix + line[: len(line) // 2]
+                yield prefix + line[:-1]
+                yield prefix + line
+
+
+def cursor_of(target: Path, classifier: UserClassifier) -> object:
+    return transcache._CACHE[target].lifts[id(classifier)]
+
+
+class TestIncrementalLift:
+    @pytest.mark.parametrize("step", ["line", "three-lines", "mid-line"])
+    def test_growth_matches_a_cold_lift_at_every_step(self, tmp_path: Path, step: str) -> None:
+        target = tmp_path / "t.jsonl"
+        for raw in cuts(split_lines(TOOL_HEAVY.read_bytes()), step):
+            write(target, raw)
+            assert transcache.load(target) == load_transcript(target)
+            assert transcache._lift(transcache._entry_for(target), no_prompts, target) == lift_classified(
+                parse_events_from_bytes(raw), no_prompts, path=target
+            )
+
+    def test_line_growth_extends_one_cursor_across_a_split_tool_result(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:9]))
+        before = transcache.load(target)
+        assert [use.result for use in before.tool_calls] == [None]
+        cursor = cursor_of(target, native_user_classifier)
+        for end in range(10, len(lines) + 1):
+            write(target, b"".join(lines[:end]))
+            assert transcache.load(target) == load_transcript(target)
+            assert cursor_of(target, native_user_classifier) is cursor
+        assert all(use.result is not None for use in transcache.load(target).tool_calls)
+
+    def test_an_unterminated_line_that_growth_invalidates_leaves_the_lift(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        head = b"".join(lines[:12])
+        target = write(tmp_path / "t.jsonl", head + lines[12][:-1])
+        assert [use.result for use in transcache.load(target).tool_calls][-1] is not None
+        write(target, head + lines[12][:-1] + b"x\n" + b"".join(lines[13:]))
+        assert transcache.load(target) == load_transcript(target)
+
+    def test_growth_feeds_each_cursor_exactly_the_events_after_its_last_feed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        feeds: dict[ActivityLift, list[TranscriptEvent]] = {}
+        extend = ActivityLift.extend
+
+        def recording(lift: ActivityLift, events: list[TranscriptEvent]) -> object:
+            feeds.setdefault(lift, []).extend(events)
+            return extend(lift, events)
+
+        monkeypatch.setattr(ActivityLift, "extend", recording)
+        target = tmp_path / "t.jsonl"
+        for raw in cuts(split_lines(TOOL_HEAVY.read_bytes()), "mid-line"):
+            write(target, raw)
+            transcache.load(target)
+            assert feeds[cursor_of(target, native_user_classifier)] == transcache._CACHE[target].events
+
+    def test_a_cursor_fed_past_its_entry_is_not_inherited(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
+        entry = transcache._entry_for(target)
+        transcache._lift(entry, native_user_classifier, target)
+        overfed = entry.lifts[id(native_user_classifier)]
+        overfed.extend(entry.events[-1:])
+        write(target, b"".join(lines))
+        assert id(native_user_classifier) not in transcache._entry_for(target).lifts
+        assert transcache.load(target) == load_transcript(target)
+
+    def test_a_session_id_learned_by_growth_starts_a_fresh_cursor(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:2]))
+        transcache.load(target)
+        stem_cursor = cursor_of(target, native_user_classifier)
+        write(target, b"".join(lines))
+        assert transcache.load(target) == load_transcript(target)
+        assert cursor_of(target, native_user_classifier) is not stem_cursor
+
+    def test_full_reparse_starts_fresh_cursors(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines))
+        transcache.load(target)
+        cursor = cursor_of(target, native_user_classifier)
+        write(target, b"".join(lines[:20]))
+        assert transcache.load(target) == load_transcript(target)
+        assert cursor_of(target, native_user_classifier) is not cursor
+
+    def test_each_classifier_extends_its_own_cursor(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:20]))
+        entry = transcache._entry_for(target)
+        transcache._lift(entry, native_user_classifier, target)
+        transcache._lift(entry, no_prompts, target)
+        native, quiet = entry.lifts[id(native_user_classifier)], entry.lifts[id(no_prompts)]
+        assert native is not quiet
+        write(target, b"".join(lines))
+        grown = transcache._entry_for(target)
+        assert grown.lifts == {id(native_user_classifier): native, id(no_prompts): quiet}
+        for classifier in (native_user_classifier, no_prompts):
+            assert transcache._lift(grown, classifier, target) == lift_classified(grown.events, classifier, path=target)
+
+    def test_an_unhashable_classifier_extends_its_own_cursor_through_growth(self, tmp_path: Path) -> None:
+        classifier = PromptsWithText()
+        with pytest.raises(TypeError):
+            hash(classifier)
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:20]))
+        entry = transcache._entry_for(target)
+        transcache._lift(entry, classifier, target)
+        cursor = entry.lifts[id(classifier)]
+        write(target, b"".join(lines))
+        grown = transcache._entry_for(target)
+        assert grown.lifts[id(classifier)] is cursor
+        assert cursor.user_classifier is classifier
+        assert transcache._lift(grown, classifier, target) == lift_classified(grown.events, classifier, path=target)
+
+
+class TestTailRead:
+    def test_growth_reads_only_the_appended_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        transcache.load(target)
+        write(target, b"".join(lines))
+        read: list[int] = []
+        opened = Path.open
+
+        class Counting:
+            def __init__(self, fh: BinaryIO) -> None:
+                self.fh = fh
+
+            def __enter__(self) -> Counting:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self.fh.close()
+
+            def seek(self, offset: int) -> int:
+                return self.fh.seek(offset)
+
+            def fileno(self) -> int:
+                return self.fh.fileno()
+
+            def read(self, size: int = -1) -> bytes:
+                chunk = self.fh.read(size)
+                read.append(len(chunk))
+                return chunk
+
+        monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: Counting(opened(self, *args, **kwargs)))
+        assert transcache.load(target) == lift_classified(
+            parse_events_from_bytes(b"".join(lines)), native_user_classifier, path=target
+        )
+        assert read == [len(b"".join(lines[40:]))]
+
+    @pytest.mark.parametrize(("start", "end"), [(0, 5), (1, 46)])
+    def test_a_file_rewritten_shorter_between_stat_and_read_reparses_in_full(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start: int, end: int
+    ) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        transcache.load(target)
+        write(target, b"".join(lines))
+        rewritten = b"".join(lines[start:end])
+        assert len(rewritten) < target.stat().st_size
+        opened = Path.open
+
+        def rewrite_then_open(self: Path, *args: object, **kwargs: object) -> BinaryIO:
+            monkeypatch.setattr(Path, "open", opened)
+            write(target, rewritten)
+            return opened(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", rewrite_then_open)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+        assert transcache.load(target) == load_transcript(target)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+
+    @pytest.mark.parametrize("longer", [False, True])
+    def test_a_file_rewritten_equal_or_longer_between_stat_and_read_never_splices(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, longer: bool
+    ) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        transcache.load(target)
+        grown = b"".join(lines[:50])
+        write(target, grown)
+        rewritten = b"".join(lines[1:50] + lines[:1] + (lines[50:] if longer else []))
+        assert (len(rewritten) > len(grown)) is longer and len(rewritten) >= len(grown)
+        opened = Path.open
+
+        def rewrite_then_open(self: Path, *args: object, **kwargs: object) -> BinaryIO:
+            monkeypatch.setattr(Path, "open", opened)
+            write(target, rewritten)
+            return opened(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", rewrite_then_open)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+        assert transcache.load(target) == load_transcript(target)
+
+    def test_a_full_reparse_torn_by_a_rewrite_is_not_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        rewritten = b"".join(lines[1:40] + lines[:1] + lines[40:])
+        opened = Path.open
+
+        class RewrittenMidRead:
+            def __init__(self, fh: BinaryIO) -> None:
+                self.fh = fh
+
+            def __enter__(self) -> RewrittenMidRead:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self.fh.close()
+
+            def fileno(self) -> int:
+                return self.fh.fileno()
+
+            def read(self, size: int = -1) -> bytes:
+                chunk = self.fh.read(size // 2)
+                with opened(target, "wb") as out:
+                    out.write(rewritten)
+                return chunk + self.fh.read(size - len(chunk))
+
+        monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: RewrittenMidRead(opened(self, *args, **kwargs)))
+        transcache._entry_for(target)
+        assert target not in transcache._CACHE
+        monkeypatch.setattr(Path, "open", opened)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+        assert transcache.load(target) == load_transcript(target)
+
+
+class TestCursorOwnership:
+    def test_a_stale_entry_hands_its_cursor_off_and_lifts_afresh(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
+        stale = transcache._entry_for(target)
+        transcache._lift(stale, native_user_classifier, target)
+        cursor = stale.lifts[id(native_user_classifier)]
+        write(target, b"".join(lines[:30]))
+        current = transcache._entry_for(target)
+        assert current.lifts[id(native_user_classifier)] is cursor
+        assert stale.lifts == {}
+        assert transcache._lift(stale, native_user_classifier, target) == lift_classified(
+            stale.events, native_user_classifier, path=target
+        )
+        assert stale.lifts[id(native_user_classifier)] is not cursor
+
+    def test_a_second_growth_from_a_stale_entry_never_touches_the_current_cursor(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
+        stale = transcache._entry_for(target)
+        transcache._lift(stale, native_user_classifier, target)
+        write(target, b"".join(lines[:30]))
+        current = transcache._entry_for(target)
+        taken = current.lifts[id(native_user_classifier)].activity
+        write(target, b"".join(lines))
+        st = target.stat()
+        rival = transcache._grow(
+            stale, target, target.read_bytes()[stale.consumed :], st.st_size, st.st_mtime_ns, st.st_ctime_ns
+        )
+        assert rival.lifts == {}
+        assert current.lifts[id(native_user_classifier)].activity is taken
+        for entry in (current, rival):
+            assert transcache._lift(entry, native_user_classifier, target) == lift_classified(
+                entry.events, native_user_classifier, path=target
+            )
+
+    def test_a_reader_copies_the_activity_out_before_a_growth_can_take_the_cursor(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
+        entry = transcache._entry_for(target)
+        transcache._lift(entry, native_user_classifier, target)
+        cursor = entry.lifts[id(native_user_classifier)]
+        write(target, b"".join(lines))
+        growth = threading.Thread(target=transcache._entry_for, args=(target,))
+
+        class GrowsMidRead(dict):
+            def get(self, key: object, default: object = None) -> object:
+                growth.start()
+                growth.join(timeout=0.2)
+                return super().get(key, default)
+
+        entry.lifts = GrowsMidRead(entry.lifts)
+        assert transcache._lift(entry, native_user_classifier, target) == lift_classified(
+            entry.events, native_user_classifier, path=target
+        )
+        growth.join()
+        assert transcache._CACHE[target].lifts[id(native_user_classifier)] is cursor
+
+    def test_readers_racing_growth_see_exactly_their_entrys_lift(self, tmp_path: Path) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:3]))
+        seen: list[tuple[transcache._Entry, UserClassifier, Session]] = []
+        grown = threading.Event()
+
+        def grow() -> None:
+            with target.open("ab") as fh:
+                for line in lines[3:]:
+                    for part in (line[: len(line) // 2], line[len(line) // 2 :]):
+                        fh.write(part)
+                        fh.flush()
+                        transcache._entry_for(target)
+            grown.set()
+
+        def read(classifier: UserClassifier) -> None:
+            while not grown.is_set():
+                entry = transcache._entry_for(target)
+                seen.append((entry, classifier, transcache._lift(entry, classifier, target)))
+
+        interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            readers = [threading.Thread(target=read, args=(c,)) for c in (native_user_classifier, no_prompts) * 6]
+            for thread in readers:
+                thread.start()
+            grow()
+            for thread in readers:
+                thread.join()
+        finally:
+            sys.setswitchinterval(interval)
+
+        cold: dict[tuple[int, UserClassifier], Session] = {}
+        assert len({len(entry.events) for entry, _, _ in seen}) > len(lines) // 2
+        for entry, classifier, session in seen:
+            key = (len(entry.events), classifier)
+            if key not in cold:
+                cold[key] = lift_classified(entry.events, classifier, path=target)
+            assert session == cold[key]

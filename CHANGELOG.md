@@ -58,11 +58,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The worker reuses a lifted transcript `Session` while its file is
   unchanged.** Each cached parse now also holds the `Session` lifted from it,
   one per user classifier. Every request still resolves its own classifier, so
-  a request whose classifier differs lifts its own. Any change to the file
-  lifts afresh, and a lifted `Session` is evicted with its parse. On a 44 MB
-  transcript the lift took 97 ms and a reuse takes 0.03 ms. The lifted
-  `Session` adds about 0.4x the source size in RSS on top of the parse's
-  budgeted entry.
+  a request whose classifier differs lifts its own. A lifted `Session` is
+  evicted with its parse. On a 44 MB transcript the lift took 97 ms and a
+  reuse takes 0.03 ms. The lifted `Session` adds about 0.4x the source size in
+  RSS on top of the parse's budgeted entry.
+- **A growing transcript extends its lifted `Session` instead of relifting
+  it.** Claude Code appends to the transcript between almost every hook event,
+  and each append used to relift the whole session. Each cached parse now
+  keeps one cc-transcript `ActivityLift` cursor per user classifier, and a
+  growth extends those cursors by the appended events alone. A shrink, an
+  in-place rewrite, or a parse error still lifts afresh. After an 8-line
+  append to a 63 MB transcript, a load took 32 ms and now takes 8.4 ms, most
+  of it reading the file and parsing the appended lines; the lift itself takes
+  0.02 ms. A cursor adds only its tool-use and result indexes, 0.18 MB on that
+  transcript, so the source-byte budget is unchanged. The cc-transcript pin is
+  now exactly `14.18.0`, the first release with `ActivityLift`.
+- **A growing transcript reads only its appended bytes.** A growth used to
+  read the whole file before parsing the new lines. It now seeks to the end of
+  the prior parse and reads only up to the size it checked. A read shorter
+  than that size, from a file truncated or rewritten in between, falls back to
+  a full reparse. The same 8-line append to a 63 MB transcript now loads in
+  0.7 ms, down from 9.8 ms.
 
 ### Fixed
 
@@ -84,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in RSS, so eight large transcripts could pin gigabytes in one worker. The
   cache now evicts least-recently-used transcripts once their summed source
   size passes 128 MiB, always keeping the one just parsed.
+- **A transcript rewritten mid-read no longer splices old and new events.** The
+  worker took the transcript's size and timestamps once, before reading. A file
+  rewritten to equal or greater length in between counted as growth, so the
+  worker parsed the replacement's bytes after the old consumed offset and
+  appended them to the cached events. A growth now rechecks the open file's
+  inode, size and timestamps after reading and reparses in full on any
+  mismatch. A full reparse caches its result only when the file's stats before
+  and after the read agree.
 - **A timed-out plain-English rewrite no longer strands a thread.** Each
   finalized `MessageDisplay` built its own one-thread executor and released it
   without joining, so a rewrite that outlived its budget kept its thread alive

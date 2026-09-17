@@ -49,13 +49,16 @@ def lift_classified(
     from cc_transcript.activity import SessionActivity
     from cc_transcript.query import Session
 
-    session_id = next(
+    return Session.from_activity(
+        SessionActivity.from_events(transcript_session_id(events, path=path), list(events), user_classifier=classifier),
+        path=path,
+    )
+
+
+def transcript_session_id(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> SessionId:
+    return next(
         (meta.session_id for event in events if (meta := event_meta(event)) is not None),
         SessionId(path.stem if path else "unknown"),
-    )
-    return Session.from_activity(
-        SessionActivity.from_events(session_id, list(events), user_classifier=classifier),
-        path=path,
     )
 
 
