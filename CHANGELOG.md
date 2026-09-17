@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next checkpoint: before an LLM call, a `call_cli` subprocess, or a transcript
   parse, and between directories of a glob or repository walk.
 
+- **A detached reviewer no longer outlives the host generation that started
+  it.** `review spawn` leaves its worker's session so a retiring worker cannot
+  kill a review, which also put it beyond the host's shutdown settlement: one
+  machine carried 22 live reviewers, several reparented to pid 1 from the
+  12.37.0 generation and one at 89% CPU for over four hours. The worker now
+  sends the host an `adopt` frame naming the child, and the host records it
+  through daemonkit's `Adopt` under its own generation. Shutdown settles the
+  reviewer's whole session, the next generation reclaims any record that
+  survived, and the host terminates the session once `spawn_deadline_seconds`
+  plus five minutes has run, a bound a blocking call inside the child cannot
+  outlast. A cold `capt-hook run` has no host and is unchanged.
+
 ### Added
 
 - **One `dispatch` line per event in the worker's daemon log.** It carries

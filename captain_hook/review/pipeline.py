@@ -11,6 +11,15 @@ the real work: resolve the repo, check it is watched, scan the transcript
 incrementally, run the judge pass, sync open PR states, and — when at least
 one candidate crosses its thresholds — spawn the headless brain that drafts
 the PRs, recording each run's outcome for the status dashboard's health line.
+
+The child leaves its parent's session so a retiring worker cannot take a review
+down with it, which also puts it beyond that worker's settlement. Under the
+resident daemon :func:`detach` therefore hands the child's pid to the host
+through the ``_ADOPTER`` seam: the host records it against its own generation,
+settles the child's whole session at shutdown or from the next generation, and
+terminates it once ``spawn_deadline_seconds`` plus :data:`LIFETIME_GRACE_SECONDS`
+has run, which is the one bound a blocking call inside the child cannot outlast.
+Cold, the seam is ``None`` and the child is bounded only from inside.
 """
 
 from __future__ import annotations
@@ -34,7 +43,7 @@ from captain_hook.types import Event
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from spawnllm import TModel
 
@@ -46,6 +55,9 @@ SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
 BRAIN_TIER: TModel = "medium"
 BRAIN_ALLOWED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "Agent")
 DISPATCH_EVENTS = frozenset({Event.SessionStart, Event.SessionEnd, Event.Stop})
+LIFETIME_GRACE_SECONDS = 300
+
+_ADOPTER: Callable[[int, int], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +197,7 @@ def detach(argv: list[str], *, spawned: str) -> None:
     try:
         (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
-            subprocess.Popen(
+            child = subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
@@ -198,6 +210,10 @@ def detach(argv: list[str], *, spawned: str) -> None:
         breadcrumb(f"detach failed: {spawned}")
         return
     breadcrumb(spawned)
+    if _ADOPTER is not None:
+        from captain_hook.review.settings import ReviewSettings
+
+        _ADOPTER(child.pid, (ReviewSettings().spawn_deadline_seconds + LIFETIME_GRACE_SECONDS) * 1000)
 
 
 def enrolled(cwd: str | None) -> bool:

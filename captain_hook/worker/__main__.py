@@ -61,11 +61,14 @@ def main() -> None:
     fallback = sys.stderr
     sys.stdout = ContextIO("stdout", fallback)
     sys.stderr = ContextIO("stderr", fallback)
+    from captain_hook.review import pipeline
     from captain_hook.worker.runtime import ProductRuntime
 
     runtime = ProductRuntime()
+    service = WorkerService(sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch)
+    pipeline._ADOPTER = service.adopt
     try:
-        WorkerService(sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch).run()
+        service.run()
     finally:
         router.close()
         runtime.close()

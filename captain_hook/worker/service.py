@@ -11,6 +11,7 @@ from captain_hook.worker.protocol import (
     EventRequest,
     EventResponse,
     ProtocolError,
+    adopt_message,
     decode_event,
     decode_hello,
     error_response,
@@ -70,6 +71,9 @@ class WorkerService:
             self._background.shutdown(wait=False, cancel_futures=True)
         if self._failure is not None:
             raise self._failure
+
+    def adopt(self, pid: int, lifetime_ms: int) -> None:
+        self._write(adopt_message(pid, lifetime_ms))
 
     def _submit(self, request: EventRequest) -> None:
         with self._guard:

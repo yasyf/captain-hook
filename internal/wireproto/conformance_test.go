@@ -42,11 +42,13 @@ func describeProtocol() protocolDescriptor {
 			"event":  OpEvent,
 			"result": OpResult,
 			"error":  OpError,
+			"adopt":  OpAdopt,
 		},
 		Fields: map[string][]string{
 			"worker_frame":   wireFields(Frame{}),
 			"event_request":  wireFields(EventRequest{}),
 			"event_response": wireFields(EventResponse{}),
+			"adopt_request":  wireFields(AdoptRequest{}),
 		},
 	}
 }
@@ -67,6 +69,11 @@ func wireFields(value any) []string {
 func admitWorkerFrame(frame Frame) error {
 	if frame.Request != nil {
 		if err := frame.Request.Validate(); err != nil {
+			return err
+		}
+	}
+	if frame.Adopt != nil {
+		if err := frame.Adopt.Validate(); err != nil {
 			return err
 		}
 	}

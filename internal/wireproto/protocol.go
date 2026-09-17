@@ -40,13 +40,14 @@ const (
 	MaxWorkerFrame = MaxHostPayload + 4<<10
 )
 
-// OpHello, OpEvent, OpResult, and OpError name the frames the host and a
-// Python worker exchange.
+// OpHello, OpEvent, OpResult, OpError, and OpAdopt name the frames the host
+// and a Python worker exchange.
 const (
 	OpHello  = "hello"
 	OpEvent  = "event"
 	OpResult = "result"
 	OpError  = "error"
+	OpAdopt  = "adopt"
 )
 
 // EventRequest is one exact hook dispatch admitted by the Go host.
@@ -75,6 +76,15 @@ type EventResponse struct {
 	ElapsedMS float64 `json:"elapsed_ms"`
 }
 
+// AdoptRequest hands the host a process the worker started in a session of its
+// own, which the worker's settlement therefore cannot reach. The host records
+// it, terminates its session once LifetimeMS has run, and settles it with
+// everything else it owns at shutdown.
+type AdoptRequest struct {
+	PID        int   `json:"pid"`
+	LifetimeMS int64 `json:"lifetime_ms"`
+}
+
 // Frame is one length-prefixed message on the worker pipe.
 type Frame struct {
 	Protocol int            `json:"protocol"`
@@ -84,6 +94,7 @@ type Frame struct {
 	Request  *EventRequest  `json:"request,omitempty"`
 	Response *EventResponse `json:"response,omitempty"`
 	Error    string         `json:"error,omitempty"`
+	Adopt    *AdoptRequest  `json:"adopt,omitempty"`
 }
 
 // Validate refuses a request the worker cannot dispatch exactly.
@@ -104,6 +115,17 @@ func (request EventRequest) Validate() error {
 	}
 	if request.Env == nil {
 		return errors.New("captain: request environment is required")
+	}
+	return nil
+}
+
+// Validate refuses an adoption that names no process or no bound on its life.
+func (request AdoptRequest) Validate() error {
+	switch {
+	case request.PID <= 1:
+		return fmt.Errorf("captain: adopt pid %d is not a process a worker can start", request.PID)
+	case request.LifetimeMS <= 0:
+		return fmt.Errorf("captain: adopt lifetime %dms does not bound the process", request.LifetimeMS)
 	}
 	return nil
 }
