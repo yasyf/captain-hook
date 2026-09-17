@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A worker loads spaCy and WordNet after its first reply.** The first
+  event a worker answers starts a background load of both, so a later hook
+  that reads them finds them loaded, or waits on the load already running,
+  instead of paying ~1.5s itself. The first reply is not slowed: the load
+  starts once it has been written.
+
+### Fixed
+
+- **The host and its Python workers run at default priority.** The host
+  LaunchAgent declared no `ProcessType`, so launchd applied its resource
+  limits to capt-hookd and every worker it spawned, whose main threads ran at
+  utility QoS. Under a busy machine a worker's startup imports took 12s where
+  the same interpreter from a terminal took 1s. The agent now declares
+  `ProcessType` `Interactive`, which spawned workers inherit.
+
+- **A worker loads spaCy and WordNet once.** Two hooks reaching an unloaded
+  NLP resource together could both load it: the loader checked for a stored
+  value under its lock, but the value was only stored after the lock was
+  released, so a second thread woken in that gap loaded the pipeline again.
+  The loaded value is now stored before the lock is released.
+
 ## [12.37.0] - 2026-09-16
 
 ### Fixed

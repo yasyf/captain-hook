@@ -16,6 +16,7 @@ from captain_hook.daemon import decision_writer, transcache
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
 from captain_hook.session import ensure_session
+from captain_hook.state import RESOURCES
 from captain_hook.types import Event
 from captain_hook.worker.protocol import EventRequest, EventResponse
 
@@ -52,6 +53,7 @@ class ProductRuntime:
         dispatcher: Callable[..., tuple[dict[str, Any] | None, Background]] = dispatch_event,
         transcript_loader: Callable[..., Any] = transcache.load,
         install_writer: bool = True,
+        nlp_warmer: Callable[[], None] = RESOURCES.warm,
     ) -> None:
         self._registry_factory = registry_factory
         self._dispatcher = dispatcher
@@ -59,6 +61,10 @@ class ProductRuntime:
         self._registries: dict[str, RegistryLike] = {}
         self._registries_guard = threading.Lock()
         self._writer = decision_writer.install() if install_writer else None
+        self._nlp_warmup = threading.Thread(
+            target=_warm_nlp, args=(nlp_warmer,), name="capt-hook-nlp-warm", daemon=True
+        )
+        self._nlp_warmup_guard = threading.Lock()
 
     def dispatch(self, request: EventRequest) -> tuple[EventResponse, Background | None]:
         try:
@@ -127,7 +133,13 @@ class ProductRuntime:
             context = contextvars.copy_context()
         if output:
             buffers.stdout.write(json.dumps(output) + "\n")
-        return lambda: context.run(_run_detached, background)
+        return lambda: self._after_reply(context, background)
+
+    def _after_reply(self, context: contextvars.Context, background: Background) -> None:
+        with self._nlp_warmup_guard:
+            if self._nlp_warmup.ident is None:
+                self._nlp_warmup.start()
+        context.run(_run_detached, background)
 
     def _registry(self, root: str) -> RegistryLike:
         with self._registries_guard:
@@ -159,6 +171,13 @@ def _run_detached(background: Background) -> None:
             background()
         except Exception:
             logger.exception("post-reply dispatch failed")
+
+
+def _warm_nlp(warmer: Callable[[], None]) -> None:
+    try:
+        warmer()
+    except Exception:
+        logger.exception("NLP warm-up failed")
 
 
 def _session(session_id: str):

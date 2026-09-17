@@ -10,7 +10,7 @@ import (
 	"github.com/yasyf/daemonkit/launchd"
 )
 
-func TestExactAgentsPinSignedBundleFailureRestartsDrainBudgetAndUnrestrictedSession(t *testing.T) {
+func TestExactAgentsPinSignedBundleFailureRestartsDrainBudgetInteractivePolicyAndUnrestrictedSession(t *testing.T) {
 	t.Parallel()
 	root, err := os.MkdirTemp("/private/tmp", "captain-hook-plan-")
 	if err != nil {
@@ -36,6 +36,7 @@ func TestExactAgentsPinSignedBundleFailureRestartsDrainBudgetAndUnrestrictedSess
 	}
 	if host.RestartPolicy != launchd.RestartOnFailure || host.Program != hostExecutablePath(app) ||
 		len(host.Args) != 1 || host.Args[0] != "serve" || host.ExitTimeOut != hostShutdownTimeout ||
+		host.ProcessType != launchd.ProcessTypeInteractive ||
 		len(host.AssociatedBundleIdentifiers) != 1 || host.AssociatedBundleIdentifiers[0] != helperBundleID {
 		t.Fatalf("host agent = %#v", host)
 	}

@@ -4,6 +4,7 @@ import importlib.metadata
 import io
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,7 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
         dispatcher=dispatch,
         transcript_loader=transcript_loader,
         install_writer=False,
+        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request())
 
@@ -100,6 +102,35 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     assert reqenv.current() is None
 
 
+def test_nlp_warms_once_after_the_first_reply_off_the_request_thread() -> None:
+    release = threading.Event()
+    warmed: list[str] = []
+
+    def warmer() -> None:
+        release.wait()
+        warmed.append(threading.current_thread().name)
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=lambda *_, **__: (None, lambda: None),
+        install_writer=False,
+        nlp_warmer=warmer,
+    )
+    _, first = runtime.dispatch(request(request_id=1))
+    assert not any(t.name == "capt-hook-nlp-warm" for t in threading.enumerate())
+
+    assert first is not None
+    first()
+    _, second = runtime.dispatch(request(request_id=2))
+    assert second is not None
+    second()
+    assert warmed == []
+
+    release.set()
+    next(t for t in threading.enumerate() if t.name == "capt-hook-nlp-warm").join()
+    assert warmed == ["capt-hook-nlp-warm"]
+
+
 def test_registry_is_reused_for_the_same_root() -> None:
     registry = FakeRegistry()
     factories = 0
@@ -110,7 +141,10 @@ def test_registry_is_reused_for_the_same_root() -> None:
         return registry
 
     runtime = ProductRuntime(
-        registry_factory=factory, dispatcher=lambda *_, **__: (None, lambda: None), install_writer=False
+        registry_factory=factory,
+        dispatcher=lambda *_, **__: (None, lambda: None),
+        install_writer=False,
+        nlp_warmer=lambda: None,
     )
     runtime.dispatch(request(request_id=1))
     runtime.dispatch(request(request_id=2))
@@ -124,6 +158,7 @@ def test_invalid_event_is_a_result_error_without_dispatch() -> None:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
+        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request(event="NoSuchEvent"))
 
@@ -137,7 +172,9 @@ def test_dispatch_exception_returns_traceback_error() -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise ValueError("broken hook")
 
-    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
     response, after = runtime.dispatch(request())
 
     assert after is None
@@ -152,7 +189,9 @@ def test_hook_writes_are_captured_inside_the_product_response() -> None:
         print("hook stderr", file=sys.stderr)
         return None, lambda: None
 
-    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=dispatch, install_writer=False)
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=dispatch, install_writer=False, nlp_warmer=lambda: None
+    )
     original_stdout, original_stderr = sys.stdout, sys.stderr
     sys.stdout = ContextIO("stdout", io.StringIO())
     sys.stderr = ContextIO("stderr", io.StringIO())

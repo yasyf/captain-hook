@@ -216,3 +216,88 @@ class TestWnConnectionRace:
             "beta one",
             "beta two",
         }
+
+
+class LingeringLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> None:
+        self._lock.acquire()
+
+    def __exit__(self, *_exc: object) -> None:
+        self._lock.release()
+        time.sleep(0.05)
+
+
+class TestNlpLoadRace:
+    @pytest.mark.parametrize("resource", ["spacy", "wn"])
+    def test_concurrent_first_reads_load_once(self, resource: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        import spacy
+
+        from captain_hook.state import NlpResources
+        from captain_hook.util import model_cache
+
+        loads: list[str] = []
+
+        def slow_load(*_args: object) -> object:
+            loads.append(resource)
+            time.sleep(0.05)
+            return object()
+
+        monkeypatch.setattr(spacy.util, "is_package", lambda _name: True)
+        monkeypatch.setattr(spacy, "load", slow_load)
+        monkeypatch.setattr(model_cache, "ensure_wn_lexicon", slow_load)
+
+        n = 8
+        resources = NlpResources()
+        resources._lock = LingeringLock()
+        barrier = threading.Barrier(n)
+        seen: list[object] = []
+
+        def read() -> None:
+            barrier.wait()
+            seen.append(getattr(resources, resource))
+
+        threads = [threading.Thread(target=read) for _ in range(n)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert loads == [resource]
+        assert len({id(value) for value in seen}) == 1
+
+    def test_readers_during_a_warm_up_wait_for_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import spacy
+
+        from captain_hook.state import NlpResources
+        from captain_hook.util import model_cache
+
+        loads: list[str] = []
+
+        def slow_load(name: str) -> object:
+            loads.append(name)
+            time.sleep(0.05)
+            return object()
+
+        pipeline = object()
+        monkeypatch.setattr(spacy.util, "is_package", lambda _name: True)
+
+        def load_pipeline(_name: str) -> object:
+            slow_load("spacy")
+            return pipeline
+
+        monkeypatch.setattr(spacy, "load", load_pipeline)
+        monkeypatch.setattr(model_cache, "ensure_wn_lexicon", lambda: slow_load("wn"))
+
+        resources = NlpResources()
+        warm = threading.Thread(target=resources.warm)
+        warm.start()
+        time.sleep(0.01)
+        seen = [resources.spacy, resources.wn]
+        warm.join()
+
+        assert sorted(loads) == ["spacy", "wn"]
+        assert seen[0] is pipeline
+        assert seen[1] is resources.wn

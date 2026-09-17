@@ -26,9 +26,6 @@ from loguru import logger
 from captain_hook.util.fs import atomic_write, read_json
 from captain_hook.util.paths import resolve_cache_dir
 
-# Inside internal/hookd's 10s workerReadinessTimeout: the probe precedes the readiness
-# handshake, so a slower shell costs the daemon a whole worker, not just the user's PATH.
-# Only a worker with no cached answer to fall back to spends this much.
 PROBE_TIMEOUT_SECONDS = 5
 
 # A bound under the shell's real cost never completes: it times out, falls back, and leaves the
@@ -120,17 +117,6 @@ def write_cache(shell: str, value: str) -> None:
 
 
 def user_path() -> str:
-    """The user's login ``PATH``, without re-paying for an answer already on disk.
-
-    Sourcing a user's profile is the most expensive thing a worker does before it is ready —
-    measured at 1.5s idle and past :data:`PROBE_TIMEOUT_SECONDS` under a parallel agent fleet,
-    against 0.45s for the worker's whole import graph — and it runs ahead of hookd's readiness
-    handshake, so a shell that answers late costs the daemon a whole worker. The answer changes
-    about as often as the user edits their profile, so a fresh record is adopted without running
-    the shell at all, and a stale one bounds its refresh to :data:`REFRESH_TIMEOUT_SECONDS`
-    because a refresh that fails behind a usable record loses nothing. Raises
-    :class:`LoginShellError` only when the probe fails with no record to fall back to.
-    """
     shell = login_shell()
     cached = read_cache(shell)
     if cached is not None and cached.fresh:
