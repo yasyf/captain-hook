@@ -138,6 +138,41 @@ def test_roster_change_changes_fingerprint(project: CliState, tmp_path: Path) ->
     assert fp(project) != before
 
 
+def test_install_dir_vanishing_behind_an_unchanged_roster_lands_within_the_ttl(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    before = fp(project)
+    (moved := tmp_path / "moved").mkdir()
+    plugin_root.rename(moved / "plug")
+    assert fp(project) == before
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
+    assert fp(project) != before
+
+
+@pytest.mark.parametrize("policy", ["managed-settings.json", "managed-settings.d/policy.json"])
+def test_unreadable_managed_settings_count_as_absent_until_readable(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    managed = tmp_path / "managed"
+    (policy_file := managed / policy).parent.mkdir(parents=True)
+    policy_file.write_text(json.dumps({"enabledPlugins": {"acme/pp": False}}))
+    monkeypatch.setattr(plugins, "MANAGED_SETTINGS_DIRS", (managed,))
+    policy_file.parent.chmod(0)
+    try:
+        unreadable = fp(project)
+        assert [pid for pid, *_ in registry._plugin_trees(project.root)] == ["acme/pp"]
+    finally:
+        policy_file.parent.chmod(0o700)
+    assert fp(project) != unreadable
+    assert registry._plugin_trees(project.root) == ()
+
+
 def test_project_disable_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
     plugin_root = tmp_path / "plug"
     make_plugin_pack(plugin_root)
@@ -147,35 +182,101 @@ def test_project_disable_changes_fingerprint(project: CliState, tmp_path: Path) 
     assert fp(project) != before
 
 
-def test_plugin_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+def test_plugin_pack_hook_edit_lands_within_the_ttl(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     plugin_root = tmp_path / "plug"
     conf = make_plugin_pack(plugin_root)
     plant_roster([("acme/pp", plugin_root)])
     before = fp(project)
     conf.write_text(PLUGIN_HOOK.replace("message='pp'", "message='pp-edited-and-much-longer'"))
+    assert fp(project) == before
+    assert Fingerprint.compute(project, fresh=True) != before
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
     assert fp(project) != before
 
 
-def test_plugin_pack_descriptor_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+def test_plugin_pack_hook_edit_reaches_the_served_snapshot_within_the_ttl(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_root = tmp_path / "plug"
+    conf = make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    reg = Registry(project)
+    snap = reg.get()
+    conf.write_text(PLUGIN_HOOK.replace("message='pp'", "message='pp-edited'"))
+    assert reg.get() is snap
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
+    assert any(h.spec.message == "pp-edited" for h in reg.get().state.hooks)
+
+
+def test_local_hook_edit_reaches_the_next_snapshot(project: CliState, tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    reg = Registry(project)
+    reg.get()
+    (Path(project.hooks) / "h.py").write_text(HOOK.replace("message='m'", "message='edited'"))
+    assert any(h.spec.message == "edited" for h in reg.get().state.hooks)
+
+
+def test_concurrent_fingerprints_walk_each_input_once(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker_walks: list[Path] = []
+    roster_reads: list[Path] = []
+    real_detect, real_roster = manager.detect_languages, plugins.enabled_plugins
+
+    def slow_detect(root: Path) -> set[str]:
+        marker_walks.append(root)
+        time.sleep(0.05)
+        return real_detect(root)
+
+    def slow_roster(root: Path) -> tuple[plugins.EnabledPlugin, ...]:
+        roster_reads.append(root)
+        time.sleep(0.05)
+        return real_roster(root)
+
+    monkeypatch.setattr(manager, "detect_languages", slow_detect)
+    monkeypatch.setattr(plugins, "enabled_plugins", slow_roster)
+    start = threading.Barrier(12)
+
+    def worker() -> Fingerprint:
+        start.wait()
+        return fp(project)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        prints = [f.result() for f in [pool.submit(worker) for _ in range(12)]]
+
+    assert len(marker_walks) == 1
+    assert len(roster_reads) == 1
+    assert len(set(prints)) == 1
+
+
+def test_plugin_pack_descriptor_edit_changes_fingerprint(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # No hook file and no roster entry moved, but a descriptor-only edit (resources/tools) must miss the
     # cache — the fingerprint digests each plugin pack's pack.toml stat, not just its hook tree.
     plugin_root = tmp_path / "plug"
     make_plugin_pack(plugin_root)
     plant_roster([("acme/pp", plugin_root)])
     before = fp(project)
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
     (plugin_root / manager.PLUGIN_PACK_DIRNAME / manager.PACK_DESCRIPTOR).write_text(
         'resources = ["spacy:en_core_web_sm"]\n'
     )
     assert fp(project) != before
 
 
-def test_malformed_plugin_pack_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+def test_malformed_plugin_pack_changes_fingerprint(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The loader keys on the whole capt-hook/ dir — a pack.toml without a hooks/ dir is FATAL cold. The
     # fingerprint must digest the whole dir too, or warm silently ignores a pack cold crashes on.
     plugin_root = tmp_path / "plug"
     plugin_root.mkdir()  # an enabled plugin with no capt-hook/ yet — ships no pack
     plant_roster([("acme/pp", plugin_root)])
     before = fp(project)
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
     (pack := plugin_root / manager.PLUGIN_PACK_DIRNAME).mkdir()
     (pack / manager.PACK_DESCRIPTOR).write_text("resources = []\n")  # pack.toml but no hooks/ — malformed
     assert fp(project) != before  # the fingerprint now sees the malformed capt-hook/ dir

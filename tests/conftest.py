@@ -14,7 +14,7 @@ from captain_hook import decisions, heartbeat
 from captain_hook.app import reset
 from captain_hook.conditions import ACTIVITY_PROBES
 from captain_hook.context import UNSUPPORTED_MODELS
-from captain_hook.daemon.registry import MARKER_WALKS
+from captain_hook.daemon.registry import MARKER_WALKS, PLUGIN_WALKS
 from captain_hook.durable import DurableStore
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
@@ -63,6 +63,7 @@ def clear_global_caches():
         resolve_repo_key,
         _cold_skip_permissions,
         MARKER_WALKS,
+        PLUGIN_WALKS,
         ACTIVITY_PROBES,
     )
     for cached in caches:
