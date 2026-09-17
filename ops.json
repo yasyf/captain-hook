@@ -1,1 +1,1 @@
-{"v":1,"lamport":8,"ops":[{"kind":"set_criterion_status","id":"0a2723393488aad2a6fffe79b1fa8835","status":"met","note":"Explicit repository roots, nested worktree roots, maxdepth 0/1/2, and scoped unfamiliar expressions pass Allow tests."}]}
+{"v":1,"lamport":9,"ops":[{"kind":"set_criterion_status","id":"98bd391a7ec88ca4cd6c7e9be000aeea","status":"met","note":"913 selected pytest cases, 48 performance inline cases, 21 executable documentation cases pass; Pyright, Ruff, and wheel build pass."}]}
