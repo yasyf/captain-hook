@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.40.0] - 2026-09-17
+
 ### Fixed
 
 - **A hook the caller's deadline abandoned no longer starves every other
