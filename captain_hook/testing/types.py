@@ -26,6 +26,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "tool_input": (dict,),
     "llm": (dict,),
     "tasks": (list,),
+    "background_tasks": (list,),
 }
 
 
@@ -157,6 +158,9 @@ class Input:
         transcript: Session history for transcript conditions — a path, a
             ``TranscriptFixture``, or a raw list of transcript-line dicts.
         tasks: The native task list read via ``evt.tasks``.
+        background_tasks: Background-task mappings for the ``Stop``/``SubagentStop``
+            payload, surfaced as ``evt.background_tasks`` — the shape that makes a
+            session :class:`~captain_hook.types.Waiting`.
         llm: Per-test LLM stub overrides merged over the default stub verdict
             (``fire``/``block``/``action``/``reasoning``), e.g. ``llm={"fire": False}``
             to exercise an LLM hook's judge-declines path.
@@ -184,6 +188,7 @@ class Input:
     limit: int | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
+    background_tasks: list[dict[str, Any]] | None = None
     llm: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
@@ -199,9 +204,10 @@ class Input:
                     f"Input field {name!r} must be {' or '.join(t.__name__ for t in types)} or None, "
                     f"got {type(value).__name__}"
                 )
-        for task in self.tasks or ():
-            if not isinstance(task, dict):
-                raise TypeError(f"Input field 'tasks' must contain dict elements, got {type(task).__name__}")
+        for name in ("tasks", "background_tasks"):
+            for task in getattr(self, name) or ():
+                if not isinstance(task, dict):
+                    raise TypeError(f"Input field {name!r} must contain dict elements, got {type(task).__name__}")
         for name in ("tool_input", "llm"):
             for key in getattr(self, name) or ():
                 if not isinstance(key, str):
