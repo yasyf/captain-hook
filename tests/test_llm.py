@@ -371,6 +371,22 @@ class TestLlmGateWaitAwareDefault:
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
         assert _state.hooks[0].spec.skip_if == ()
 
+    def test_stop_llm_gate_opts_out_of_waiting(self) -> None:
+        register_llm_gate(
+            "Check this",
+            message="BLOCKED",
+            when=lambda evt: True,
+            skip_if=[RanCommand("pytest")],
+            guards_waiting=False,
+        )
+        assert _state.hooks[0].spec.skip_if == (RanCommand("pytest"),)
+
+    def test_posttooluse_llm_gate_opts_into_waiting(self) -> None:
+        register_llm_gate(
+            "Check this", message="BLOCKED", when=lambda evt: True, events=Event.PostToolUse, guards_waiting=True
+        )
+        assert _state.hooks[0].spec.skip_if == (Waiting(),)
+
 
 class TestLlmGateDefaultMaxFires:
     def test_llm_gate_defaults_to_unlimited_fires(self, tmp_path: Path) -> None:

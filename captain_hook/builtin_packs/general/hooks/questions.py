@@ -17,12 +17,16 @@ user in PROSE instead of asking it with the AskUserQuestion tool.
 The user's standing rule: when work needs the user's decision, the question IS an
 AskUserQuestion call (2-4 concrete options, recommended first) in that same turn. A turn
 that ends on the question written as text, and then sits idle or proceeds on a default,
-is a bug. This covers every shape of it.
+is a bug. This covers every shape of it. Background work still running is not an excuse
+to defer the question — a background task's result is never the user's answer.
 
 Prose-question tells (lean block=true): "one decision for you", "holding for your pick",
-"let me know which", "your call", "which do you prefer", an A-or-B fork laid out as
-options, "the lane recommends X and is proceeding on X" (a decision the user never got
-a real prompt for), "want me to ...?" or "should I ...?" offers closing the message.
+"still yours to decide", "your call", "your decision", "up to you", "say the word",
+"I'll leave it to you", "needs your sign-off", "let me know which", "tell me which",
+"if you'd rather", "which do you prefer", an A-or-B fork laid out as options, a deferral
+list parked under a heading such as "Still yours to decide:", "the lane recommends X and
+is proceeding on X" (a decision the user never got a real prompt for), "want me to ...?"
+or "should I ...?" offers closing the message.
 
 Do NOT fire when: the question is rhetorical and the agent answers it itself; the agent
 quotes or reports someone else's question; the question is addressed to a subagent,
@@ -40,20 +44,27 @@ prose question) in `reasoning`.""",
     signals=Signals(
         [
             Signal(pattern=r"(?i)\bone decision for you\b", weight=2),
-            Signal(pattern=r"(?i)\bholding for your (?:pick|call|answer|decision|go-ahead)\b", weight=2),
-            Signal(pattern=r"(?i)\blet me know (?:which|what|if|whether|how)\b", weight=2),
-            Signal(pattern=r"(?i)\byour (?:call|pick)\b", weight=2),
+            Signal(pattern=r"(?i)\b(?:holding|waiting) (?:for|on) (?:your|you)\b", weight=2),
+            Signal(pattern=r"(?i)\b(?:let me know|tell me) (?:which|what|if|whether|how)\b", weight=2),
+            Signal(pattern=r"(?i)\byour (?:call|pick|decision|choice|move|shout)\b", weight=2),
+            Signal(pattern=r"(?i)\byours? to (?:decide|call|choose)\b", weight=2),
+            Signal(pattern=r"(?i)\bup to you\b", weight=2),
+            Signal(pattern=r"(?i)\bsay the word\b", weight=2),
+            Signal(pattern=r"(?i)\bif you(?:'|’)?d (?:rather|prefer)\b", weight=2),
+            Signal(pattern=r"(?i)\bleave (?:it|that|this|them) (?:up )?to you\b", weight=2),
+            Signal(pattern=r"(?i)\bneeds? your (?:call|decision|input|sign-?off)\b", weight=2),
             Signal(pattern=r"(?i)\bwhich (?:one )?(?:do|would) you (?:want|prefer|like)\b", weight=2),
-            Signal(pattern=r"(?i)\b(?:should I|want me to|shall I)\b[^.?!]*\?", weight=2),
+            Signal(pattern=r"(?i)\b(?:should I|want me to|shall I)\b[^.?!]*[.?!]", weight=2),
             Signal(pattern=r"(?i)\brecommends?\b[^.]*\b(?:proceeding|going ahead) (?:on|with)\b", weight=2),
             Signal(pattern=r"\?\s*$", weight=1),
             Signal(pattern=r"(?im)^\s*(?:[-*]\s*)?(?:option\s+[A-D1-4]\b|\(?[a-d]\)\s)", weight=1),
         ],
         threshold=2,
-        window=6,
+        window="turn",
         scope="text",
     ),
     skip_if=[UsedTool("AskUserQuestion", "ExitPlanMode")],
+    guards_waiting=False,
     events=Event.Stop,
     tests={
         Input(transcript=[T.assistant(O1_PROSE_DECISION)]): Block(pattern="AskUserQuestion"),
@@ -62,11 +73,38 @@ prose question) in `reasoning`.""",
         ),
         Input(
             transcript=[
+                T.assistant(
+                    "Both stacks are green and the boot stack is four PRs deep.\n\n"
+                    "Still yours to decide at the end: the api-actions pool PRs, #21840 and #21847."
+                )
+            ]
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[T.assistant("Still yours to decide: the api-actions pool PRs, #21840 and #21847.")],
+            background_tasks=[
+                {"id": "t1", "type": "subagent", "status": "running", "description": "pr-watcher on #21840"}
+            ],
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[
+                T.assistant("Still yours to decide: the api-actions pool PRs, #21840 and #21847."),
+                *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(8)),
+            ]
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[T.assistant("The cap is 30 slots today — up to you whether we raise it or shed jobs.")]
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[
                 T.assistant(O1_PROSE_DECISION),
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Keep the IMDS firewall?"}])),
             ]
         ): Allow(),
         Input(transcript=[T.assistant("Shipped #94; CI is green.")]): Allow(),
+        Input(
+            transcript=[T.assistant("Both pool PRs are merged; nothing is left to decide.")],
+            llm={"block": False},
+        ): Allow(),
         Input(
             transcript=[T.assistant("Why did the build fail? Let me know which key went stale: the lockfile.")],
             llm={"block": False},

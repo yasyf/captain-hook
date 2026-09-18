@@ -186,6 +186,7 @@ def llm_primitive[M: BaseModel](
     contexts: Sequence[PromptContext] = (),
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
+    guards_waiting: bool | None = None,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -238,11 +239,15 @@ def llm_primitive[M: BaseModel](
     handler.__name__ = handler.__qualname__ = name
 
     resolved = events or default_events
-    guards_waiting = action is Action.block and bool(resolved & (Event.Stop | Event.SubagentStop))
+    waiting_guarded = (
+        action is Action.block and bool(resolved & (Event.Stop | Event.SubagentStop))
+        if guards_waiting is None
+        else guards_waiting
+    )
     on(
         resolved,
         only_if=only_if,
-        skip_if=(Waiting(), *skip_if) if guards_waiting else tuple(skip_if),
+        skip_if=(Waiting(), *skip_if) if waiting_guarded else tuple(skip_if),
         max_fires=(None if action is Action.block else default_max_fires) if max_fires == DEFAULT_FIRES else max_fires,
         tests=tests,
         async_=async_,
@@ -263,6 +268,7 @@ def llm_gate(
     contexts: Sequence[PromptContext] = (),
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
+    guards_waiting: bool | None = None,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -304,6 +310,10 @@ def llm_gate(
             resolve to the same hook name. Uniqueness within the module is the author's
             responsibility. Omit it to derive the name from the prompt (the name then
             shifts whenever the prompt text changes).
+        guards_waiting: Whether to skip while :class:`~captain_hook.types.Waiting`.
+            ``None`` keeps the default — a Stop/SubagentStop gate skips, anything else
+            does not. Pass ``False`` for a gate whose whole subject is the turn that
+            parks on background work.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -329,6 +339,7 @@ def llm_gate(
         contexts=contexts,
         only_if=only_if,
         skip_if=skip_if,
+        guards_waiting=guards_waiting,
         events=events,
         max_fires=max_fires,
         tests=tests,

@@ -271,6 +271,7 @@ def mock_stop_event(
     stop_hook_active: bool = False,
     permission_mode: str | None = None,
     cwd: str | None = None,
+    background_tasks: list[dict[str, Any]] | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
@@ -278,7 +279,8 @@ def mock_stop_event(
     return StopEvent(
         _raw={"stop_hook_active": stop_hook_active}
         | ({"permission_mode": permission_mode} if permission_mode else {})
-        | ({"cwd": cwd} if cwd else {}),
+        | ({"cwd": cwd} if cwd else {})
+        | ({"background_tasks": background_tasks} if background_tasks else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -327,6 +329,7 @@ def mock_subagent_stop_event(
     agent_transcript_path: str = "",
     permission_mode: str | None = None,
     cwd: str | None = None,
+    background_tasks: list[dict[str, Any]] | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
@@ -339,7 +342,8 @@ def mock_subagent_stop_event(
             "agent_transcript_path": agent_transcript_path,
         }
         | ({"permission_mode": permission_mode} if permission_mode else {})
-        | ({"cwd": cwd} if cwd else {}),
+        | ({"cwd": cwd} if cwd else {})
+        | ({"background_tasks": background_tasks} if background_tasks else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -454,13 +458,18 @@ def input_to_event(
     }
     match ev:
         case Event.SubagentStop:
-            evt = mock_subagent_stop_event(agent_type=inp.agent_type or "", agent_id=inp.agent_id or "", **ctx_kw)
+            evt = mock_subagent_stop_event(
+                agent_type=inp.agent_type or "",
+                agent_id=inp.agent_id or "",
+                background_tasks=inp.background_tasks,
+                **ctx_kw,
+            )
         case Event.SubagentStart:
             evt = mock_subagent_start_event(agent_type=inp.agent_type or "", agent_id=inp.agent_id or "", **ctx_kw)
         case Event.UserPromptSubmit:
             evt = mock_user_prompt_event(prompt=inp.prompt or "", **ctx_kw)
         case Event.Stop:
-            evt = mock_stop_event(**ctx_kw)
+            evt = mock_stop_event(background_tasks=inp.background_tasks, **ctx_kw)
         case Event.SessionStart:
             evt = mock_session_start_event(source=inp.source or "startup", agent_id=inp.agent_id, **ctx_kw)
         case Event.SessionEnd:
