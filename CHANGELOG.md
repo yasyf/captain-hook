@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.42.0] - 2026-09-17
+
+### Added
+
+- **An inline test can express a waiting session.** `Input` takes
+  `background_tasks`, threaded through `mock_stop_event` and
+  `mock_subagent_stop_event` into the `Stop`/`SubagentStop` payload and surfaced
+  as `evt.background_tasks`. Without it no test could reproduce a gate that only
+  misfires while background work is in flight.
+
 ### Changed
 
 - **Claude-backed hook calls now run through the Claude Agent SDK rather than
