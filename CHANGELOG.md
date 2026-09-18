@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Claude-backed hook calls now run through the Claude Agent SDK rather than
+  the `claude` CLI.** The dependency becomes `spawnllm[sdk]`, which installs
+  `claude-agent-sdk` and makes spawnllm's `ClaudeSdkBackend` the first ready
+  backend for the `general` specialty. Structured output travels over the SDK's
+  typed `json_schema` transport instead of CLI flags and parsed stdout. This is
+  latency-neutral — the SDK hosts the same bundled Claude Code binary, so both
+  routes pay the same spawn, and a trivial structured call measures 5.11 s
+  median before and 4.95 s after. Isolation is unchanged: the SDK run passes
+  `setting_sources=[]`, `strict_mcp_config`, and `no-session-persistence`, so it
+  still inherits none of the caller's settings, hooks, or MCP servers.
+  Authentication still comes from the ambient `/login` session, with no new key.
+  The installed tool environment grows by about 88 MB per version, the size of
+  the CLI the SDK wheel bundles.
+
 ## [12.41.1] - 2026-09-17
 
 ### Fixed
