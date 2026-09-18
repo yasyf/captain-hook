@@ -69,8 +69,9 @@ def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
                 yield thinking
             case ToolUseBlock(name=name, input=payload):
                 match parse_tool_call(name, payload, on_error="other"):
-                    case TaskCreateCall(subject=subject, description=description) | TaskUpdateCall(
-                        subject=subject, description=description
+                    case (
+                        TaskCreateCall(subject=subject, description=description)
+                        | TaskUpdateCall(subject=subject, description=description)
                     ):
                         yield " ".join(filter(None, (subject, description)))
                     case _ if extract := PROSE_TOOLS.get(name):
@@ -98,10 +99,11 @@ def transcript_texts(
     agent's own words. Signal-driven hooks thread ``Signals.origin`` here, which
     defaults to ``"assistant"``.
 
-    A fixed ``window`` counts raw JSONL events, not turns, so tool-call traffic
-    between a target assistant message and the triggering event can crowd that
-    text out of a small window (a writeup then four ``Read`` pairs drops the
-    writeup at ``window=6``); pass ``window="turn"`` for whole-prior-turn semantics.
+    A fixed ``window`` counts scored prose entries, not raw JSONL events: tool calls
+    and their results carry no prose, so they never crowd a message out of the window,
+    and ``window=6`` means the last six texts a signal could match. The scan walks
+    backwards and stops once ``window`` entries are in hand. Use ``window="turn"`` when
+    the whole current turn is the unit regardless of how much prose it holds.
 
     On ``UserPromptSubmit`` the just-submitted prompt is not yet in the transcript,
     so it is prepended as its own entry ahead of that window: a UPS-scored hook
@@ -118,17 +120,28 @@ def transcript_texts(
     under ``origin="any"``: a relay banner echoes another agent's prose into this
     transcript, so scoring it would let one agent's words trip this agent's gate.
     """
-    scope = evt.ctx.turn if window == "turn" else evt.ctx.t.recent(window)
-    texts = [
-        text
-        for event in scope.events
-        if isinstance(event, UserEvent | AssistantEvent)
-        and not (event.meta.is_meta or event.meta.is_compact_summary)
-        and not (isinstance(event, UserEvent) and event.is_agent_injected)
-        and (origin == "any" or isinstance(event, AssistantEvent))
-        for text in (event.text, *block_texts(event))
-        if text
-    ]
+
+    def eligible(event: object) -> bool:
+        return (
+            isinstance(event, UserEvent | AssistantEvent)
+            and not (event.meta.is_meta or event.meta.is_compact_summary)
+            and not (isinstance(event, UserEvent) and event.is_agent_injected)
+            and (origin == "any" or isinstance(event, AssistantEvent))
+        )
+
+    def texts_of(event: UserEvent | AssistantEvent) -> list[str]:
+        return [text for text in (event.text, *block_texts(event)) if text]
+
+    if window == "turn":
+        texts = [text for event in evt.ctx.turn.events if eligible(event) for text in texts_of(event)]
+    else:
+        texts = []
+        for event in reversed(evt.ctx.t.events):
+            if len(texts) >= window:
+                break
+            if eligible(event):
+                texts = texts_of(event) + texts
+        texts = texts[-window:] if window else []
     if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
         return [evt.user_prompt, *texts]
     return texts

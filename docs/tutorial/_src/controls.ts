@@ -56,7 +56,7 @@ export function deriveControls(hooks: SerializedHook[], options: DeriveOptions):
       walk(cond, (c) => {
         if (c.kind === "TouchedFile") touched = true;
         else if (c.kind === "RanCommand") ran = true;
-        else if (c.kind === "Waiting") waiting = waiting || !c.implicit;
+        else if (c.kind === "Waiting") waiting = true;
         else if (c.kind === "UsedSkill") c.names.forEach((n) => skills.includes(n) || skills.push(n));
         else if (!COMPOSITE_KINDS.has(c.kind) && !unmodelled.includes(c.kind)) unmodelled.push(c.kind);
       });

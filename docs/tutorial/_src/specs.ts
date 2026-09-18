@@ -32,7 +32,7 @@ export type Condition =
   | { kind: "TouchedFile"; patterns: string[] }
   | { kind: "UsedSkill"; names: string[] }
   | { kind: "RanCommand"; argv: string[] }
-  | { kind: "Waiting"; implicit?: boolean }
+  | { kind: "Waiting" }
   | { kind: "Not"; condition: Condition }
   | { kind: "Or"; conditions: Condition[] }
   | { kind: "And"; conditions: Condition[] };

@@ -354,38 +354,28 @@ class TestLlmNudgeExitPlanModeGate:
         ctx.call_llm.assert_not_called()
 
 
-class TestLlmGateWaitAwareDefault:
-    def test_stop_llm_gate_without_skip_if_gets_waiting(self) -> None:
+class TestLlmGateSkipIfIsVerbatim:
+    def test_stop_llm_gate_without_skip_if_gets_nothing(self) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
-        assert _state.hooks[0].spec.skip_if == (Waiting(),)
+        assert _state.hooks[0].spec.skip_if == ()
 
-    def test_stop_llm_gate_skip_if_is_additive_with_waiting(self) -> None:
+    def test_stop_llm_gate_skip_if_passes_through(self) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, skip_if=[RanCommand("pytest")])
+        assert _state.hooks[0].spec.skip_if == (RanCommand("pytest"),)
+
+    def test_stop_llm_gate_opts_into_waiting_itself(self) -> None:
+        register_llm_gate(
+            "Check this", message="BLOCKED", when=lambda evt: True, skip_if=[Waiting(), RanCommand("pytest")]
+        )
         assert _state.hooks[0].spec.skip_if == (Waiting(), RanCommand("pytest"))
 
-    def test_posttooluse_llm_gate_is_not_wait_aware(self) -> None:
+    def test_posttooluse_llm_gate_gets_nothing(self) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, events=Event.PostToolUse)
         assert _state.hooks[0].spec.skip_if == ()
 
-    def test_llm_nudge_is_not_wait_aware(self) -> None:
+    def test_llm_nudge_gets_nothing(self) -> None:
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
         assert _state.hooks[0].spec.skip_if == ()
-
-    def test_stop_llm_gate_opts_out_of_waiting(self) -> None:
-        register_llm_gate(
-            "Check this",
-            message="BLOCKED",
-            when=lambda evt: True,
-            skip_if=[RanCommand("pytest")],
-            guards_waiting=False,
-        )
-        assert _state.hooks[0].spec.skip_if == (RanCommand("pytest"),)
-
-    def test_posttooluse_llm_gate_opts_into_waiting(self) -> None:
-        register_llm_gate(
-            "Check this", message="BLOCKED", when=lambda evt: True, events=Event.PostToolUse, guards_waiting=True
-        )
-        assert _state.hooks[0].spec.skip_if == (Waiting(),)
 
 
 class TestLlmGateDefaultMaxFires:
