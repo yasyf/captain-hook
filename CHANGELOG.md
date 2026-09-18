@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `setting_sources=[]`, `strict_mcp_config`, and `no-session-persistence`, so it
   still inherits none of the caller's settings, hooks, or MCP servers.
   Authentication still comes from the ambient `/login` session, with no new key.
-  The installed tool environment grows by about 88 MB per version, the size of
-  the CLI the SDK wheel bundles.
+  The cost is disk: the SDK wheel bundles the Claude Code binary, so each
+  installed tool environment grows by about 213 MB on macOS arm64 (an 88 MB
+  download that unpacks to a 206 MB executable), and `capt-hook update run`
+  keeps one environment per released version.
 
 ## [12.41.1] - 2026-09-17
 
