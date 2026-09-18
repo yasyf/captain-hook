@@ -22,6 +22,7 @@ from captain_hook.types import (
     Signal,
     Signals,
     TCondition,
+    Waiting,
 )
 
 if TYPE_CHECKING:
@@ -44,6 +45,7 @@ def nudge(
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
+    guards_waiting: bool | None = None,
     block: bool = False,
     advisory_on_deny: bool = False,
     events: Event | None = None,
@@ -57,8 +59,10 @@ def nudge(
     ``when`` and ``signals`` compose: signals decide whether the message fires, and ``when``
     is a veto checked first (both must pass). The triggering event defaults to ``Stop |
     SubagentStop`` for a blocking gate, ``PostToolUse`` for a signal-scored nudge, and
-    ``PreToolUse`` otherwise; pass ``events=`` to override. A Stop gate that should hold its
-    peace while background work runs says so: ``skip_if=[Waiting()]``.
+    ``PreToolUse`` otherwise; pass ``events=`` to override. Blocking Stop/SubagentStop gates
+    additionally skip while :class:`~captain_hook.types.Waiting`, on top of any ``skip_if`` —
+    pass ``guards_waiting=False`` for a gate whose subject *is* the turn that parks on
+    background work, and ``guards_waiting=True`` to opt a non-gate into the same skip.
 
     ``skip_planning_agents`` defaults to ``None``, resolving to ``not block``: a blocking gate
     enforces on every agent type, while a warning nudge skips planning/exploration subagents
@@ -110,10 +114,13 @@ def nudge(
     resolved = events or (
         (Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse
     )
+    waiting_guarded = (
+        block and bool(resolved & (Event.Stop | Event.SubagentStop)) if guards_waiting is None else guards_waiting
+    )
     on(
         resolved,
         only_if=only_if,
-        skip_if=tuple(skip_if),
+        skip_if=(Waiting(), *skip_if) if waiting_guarded else tuple(skip_if),
         max_fires=(None if block else 3 if sig else 1) if max_fires == DEFAULT_FIRES else max_fires,
         tests=tests,
         async_=async_,
@@ -129,6 +136,7 @@ def gate(
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
+    guards_waiting: bool | None = None,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -137,9 +145,10 @@ def gate(
 ) -> None:
     """Register a blocking gate — ``nudge(message, block=True, ...)`` with an explicit signature.
 
-    A gate keeps enforcing: it defaults to unlimited fires (once per turn). A gate that should
-    hold its peace while background work runs passes ``skip_if=[Waiting()]`` itself — nothing is
-    injected for it, because whether background work excuses the turn is the gate's own question.
+    A gate keeps enforcing: it defaults to unlimited fires (once per turn) and skips while the
+    session is :class:`~captain_hook.types.Waiting`, additively with any ``skip_if`` given. Pass
+    ``guards_waiting=False`` to turn that skip off — the one gate that needs it is the gate whose
+    subject is the turn that parks on background work instead of finishing.
     Because it blocks, ``skip_planning_agents`` resolves (via ``None``) to ``False`` — enforcement
     runs on every agent type, including delegated ``general-purpose`` subagents at ``SubagentStop``.
 
@@ -152,6 +161,7 @@ def gate(
         signals=signals,
         only_if=only_if,
         skip_if=skip_if,
+        guards_waiting=guards_waiting,
         block=True,
         events=events,
         max_fires=max_fires,

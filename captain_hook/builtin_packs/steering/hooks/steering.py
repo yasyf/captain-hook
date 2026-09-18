@@ -19,7 +19,6 @@ from captain_hook import (
     Signals,
     T,
     Tool,
-    Waiting,
     Warn,
     llm_gate,
     llm_nudge,
@@ -607,7 +606,7 @@ tell that decided it) in `reasoning`.""",
         ],
     ),
     events=Event.PostToolUse | Event.Stop | Event.SubagentStop,
-    skip_if=[InPlanMode(), Waiting()],
+    skip_if=[InPlanMode()],
     tests={
         Input(
             transcript=[

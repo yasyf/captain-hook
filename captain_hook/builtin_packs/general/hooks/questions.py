@@ -64,6 +64,7 @@ prose question) in `reasoning`.""",
         scope="text",
     ),
     skip_if=[UsedTool("AskUserQuestion", "ExitPlanMode")],
+    guards_waiting=False,
     events=Event.Stop,
     tests={
         Input(transcript=[T.assistant(O1_PROSE_DECISION)]): Block(pattern="AskUserQuestion"),

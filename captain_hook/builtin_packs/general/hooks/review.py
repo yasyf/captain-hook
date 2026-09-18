@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Block, EditedSource, Event, Input, T, Waiting, llm_gate
+from captain_hook import Allow, Block, EditedSource, Event, Input, T, llm_gate
 from captain_hook.builtin_packs.general.hooks._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
 
 llm_gate(
@@ -20,7 +20,6 @@ llm_gate(
     message="Review flagged an issue to fix before stopping: {reasoning}",
     diff=True,
     only_if=[EditedSource()],
-    skip_if=[Waiting()],
     events=Event.Stop,
     tests={
         Input(

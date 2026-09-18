@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: fb19b73a1c18f8cef0e6dbad6915c3f31cd9ee4be66d1b965977075807e0f24f
+// capt-hook-widget src-sha256: 23fda2c3413fe374370456ebe6012f76435722054c05de4a7b229437e18f8d9d
 
 // autocomplete.ts
 var counter = 0;
@@ -367,7 +367,7 @@ function deriveControls(hooks, options) {
       walk(cond, (c) => {
         if (c.kind === "TouchedFile") touched = true;
         else if (c.kind === "RanCommand") ran = true;
-        else if (c.kind === "Waiting") waiting = true;
+        else if (c.kind === "Waiting") waiting = waiting || !c.implicit;
         else if (c.kind === "UsedSkill") c.names.forEach((n) => skills.includes(n) || skills.push(n));
         else if (!COMPOSITE_KINDS.has(c.kind) && !unmodelled.includes(c.kind)) unmodelled.push(c.kind);
       });

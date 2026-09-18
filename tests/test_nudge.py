@@ -170,22 +170,25 @@ class TestGateDefaultEvents:
         assert _state.hooks[-1].spec.events == (Event.Stop | Event.SubagentStop)
 
 
-class TestGateSkipIfIsVerbatim:
+class TestGateWaitAwareDefault:
     @pytest.mark.parametrize(
         ("skip_if", "expected"),
         [
-            pytest.param((), (), id="stop_gate_without_skip_if_gets_nothing"),
-            pytest.param([RanCommand("pytest")], (RanCommand("pytest"),), id="stop_gate_skip_if_passes_through"),
+            pytest.param((), (Waiting(),), id="stop_gate_without_skip_if_gets_waiting"),
             pytest.param(
-                [Waiting(), RanCommand("pytest")],
+                [RanCommand("pytest")],
                 (Waiting(), RanCommand("pytest")),
-                id="stop_gate_opts_into_waiting_itself",
+                id="stop_gate_skip_if_is_additive_with_waiting",
             ),
         ],
     )
     def test_gate_skip_if(self, skip_if: Any, expected: tuple[Any, ...]) -> None:
         register_gate("gate message", skip_if=skip_if)
         assert _state.hooks[-1].spec.skip_if == expected
+
+    def test_gate_opts_out_of_waiting(self) -> None:
+        register_gate("gate message", skip_if=[RanCommand("pytest")], guards_waiting=False)
+        assert _state.hooks[-1].spec.skip_if == (RanCommand("pytest"),)
 
     @pytest.mark.parametrize(
         ("kwargs"),
@@ -198,8 +201,8 @@ class TestGateSkipIfIsVerbatim:
         register_nudge("nudge", **kwargs)
         assert _state.hooks[-1].spec.skip_if == ()
 
-    def test_stop_gate_skips_while_waiting_when_it_asks_to(self, tmp_path: Path) -> None:
-        register_gate("You must stop!", skip_if=[Waiting()])
+    def test_stop_gate_skips_while_waiting(self, tmp_path: Path) -> None:
+        register_gate("You must stop!")
 
         ctx = build_ctx(transcript=disk_fixture_session(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
         evt = make_stop_event(ctx=ctx)
@@ -207,8 +210,8 @@ class TestGateSkipIfIsVerbatim:
 
         assert result is None
 
-    def test_stop_gate_fires_while_waiting_by_default(self, tmp_path: Path) -> None:
-        register_gate("You must stop!")
+    def test_stop_gate_fires_while_waiting_when_it_opts_out(self, tmp_path: Path) -> None:
+        register_gate("You must stop!", guards_waiting=False)
 
         ctx = build_ctx(transcript=disk_fixture_session(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
         evt = make_stop_event(ctx=ctx)
