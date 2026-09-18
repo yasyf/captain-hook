@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A fixed signal `window` counts scored prose entries, not raw JSONL events.**
+  `window=6` meant "the last six transcript events", and tool calls and their
+  results are events that carry no prose, so a message followed by a handful of
+  reads fell out of scoring range before it could be matched. It now means the
+  last six texts a signal could match, scanned backwards with an early exit, so
+  intervening tool traffic costs a window nothing. `window="turn"` is unchanged.
+
+- **`gate`, `nudge(block=True)`, and `llm_gate` no longer inject `Waiting()` into
+  `skip_if`.** A blocking Stop gate silently skipped whenever a background shell,
+  subagent, workflow, monitor, or scheduled wake-up was in flight, and no
+  parameter turned that off — so a gate whose whole subject is the turn that
+  parks on background work could never fire. `skip_if` is now taken verbatim and
+  a gate that wants the guard passes `Waiting()` itself, which every builtin gate
+  that wants it now does. Out-of-tree packs relying on the injection must add
+  `skip_if=[Waiting()]` to keep the old behaviour.
+
+### Fixed
+
+- **The general pack's prose-question gate fires on the deferral formulas agents
+  actually use.** "Still yours to decide: ..." scored zero against the gate's
+  signals, so its judge was never consulted and the turn ended on a question the
+  user was never asked. The signal set now covers `yours to decide/call/choose`,
+  `up to you`, `say the word`, `if you'd rather`, `leave it to you`,
+  `needs your sign-off`, `tell me which`, and `your decision/choice/move`, and a
+  closing `Want me to ...` offer no longer needs a question mark.
+
 ## [12.41.1] - 2026-09-17
 
 ### Fixed

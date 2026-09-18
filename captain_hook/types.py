@@ -814,10 +814,10 @@ class Signals:
     nothing. A veto's ``weight`` is meaningless and must be left at its default.
 
     ``window`` bounds how much transcript each scoring pass reads: the last
-    ``window`` events by default, or the whole current turn with the ``"turn"``
-    sentinel. Use ``"turn"`` when the tell can sit hundreds of events before the
-    turn ends — a fixed window at ``Stop`` only reaches the last few tool
-    exchanges.
+    ``window`` scored prose entries by default, or the whole current turn with the
+    ``"turn"`` sentinel. Entries are the texts a signal can match — messages and
+    thinking blocks — so intervening tool calls never push a message out of range.
+    Use ``"turn"`` when the whole turn is the unit however much prose it holds.
     """
 
     patterns: Sequence[Signal | NlpSignal]
