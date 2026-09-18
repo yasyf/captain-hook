@@ -170,15 +170,16 @@ class TestGateDefaultEvents:
         assert _state.hooks[-1].spec.events == (Event.Stop | Event.SubagentStop)
 
 
-class TestGateWaitAwareDefault:
+class TestGateSkipIfIsVerbatim:
     @pytest.mark.parametrize(
         ("skip_if", "expected"),
         [
-            pytest.param((), (Waiting(),), id="stop_gate_without_skip_if_gets_waiting"),
+            pytest.param((), (), id="stop_gate_without_skip_if_gets_nothing"),
+            pytest.param([RanCommand("pytest")], (RanCommand("pytest"),), id="stop_gate_skip_if_passes_through"),
             pytest.param(
-                [RanCommand("pytest")],
+                [Waiting(), RanCommand("pytest")],
                 (Waiting(), RanCommand("pytest")),
-                id="stop_gate_skip_if_is_additive_with_waiting",
+                id="stop_gate_opts_into_waiting_itself",
             ),
         ],
     )
@@ -197,14 +198,23 @@ class TestGateWaitAwareDefault:
         register_nudge("nudge", **kwargs)
         assert _state.hooks[-1].spec.skip_if == ()
 
-    def test_stop_gate_skips_while_waiting(self, tmp_path: Path) -> None:
-        register_gate("You must stop!")
+    def test_stop_gate_skips_while_waiting_when_it_asks_to(self, tmp_path: Path) -> None:
+        register_gate("You must stop!", skip_if=[Waiting()])
 
         ctx = build_ctx(transcript=disk_fixture_session(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
         evt = make_stop_event(ctx=ctx)
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
         assert result is None
+
+    def test_stop_gate_fires_while_waiting_by_default(self, tmp_path: Path) -> None:
+        register_gate("You must stop!")
+
+        ctx = build_ctx(transcript=disk_fixture_session(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is not None
 
 
 class TestNudgeMessageDedent:

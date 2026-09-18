@@ -73,8 +73,8 @@ PRIMITIVE_DESCRIPTIONS = {
         "clobbering a present one"
     ),
     "gate": (
-        "`Stop \\| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive "
-        "with an automatic `Waiting()`"
+        "`Stop \\| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is taken "
+        "verbatim — a gate that should hold while background work runs passes `Waiting()` itself"
     ),
     "nudge": (
         "`PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns"

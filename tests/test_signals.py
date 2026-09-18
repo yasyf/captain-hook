@@ -325,6 +325,40 @@ class TestMatchSignalsAggregation:
         ]
 
 
+class TestFixedWindowCountsProseEntries:
+    """A fixed ``window`` counts scored prose, so tool traffic never crowds a message out."""
+
+    @staticmethod
+    def stop_event(messages: list[dict[str, Any]]) -> Any:
+        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.testing.types import Input
+        from captain_hook.types import Event
+
+        return input_to_event(Event.Stop, Input(transcript=messages))
+
+    def test_tool_calls_do_not_consume_the_window(self) -> None:
+        from captain_hook.signals import transcript_texts
+
+        evt = self.stop_event(
+            [
+                T.assistant("the tell sits here"),
+                *(T.assistant(T.tool("Read", file_path=f"src/f{n}.py")) for n in range(8)),
+            ]
+        )
+        assert transcript_texts(evt, 2, "assistant") == ["the tell sits here"]
+
+    def test_window_keeps_the_last_n_prose_entries_in_order(self) -> None:
+        from captain_hook.signals import transcript_texts
+
+        evt = self.stop_event([T.assistant(f"message {n}") for n in range(5)])
+        assert transcript_texts(evt, 2, "assistant") == ["message 3", "message 4"]
+
+    def test_window_zero_reads_no_transcript(self) -> None:
+        from captain_hook.signals import transcript_texts
+
+        assert transcript_texts(self.stop_event([T.assistant("the tell sits here")]), 0, "assistant") == []
+
+
 class TestMatchSignalsPerText:
     """``scope="text"`` thresholding: a fire needs one candidate text to meet threshold alone."""
 
@@ -598,11 +632,12 @@ class TestTranscriptTextsProse:
         assert self.texts_for(messages, "turn") == ["second question", "new answer"]
         assert self.texts_for(messages, 10) == ["first question", "old answer", "second question", "new answer"]
 
-    def test_turn_window_out_reaches_int_window(self) -> None:
+    def test_int_window_reaches_past_tool_traffic(self) -> None:
         messages = [T.assistant("early deferral")] + [
             line for i in range(6) for line in T.tool_turn("Read", file_path=f"/tmp/f{i}.py")
         ]
-        assert "early deferral" not in self.texts_for(messages, 10)
+        # The window counts scored prose, so twelve intervening tool events cost it nothing.
+        assert self.texts_for(messages, 1) == ["early deferral"]
         assert self.texts_for(messages, "turn") == ["early deferral"]
 
 
