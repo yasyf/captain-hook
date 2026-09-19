@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 
     from captain_hook.cli import CliState, ToolReg
 
-MAX_SNAPSHOTS = 8
 BUILD_RETRIES = 3
 MARKER_TTL = 30.0
 PLUGIN_TTL = 30.0
@@ -121,7 +120,7 @@ class RegistrySnapshot:
 
 
 class Registry:
-    def __init__(self, cli_state: CliState, *, maxsize: int = MAX_SNAPSHOTS) -> None:
+    def __init__(self, cli_state: CliState, *, maxsize: int = 8) -> None:
         self._cli_state = cli_state
         self._cache: LRUDict[Fingerprint, RegistrySnapshot] = LRUDict(maxsize)
         self._build_lock = threading.Lock()

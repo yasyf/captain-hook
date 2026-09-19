@@ -35,9 +35,6 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import CandidateView, JudgeHealth, SpawnHealth
 
-DETAIL_WIDTH = 80
-KIND_STYLE = {CandidateKind.CREATE: "cyan", CandidateKind.FIX: "magenta"}
-SPAWN_STALE_AFTER = timedelta(days=7)
 REJECTED_COLLAPSE_N = 5
 
 
@@ -77,7 +74,7 @@ def stage_of(view: CandidateView) -> Stage:
             return Stage.ELIGIBLE if view.eligible else Stage.WATCHING
 
 
-def trim(text: str, *, width: int = DETAIL_WIDTH) -> str:
+def trim(text: str, *, width: int = 80) -> str:
     return flat if len(flat := " ".join(text.split())) <= width else flat[: width - 1] + "…"
 
 
@@ -145,7 +142,7 @@ def candidate_block(view: CandidateView, settings: ReviewSettings) -> Renderable
         Text.assemble(
             (f"  #{view.row['id']}", "bold"),
             "  ",
-            (kind.value.ljust(6), KIND_STYLE[kind]),
+            (kind.value.ljust(6), {CandidateKind.CREATE: "cyan", CandidateKind.FIX: "magenta"}[kind]),
             "  ",
             lead_detail(view, settings),
         ),
@@ -165,7 +162,7 @@ def relative(stamp: str) -> str:
 
 
 def spawn_stale(stamp: str) -> bool:
-    return datetime.now(UTC) - datetime.fromisoformat(stamp) > SPAWN_STALE_AFTER
+    return datetime.now(UTC) - datetime.fromisoformat(stamp) > timedelta(days=7)
 
 
 def judge_segment(judge: JudgeHealth) -> str:

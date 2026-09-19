@@ -35,16 +35,12 @@ if TYPE_CHECKING:
 GATE_FREEVARS = frozenset({"block", "message", "sig", "when"})
 REWRITE_FREEVARS = frozenset({"pattern", "replace", "note"})
 
-# Python-only regex syntax with no JS equivalent — refused so parity can't silently diverge.
-INLINE_FLAG = re.compile(r"\(\?[aiLmsux]+[):]")
-FORBIDDEN_REGEX = ("(?P<", "(?P=", "\\A", "\\Z")
-
 # A \N{name} escape preceded by an even number of backslashes: a real named escape, not \\N literal.
 NAMED_ESCAPE = re.compile(r"(?<!\\)(?:\\\\)*\\N\{")
 
 
 def check_regex_dialect(pattern: str) -> str:
-    if INLINE_FLAG.search(pattern) or any(tok in pattern for tok in FORBIDDEN_REGEX):
+    if re.search(r"\(\?[aiLmsux]+[):]", pattern) or any(tok in pattern for tok in ("(?P<", "(?P=", "\\A", "\\Z")):
         raise ValueError(f"regex {pattern!r} uses Python-only syntax outside the JS-shared subset")
     return pattern
 

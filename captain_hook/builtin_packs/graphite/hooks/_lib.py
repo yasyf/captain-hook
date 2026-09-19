@@ -15,9 +15,7 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
 
 REVIEW_SKILL_PREFIX = "cc-review"
-REVIEW_COMMAND = re.compile(r"<command-name>/?cc-review", re.IGNORECASE)
 
-JJ_INFO_FLAGS = frozenset({"-h", "--help", "-V", "--version"})
 JJ_READS = frozenset(
     {
         ("log",),
@@ -57,7 +55,9 @@ def is_review_skill(skill: str) -> bool:
 
 def jj_read(call: Call) -> bool:
     verbs = tuple(target.value for target in call.targets)
-    return not JJ_INFO_FLAGS.isdisjoint(call.flags) or any(verbs[: len(read)] == read for read in JJ_READS)
+    return not {"-h", "--help", "-V", "--version"}.isdisjoint(call.flags) or any(
+        verbs[: len(read)] == read for read in JJ_READS
+    )
 
 
 def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
@@ -167,5 +167,5 @@ class ReviewPassRan(CustomCondition):
     def check(self, evt: BaseHookEvent) -> bool:
         t = evt.ctx.transcript
         return any(is_review_skill(skill) for window in t.deep_inputs() for skill in window.skills) or any(
-            REVIEW_COMMAND.search(turn.prompt) for turn in t.turns if turn.prompt
+            re.search(r"<command-name>/?cc-review", turn.prompt, re.IGNORECASE) for turn in t.turns if turn.prompt
         )

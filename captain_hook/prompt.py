@@ -9,8 +9,6 @@ from pathlib import Path
 from captain_hook.state import FRAMEWORK_DIR, framework_frame
 from captain_hook.util import reqenv
 
-PLACEHOLDER = re.compile(r"(?<![{$])\{([A-Za-z_]\w*)\}(?!\})")
-
 
 def dedent_text(text: str) -> str:
     return textwrap.dedent(text).strip()
@@ -38,7 +36,7 @@ def render_template(text: str, **vars: object) -> str:
             raise KeyError(f"template variable {name!r} not supplied")
         return str(vars[name])
 
-    return PLACEHOLDER.sub(repl, text)
+    return re.sub(r"(?<![{$])\{([A-Za-z_]\w*)\}(?!\})", repl, text)
 
 
 @dataclass(frozen=True, kw_only=True)

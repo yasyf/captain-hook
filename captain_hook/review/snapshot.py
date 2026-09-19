@@ -31,8 +31,6 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import CandidateView, ReviewStore
 
-SCHEMA_IDENTITY = "captain-hook.status.v1"
-SCHEMA_VERSION = 1
 SCHEMA_DESCRIPTOR = (
     "captain-hook.status.v1|identity:string|schema_version:uint64|fingerprint:sha256hex|"
     "generated_at:rfc3339|capt_hook_version:string|repos:[{key:string,name:string,watching:bool,"
@@ -42,13 +40,11 @@ SCHEMA_DESCRIPTOR = (
     "judge_pending:int64}"
 )
 SCHEMA_FINGERPRINT = "ef46e55d15f15bc622e6cbf032fbb23f7917e232e01a44a94f426643c10738bc"
-DIST_NAME = "capt-hook"
-OPEN_PR_CAP = 20
 
 
 def capt_hook_version() -> str:
     """The installed ``capt-hook`` distribution version, stamped into every snapshot."""
-    return importlib.metadata.version(DIST_NAME)
+    return importlib.metadata.version("capt-hook")
 
 
 def _utcnow() -> datetime:
@@ -94,7 +90,7 @@ async def _repo_entry(store: ReviewStore, repo: dict[str, object], *, settings: 
             "rejected": counts[Stage.REJECTED],
             "stale": counts[Stage.STALE],
         },
-        "open_prs": [_open_pr_entry(view) for view in open_prs[:OPEN_PR_CAP]],
+        "open_prs": [_open_pr_entry(view) for view in open_prs[:20]],
     }
 
 
@@ -113,8 +109,8 @@ async def build_snapshot(store: ReviewStore, *, settings: ReviewSettings) -> dic
     spawn = await store.spawn_health()
     judge = await store.judge_health()
     return {
-        "identity": SCHEMA_IDENTITY,
-        "schema_version": SCHEMA_VERSION,
+        "identity": "captain-hook.status.v1",
+        "schema_version": 1,
         "fingerprint": SCHEMA_FINGERPRINT,
         "generated_at": _iso_z(_utcnow()),
         "capt_hook_version": capt_hook_version(),

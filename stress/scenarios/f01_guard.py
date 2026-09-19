@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from stress.sandbox import Sandbox
 
 FAMILY = "guard"
-NO_SPAWN_WINDOW = 1.5
 MALFORMED_CASES: tuple[tuple[str, str], ...] = (
     ("empty-stdin", ""),
     ("not-json", "not json"),
@@ -38,7 +37,7 @@ MALFORMED_CASES: tuple[tuple[str, str], ...] = (
 
 
 def lingering_spawn(sandbox: Sandbox) -> list[int]:
-    return wait_for(lambda: pids if (pids := spawn_pids(sandbox)) else None, timeout=NO_SPAWN_WINDOW) or []
+    return wait_for(lambda: pids if (pids := spawn_pids(sandbox)) else None, timeout=1.5) or []
 
 
 def silent_no_spawn(sandbox: Sandbox, label: str, proc: subprocess.CompletedProcess[str], before: str) -> Check:

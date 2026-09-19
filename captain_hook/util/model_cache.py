@@ -17,16 +17,13 @@ from captain_hook.util import http
 from captain_hook.util.paths import resolve_cache_home
 
 MODEL_NAME = "en_core_web_sm"
-WN_LEXICON = "oewn"
-WN_VERSION = "2025+"
-WN_SPEC = f"{WN_LEXICON}:{WN_VERSION}"
+WN_SPEC = "oewn:2025+"
 WN_ARCHIVE_NAME = "english-wordnet-2025-plus.xml.gz"
 WN_ASSET_URL = (
     "https://github.com/globalwordnet/english-wordnet/releases/download/2025-edition/english-wordnet-2025-plus.xml.gz"
 )
 WN_ARCHIVE_SIZE = 12_925_887
 WN_ARCHIVE_SHA256 = "31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc"
-WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 
 
 def cache_root() -> Path:
@@ -55,7 +52,7 @@ def model_sha256(version: str) -> str:
     body = fetch_json(f"https://api.github.com/repos/explosion/spacy-models/releases/tags/{MODEL_NAME}-{version}")[
         "body"
     ]
-    if not (match := WHEEL_CHECKSUM.search(body)):
+    if not (match := re.search(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`", body)):
         raise RuntimeError(f"no wheel checksum in release notes for {MODEL_NAME}-{version}")
     return match.group(1)
 

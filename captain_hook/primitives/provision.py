@@ -14,8 +14,6 @@ from captain_hook.types import Event, InlineTests, TCondition
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
 
-STDERR_TAIL = 2000
-
 
 def install_binary(
     script: str | Path,
@@ -65,7 +63,7 @@ def install_binary(
         if proc.returncode == 0:
             logger.bind(label=label, script=str(resolved)).info(f"install_binary {label}: ok")
         else:
-            tail = (proc.stderr or "").strip()[-STDERR_TAIL:]
+            tail = (proc.stderr or "").strip()[-2000:]
             logger.bind(label=label, script=str(resolved)).warning(
                 f"install_binary {label}: exit {proc.returncode}: {tail}"
             )

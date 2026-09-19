@@ -66,8 +66,7 @@ NON_SOURCE_SUFFIXES = (
     ".cfg",
     ".lock",
 )
-MAX_ACTIVITY_PROBES = 32
-ACTIVITY_PROBES: LRUDict[tuple[Path, int, int, int, frozenset[str], int], bool] = LRUDict(MAX_ACTIVITY_PROBES)
+ACTIVITY_PROBES: LRUDict[tuple[Path, int, int, int, frozenset[str], int], bool] = LRUDict(32)
 ACTIVITY_PROBE_LOCK = threading.Lock()
 
 

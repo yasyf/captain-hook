@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 
 RECENT_WINDOW = 15
-UNSUPPORTED_MODEL = re.compile(r'(?:^|\s)ERROR: \{.*"status":\s*400\b.*\bmodel\b.*\bnot supported\b')
 UNSUPPORTED_MODELS: dict[tuple[str, str], ModelRejection] = {}
 UNSUPPORTED_MODELS_LOCK = threading.Lock()
 
@@ -48,7 +47,9 @@ def is_unsupported_model(exc: BaseException) -> bool:
     """
     from spawnllm import BackendCallError
 
-    return isinstance(exc, BackendCallError) and UNSUPPORTED_MODEL.search(last_error_line(exc)) is not None
+    return isinstance(exc, BackendCallError) and bool(
+        re.search(r'(?:^|\s)ERROR: \{.*"status":\s*400\b.*\bmodel\b.*\bnot supported\b', last_error_line(exc))
+    )
 
 
 def remember_model_rejection(specialty: str, model: str, exc: BaseException, backend: LlmBackend | None) -> None:

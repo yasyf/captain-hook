@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
 
 VALID_CONDITION_TYPES = tuple(t for t in get_args(TCondition) if t is not CustomCondition)
-VALID_CONDITION_NAMES = ", ".join(t.__name__ for t in VALID_CONDITION_TYPES) + ", or a CustomCondition"
 
 
 class AsyncDecisionError(TypeError):
@@ -62,7 +61,7 @@ def validate_conditions(conditions: Sequence[TCondition], label: str, events: Ev
         if not isinstance(c, (*VALID_CONDITION_TYPES, CustomCondition)):
             raise TypeError(
                 f"Invalid condition in {label}: {c!r} (type {type(c).__name__}). "
-                f"Expected one of: {VALID_CONDITION_NAMES}."
+                f"Expected one of: {', '.join(t.__name__ for t in VALID_CONDITION_TYPES)}, or a CustomCondition."
             )
         if events is not None and not (events & (valid := condition_events(c))):
             raise TypeError(

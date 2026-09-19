@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
     from captain_hook.prompt import Prompt
 
-SNAKE_CASE = re.compile(r"(?<!^)(?=[A-Z])")
 WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
 PIN_EXCERPT_CAP = 2_000  # the pin header must not crowd out the source under the enclosing max_context slice
 
@@ -217,7 +216,7 @@ class Introduced:
         if self.kind is not None and not isinstance(self.kind, frozenset):
             object.__setattr__(self, "kind", frozenset([self.kind] if isinstance(self.kind, str) else self.kind))
         if self.tag is None:
-            object.__setattr__(self, "tag", SNAKE_CASE.sub("_", type(self).__name__).lower())
+            object.__setattr__(self, "tag", re.sub(r"(?<!^)(?=[A-Z])", "_", type(self).__name__).lower())
 
     def keep(self, text: str) -> bool:
         """Whether an introduced construct's text belongs in the block — override to filter."""

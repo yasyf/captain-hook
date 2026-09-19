@@ -20,12 +20,8 @@ if TYPE_CHECKING:
 
     from stress.sandbox import Sandbox
 
-SESSION_TIMEOUT = 900
 
-
-def claude_p(
-    sandbox: Sandbox, *args: str, max_turns: int = 8, timeout: int = SESSION_TIMEOUT
-) -> subprocess.CompletedProcess[str]:
+def claude_p(sandbox: Sandbox, *args: str, max_turns: int = 8, timeout: int = 900) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["claude", "-p", *args, "--model", "sonnet", "--permission-mode", "acceptEdits", "--max-turns", str(max_turns)],
         env=sandbox.env(),

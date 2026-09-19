@@ -23,8 +23,6 @@ if TYPE_CHECKING:
 
     from stress.sandbox import Sandbox
 
-GH_TIMEOUT = 60
-
 
 @dataclass(frozen=True, slots=True)
 class ThrowawayRepo:
@@ -32,7 +30,7 @@ class ThrowawayRepo:
     url: str
 
 
-def gh(*args: str, timeout: int = GH_TIMEOUT) -> subprocess.CompletedProcess[str]:
+def gh(*args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
 
 

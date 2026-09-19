@@ -7,8 +7,6 @@ from pathlib import PurePath
 
 from captain_hook.util import reqenv
 
-SKIP_PERMISSIONS_FLAGS = frozenset({"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"})
-JS_RUNTIMES = frozenset({"node", "bun", "deno"})
 MAX_WALK = 20
 
 
@@ -60,7 +58,7 @@ def is_claude(tokens: list[str]) -> bool:
     match tokens:
         case [exe, *_] if PurePath(exe).name == "claude":
             return True
-        case [exe, *args] if PurePath(exe).name in JS_RUNTIMES:
+        case [exe, *args] if PurePath(exe).name in {"node", "bun", "deno"}:
             return any(is_claude_cli_js(arg) for arg in args)
         case _:
             return False
@@ -73,7 +71,7 @@ def walk_skip_permissions(start_pid: int) -> bool:
             return False
         ppid, command = entry
         if is_claude(tokens := command.split()):
-            return not SKIP_PERMISSIONS_FLAGS.isdisjoint(tokens)
+            return not {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}.isdisjoint(tokens)
         if ppid <= 1:
             return False
         pid = ppid

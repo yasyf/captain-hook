@@ -12,20 +12,15 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "tutorial" / "_src"
 WIDGETS_DIR = SRC_DIR.parent / "widgets"
 NODE_MODULES = SRC_DIR / "node_modules"
 TOOL_ALIASES_JSON = SRC_DIR / "generated" / "tool_aliases.json"
-LOCK = SRC_DIR / "package-lock.json"
 CI_STAMP = NODE_MODULES / ".capt-hook-ci-stamp"
 
 # The wllama single-thread WebAssembly runtime is the one asset esbuild can't bundle (a binary
 # loaded by URL at runtime), so it is copied out of node_modules and self-hosted alongside the
 # bundles; llm.js passes its committed URL through as the wllama lane's `assets.default`.
-WLLAMA_WASM_SRC = NODE_MODULES / "@wllama" / "wllama" / "esm" / "wasm" / "wllama.wasm"
 WLLAMA_WASM_DST = WIDGETS_DIR / "wllama" / "wllama.wasm"
 
 BANNER_PREFIX = "// capt-hook-widget src-sha256: "
 COMMON_FLAGS = ("--bundle", "--format=esm", "--target=es2022", "--platform=browser", "--log-level=warning")
-
-# Config and generated inputs (beyond the TS sources) that every bundle's hash covers.
-HASHED_INPUTS = ("package.json", "package-lock.json", "tsconfig.json", "generated/tool_aliases.json")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +58,7 @@ def write_tool_aliases() -> None:
 
 
 def ensure_node_modules() -> None:
-    want = hashlib.sha256(LOCK.read_bytes()).hexdigest()
+    want = hashlib.sha256((SRC_DIR / "package-lock.json").read_bytes()).hexdigest()
     if CI_STAMP.exists() and CI_STAMP.read_text() == want:
         return
     subprocess.run(["npm", "ci"], cwd=SRC_DIR, check=True)
@@ -72,7 +67,7 @@ def ensure_node_modules() -> None:
 
 def copy_wllama_wasm() -> None:
     WLLAMA_WASM_DST.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(WLLAMA_WASM_SRC, WLLAMA_WASM_DST)
+    shutil.copyfile(NODE_MODULES / "@wllama" / "wllama" / "esm" / "wasm" / "wllama.wasm", WLLAMA_WASM_DST)
 
 
 def typecheck() -> None:
@@ -94,7 +89,7 @@ def src_hash() -> str:
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")
-    for name in HASHED_INPUTS:
+    for name in ("package.json", "package-lock.json", "tsconfig.json", "generated/tool_aliases.json"):
         digest.update(name.encode())
         digest.update(b"\0")
         digest.update((SRC_DIR / name).read_bytes())

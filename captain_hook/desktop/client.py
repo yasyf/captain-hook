@@ -22,9 +22,6 @@ from captain_hook.util import reqenv
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-APP_PATH = Path.home() / "Applications" / "Captain Hook.app"
-INSTALLED_BRIDGE = APP_PATH / "Contents" / "Helpers" / "capt-hook-helper-client"
-
 BRIDGE_TIMEOUT = 7.0
 PAYLOAD_CAP = 64 * 1024
 
@@ -56,7 +53,7 @@ def bridge_path() -> Path:
     """The fixed app-embedded signed bridge, with a test-only override."""
     if override := reqenv.getenv("CAPT_HOOK_HELPER_CLIENT"):
         return Path(override)
-    return INSTALLED_BRIDGE
+    return Path.home() / "Applications" / "Captain Hook.app" / "Contents" / "Helpers" / "capt-hook-helper-client"
 
 
 def status_path() -> Path:

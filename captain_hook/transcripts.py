@@ -177,8 +177,7 @@ def readable_transcript(path: Path) -> bool:
     return path.is_file() and path.stat().st_size <= MAX_TRANSCRIPT_BYTES
 
 
-MAX_ROLLOUT_INDEXES = 4
-ROLLOUT_INDEXES: LRUDict[Path, RolloutIndex] = LRUDict(MAX_ROLLOUT_INDEXES)
+ROLLOUT_INDEXES: LRUDict[Path, RolloutIndex] = LRUDict(4)
 ROLLOUT_INDEXES_LOCK = threading.Lock()
 
 

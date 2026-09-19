@@ -40,7 +40,6 @@ from captain_hook.update.settings import UpdateSettings
 from captain_hook.util import reqenv
 from captain_hook.util.http import GitHubFetchError, github_get_json
 
-RELEASES_URL = "https://api.github.com/repos/yasyf/captain-hook/releases/latest"
 UPDATE_STAMP = "check.stamp"
 APPLY_STAMP = "apply.stamp"
 ESCALATION_RECORD = "escalation"
@@ -72,7 +71,7 @@ def version_tuple(version: str) -> tuple[int, ...]:
 
 
 def latest_release_tag() -> str:
-    return str(github_get_json(RELEASES_URL)["tag_name"])
+    return str(github_get_json("https://api.github.com/repos/yasyf/captain-hook/releases/latest")["tag_name"])
 
 
 def installed_version() -> str | None:

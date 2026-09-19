@@ -42,11 +42,6 @@ DANGEROUS_MCP_VERBS = frozenset(
 COMMAND_KEY = re.compile(r"cmd|command|script|shell|exec|args|argv|run|code", re.ASCII | re.IGNORECASE)
 MAX_SCAN_DEPTH = 12
 
-DESTRUCTIVE_EXECUTABLES = frozenset({"rm", "dd", "shred", "truncate"})
-DOWNLOADERS = frozenset({"curl", "wget"})
-FORCE_PUSH_FLAG = re.compile(r"(--?force(-with-lease)?|-f|--delete)(=.*)?")
-PAYLOAD_SCAN_LIMIT = 8192
-
 
 def payload_leaves(items: list[object], depth: int) -> Iterator[object]:
     for item in items:
@@ -89,20 +84,20 @@ def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
 def is_dangerous_call(call: Call) -> bool:
     if "sudo" in call.wrappers or call.name == "sudo":
         return True
-    if call.name in DESTRUCTIVE_EXECUTABLES or call.name.startswith("mkfs"):
+    if call.name in {"rm", "dd", "shred", "truncate"} or call.name.startswith("mkfs"):
         return True
     if call.name == "git":
         match call.targets.targets[0].value if call.targets else None:
             case "reset" | "clean" | "restore":
                 return True
             case "push":
-                return any(FORCE_PUSH_FLAG.fullmatch(flag) for flag in call.flags)
+                return any(re.fullmatch(r"(--?force(-with-lease)?|-f|--delete)(=.*)?", flag) for flag in call.flags)
     return False
 
 
 def pipes_into_shell(cmd: Cmd) -> bool:
     return any(
-        call.occurrence.next_op == "|" and call.name in DOWNLOADERS and nxt.name in SHELLS
+        call.occurrence.next_op == "|" and call.name in {"curl", "wget"} and nxt.name in SHELLS
         for call, nxt in pairwise(cmd.calls())
     )
 
@@ -157,8 +152,7 @@ class DangerousPayloadCommand(CustomCondition):
         # Replace lone surrogates (unencodable, would crash the parser) and cap before Cmd.parse,
         # which itself falls open (None) on pathological nesting.
         return any(
-            (cmd := Cmd.parse(text[:PAYLOAD_SCAN_LIMIT].encode(errors="replace").decode())) is not None
-            and is_dangerous_cmd(cmd)
+            (cmd := Cmd.parse(text[:8192].encode(errors="replace").decode())) is not None and is_dangerous_cmd(cmd)
             for text in command_texts(evt.input.raw)
         )
 

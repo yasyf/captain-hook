@@ -50,11 +50,8 @@ if TYPE_CHECKING:
     from captain_hook.types import RegisteredHook
 
 # capt-hook plugin/marketplace identity, rehomed from the deleted packs.contract module.
-DIST_NAME = "capt-hook"
-DEFAULT_PREFIX = f"uvx --isolated {DIST_NAME}"
+DEFAULT_PREFIX = "uvx --isolated capt-hook"
 PLUGIN_ID = "captain-hook@captain-hook"
-MARKETPLACE_NAME = "captain-hook"
-MARKETPLACE_REPO = "yasyf/captain-hook"
 # A captain-hook dependency version floor is a lower bound: `>=X.Y.Z` (a bare pin or `<=`/`==`
 # would not let a newer captain-hook resolve). `pack test` requires it in a pack plugin's plugin.json.
 VERSION_FLOOR_RE = re.compile(r">=\s*\d+\.\d+\.\d+")
@@ -211,7 +208,7 @@ def register_marketplace(root: Path) -> None:
         existing
         | {
             "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {})
-            | {MARKETPLACE_NAME: {"source": {"source": "github", "repo": MARKETPLACE_REPO}, "autoUpdate": True}},
+            | {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}, "autoUpdate": True}},
             "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
         },
     )

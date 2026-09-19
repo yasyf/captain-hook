@@ -39,7 +39,6 @@ STATUS_NUDGE_CANDIDATE = {
 AMBIGUOUS_SESSION = "stress-fix-ambiguous"
 STOP_SESSION = "stress-fix-stop"
 GROUP_SESSIONS = ("stress-fix-g1", "stress-fix-g2")
-CANDIDATE_COLUMNS = "candidate_kind, status, target_source_file, target_hook_name, misfire_class"
 
 
 def enable(sandbox: Sandbox) -> None:
@@ -62,7 +61,10 @@ def fix_events(sandbox: Sandbox) -> list[dict[str, Any]]:
 
 
 def fix_candidates(sandbox: Sandbox) -> list[dict[str, Any]]:
-    return query(sandbox.review_db, f"SELECT {CANDIDATE_COLUMNS} FROM candidates")
+    return query(
+        sandbox.review_db,
+        "SELECT candidate_kind, status, target_source_file, target_hook_name, misfire_class FROM candidates",
+    )
 
 
 def ambiguous_planted() -> Planted:

@@ -30,9 +30,7 @@ if TYPE_CHECKING:
 
     from loguru import Message, Record
 
-MAX_SESSION_HANDLES = 64
 DAEMON_LOG_ROTATION = "10 MB"
-DAEMON_LOG_RETENTION = 5
 
 # Keys bound only for routing/context by request_scope — never rendered into a line (cold logs
 # carry neither) and never truncated (the router reads session_log_path to pick the target file).
@@ -55,7 +53,7 @@ def daemon_format(template: str) -> Callable[[Record], str]:
 
 
 class SessionFileRouter:
-    def __init__(self, *, maxsize: int = MAX_SESSION_HANDLES) -> None:
+    def __init__(self, *, maxsize: int = 64) -> None:
         self._maxsize = maxsize
         self._handles: OrderedDict[str, TextIO] = OrderedDict()
         self._lock = threading.Lock()
@@ -137,7 +135,7 @@ def configure_daemon_logging(key: str) -> SessionFileRouter:
                 "format": daemon_format(FILE_FORMAT),
                 "filter": lambda record: not record["extra"].get("session_log_path"),
                 "rotation": DAEMON_LOG_ROTATION,
-                "retention": DAEMON_LOG_RETENTION,
+                "retention": 5,
                 "encoding": "utf-8",
                 "enqueue": False,
                 "opener": private_log_opener,

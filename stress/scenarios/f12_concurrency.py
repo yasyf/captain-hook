@@ -33,8 +33,6 @@ FAMILY = "concurrency"
 NO_BRAIN_ENV = {"HOOKS_REVIEW_MAX_OPEN_PRS": "0"}
 SLOW_JUDGE_ENV = {"HOOKS_REVIEW_JUDGE_CONCURRENCY": "1", "HOOKS_REVIEW_MAX_OPEN_PRS": "0"}
 CORRECTION = "never log with print in this repo, always use the loguru logger [[judge:tooling_rule]]"
-PR_URL = "https://github.com/capt-hook-stress/race/pull/1"
-LOCKED_ERROR = "sqlite3.OperationalError: database is locked"
 LOCKED_FINDING = (
     "concurrent SessionEnd deliveries race DecisionLog.open on a fresh decisions.db: cc_transcript/decisions.py "
     "runs `PRAGMA journal_mode = WAL` BEFORE `PRAGMA busy_timeout = 2000`, so when two reviewer children open "
@@ -44,7 +42,7 @@ LOCKED_FINDING = (
 )
 HAMMER_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("review", "list"),
-    ("review", "update", "1", "pr_open", "--pr-url", PR_URL),
+    ("review", "update", "1", "pr_open", "--pr-url", "https://github.com/capt-hook-stress/race/pull/1"),
 )
 
 
@@ -139,7 +137,7 @@ def race_attempt(sandbox: Sandbox, n: int) -> RaceAttempt:
     log = sub.spawn_log_text()
     return RaceAttempt(
         rcs=tuple(proc.returncode for proc in procs),
-        crashes=log.count(LOCKED_ERROR),
+        crashes=log.count("sqlite3.OperationalError: database is locked"),
         reports=tuple(spawn_reports(sub)),
         recorded=frozenset(str(row["path"]) for row in query(sub.review_db, "SELECT path FROM files")),
         planted=frozenset(str(path) for path in paths),

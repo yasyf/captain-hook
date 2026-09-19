@@ -45,8 +45,6 @@ BRAIN_ENV = {
     "HOOKS_REVIEW_BRAIN_MAX_BUDGET_USD": "3.0",
     "HOOKS_REVIEW_BRAIN_MAX_TURNS": "40",
 }
-SPAWN_TIMEOUT = 1800
-AUTOFIRE_WAIT = 180
 
 
 def wire_session_end(sandbox: Sandbox, command: str) -> None:
@@ -63,7 +61,7 @@ def run_autofire(sandbox: Sandbox) -> ScenarioResult:
     wire_session_end(sandbox, f"{sandbox.bin}/capt-hook review run")
     (sandbox.repo / "app.py").write_text("x = 1\n")
     session = run_session(sandbox, "Reply with the single word: ok", max_turns=1, timeout=150)
-    reports = wait_for_report(sandbox, count=1, timeout=AUTOFIRE_WAIT)
+    reports = wait_for_report(sandbox, count=1, timeout=180)
     log = sandbox.spawn_log_text()
     return ScenarioResult(
         checks=(
@@ -88,7 +86,7 @@ def spawn_over(sandbox: Sandbox, transcript: str) -> str:
         "--cwd",
         str(sandbox.repo),
         sandbox=sandbox,
-        timeout=SPAWN_TIMEOUT,
+        timeout=1800,
     )
     return proc.stdout + proc.stderr
 

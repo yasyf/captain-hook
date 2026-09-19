@@ -15,8 +15,6 @@ if TYPE_CHECKING:
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
-MAX_SOURCE_BYTES = 128 * 1024 * 1024
-
 
 @dataclass(slots=True)
 class _Entry:
@@ -30,7 +28,7 @@ class _Entry:
     lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
 
 
-_CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(MAX_SOURCE_BYTES, weigh=attrgetter("size"))
+_CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(128 * 1024 * 1024, weigh=attrgetter("size"))
 _LOCK = threading.Lock()
 
 

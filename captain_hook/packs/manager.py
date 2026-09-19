@@ -35,17 +35,12 @@ PACK_DESCRIPTOR = "pack.toml"
 HOOKS_DIRNAME = "hooks"
 # The fixed subdir under an enabled plugin's root that carries its pack (pack.toml + hooks/).
 PLUGIN_PACK_DIRNAME = "capt-hook"
-BUILTIN_PACKS_PACKAGE = "captain_hook.builtin_packs"
 
-# Builtins active in every repo, no detection.
-UNCONDITIONAL_BUILTINS = ("fixes", "general", "graphite", "performance", "steering")
 # Language builtins activate when a recursive, non-ignored build manifest exists anywhere in the repo.
 LANGUAGE_MARKERS: dict[str, tuple[str, ...]] = {
     "go": ("go.mod", "go.work"),
     "python": ("pyproject.toml",),
 }
-# Dirs never descended when scanning for language markers, on top of .gitignore: VCS metadata.
-PRUNE_DIRS = frozenset({".git", ".jj", ".hg", ".svn"})
 
 
 def pack_module_name(name: str) -> str:
@@ -207,7 +202,7 @@ class ResolvedPack:
 
 
 def builtin_packs_root() -> Path:
-    return Path(str(importlib.resources.files(BUILTIN_PACKS_PACKAGE)))
+    return Path(str(importlib.resources.files("captain_hook.builtin_packs")))
 
 
 def builtin_names() -> tuple[str, ...]:
@@ -296,7 +291,7 @@ def detect_languages(root: Path) -> frozenset[str]:
         dirnames[:] = [
             d
             for d in dirnames
-            if d not in PRUNE_DIRS
+            if d not in {".git", ".jj", ".hg", ".svn"}
             and not (spec is not None and spec.match_file(f"{rel_dir}/{d}/" if rel_dir else f"{d}/"))
         ]
     return frozenset(found)
@@ -304,4 +299,4 @@ def detect_languages(root: Path) -> frozenset[str]:
 
 def active_builtins(root: Path) -> tuple[str, ...]:
     """The builtin pack names active for ``root``: the unconditional ones plus detected languages, name-ordered."""
-    return tuple(sorted({*UNCONDITIONAL_BUILTINS, *detect_languages(root)}))
+    return tuple(sorted({"fixes", "general", "graphite", "performance", "steering", *detect_languages(root)}))

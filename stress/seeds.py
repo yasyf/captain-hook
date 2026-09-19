@@ -23,10 +23,7 @@ if TYPE_CHECKING:
     from captain_hook.review.judge import Category
     from captain_hook.review.store import ReviewStore
 
-PRIMITIVE_NUDGE = "/x/site-packages/captain_hook/primitives/nudge.py"
 NUDGE_MESSAGE = "Remember to use the project's task tracker before running status checks."
-GIT_STATUS_DIGEST = tool_digest("Bash", {"command": "git status"})
-INJECTED_MODEL = "stress-injected"
 
 
 def seed_decision(
@@ -35,11 +32,11 @@ def seed_decision(
     ts_ms: int,
     session_id: str,
     kind: str = "status_nudge:nudge_c424798f",
-    source_file: str = PRIMITIVE_NUDGE,
+    source_file: str = "/x/site-packages/captain_hook/primitives/nudge.py",
     event: str = "PreToolUse",
     action: str = "warn",
     message: str | None = NUDGE_MESSAGE,
-    digest: ToolDigest | None = GIT_STATUS_DIGEST,
+    digest: ToolDigest | None = tool_digest("Bash", {"command": "git status"}),
 ) -> None:
     DecisionLog.open(db_path).append(
         Decision(
@@ -62,7 +59,7 @@ async def inject_verdict(
     *,
     category: Category,
     confidence: float = 0.9,
-    model: str = INJECTED_MODEL,
+    model: str = "stress-injected",
     fidelity: str = "full",
     slug: str | None = None,
 ) -> None:

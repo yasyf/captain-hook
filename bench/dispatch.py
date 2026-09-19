@@ -25,7 +25,6 @@ from pathlib import Path
 from bench.measure import Command
 from capt_hook_client.client import HOST
 
-BENCH_ROOT = Path.home() / ".cache" / "capt-hook-bench"
 COLD_BUDGET_S = 60.0
 EVENT = "PostToolUse"
 
@@ -99,7 +98,7 @@ def host(root: Path) -> Command:
 
 @contextmanager
 def roots() -> Iterator[tuple[Path, Path]]:
-    warm = BENCH_ROOT / "warm"
+    warm = Path.home() / ".cache" / "capt-hook-bench" / "warm"
     warm.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="capt-hook-bench-cold-") as cold:
         yield warm, Path(cold)

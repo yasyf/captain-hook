@@ -10,9 +10,6 @@ from captain_hook.util import reqenv
 from captain_hook.util.caching import ttl_cache
 
 GRAPHITE_MARKER = ".graphite_repo_config"
-NOGT_KEY = "ccx.nogt"
-NOGT_TTL = 300.0
-NOGT_TIMEOUT = 5
 # ccx gates its own gt lane on this key parsed by Go's strconv.ParseBool, so these are
 # the exact spellings it accepts. `git config --type=bool` would also take yes/on/off,
 # which would silence a hook here while ccx still rode the gt lane.
@@ -50,15 +47,15 @@ def is_graphite_repo(directory: Path) -> bool:
     return graphite_common_dir(directory) is not None
 
 
-@ttl_cache(NOGT_TTL)
+@ttl_cache(300.0)
 def gt_disabled(common: Path) -> bool:
     try:
         probe = subprocess.run(
-            ["git", "--git-dir", str(common), "config", "--get", NOGT_KEY],
+            ["git", "--git-dir", str(common), "config", "--get", "ccx.nogt"],
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
-            timeout=NOGT_TIMEOUT,
+            timeout=5,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):

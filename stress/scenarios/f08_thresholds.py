@@ -24,8 +24,6 @@ FAMILY = "thresholds"
 TEXT_A = corpus.DURABLE_CORRECTION_LIVE
 TEXT_B = "never push directly to main, open a pull request instead"
 TEXT_C = "always run the linter before committing anything"
-FIX_SESSION = "stress-fix-strong"
-DECISION_TS = "2026-06-01T12:01:00+00:00"
 
 
 def review_cli(sandbox: Sandbox, *args: str, **env_overrides: str) -> CompletedProcess[str]:
@@ -253,8 +251,8 @@ def transitions_enforced(sandbox: Sandbox) -> ScenarioResult:
 def fix_single_observation(sandbox: Sandbox) -> ScenarioResult:
     seed_decision(
         sandbox.decisions_db,
-        ts_ms=int(datetime.fromisoformat(DECISION_TS).timestamp() * 1000),
-        session_id=FIX_SESSION,
+        ts_ms=int(datetime.fromisoformat("2026-06-01T12:01:00+00:00").timestamp() * 1000),
+        session_id="stress-fix-strong",
     )
     enable(sandbox)
     scanned = scan_transcripts(sandbox, corpus.write(corpus.fix_strong(), sandbox.transcripts, cwd=sandbox.repo))
