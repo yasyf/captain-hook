@@ -42,6 +42,7 @@ REVIEW_ROUTING_PATTERN = (
     r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
     r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))"
 )
+PROSE_CODEX_ROUTE = r"(?i)\b(codex|astra)\b"
 WRITING_VERBS = (
     "write",
     "draft",
@@ -210,19 +211,21 @@ llm_gate(
         deliverable_rubric=str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block")),
     ),
     message=(
-        "This subagent's deliverable is prose/writing work, but it will not run on fable. "
-        "{reasoning} All writing — docs, READMEs, release notes, any user-facing text — routes "
-        "to fable, and a spawn naming no model runs opus rather than inheriting the session "
-        "model: pass model='fable' explicitly. "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "This subagent would write its prose deliverable itself on a Claude model. "
+        "{reasoning} Prose routes to gpt-6-astra at xhigh through the codex skill: "
+        "Skill(codex) from the main conversation, subagent_type: 'codex:codex-wrapper' for a "
+        "delegated lane, or codex-ask -m astra for parallel lanes. Hand the writing there, or "
+        "state in the prompt that this agent delegates every sentence there and lands it "
+        "verbatim. No Claude model pin clears this; fable is not the writing lane. "
+        "See CLAUDE.md § Model Routing."
     ),
     contexts=[ProseSpawn()],
     events=Event.PreToolUse,
     only_if=[Tool("Agent|Task")],
     skip_if=[
-        ToolInput("model", r"(?i)\bfable\b"),
+        ToolInput("prompt", PROSE_CODEX_ROUTE),
         ToolInput("prompt", r"(?i)\b(classif|label|tag|categoriz|count|extract|mechanical)"),
-        Agent("Explore|claude-code-guide"),
+        Agent("Explore|claude-code-guide|codex-wrapper|codex:codex-wrapper"),
     ],
     agent=False,
     transcript=False,
@@ -231,9 +234,19 @@ llm_gate(
         Input(model="sonnet", prompt="Write the README quickstart for this repo"): Block(),
         Input(model="opus", prompt="draft the release notes for v2"): Block(),
         Input(model="haiku", prompt="update the CHANGELOG entry for the fix"): Block(),
-        Input(model="fable", prompt="write the README quickstart"): Allow(),
+        Input(model="fable", prompt="write the README quickstart"): Block(),
         Input(prompt="write the README quickstart"): Block(),
         Input(prompt="draft the release notes for v2"): Block(),
+        Input(
+            model="opus",
+            prompt="Orchestrate the incident-retro revision: rewrite the release notes and redraft "
+            "the guide. Every sentence is written by gpt-6-astra at xhigh via the codex skill and "
+            "landed verbatim; you orchestrate and never write the prose yourself.",
+        ): Allow(),
+        Input(
+            agent_type="codex:codex-wrapper",
+            prompt="Rewrite the README quickstart in the technical-builder voice",
+        ): Allow(),
         Input(model="sonnet", prompt="review the README for factual errors"): Allow(),
         Input(model="sonnet", prompt="update the retry backoff config"): Allow(),
         Input(prompt="update the retry backoff config"): Allow(),
@@ -496,11 +509,12 @@ llm_nudge(
         deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
     ),
     message=(
-        "This workflow script runs a stage whose deliverable is prose off fable. {reasoning} "
-        "All writing — docs, READMEs, release notes, any user-facing text — routes to fable, and a "
-        "stage with no model pin runs opus rather than inheriting the session model: pin "
-        "model: 'fable' on that stage. "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "This workflow script runs a stage whose deliverable is prose on a Claude model. "
+        "{reasoning} Prose routes to gpt-6-astra at xhigh through the codex skill: give that "
+        "stage agentType: 'codex:codex-wrapper' with a self-contained writing brief, or have "
+        "its prompt delegate every sentence to astra through codex and land it verbatim. No "
+        "model: pin clears this, fable included, because model: takes only Claude models. "
+        "See CLAUDE.md § Model Routing."
     ),
     contexts=[ProseWorkflowScript()],
     events=Event.PreToolUse,
@@ -510,13 +524,18 @@ llm_nudge(
     agent=False,
     transcript=False,
     tests={
-        Input(script="steps:\n  - agent: write the README intro\n    model: 'sonnet'\n"): Warn(pattern="fable"),
-        Input(script="steps:\n  - agent: write the README intro\n"): Warn(pattern="fable"),
-        Input(script="steps:\n  - agent: write the README intro\n    model: 'fable'\n", llm={"fire": False}): Allow(),
+        Input(script="steps:\n  - agent: write the README intro\n    model: 'sonnet'\n"): Warn(pattern="astra"),
+        Input(script="steps:\n  - agent: write the README intro\n"): Warn(pattern="astra"),
+        Input(script="steps:\n  - agent: write the README intro\n    model: 'fable'\n"): Warn(pattern="astra"),
+        Input(
+            script="agent('Rewrite the README quickstart', {agentType: 'codex:codex-wrapper'})",
+            llm={"fire": False},
+        ): Allow(),
         Input(script="steps:\n  - agent: fix the retry backoff\n    model: 'sonnet'\n"): Allow(),
         Input(script="agent('Audit docs/architecture.md for stale claims', {model: 'opus'})"): Allow(),
         Input(
-            script="agent('recon the module map', {model: 'sonnet'})\n// every prose stage is pinned to fable\n"
+            script="agent('recon the module map', {model: 'sonnet'})\n"
+            "// every prose stage goes to codex:codex-wrapper\n"
         ): Allow(),
         Input(
             script="agent('Fix the import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})",
