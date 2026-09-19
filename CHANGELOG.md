@@ -6,6 +6,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.44.0] - 2026-09-19
+
+### Fixed
+
+- **`prose_spawn_gate` and `prose_workflow_nudge` stopped enforcing a retired
+  routing rule.** Both hooks in `captain_hook/builtin_packs/general/hooks/models.py`
+  still demanded that prose run on fable, told the caller to pass `model='fable'`,
+  and cited `CLAUDE.md § Plan Execution & Orchestration (Models)`, a section that
+  no longer exists. The misfire that exposed it: an `Agent(model: opus)` spawn
+  whose prompt only orchestrated an incident-retro revision — every sentence of
+  prose delegated onward to gpt-6-astra through the codex skill — was blocked
+  outright, with a message instructing the caller to pin fable, a model the
+  spawn never touched. The rule is now the current one: prose routes to
+  gpt-6-astra at `xhigh` through the codex skill, and a subagent or workflow
+  `model:` takes only Claude models, so no pin — fable included — routes prose.
+  What clears a spawn is the route, not the pin. Both hook messages now cite
+  `CLAUDE.md § Model Routing`, and both judge rubrics
+  (`prompts/models/prose_spawn_gate.md`, `prose_workflow_nudge.md`) were
+  rewritten to match.
+
+### Changed
+
+- **`prose_spawn_gate`'s `skip_if` now matches the route, not a model pin.**
+  It gained a `PROSE_CODEX_ROUTE` check on the prompt (the words `codex` or
+  `astra`) and widened its agent carve-out to `codex-wrapper|codex:codex-wrapper`,
+  so an orchestrator whose prompt hands writing to codex, or a spawn that is
+  itself a `codex:codex-wrapper` agent, clears the gate. It lost the
+  `model=fable` exemption entirely, so a fable-pinned prose spawn now blocks
+  where it previously passed — the one behaviour change a caller may notice.
+  Regression coverage sits inline on both hooks: the misfire shape (an opus
+  orchestrator whose prompt delegates every sentence to astra) now returns
+  `Allow()`, as does a `codex:codex-wrapper` spawn asked to rewrite the README
+  quickstart, while a sonnet, opus, haiku, or fable spawn that writes the prose
+  itself still blocks. The new tests were verified red against the old
+  condition and green against the new.
+
 ## [12.43.0] - 2026-09-18
 
 ### Changed
