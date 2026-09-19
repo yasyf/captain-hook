@@ -1,25 +1,17 @@
 from __future__ import annotations
 
-from captain_hook import (
-    Allow,
-    Event,
-    Input,
-    Or,
-    Runs,
-    Tool,
-    hook,
-)
-from captain_hook.builtin_packs.graphite.hooks._lib import GraphiteActive, HasFlag, JJReads, PushesTagRef, ReviewPassRan
+from captain_hook import Allow, Event, Input, Tool, hook
+from captain_hook.builtin_packs.graphite.hooks._lib import GraphiteRuns, HasFlag, JJReads, PushesTagRef, ReviewPassRan
 
 # Inline tests are Allow-only: a FileFixture can't stage a nested `.git/.graphite_repo_config`, so
-# GraphiteActive() is always off at cwd="/" and every matcher short-circuits to allow. The fire path
+# GraphiteRuns() is always off at cwd="/" and every matcher short-circuits to allow. The fire path
 # (marker present, in a real gt repo/worktree) is covered by tests/test_pack_graphite.py, and so are
 # the two things inline rows cannot see: the ccx.nogt opt-out, and the JJReads carve-out, which
 # matches_conditions collapses into the same allow a failed only_if produces.
 
 hook(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), Runs("jj"), GraphiteActive()],
+    only_if=[Tool("Bash"), GraphiteRuns(("jj",))],
     skip_if=[JJReads()],
     message=(
         "BLOCKED: the repository this command targets runs on Graphite (gt), not jj — its stack metadata "
@@ -42,16 +34,15 @@ hook(
     Event.PreToolUse,
     only_if=[
         Tool("Bash"),
-        Or(
-            Runs("git", "commit"),
-            Runs("git", "push"),
-            Runs("git", "switch", "-c"),
-            Runs("git", "switch", "-C"),
-            Runs("git", "switch", "--create"),
-            Runs("git", "checkout", "-b"),
-            Runs("git", "checkout", "-B"),
+        GraphiteRuns(
+            ("git", "commit"),
+            ("git", "push"),
+            ("git", "switch", "-c"),
+            ("git", "switch", "-C"),
+            ("git", "switch", "--create"),
+            ("git", "checkout", "-b"),
+            ("git", "checkout", "-B"),
         ),
-        GraphiteActive(),
     ],
     skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef()],
     message=(
@@ -76,8 +67,7 @@ hook(
     Event.PreToolUse,
     only_if=[
         Tool("Bash"),
-        Or(Runs("gt", "submit"), Runs("gt", "s"), Runs("gt", "ss"), Runs("ccx", "vcs", "ship")),
-        GraphiteActive(),
+        GraphiteRuns(("gt", "submit"), ("gt", "s"), ("gt", "ss"), ("ccx", "vcs", "ship")),
     ],
     skip_if=[
         ReviewPassRan(),
@@ -102,8 +92,7 @@ hook(
     Event.PreToolUse,
     only_if=[
         Tool("Bash"),
-        Or(Runs("git", "rebase"), Runs("git", "merge"), Runs("git", "pull")),
-        GraphiteActive(),
+        GraphiteRuns(("git", "rebase"), ("git", "merge"), ("git", "pull")),
     ],
     skip_if=[HasFlag("--abort", "--continue", "--quit")],
     message=(

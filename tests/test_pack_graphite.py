@@ -170,6 +170,36 @@ def test_git_write_message_names_the_target_not_the_session(
     assert "in this repository" not in context
 
 
+def test_ownership_and_verb_are_judged_on_the_same_call(
+    isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command(f"git -C {gt_repo} status && jj new", git_repo, tmp_path) is None
+    assert dispatch_command(f"git -C {gt_repo} status && git push", git_repo, tmp_path) is None
+    assert_fires(dispatch_command(f"git -C {git_repo} status && jj new", gt_repo, tmp_path), "deny", "Graphite")
+
+
+def test_a_verbs_own_dash_C_is_not_a_directory_hop(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    (gt_repo / "vendor" / ".git").mkdir(parents=True)
+    assert warn_context(dispatch_command("git switch -C vendor", gt_repo, tmp_path))
+    assert warn_context(dispatch_command("git checkout -B vendor", gt_repo, tmp_path))
+
+
+def test_git_dir_resolves_against_the_dash_C_cwd_not_as_another_hop(
+    isolate_modules: None, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    root = tmp_path / "root"
+    (metadata := root / "metadata").mkdir(parents=True)
+    (metadata / ".graphite_repo_config").write_text("")
+    (separate := root / "separate").mkdir()
+    assert warn_context(dispatch_command("git --git-dir=../metadata -C separate push", root, tmp_path))
+    assert warn_context(dispatch_command(f"git --git-dir={metadata} push", separate, tmp_path))
+    assert warn_context(dispatch_command(f"git --git-dir {metadata} push", git_repo, tmp_path))
+    assert dispatch_command(f"git --git-dir={git_repo / '.git'} push", separate, tmp_path) is None
+
+
 def test_unresolvable_cd_falls_back_to_the_session_cwd(
     isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path
 ) -> None:

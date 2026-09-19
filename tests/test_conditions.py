@@ -648,6 +648,9 @@ class TestRunsCondition:
             pytest.param(Runs("git", "switch", "-c"), "git -C /tmp switch -c feature", True, id="verb_flag_kept"),
             pytest.param(Runs("git", "push"), "git -C /tmp status", False, id="git_C_wrong_verb"),
             pytest.param(Runs("git", "push"), "git -C push", False, id="git_C_eats_the_verb"),
+            pytest.param(Runs("git", "stash"), "git --help stash", False, id="help_is_not_the_verb"),
+            pytest.param(Runs("git", "stash"), "git -C /tmp -h stash", False, id="short_help_is_not_the_verb"),
+            pytest.param(Runs("git", "stash"), "git help stash", False, id="help_verb_is_not_stash"),
         ],
     )
     def test_runs(self, cond: TCondition, command: str, expected: bool) -> None:

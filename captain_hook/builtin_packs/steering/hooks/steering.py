@@ -620,8 +620,13 @@ tell that decided it) in `reasoning`.""",
             Signal(
                 pattern=(
                     r"(?i)(?:ask(?:ed|ing)?\s+the\s+user|how\s+would\s+you\s+like\s+to\s+proceed|should\s+i\s+proceed"
-                    r"|\bwant\s+me\s+to\b|would\s+you\s+(?:prefer|rather|like)|which\s+(?:option|approach|one)\b"
-                    r"|\b(?:the\s+)?options(?:\s+are)?:|\bshall\s+i\b)"
+                    r"|do\s+you\s+want\s+me\s+to|would\s+you\s+(?:prefer|rather|like)|which\s+(?:option|approach)\b)"
+                ),
+            ),
+            Signal(
+                pattern=(
+                    r"(?is)\b(?:want\s+me\s+to|shall\s+i|which\s+(?:option|approach|one)|would\s+you\s+(?:prefer|rather|like))\b"
+                    r"[^?\n]*\?(?:[ \t]*[^\n?]*:)?(?:\s*(?:[-*•]|\d+[.)])[^\n]*)*\s*\Z"
                 ),
             ),
             Signal(
@@ -887,6 +892,13 @@ tell that decided it) in `reasoning`.""",
             transcript=[
                 T.user("why are the capt-hook hooks timing out, slop-cop timing out, and SessionStart failing?"),
                 T.assistant(
+                    T.thinking(
+                        "The daemon's been running since Aug 20 with a day of uptime, but checking its environment "
+                        "via ps didn't return anything useful. I'll move on and check the registry priority instead "
+                        "to confirm codex is actually selected and see if there's a fallback mechanism on failure."
+                    )
+                ),
+                T.assistant(
                     "Three separate causes, not one.\n\n## 1. capt-hook `context deadline exceeded` — codex OAuth "
                     "token refresh storm\n\n~37 concurrent codex processes share one rotating refresh token with "
                     "no cross-process lock; each failed call burns ~24 s before raising, which blows the hook "
@@ -912,5 +924,29 @@ tell that decided it) in `reasoning`.""",
                 ),
             ]
         ): Block(),
+        Input(
+            transcript=[
+                T.assistant(
+                    "Compiler options: --strict and --no-emit. The fix requires a release. I updated the "
+                    "documentation instead of fixing it; the bug remains unfixed."
+                )
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                T.assistant(
+                    "Shall I cut the release? No — the pragmatic solution is to document the limitation in the "
+                    "README for now; the bug remains unfixed."
+                )
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                T.assistant(
+                    "Fixing this needs a cc-transcript release, so for now I documented the limitation. "
+                    "Want me to cut that release?\n- yes, cut it now\n- no, leave the note"
+                )
+            ]
+        ): Allow(),
     },
 )

@@ -107,7 +107,6 @@ def home_fixture_dir() -> Path:
 
 
 def seeded_session_dir(seen: dict[str, list[str]]) -> Path:
-    """A fresh session directory whose ``SeenKeys`` slot already holds ``seen``: ``once``/``unseen`` dedup for real."""
     from captain_hook.state import SeenKeys
 
     session_dir = fixture_file_dir() / f"session-{next(FIXTURE_FILE_COUNTER)}"
@@ -118,11 +117,6 @@ def seeded_session_dir(seen: dict[str, list[str]]) -> Path:
 
 @contextmanager
 def stubbed_commands(commands: dict[str, str] | None) -> Iterator[None]:
-    """Answer ``subprocess.run`` calls whose argv starts with a key of ``commands`` from the stub, exit 0.
-
-    Longest matching prefix wins; argv that matches no key runs for real, so a hook's own
-    ``gh``/``git`` calls are stubbed while the harness underneath stays untouched.
-    """
     if not commands:
         yield
         return
@@ -133,9 +127,12 @@ def stubbed_commands(commands: dict[str, str] | None) -> Iterator[None]:
         args: str | Sequence[str | os.PathLike[str]], *pargs: Any, **kwargs: Any
     ) -> subprocess.CompletedProcess[Any]:
         argv = tuple(str(args).split()) if isinstance(args, str) else tuple(str(arg) for arg in args)
+        text_mode = any(kwargs.get(key) for key in ("text", "universal_newlines", "encoding", "errors"))
         for prefix, stdout in prefixes:
             if argv[: len(prefix)] == prefix:
-                return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=stdout if text_mode else stdout.encode(), stderr="" if text_mode else b""
+                )
         return real_run(args, *pargs, **kwargs)
 
     with mock.patch.object(subprocess, "run", run):

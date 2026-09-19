@@ -740,6 +740,36 @@ class TestDetector:
         events = parse_events_from_bytes(path.read_bytes())
         assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
+    async def test_unrelated_recent_fingerprint_does_not_attribute_a_user_complaint(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("run a status check"),
+            assistant_tool_use("t1", "Bash", {"command": "git status"}),
+            nudge_attachment(NUDGE_MESSAGE),
+            tool_result("t1", "clean"),
+            user_text(USER_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        await seed_decision(decisions)
+        events = parse_events_from_bytes(path.read_bytes())
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
+
+    async def test_named_hook_that_never_fired_beats_a_word_overlap_fallback(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        complaint = "Fix capt-hook. The import-validator hook is broken when running Python checks."
+        write_transcript(path, [user_text("run a status check"), user_text(complaint)])
+        await seed_decision(decisions)
+        events = parse_events_from_bytes(path.read_bytes())
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
+        await seed_decision(decisions, kind="import_validator:nudge_0badf00d", ts_ms=BASE_MS - 5_000)
+        [sig] = [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)]
+        assert sig.evidence["attribution"] == "hook_name"
+        assert sig.evidence["target_source_file"] == ".claude/hooks/import_validator.py"
+
     async def test_benign_user_mention_of_capt_hook_yields_nothing(
         self, decisions: DecisionLog, tmp_path: Path
     ) -> None:

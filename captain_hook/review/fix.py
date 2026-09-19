@@ -34,11 +34,15 @@ USER turns are scanned too, under a different marker: the user naming capt-hook
 (``"capt hook"``, ``"capt-hook"``, ``"captain hook"``) beside a defect verb (fix,
 broken, misfiring, wrong, stale, out of date, forcing, should be) —
 :func:`classify_user_marker`, tolerant of the typos a human types. A user complaint
-attributes through the same fingerprint and named-hook paths, then through
-:func:`fire_message_target`: the one ledger row within :data:`NAMED_HOOK_WINDOW_MS`
-whose fire message shares at least :data:`FIRE_MESSAGE_OVERLAP` content words with
-the complaint, failing closed on zero or ambiguous matches. A user complaint about
-a hook that never fired in that session has no ledger row to join and is dropped.
+never attributes by proximity alone — a hook that happened to fire two turns earlier
+is not the one being complained about — but by its own words: a binding hook name
+(``"the X hook"``, or a hyphenated/underscored name) must match a fired hook's stem
+or the complaint is dropped, and otherwise :func:`fire_message_target` picks the one
+ledger row within :data:`NAMED_HOOK_WINDOW_MS` whose fire message shares at least
+:data:`FIRE_MESSAGE_OVERLAP` content words with the complaint, failing closed on zero
+or ambiguous matches. A preceding fingerprint of that same hook then supplies the
+trigger and the proximity bump. A user complaint about a hook that never fired in
+that session has no ledger row to join and is dropped.
 The PR target resolves by source location into a :class:`~captain_hook.review.routing.Target`
 naming the file, the hook, and the repo the fix belongs to: a watched-repo hook file is the
 target verbatim (``repo`` ``None`` — fixed in place), but an installed-wheel or plugin-pack
@@ -320,11 +324,25 @@ def name_slug(name: str) -> str:
     return re.sub(r"[-_\s]+", "", name.lower())
 
 
+def binding_hook_names(text: str) -> set[str]:
+    return {
+        name_slug(match.group(1))
+        for match in NAMED_HOOK_RE.finditer(CAPT_HOOK_RE.sub(" ", text))
+        if match.group(0).lower().startswith("the ") or re.search(r"[-_]", match.group(1))
+    }
+
+
 async def named_hook_target(
     text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
 ) -> Decision | None:
     if not (names := {name_slug(match.group(1)) for match in NAMED_HOOK_RE.finditer(text)}):
         return None
+    return await decision_named(names, decisions, session_id, near_ts_ms)
+
+
+async def decision_named(
+    names: set[str], decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
+) -> Decision | None:
     matched = [
         decision
         for decision in await decisions.for_session(session_id)
@@ -336,6 +354,16 @@ async def named_hook_target(
     if len({decision.kind for decision in matched}) != 1:
         return None
     return min(matched, key=lambda decision: abs(decision.ts_ms - near_ts_ms))
+
+
+async def user_complaint_target(
+    text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
+) -> tuple[Decision, str] | None:
+    if names := binding_hook_names(text):
+        named = await decision_named(names, decisions, session_id, near_ts_ms)
+        return None if named is None else (named, "hook_name")
+    matched = await fire_message_target(text, decisions, session_id, near_ts_ms)
+    return None if matched is None else (matched, "fire_message")
 
 
 async def fire_message_target(
@@ -438,7 +466,7 @@ async def iter_hook_complaint_signals(
     id, or by event name and timestamp proximity when it does not. Assistant turns
     carry Claude's own dismissals (:func:`classify_marker`); user turns carry the
     developer's plain-words complaints about capt-hook (:func:`classify_user_marker`),
-    which also attribute by fire-message overlap (:func:`fire_message_target`).
+    which attribute by their own words (:func:`user_complaint_target`).
 
     Args:
         events: The transcript's full ordered event stream.
@@ -459,20 +487,21 @@ async def iter_hook_complaint_signals(
             continue
         near_ts_ms = int(event.meta.timestamp.timestamp() * 1000)
         session_id = event.meta.session_id
-        if (
-            primary := await attribute_from_fingerprints(
-                decisions, uses, session_id, near_ts_ms, preceding_fingerprints(events, event_index)
+        fingerprints = preceding_fingerprints(events, event_index)
+        primary = await attribute_from_fingerprints(decisions, uses, session_id, near_ts_ms, fingerprints)
+        if isinstance(event, UserEvent):
+            if (target := await user_complaint_target(event.text, decisions, session_id, near_ts_ms)) is None:
+                continue
+            fire, attribution = target
+            trigger_index, turns_back = (
+                (primary[0], primary[1]) if primary is not None and primary[2].kind == fire.kind else (None, None)
             )
-        ) is not None:
+            attribution = "fingerprint" if trigger_index is not None else attribution
+        elif primary is not None:
             trigger_index, turns_back, fire = primary
             attribution = "fingerprint"
         elif (fire := await named_hook_target(event.text, decisions, session_id, near_ts_ms)) is not None:
             trigger_index, turns_back, attribution = None, None, "hook_name"
-        elif (
-            isinstance(event, UserEvent)
-            and (fire := await fire_message_target(event.text, decisions, session_id, near_ts_ms)) is not None
-        ):
-            trigger_index, turns_back, attribution = None, None, "fire_message"
         else:
             continue
         if (target := resolve_target(fire, index)) is None:

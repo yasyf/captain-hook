@@ -7,15 +7,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
-from captain_hook.util.vcs import graphite_lane
+from captain_hook.util.vcs import graphite_lane, graphite_lane_of_git_dir
 
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
 
     from captain_hook.cmd import Call
 
-VCS_COMMANDS = frozenset({"git", "jj", "gt", "ccx"})
-GIT_DIR_FLAGS = ("-C", "--git-dir")
 REVIEW_SKILL_PREFIX = "cc-review"
 REVIEW_COMMAND = re.compile(r"<command-name>/?cc-review", re.IGNORECASE)
 
@@ -62,49 +60,62 @@ def jj_read(call: Call) -> bool:
     return not JJ_INFO_FLAGS.isdisjoint(call.flags) or any(verbs[: len(read)] == read for read in JJ_READS)
 
 
-def git_dir_values(flags: tuple[str, ...]) -> list[str]:
-    values: list[str] = []
-    tokens = iter(flags)
-    for token in tokens:
-        if token in GIT_DIR_FLAGS:
-            if (value := next(tokens, None)) is not None:
-                values.append(value)
-        elif token.startswith("-C") and len(token) > 2:
-            values.append(token[2:])
+def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
+    cwd, git_dir = call.cwd or session_cwd, None
+    options = iter(call.leading_options)
+    for token in options:
+        if token == "-C":
+            hop = next(options, None)
+        elif token.startswith("-C"):
+            hop = token[2:]
+        elif token == "--git-dir":
+            git_dir = next(options, None)
+            continue
         elif token.startswith("--git-dir="):
-            values.append(token.removeprefix("--git-dir="))
-    return values
+            git_dir = token.removeprefix("--git-dir=")
+            continue
+        else:
+            continue
+        if hop is not None:
+            path = Path(os.path.expanduser(hop))
+            cwd = path if path.is_absolute() else (cwd / path if cwd else None)
+    if git_dir is None:
+        return cwd, None
+    path = Path(os.path.expanduser(git_dir))
+    return cwd, path if path.is_absolute() else (cwd / path if cwd else None)
 
 
-def call_directory(call: Call, fallback: Path | None) -> Path | None:
-    """The directory a VCS call operates in: its ``cd``-scoped cwd, then any ``git -C``/``--git-dir`` hop.
-
-    An unresolvable ``cd`` (``cd $OTHER``) leaves the call's cwd unknown, so the session cwd
-    stands in — the judgment every hook made before the target was resolved at all.
-    """
-    directory = call.cwd or fallback
-    for value in git_dir_values(call.flags):
-        path = Path(os.path.expanduser(value))
-        directory = path if path.is_absolute() else (directory / path if directory is not None else None)
-    return directory
+def graphite_owns(call: Call, session_cwd: Path | None) -> bool:
+    cwd, git_dir = git_location(call, session_cwd)
+    if git_dir is not None:
+        return graphite_lane_of_git_dir(git_dir)
+    return cwd is not None and graphite_lane(cwd)
 
 
-class GraphiteActive(CustomCommandLineCondition):
-    """Matches when Graphite owns the workflow in the repository a VCS call on the line targets.
+@dataclass(frozen=True, slots=True)
+class GraphiteRuns(CustomCommandLineCondition):
+    """Matches when one call runs one of ``argvs`` inside a repository Graphite owns.
 
-    Judged where the call runs — after a leading ``cd``, or through ``git -C``/``--git-dir`` —
-    not at the session cwd, so a ``cd ../plain-git-repo && git push`` from a Graphite session is
-    left alone and a ``cd ../gt-repo && git push`` from a plain-git session is not. A live
+    Ownership and verb are judged on the same call, where it runs: after a leading ``cd``, or
+    through git's own ``-C`` and ``--git-dir`` global options (``--git-dir`` resolves against the
+    ``-C`` cwd, as git does), never at the session cwd unless the call's own cannot be resolved
+    (``cd $OTHER``). So ``cd ../plain-repo && git push`` from a Graphite session is left alone,
+    ``cd ../gt-repo && git push`` from a plain-git session is not, and an unrelated
+    ``git -C ../gt-repo status`` never lends its repository to a ``jj new`` beside it. A live
     ``gt repo init`` marker is necessary but not sufficient: a repository that sets ``ccx.nogt``
     has opted out of the gt lane — ccx itself declines it there — so a stale marker must not
     make these hooks steer toward gt.
     """
 
+    argvs: tuple[tuple[str, ...], ...]
+
+    def __init__(self, *argvs: tuple[str, ...]) -> None:
+        object.__setattr__(self, "argvs", argvs)
+
     def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
         return any(
-            (directory := call_directory(call, evt.cwd)) is not None and graphite_lane(directory)
+            any(call.verb_argv[: len(argv)] == argv for argv in self.argvs) and graphite_owns(call, evt.cwd)
             for call in evt.cmd.calls()
-            if call.name in VCS_COMMANDS
         )
 
 

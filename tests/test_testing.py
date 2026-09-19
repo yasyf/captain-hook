@@ -1081,6 +1081,23 @@ class TestCommandsStubSubprocess:
         assert len(results) == 4
         assert all(r[2] for r in results), f"Failed: {results}"
 
+    def test_binary_mode_callers_get_bytes(self):
+        import subprocess
+
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input, Warn
+
+        reset()
+
+        @on(Event.Stop, tests={Input(commands={"gh pr view": "DRAFT"}): Warn(pattern="draft")})
+        def bytes_guard(evt):
+            done = subprocess.run(["gh", "pr", "view"], capture_output=True, timeout=1, cwd="/")
+            return evt.warn("still a draft") if done.stdout.decode() == "DRAFT" and done.stderr == b"" else None
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+
     def test_longest_prefix_wins_and_unmatched_argv_runs_for_real(self):
         import subprocess
 
