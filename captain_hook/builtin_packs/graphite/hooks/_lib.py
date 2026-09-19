@@ -59,15 +59,22 @@ def jj_read(call: Call) -> bool:
 
 
 class GraphiteActive(CustomCondition):
-    """Matches when Graphite owns the workflow at the session cwd.
+    """Matches when Graphite owns the workflow at the command's effective cwd.
 
     A live ``gt repo init`` marker is necessary but not sufficient: a repository that sets
     ``ccx.nogt`` has opted out of the gt lane — ccx itself declines it there — so a stale
     marker must not make these hooks steer toward gt.
+
+    The effective cwd is the last call's, not the session's: ``evt.cmd.calls()`` walks any
+    leading ``cd`` on the Bash line, so ``cd other-repo && git push`` is judged at
+    ``other-repo`` — reading ``evt.cwd`` directly applied this repo's Graphite policy to a
+    push that landed in an unrelated plain-git repo (graphite.vcs:hook_1372d16d misfire).
     """
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return evt.cwd is not None and graphite_lane(evt.cwd)
+        calls = evt.cmd.calls()
+        cwd = calls[-1].cwd if calls else evt.cwd
+        return cwd is not None and graphite_lane(cwd)
 
 
 class JJReads(CustomCommandLineCondition):

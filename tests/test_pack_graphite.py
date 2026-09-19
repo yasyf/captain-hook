@@ -121,6 +121,19 @@ def test_hook_fires_in_gt_worktree(
     assert_fires(dispatch_command(command, gt_worktree, tmp_path), kind, needle)
 
 
+# Regression for the graphite.vcs:hook_1372d16d misfire (session a568684c-4bf6-4b65-b963-40e34facc45f,
+# 2026-09-19): GraphiteActive used to read the session's cwd, so `cd <other-repo> && git push` judged
+# the push against the session's repo instead of where the push actually landed.
+def test_hook_silent_when_cd_targets_plain_git(isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command(f"cd {git_repo} && git push", gt_repo, tmp_path) is None
+
+
+def test_hook_fires_when_cd_targets_gt_repo(isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_fires(dispatch_command(f"cd {gt_repo} && git push", git_repo, tmp_path), "warn", "gt create")
+
+
 @pytest.mark.parametrize(
     "command",
     [
