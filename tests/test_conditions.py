@@ -641,6 +641,13 @@ class TestRunsCondition:
             pytest.param(Runs("git", "stash"), "echo git stash", False, id="not_first_token"),
             pytest.param(Runs("git", "stash"), "git status", False, id="wrong_subcommand"),
             pytest.param(Runs("uv", "run", "pytest"), "uv run pytest -x", True, id="three_token_prefix"),
+            pytest.param(Runs("git", "push"), "git -C /tmp push", True, id="git_C_value_flag"),
+            pytest.param(Runs("git", "push"), "git -C/tmp push", True, id="git_C_attached"),
+            pytest.param(Runs("git", "push"), "git --git-dir=/tmp/.git push", True, id="git_dir_flag"),
+            pytest.param(Runs("git", "commit"), "git -c user.name=x --no-pager commit -m y", True, id="git_globals"),
+            pytest.param(Runs("git", "switch", "-c"), "git -C /tmp switch -c feature", True, id="verb_flag_kept"),
+            pytest.param(Runs("git", "push"), "git -C /tmp status", False, id="git_C_wrong_verb"),
+            pytest.param(Runs("git", "push"), "git -C push", False, id="git_C_eats_the_verb"),
         ],
     )
     def test_runs(self, cond: TCondition, command: str, expected: bool) -> None:

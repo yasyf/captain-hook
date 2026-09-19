@@ -138,8 +138,44 @@ def test_skip_if_carve_outs_stay_silent(isolate_modules: None, gt_repo: Path, tm
 def test_submit_gate_mentions_review_and_draft(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     context = warn_context(dispatch_command("gt submit", gt_repo, tmp_path))
-    assert "review" in context
-    assert "draft" in context
+    assert "review pass" in context
+    assert "never draft" in context
+    assert "approv" not in context.lower()
+
+
+@pytest.mark.parametrize(
+    ("command", "kind", "needle"),
+    [
+        pytest.param("cd {other} && git push", "warn", "gt create", id="cd-then-git-write"),
+        pytest.param("git -C {other} push", "warn", "gt create", id="git-C-write"),
+        pytest.param("git --git-dir={other}/.git push", "warn", "gt create", id="git-dir-write"),
+        pytest.param("cd {other} && git rebase main", "warn", "gt restack", id="cd-then-restack"),
+        pytest.param("cd {other} && jj new", "deny", "Graphite", id="cd-then-jj"),
+    ],
+)
+def test_hooks_judge_the_repository_the_command_targets(
+    isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path, command: str, kind: str, needle: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command(command.format(other=git_repo), gt_repo, tmp_path) is None
+    assert_fires(dispatch_command(command.format(other=gt_repo), git_repo, tmp_path), kind, needle)
+
+
+def test_git_write_message_names_the_target_not_the_session(
+    isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    context = warn_context(dispatch_command(f"cd {gt_repo} && git push", git_repo, tmp_path))
+    assert "the repository this command targets" in context
+    assert "in this repository" not in context
+
+
+def test_unresolvable_cd_falls_back_to_the_session_cwd(
+    isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert warn_context(dispatch_command("cd $OTHER && git push", gt_repo, tmp_path))
+    assert dispatch_command("cd $OTHER && git push", git_repo, tmp_path) is None
 
 
 @pytest.mark.parametrize(

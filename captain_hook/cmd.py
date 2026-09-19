@@ -259,6 +259,21 @@ class Call:
         return self.command.redirects
 
     @property
+    def verb_argv(self) -> tuple[str, ...]:
+        """``name`` plus the arguments from the first operand on, leading global options dropped.
+
+        ``git -C <dir> push`` and ``git -c x=y push`` both read ``("git", "push")``: a registered
+        value flag (:data:`COMMAND_VALUE_FLAGS`) takes its argument with it, any other leading
+        option goes alone, and everything from the verb onward is kept verbatim.
+        """
+        value_flags = COMMAND_VALUE_FLAGS.get(self.name, ())
+        args = list(self.args)
+        while args and args[0].startswith("-"):
+            if args.pop(0) in value_flags and args:
+                args.pop(0)
+        return (self.name, *args)
+
+    @property
     def nested(self) -> bool:
         """Whether this call sits below top level — a payload or substitution hop away."""
         return self.occurrence.nesting > 0

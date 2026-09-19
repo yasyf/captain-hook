@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
@@ -12,6 +14,8 @@ if TYPE_CHECKING:
 
     from captain_hook.cmd import Call
 
+VCS_COMMANDS = frozenset({"git", "jj", "gt", "ccx"})
+GIT_DIR_FLAGS = ("-C", "--git-dir")
 REVIEW_SKILL_PREFIX = "cc-review"
 REVIEW_COMMAND = re.compile(r"<command-name>/?cc-review", re.IGNORECASE)
 
@@ -58,16 +62,50 @@ def jj_read(call: Call) -> bool:
     return not JJ_INFO_FLAGS.isdisjoint(call.flags) or any(verbs[: len(read)] == read for read in JJ_READS)
 
 
-class GraphiteActive(CustomCondition):
-    """Matches when Graphite owns the workflow at the session cwd.
+def git_dir_values(flags: tuple[str, ...]) -> list[str]:
+    values: list[str] = []
+    tokens = iter(flags)
+    for token in tokens:
+        if token in GIT_DIR_FLAGS:
+            if (value := next(tokens, None)) is not None:
+                values.append(value)
+        elif token.startswith("-C") and len(token) > 2:
+            values.append(token[2:])
+        elif token.startswith("--git-dir="):
+            values.append(token.removeprefix("--git-dir="))
+    return values
 
-    A live ``gt repo init`` marker is necessary but not sufficient: a repository that sets
-    ``ccx.nogt`` has opted out of the gt lane — ccx itself declines it there — so a stale
-    marker must not make these hooks steer toward gt.
+
+def call_directory(call: Call, fallback: Path | None) -> Path | None:
+    """The directory a VCS call operates in: its ``cd``-scoped cwd, then any ``git -C``/``--git-dir`` hop.
+
+    An unresolvable ``cd`` (``cd $OTHER``) leaves the call's cwd unknown, so the session cwd
+    stands in — the judgment every hook made before the target was resolved at all.
+    """
+    directory = call.cwd or fallback
+    for value in git_dir_values(call.flags):
+        path = Path(os.path.expanduser(value))
+        directory = path if path.is_absolute() else (directory / path if directory is not None else None)
+    return directory
+
+
+class GraphiteActive(CustomCommandLineCondition):
+    """Matches when Graphite owns the workflow in the repository a VCS call on the line targets.
+
+    Judged where the call runs — after a leading ``cd``, or through ``git -C``/``--git-dir`` —
+    not at the session cwd, so a ``cd ../plain-git-repo && git push`` from a Graphite session is
+    left alone and a ``cd ../gt-repo && git push`` from a plain-git session is not. A live
+    ``gt repo init`` marker is necessary but not sufficient: a repository that sets ``ccx.nogt``
+    has opted out of the gt lane — ccx itself declines it there — so a stale marker must not
+    make these hooks steer toward gt.
     """
 
-    def check(self, evt: BaseHookEvent) -> bool:
-        return evt.cwd is not None and graphite_lane(evt.cwd)
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return any(
+            (directory := call_directory(call, evt.cwd)) is not None and graphite_lane(directory)
+            for call in evt.cmd.calls()
+            if call.name in VCS_COMMANDS
+        )
 
 
 class JJReads(CustomCommandLineCondition):

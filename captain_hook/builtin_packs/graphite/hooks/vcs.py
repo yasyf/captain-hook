@@ -22,9 +22,9 @@ hook(
     only_if=[Tool("Bash"), Runs("jj"), GraphiteActive()],
     skip_if=[JJReads()],
     message=(
-        "BLOCKED: this repository's workflow is Graphite (gt), not jj — its stack metadata lives in "
-        'Graphite. Use `gt create -m "<msg>"` to start a stacked branch, `gt modify` to amend, `gt log` '
-        "to inspect the stack, and `gt checkout` to move between branches."
+        "BLOCKED: the repository this command targets runs on Graphite (gt), not jj — its stack metadata "
+        'lives in Graphite. Use `gt create -m "<msg>"` to start a stacked branch, `gt modify` to amend, '
+        "`gt log` to inspect the stack, and `gt checkout` to move between branches."
     ),
     block=True,
     tests={
@@ -33,6 +33,7 @@ hook(
         Input(command="git status", cwd="/"): Allow(),
         Input(command="jj log", cwd="/"): Allow(),
         Input(command="jj bookmark list", cwd="/"): Allow(),
+        Input(command="cd /tmp && jj new", cwd="/"): Allow(),
     },
 )
 
@@ -54,10 +55,10 @@ hook(
     ],
     skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef()],
     message=(
-        "Committing, branching, and pushing go through gt in this repository — `gt create -m` starts a "
-        "stacked branch, `gt modify` amends and restacks, `gt submit` opens/updates PRs. Prefer "
-        '`ccx vcs ship -m "<msg>"`, which drives the whole gt lane. Raw git rewrites leave Graphite\'s '
-        "stack metadata stale."
+        "Committing, branching, and pushing go through gt in the repository this command targets — "
+        "`gt create -m` starts a stacked branch, `gt modify` amends and restacks, `gt submit` opens/updates "
+        'PRs. Prefer `ccx vcs ship -m "<msg>"`, which drives the whole gt lane. Raw git rewrites leave '
+        "Graphite's stack metadata stale."
     ),
     tests={
         Input(command="git commit -m x", cwd="/"): Allow(),
@@ -65,6 +66,8 @@ hook(
         Input(command="git switch -c feature", cwd="/"): Allow(),
         Input(command="git switch -C main", cwd="/"): Allow(),
         Input(command="git status", cwd="/"): Allow(),
+        Input(command="cd /tmp && git push", cwd="/"): Allow(),
+        Input(command="git -C /tmp push", cwd="/"): Allow(),
     },
 )
 
@@ -82,10 +85,9 @@ hook(
         HasFlag("--no-push"),
     ],
     message=(
-        "Before submitting: has the user explicitly approved publishing these PRs? Approval to write the "
-        "code is not approval to submit it. No review pass has run this session — offer one first "
-        "(`/cc-review:start`) so the user can review the diff before it goes up. And PRs are always "
-        "published, never draft: submit without `--draft`/`-d`."
+        "Before submitting: no review pass has run this session — run one first (`/cc-review:start`), the "
+        "single finder pass over the diff a non-trivial change carries. And PRs are always published, "
+        "never draft: submit without `--draft`/`-d`."
     ),
     tests={
         Input(command="gt submit", cwd="/"): Allow(),

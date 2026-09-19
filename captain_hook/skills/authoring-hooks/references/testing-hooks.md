@@ -36,6 +36,8 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
 | `permission_mode` | e.g. plan mode | `Input(permission_mode="plan")` |
 | `skip_permissions` | Pre-seeds `evt.skip_permissions` / `SkipPermissions()`; `None` leaves the real process-tree walk in place | `Input(command="ls", skip_permissions=True)` |
 | `transcript` | Session history | `Input(transcript=[T.user("ship it"), T.assistant(T.tool("Bash", command="uv run pytest"))])` |
+| `seen` | Keys `evt.ctx.s.once`/`unseen` already saw this session, per scope (`""` for the unscoped call); backed by a real temp session dir, so "the repeat is silent" is one `Input` | `Input(command="git push", seen={"push": ["origin"]})` |
+| `commands` | `subprocess.run` stubs by argv prefix: matching argv returns the text as stdout with exit 0 (the `llm=` convention for shell-outs); unmatched argv runs for real | `Input(commands={"gh pr view": '{"isDraft": true}'})` |
 
 ## Expected outcomes
 
