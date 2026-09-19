@@ -12,7 +12,6 @@ from captain_hook import (
     Tool,
     TouchedFile,
     UsedSkill,
-    Waiting,
     Warn,
     llm_gate,
     nudge,
@@ -32,12 +31,24 @@ nudge(
     "`slop-cop check <file> --lang=markdown` to catch prose tells before you finish. "
     "slop-cop is a Go binary — if it's not on PATH, run the `/slop-cop-check` skill "
     "(it installs it), never `uvx slop-cop`.",
-    only_if=[Tool("Write|Edit"), FilePath("**/*.md", "**/*.qmd", "docs/**", "README.md")],
-    skip_if=[UsedSkill("writing-docs")],
+    only_if=[Tool("Write|Edit"), FilePath("**/*.md", "**/*.qmd", "**/docs/**", "README.md")],
+    skip_if=[UsedSkill("writing-docs", scope="session")],
     max_fires=1,
     tests={
         Input(tool="Write", file="docs/guide/x.qmd", content="# X"): Warn(pattern="writing-docs"),
+        Input(tool="Write", file="packages/cli/docs/cheatsheet.txt", content="# X"): Warn(pattern="writing-docs"),
         Input(tool="Edit", file="src/app.py", content="x = 1"): Allow(),
+        Input(
+            tool="Edit",
+            file="docs/guide/y.qmd",
+            content="# Y",
+            transcript=[
+                T.user("write the guide"),
+                T.assistant(T.tool("Skill", skill="writing-docs")),
+                T.user("now the other page"),
+                T.assistant("ok"),
+            ],
+        ): Allow(),
     },
 )
 
@@ -65,9 +76,8 @@ llm_gate(
     diff=True,
     only_if=[EditedSource()],
     skip_if=[
-        Waiting(),
         TouchedFile("**/*.md", "**/*.qmd"),
-        UsedSkill("writing-docs|writing-docs:writing-docs"),
+        UsedSkill("writing-docs", scope="session"),
         Headless(),
     ],
     events=Event.Stop,
@@ -87,6 +97,14 @@ llm_gate(
         Input(transcript=[T.assistant(T.tool("Edit", file_path="README.md", old_string="a", new_string="b"))]): Allow(),
         Input(
             transcript=[T.assistant(T.tool("Edit", file_path="tests/test_app.py", old_string="a", new_string="b"))]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.user("write the guide"),
+                T.assistant(T.tool("Skill", skill="writing-docs")),
+                T.user("now refactor the app"),
+                T.assistant(T.tool("Edit", file_path="src/app.py", old_string="a", new_string="b")),
+            ]
         ): Allow(),
         Input(transcript=SCRATCH_WORKFLOW_WRITE_FIXTURE): Allow(),
     },

@@ -1,20 +1,26 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+import re
 from typing import TYPE_CHECKING
 
 from captain_hook import (
     Allow,
     Block,
+    Call,
+    CommandSchema,
     CwdHasFiles,
     Event,
     Input,
     LambdaCondition,
+    Operand,
+    Option,
     Or,
+    PathMatches,
     RanCommand,
     Rewrite,
     Rewritten,
     Runs,
+    Target,
     Tool,
     UsedSkill,
     Warn,
@@ -24,7 +30,37 @@ from captain_hook import (
 )
 
 if TYPE_CHECKING:
-    from captain_hook import BaseHookEvent, Call, Command, HookResult, Occurrence, PreToolUseEvent, WalkContext
+    from captain_hook import Arguments, BaseHookEvent, HookResult, Occurrence, PreToolUseEvent, WalkContext
+
+FIND_TO_RG_NOTE = (
+    "Rewrote an unbounded `find` to `rg --files`: a name search rooted at $HOME or / walks every "
+    "worktree, node_modules, and build tree on the volume and pins a core for minutes. rg honours "
+    ".gitignore/.ignore and skips hidden files, so it returns the tracked hits in well under a "
+    "second. Need the ignored or hidden ones too? Re-run with `rg --files -uu` or `fd -H -I`."
+)
+FIND_EXEC_BLOCKED = (
+    "BLOCKED: `find -exec` forks one process per hit and traverses ignored trees, so it pins a core "
+    "for minutes on any real checkout. Use `fd` instead: `fd -H -i '<pattern>' <root> -x <cmd>` runs "
+    "the same command per hit, in parallel, honouring .gitignore/.ignore — and `-X` batches them "
+    "into one invocation like `-exec {} +`. To act on content matches rather than names, "
+    "`rg -l '<pattern>' | xargs <cmd>`."
+)
+FIND_TO_RG = CommandSchema(
+    "find",
+    operands=(Operand("root"),),
+    options=(
+        Option("follow", ("-L",), bool, prefix=True),
+        Option("link_mode", ("-H", "-P"), bool, prefix=True),
+        Option("name", ("-name",)),
+        Option("iname", ("-iname",)),
+        Option("type", ("-type",)),
+        Option("print", ("-print",), bool),
+    ),
+    options_end_operands=True,
+)
+UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktrees"))
+HOME_VARIABLE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
+GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
 
 hook(
     Event.PreToolUse,
@@ -183,47 +219,36 @@ nudge(
 )
 
 
-FIND_TO_RG_NOTE = (
-    "Rewrote an unbounded `find` to `rg --files`: a name search rooted at $HOME or / walks every "
-    "worktree, node_modules, and build tree on the volume and pins a core for minutes. rg honours "
-    ".gitignore/.ignore and skips hidden files, so it returns the tracked hits in well under a "
-    "second. Need the ignored or hidden ones too? Re-run with `rg --files -uu` or `fd -H -I`."
-)
-FIND_EXEC_BLOCKED = (
-    "BLOCKED: `find -exec` forks one process per hit and traverses ignored trees, so it pins a core "
-    "for minutes on any real checkout. Use `fd` instead: `fd -H -i '<pattern>' <root> -x <cmd>` runs "
-    "the same command per hit, in parallel, honouring .gitignore/.ignore — and `-X` batches them "
-    "into one invocation like `-exec {} +`. To act on content matches rather than names, "
-    "`rg -l '<pattern>' | xargs <cmd>`."
-)
+def home_respelled(target: Target) -> Target:
+    """A ``$HOME``-rooted target respelled with ``~``, since ``PathMatches`` expands no variables."""
+    if target.value is not None or not HOME_VARIABLE.match(raw := target.raw.strip("\"'")):
+        return target
+    return Target(text := HOME_VARIABLE.sub("~", raw), text, target.cwd)
 
 
-def unbounded_root(value: str) -> bool:
-    """Whether a search rooted here walks the whole volume: /, $HOME, /Users, or the worktree pool."""
-    path = value.rstrip("/") or "/"
-    if path == "$HOME" or path.startswith("$HOME/"):
-        path = "~" + path[len("$HOME") :]
-    if path.endswith("/.claude/worktrees"):
-        return True
-    if path in ("/", "~", "/Users"):
-        return True
-    parts = PurePosixPath(path).parts
-    return len(parts) == 3 and parts[:2] == ("/", "Users")
+def unbounded_root(arguments: Arguments) -> bool:
+    """Whether a search rooted here walks the whole volume: /, a home directory, or the worktree pool."""
+    return any(UNBOUNDED_ROOT(home_respelled(target)) for target in arguments.paths("root"))
 
 
-def rg_equivalent(command: Command) -> str | None:
+def rg_equivalent(call: Call) -> str | None:
     """``rg --files`` spelling one ``find`` invocation, or None when the shapes do not correspond."""
-    words = command.words[1:]
-    if not words or not unbounded_root(command.args[0]):
+    arguments = FIND_TO_RG.bind(call)
+    if not arguments.complete or arguments.values.get("type", ("f",)) != ("f",) or not unbounded_root(arguments):
         return None
-    rest = list(zip(command.args[1:], words[1:], strict=True))
-    if rest[:1] and rest[0][0] == "-type":
-        if len(rest) < 2 or rest[1][0] != "f":
+    match [(glob, words) for role, glob in GLOB_FLAGS.items() if (words := arguments.words.get(role))]:
+        case [(glob, (pattern,))]:
+            return " ".join(
+                (
+                    "rg --files",
+                    *(("-L",) if arguments.values.get("follow") else ()),
+                    arguments.words["root"][0].raw,
+                    glob,
+                    pattern.raw,
+                )
+            )
+        case _:
             return None
-        rest = rest[2:]
-    if len(rest) != 2 or (glob := {"-name": "--glob", "-iname": "--iglob"}.get(rest[0][0])) is None:
-        return None
-    return f"rg --files {words[0].raw} {glob} {rest[1][1].raw}"
 
 
 def guard_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> str | Rewritten | HookResult | None:
@@ -234,7 +259,7 @@ def guard_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> str |
         return evt.block(FIND_EXEC_BLOCKED)
     if not ctx.spliceable or command.env or command.redirects:
         return None
-    rewritten = rg_equivalent(command)
+    rewritten = rg_equivalent(Call(evt.cmd, occ, ctx.cwd))
     return Rewritten(rewritten, FIND_TO_RG_NOTE) if rewritten else None
 
 
@@ -247,6 +272,9 @@ rewrite_command_occurrences(
         # The root keeps its source spelling, so ~ still expands and the glob stays quoted.
         Input(command="find ~ -iname '*.pem'"): Rewrite(pattern="rg --files ~ --iglob '*.pem'"),
         Input(command="find $HOME -type f -iname foo"): Rewrite(pattern="rg --files $HOME --iglob foo"),
+        Input(command="find ~ -iname '*.pem' -type f"): Rewrite(pattern="rg --files ~ --iglob '*.pem'"),
+        Input(command="find -L ~ -iname '*.pem'"): Rewrite(pattern="rg --files -L ~ --iglob '*.pem'"),
+        Input(command="find ~ -name x -print"): Rewrite(pattern="rg --files ~ --glob x"),
         Input(command="find /Users/yasyf -name '*.p12'"): Rewrite(pattern="rg --files /Users/yasyf --glob '*.p12'"),
         Input(command="find ~/.claude/worktrees -iname '*.lock'"): Rewrite(
             pattern="rg --files ~/.claude/worktrees --iglob '*.lock'"
@@ -262,6 +290,9 @@ rewrite_command_occurrences(
         Input(command="find api/src -iname '*.ts'"): Allow(),
         # -type d has no rg --files equivalent -> untouched.
         Input(command="find ~ -type d -iname build"): Allow(),
+        Input(command="find ~ -iname foo -newer bar"): Allow(),
+        Input(command="find ~ -name x -print0"): Allow(),
+        Input(command="find ~ -iname a -iname b"): Allow(),
         # -exec blocks at any root, and beats the rewrite.
         Input(command=r"find . -name '*.pyc' -exec rm {} \;"): Block(),
         Input(command="find ~ -type f -exec grep -l foo {} +"): Block(),

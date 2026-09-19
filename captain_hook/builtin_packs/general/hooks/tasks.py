@@ -19,7 +19,7 @@ from captain_hook import (
     Tool,
     Waiting,
     Warn,
-    gate,
+    hook,
     nudge,
 )
 
@@ -42,13 +42,14 @@ class DriftedFromTasks(CustomCondition):
         return since.tool_calls.named("Bash|Grep|Glob|WebSearch|WebFetch|LSP|Skill").count() >= TASK_DRIFT_THRESHOLD
 
 
-gate(
+hook(
+    Event.Stop,
     "Open tasks remain. Before stopping, mark each finished task status='completed' via the "
     "TaskUpdate tool (add a note if you're deliberately deferring one), or output "
     f"{OVERRIDE_TOKEN} to acknowledge and stop. See: CLAUDE.md § Task Tracking.",
     only_if=[LambdaCondition(lambda evt: not evt.tasks.all_completed)],
     skip_if=[Waiting(), LambdaCondition(lambda evt: evt.ctx.t.has_override(OVERRIDE_TOKEN))],
-    events=Event.Stop,
+    block=True,
     tests={
         Input(tasks=[{"id": "1", "subject": "a", "status": "completed"}]): Allow(),
         Input(tasks=[{"id": "1", "subject": "a", "status": "pending"}]): Block(),
