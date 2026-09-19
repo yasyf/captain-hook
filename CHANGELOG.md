@@ -6,6 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.46.1] - 2026-09-19
+
+### Fixed
+
+- **The stop-and-replan guard could not be satisfied.** The guard blocks edit
+  tools after the user tells the agent to stop and re-plan, and cleared on
+  `UsedTool("EnterPlanMode")`. A session launched with `permission_mode=plan`
+  never calls that tool, and neither does one whose plan was presented with
+  `ExitPlanMode` alone, so the skip was unreachable and every edit stayed
+  blocked with no way out: the agent could not comply, since re-entering plan
+  mode is wrong once the plan is approved, and had to stop and ask. `skip_if`
+  is now `[InPlanMode(), UsedTool("ExitPlanMode")]`, reusing the condition that
+  already reads `permission_mode` and balances `EnterPlanMode` against
+  `ExitPlanMode`. The bare stop-work clause additionally requires the prompt to
+  mention a plan, so review feedback that stops one specific thing no longer
+  trips a global edit block, and the message names the actual remedy.
+- **The review-routing nudges rejected astra for synthesis.** Their rubrics
+  told the judges that synthesis/accept-reject over findings belongs on opus,
+  so a synthesis stage or spawn routed to gpt-6-astra read as a misroute. Opus
+  stays the default; astra at `xhigh` through `codex:codex-wrapper` is an
+  equally accepted route and is no longer a finding. Nine sites across both
+  review-routing rubrics, the implementation-spawn rubric, and the two hook
+  messages. Design/architecture review and hard planning are unchanged.
+
 ## [12.46.0] - 2026-09-19
 
 ### Fixed
