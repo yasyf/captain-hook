@@ -12,8 +12,9 @@ implementation. Repetitive bounded N-unit sweeps never run on opus: use sonnet a
 xhigh when the lanes must stay Claude-side, and gpt-6-astra at xhigh through
 codex:codex-wrapper otherwise. Shell-heavy execution also routes to astra at
 xhigh. Orchestration, multi-phase autonomous drives, long-horizon agentic runs,
-sustained tool-driving, design/architecture review, hard planning, and
-synthesis/accept-reject over findings run on opus at xhigh. Fable-5.1 keeps one
+sustained tool-driving, design/architecture review, and hard planning run on opus
+at xhigh. Synthesis/accept-reject over findings defaults to opus at xhigh, and
+astra at xhigh is an equally accepted route. Fable-5.1 keeps one
 lane: implementation of very sensitive or error-prone code, including auth,
 migrations, concurrency, data loss, crypto, and subtle algorithms, reached as a
 typed model='fable' subagent. A missed implementation lane crosses between opus

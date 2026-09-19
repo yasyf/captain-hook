@@ -11,8 +11,10 @@ code (auth, input validation, crypto, secrets), and bug diagnosis also route to
 gpt-6-astra at xhigh. Give each stage agentType: 'codex:codex-wrapper' and a
 self-contained question as its prompt, including the files or diff to inspect.
 A Claude-model stage that asks its agent to run the codex skill is the retired
-wrapper shape. Design/architecture review and synthesis/accept-reject over
-findings run on opus at xhigh. An unpinned stage runs opus; it never inherits the
+wrapper shape. Design/architecture review runs on opus at xhigh.
+Synthesis/accept-reject over findings defaults to opus at xhigh, and astra at
+xhigh through codex:codex-wrapper is an equally accepted route.
+An unpinned stage runs opus; it never inherits the
 session model. An astra miss permits escalation to opus at xhigh. Fable requires
 an actual opus xhigh miss on that work first, except for security-sensitive
 implementation, which goes directly to a typed model='fable' subagent.
@@ -23,7 +25,9 @@ Set fire=true when an astra-lane review or diagnosis stage runs on a Claude mode
 before the required prior attempt. A stage that asks a Claude model to run the
 codex skill itself stays fire=true, including in a fallback branch. Stages
 routed through codex:codex-wrapper to astra at xhigh, and design or synthesis
-stages on opus at xhigh, are routed correctly: fire=false. An opus xhigh review
+stages on opus at xhigh, are routed correctly: fire=false. A synthesis or
+accept-reject stage is never a finding on either route, opus or
+codex:codex-wrapper. An opus xhigh review
 or diagnosis stage reached only after an astra stage for the same work returns
 nothing is an allowed escalation: fire=false. A fable escalation requires an
 opus xhigh attempt to have fallen short first. A feature flag or input check
@@ -54,7 +58,11 @@ The finder routes through codex:codex-wrapper to gpt-6-astra at xhigh.
 </example>
 <example fire="false">
 agent(`Synthesize the confirmed findings and decide which to fix`, {model: 'opus', effort: 'xhigh'})
-Synthesis/accept-reject belongs on opus at xhigh.
+Synthesis/accept-reject defaults to opus at xhigh.
+</example>
+<example fire="false">
+agent(`Synthesize the confirmed findings and decide which to fix`, {agentType: 'codex:codex-wrapper', effort: 'xhigh'})
+Synthesis/accept-reject on astra at xhigh is an accepted route, not a misroute.
 </example>
 <example fire="false">
 const r = await agent(q, { agentType: 'codex:codex-wrapper', effort: 'xhigh', phase: 'Review', schema: REVIEW })

@@ -11,9 +11,11 @@ code (auth, input validation, crypto, secrets), and bug diagnosis also route to
 gpt-6-astra at xhigh. Spawn agent type 'codex:codex-wrapper' with the
 self-contained question as its prompt; use Skill(codex) from the main
 conversation. A Claude-model spawn that asks its agent to run the codex skill is
-the retired wrapper shape. Design/architecture review, approach judgment, and
-synthesis/accept-reject over findings belong on opus at xhigh. All prose/writing
-routes to astra at xhigh; reading a prose artifact does not make it code review.
+the retired wrapper shape. Design/architecture review and approach judgment
+belong on opus at xhigh. Synthesis/accept-reject over findings defaults to opus at
+xhigh, and astra at xhigh through codex:codex-wrapper is an equally accepted
+route. All prose/writing routes to astra at xhigh; reading a prose artifact does
+not make it code review.
 Security-sensitive implementation goes directly to a typed model='fable'
 subagent and is outside this review nudge. For review or diagnosis, escalate an
 astra miss to opus at xhigh. Fable is available only after opus at xhigh has
@@ -25,11 +27,12 @@ to run the codex skill itself. The retired wrapper shape stays fire=true even
 when called an escalation. A codex:codex-wrapper spawn at xhigh is routed
 correctly: fire=false. An opus xhigh escalation after a stated astra miss, or a
 fable escalation after a stated opus xhigh miss, is allowed: fire=false. An astra
-miss alone does not clear a fable spawn. Design review, synthesis, prose review,
-and implementation are outside this nudge: fire=false; their own lanes still
-apply. When uncertain, fire=false — the agent may have chosen the route
-deliberately, and a false alarm teaches it to ignore this nudge. Keep reasoning
-under 40 words.
+miss alone does not clear a fable spawn. Design review, prose review, and
+implementation are outside this nudge: fire=false; their own lanes still apply.
+Synthesis/accept-reject is outside it on either of its routes: an opus spawn and a
+codex:codex-wrapper astra spawn are both fire=false. When uncertain, fire=false —
+the agent may have chosen the route deliberately, and a false alarm teaches it to
+ignore this nudge. Keep reasoning under 40 words.
 
 <examples>
 <example fire="true">
@@ -54,7 +57,11 @@ Design/architecture judgment belongs on opus at xhigh and is outside this code-r
 </example>
 <example fire="false">
 Synthesize the confirmed findings and decide which to fix before release.
-Synthesis/accept-reject belongs on opus at xhigh.
+Synthesis/accept-reject defaults to opus at xhigh.
+</example>
+<example fire="false">
+agentType: codex:codex-wrapper — Synthesize the confirmed review findings and decide which to fix.
+Synthesis/accept-reject on astra at xhigh is an accepted route, not a misroute.
 </example>
 <example fire="false">
 Review the README draft for factual errors.
