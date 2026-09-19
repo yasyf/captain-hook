@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from captain_hook import CommandMatches, CommandSchema, Operand, Option, OptionIs, PathMatches, PathsMatch
-from captain_hook.command_schemas import FIND
+from captain_hook.command_schemas import FIND, GIT_PUSH
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
@@ -35,6 +35,57 @@ def test_expression_arguments_are_not_roots(command: str, roots: tuple[str, ...]
     assert arguments.values["roots"] == roots
     assert arguments.values.get("max_depth", ()) == depth
     assert arguments.complete
+
+
+@pytest.mark.parametrize(
+    ("command", "options", "targets"),
+    [
+        ("git push", set(), ()),
+        ("git push origin main", set(), ("origin", "main")),
+        ("git push -d origin main", {"delete"}, ("origin", "main")),
+        ("git push origin main --delete", {"delete"}, ("origin", "main")),
+        ("git push --prune origin", {"delete"}, ("origin",)),
+        ("git push -uf origin main", {"force"}, ("origin", "main")),
+        ("git push -nuf origin main", {"force"}, ("origin", "main")),
+        ("git push --force-with-lease=origin/main origin HEAD", {"force"}, ("origin", "HEAD")),
+        ("git push --mirror origin", {"force"}, ("origin",)),
+        ("git -C repo --no-pager push -o ci.skip --force origin main", {"force"}, ("origin", "main")),
+        ("git push -oci.skip --force origin main", {"force"}, ("origin", "main")),
+        ("git push --push-option=ci.skip --no-verify -f origin main", {"force"}, ("origin", "main")),
+        ("git push origin +main :old HEAD:new", set(), ("origin", "+main", ":old", "HEAD:new")),
+        ("git push origin main -- -d", set(), ("origin", "main", "-d")),
+    ],
+)
+def test_git_push_binds_destructive_options_and_targets(
+    command: str, options: set[str], targets: tuple[str, ...]
+) -> None:
+    arguments = GIT_PUSH.bind(evt_for(command).cmd.call("git"))
+    assert arguments.values["verb"] == ("push",)
+    assert {"force", "delete"} & arguments.values.keys() == options
+    assert arguments.values["targets"] == targets
+    assert arguments.complete
+
+
+@pytest.mark.parametrize("spelling", ["-oci.skip", "-o ci.skip", "--push-option=ci.skip", "--push-option ci.skip"])
+def test_short_option_value_binds_attached_or_separate(spelling: str) -> None:
+    call = evt_for(f"git push {spelling} origin main").cmd.call("git")
+    arguments = GIT_PUSH.bind(call)
+    assert arguments.values["parameter"] == ("ci.skip",)
+    assert arguments.words["parameter"][0] in call.command.words
+    assert arguments.complete
+
+
+@pytest.mark.parametrize("command", ["git push -ufo ci.skip origin main", "git push --no-such-option origin main"])
+def test_unbindable_git_push_option_is_incomplete_without_guessing(command: str) -> None:
+    arguments = GIT_PUSH.bind(evt_for(command).cmd.call("git"))
+    assert not arguments.complete
+    assert "force" not in arguments.values
+
+
+def test_attached_short_values_stay_off_for_find_style_flags() -> None:
+    arguments = FIND.bind(evt_for("find -fsrc -name x").cmd.call("find"))
+    assert not arguments.complete
+    assert arguments.values["roots"] == (".",)
 
 
 def test_schema_binds_a_pattern_paths_and_typed_options() -> None:
