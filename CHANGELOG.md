@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.43.0] - 2026-09-18
+
+### Changed
+
+- **The `Waiting()` skip on blocking Stop gates is back, now with a
+  `guards_waiting` opt-out.** 12.42.0 removed the injection outright. A survey of
+  all 14 installed packs says that was too strong: of the seven gate-backed Stop
+  hooks, six want the skip and only the general pack's prose-question gate does
+  not — its whole subject is the turn that parks on background work instead of
+  finishing. `gate`, `nudge(block=True)`, and `llm_gate` take
+  `guards_waiting: bool | None`; `None` restores the pre-12.42.0 rule, `False`
+  turns the skip off, and `True` opts a non-gate into it. The prose-question gate
+  passes `False`. Packs that added `skip_if=[Waiting()]` for 12.42.0 need no
+  change — the condition is idempotent — and the one out-of-tree Stop gate in the
+  installed set never needed one.
+
 ## [12.42.0] - 2026-09-17
 
 ### Added
@@ -41,14 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last six texts a signal could match, scanned backwards with an early exit, so
   intervening tool traffic costs a window nothing. `window="turn"` is unchanged.
 
-- **`gate`, `nudge(block=True)`, and `llm_gate` take `guards_waiting`.** A
-  blocking Stop gate skips while the session is `Waiting()`, which is right for
-  almost every gate and wrong for the one whose subject *is* the turn that parks
-  on background work instead of finishing — and no parameter turned it off, so
-  that gate could never fire. The default is unchanged; `guards_waiting=False`
-  turns the skip off, and `guards_waiting=True` opts a non-gate into it. A survey
-  of all 14 installed packs found seven gate-backed Stop hooks: six want the
-  default and the prose-question gate is the one that does not.
+- **`gate`, `nudge(block=True)`, and `llm_gate` no longer inject `Waiting()` into
+  `skip_if`.** A blocking Stop gate silently skipped whenever a background shell,
+  subagent, workflow, monitor, or scheduled wake-up was in flight, and no
+  parameter turned that off — so a gate whose whole subject is the turn that
+  parks on background work could never fire. `skip_if` is now taken verbatim and
+  a gate that wants the guard passes `Waiting()` itself, which every builtin gate
+  that wants it now does. Out-of-tree packs relying on the injection must add
+  `skip_if=[Waiting()]` to keep the old behaviour.
 
 ### Fixed
 
