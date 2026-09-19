@@ -27,6 +27,8 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "llm": (dict,),
     "tasks": (list,),
     "background_tasks": (list,),
+    "seen": (dict,),
+    "commands": (dict,),
 }
 
 
@@ -164,6 +166,14 @@ class Input:
         llm: Per-test LLM stub overrides merged over the default stub verdict
             (``fire``/``block``/``action``/``reasoning``), e.g. ``llm={"fire": False}``
             to exercise an LLM hook's judge-declines path.
+        seen: Keys already observed this session, per ``once``/``unseen`` scope
+            (``seen={"scope": ["key"]}``; the unscoped call site is ``""``). Backed by a
+            real temporary session directory, so ``evt.ctx.s.once`` dedups exactly as it
+            does in production and "the repeat is silent" is one ``Input``.
+        commands: Subprocess stubs keyed by argv prefix (``commands={"gh pr view": "DRAFT"}``);
+            a ``subprocess.run`` whose argv starts with a key returns that text as stdout with
+            exit 0, the way ``llm`` stubs the model call, so a hook that shells out to ``gh``
+            or ``git`` can reach its fire path. Unmatched argv runs for real.
     """
 
     command: str | None = None
@@ -190,6 +200,8 @@ class Input:
     tasks: list[dict[str, Any]] | None = None
     background_tasks: list[dict[str, Any]] | None = None
     llm: dict[str, Any] | None = None
+    seen: dict[str, list[str]] | None = None
+    commands: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         match self.transcript:
@@ -208,10 +220,16 @@ class Input:
             for task in getattr(self, name) or ():
                 if not isinstance(task, dict):
                     raise TypeError(f"Input field {name!r} must contain dict elements, got {type(task).__name__}")
-        for name in ("tool_input", "llm"):
+        for name in ("tool_input", "llm", "seen", "commands"):
             for key in getattr(self, name) or ():
                 if not isinstance(key, str):
                     raise TypeError(f"Input field {name!r} must have str keys, got {type(key).__name__}")
+        for scope, keys in (self.seen or {}).items():
+            if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
+                raise TypeError(f"Input field 'seen' scope {scope!r} must map to a list of str keys")
+        for argv, stdout in (self.commands or {}).items():
+            if not argv.split() or not isinstance(stdout, str):
+                raise TypeError(f"Input field 'commands' entry {argv!r} must map a non-empty argv prefix to str stdout")
 
     def __repr__(self) -> str:
         set_fields = ", ".join(

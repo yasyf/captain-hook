@@ -40,6 +40,7 @@ class ReviewSettings(HooksSettings):
     min_confidence: Confidence = MEDIUM
     min_sessions_fix: int = 2
     min_days_fix: int = 0
+    max_open_prs_fix: int = 2
     min_confidence_fix: Confidence = MEDIUM
     min_confidence_fix_single: Confidence = VERY_HIGH
     judge_tier: TModel = "medium"

@@ -102,7 +102,7 @@ Review Progress:
   - [ ] Step 4: Draft via the authoring-hooks skill (fix: FIX mode — amend + re-
          gression test; create-as-edit: EXTEND mode — broaden + new test pair)
   - [ ] Step 5: Verify (uvx --isolated capt-hook test green in the worktree)
-  - [ ] Step 6: Slot check (review slots --repo <the Step-3 target>), then commit,
+  - [ ] Step 6: Slot check (review slots --repo <the Step-3 target> --kind <kind>), then commit,
          push, gh pr create (Issue/Fix/Example body per pr-workflow.md)
   - [ ] Step 7: review update <ID> pr_open --pr-url <url>
 - [ ] Step 8: Final report
@@ -199,7 +199,7 @@ Follow [references/pr-workflow.md](references/pr-workflow.md) exactly:
 3. **Verify** — run `uvx --isolated capt-hook test` in the worktree yourself (in a clone, the
    pack-kind verify command from the Hard Rules); green or the candidate is skipped
    this pass.
-4. **PR** — slot-check the target repo first (`review slots --repo <target>`,
+4. **PR** — slot-check the target repo first (`review slots --repo <target> --kind <kind>`,
    whatever repo Step 3 picked — the exact step lives in
    [pr-workflow.md](references/pr-workflow.md)), then commit the hook file, push
    the branch, `gh pr create` with the template body: the rule, the hook's behavior,

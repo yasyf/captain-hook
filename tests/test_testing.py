@@ -994,3 +994,123 @@ class TestRewriteFieldsMatching:
         assert matches_expected(result, Rewrite(model="sonnet")) is True
         assert matches_expected(result, Rewrite(model="haiku")) is False
         assert matches_expected(result, Rewrite(model="sonnet", prompt="p")) is True
+
+
+class TestSeenSeedsTheSessionStore:
+    def test_seen_key_makes_the_repeat_silent(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+
+        reset()
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("Bash")],
+            tests={
+                Input(command="git push"): Warn(pattern="first"),
+                Input(command="git push", seen={"push": ["origin"]}): Allow(),
+                Input(command="git push", seen={"push": ["upstream"]}): Warn(pattern="first"),
+                Input(command="git push", seen={"other": ["origin"]}): Warn(pattern="first"),
+            },
+        )
+        def push_once(evt):
+            return evt.warn("first push this session") if evt.ctx.s.once("origin", scope="push") else None
+
+        results = run_inline_tests()
+        assert len(results) == 4
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_seen_persists_across_calls_within_one_input(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input, Warn
+
+        reset()
+        outcomes: list[bool] = []
+
+        @on(Event.PreToolUse, only_if=[Tool("Bash")], tests={Input(command="x", seen={"": []}): Warn()})
+        def twice(evt):
+            outcomes.extend([evt.ctx.s.once("k"), evt.ctx.s.once("k")])
+            return evt.warn("ran")
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert outcomes == [True, False]
+
+    def test_seen_rejects_non_list_scopes(self):
+        from captain_hook.testing.types import Input
+
+        with pytest.raises(TypeError, match="list of str"):
+            Input(command="x", seen={"push": "origin"})
+
+
+class TestCommandsStubSubprocess:
+    def test_stubbed_argv_prefix_reaches_the_fire_path(self):
+        import subprocess
+
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(commands={"gh pr view": '{"isDraft": true}'}): Warn(pattern="draft"),
+                Input(commands={"gh pr view": '{"isDraft": false}'}): Allow(),
+                Input(commands={"gh pr list": '{"isDraft": true}'}): Allow(),
+                Input(): Allow(),
+            },
+        )
+        def draft_guard(evt):
+            try:
+                done = subprocess.run(
+                    ["gh", "pr", "view", "--json", "isDraft"], capture_output=True, text=True, timeout=1, cwd="/"
+                )
+            except (OSError, subprocess.SubprocessError):
+                return None
+            return (
+                evt.warn("the PR is still a draft")
+                if done.returncode == 0 and '"isDraft": true' in done.stdout
+                else None
+            )
+
+        results = run_inline_tests()
+        assert len(results) == 4
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_binary_mode_callers_get_bytes(self):
+        import subprocess
+
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input, Warn
+
+        reset()
+
+        @on(Event.Stop, tests={Input(commands={"gh pr view": "DRAFT"}): Warn(pattern="draft")})
+        def bytes_guard(evt):
+            done = subprocess.run(["gh", "pr", "view"], capture_output=True, timeout=1, cwd="/")
+            return evt.warn("still a draft") if done.stdout.decode() == "DRAFT" and done.stderr == b"" else None
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_longest_prefix_wins_and_unmatched_argv_runs_for_real(self):
+        import subprocess
+
+        from captain_hook.testing.helpers import stubbed_commands
+
+        with stubbed_commands({"git": "short", "git status": "long"}):
+            assert subprocess.run(["git", "status", "-s"], capture_output=True, text=True).stdout == "long"
+            assert subprocess.run(["git", "log"], capture_output=True, text=True).stdout == "short"
+            assert subprocess.run(["printf", "real"], capture_output=True, text=True).stdout == "real"
+        assert subprocess.run(["printf", "restored"], capture_output=True, text=True).stdout == "restored"
+
+    def test_commands_rejects_empty_prefixes(self):
+        from captain_hook.testing.types import Input
+
+        with pytest.raises(TypeError, match="non-empty argv prefix"):
+            Input(command="x", commands={"  ": "out"})

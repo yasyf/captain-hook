@@ -18,6 +18,7 @@ from captain_hook.review.settings import ReviewSettings
         pytest.param("min_confidence", MEDIUM, id="min_confidence"),
         pytest.param("min_sessions_fix", 2, id="min_sessions_fix"),
         pytest.param("min_days_fix", 0, id="min_days_fix"),
+        pytest.param("max_open_prs_fix", 2, id="max_open_prs_fix"),
         pytest.param("min_confidence_fix", MEDIUM, id="min_confidence_fix"),
         pytest.param("min_confidence_fix_single", VERY_HIGH, id="min_confidence_fix_single"),
         pytest.param("judge_tier", "medium", id="judge_tier"),

@@ -6,13 +6,15 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
 from typing import Any, cast, overload
+from unittest import mock
 
 from cc_transcript.parser import parse_event
 from cc_transcript.query import Session
@@ -102,6 +104,39 @@ def home_fixture_dir() -> Path:
     root = Path(tempfile.mkdtemp(prefix="capt-hook-home-"))
     atexit.register(shutil.rmtree, root, ignore_errors=True)
     return root
+
+
+def seeded_session_dir(seen: dict[str, list[str]]) -> Path:
+    from captain_hook.state import SeenKeys
+
+    session_dir = fixture_file_dir() / f"session-{next(FIXTURE_FILE_COUNTER)}"
+    session_dir.mkdir()
+    SessionStore(session_dir)[SeenKeys].set(SeenKeys(seen={scope: list(keys) for scope, keys in seen.items()}))
+    return session_dir
+
+
+@contextmanager
+def stubbed_commands(commands: dict[str, str] | None) -> Iterator[None]:
+    if not commands:
+        yield
+        return
+    prefixes = sorted(((tuple(key.split()), stdout) for key, stdout in commands.items()), key=lambda p: -len(p[0]))
+    real_run = subprocess.run
+
+    def run(
+        args: str | Sequence[str | os.PathLike[str]], *pargs: Any, **kwargs: Any
+    ) -> subprocess.CompletedProcess[Any]:
+        argv = tuple(str(args).split()) if isinstance(args, str) else tuple(str(arg) for arg in args)
+        text_mode = any(kwargs.get(key) for key in ("text", "universal_newlines", "encoding", "errors"))
+        for prefix, stdout in prefixes:
+            if argv[: len(prefix)] == prefix:
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=stdout if text_mode else stdout.encode(), stderr="" if text_mode else b""
+                )
+        return real_run(args, *pargs, **kwargs)
+
+    with mock.patch.object(subprocess, "run", run):
+        yield
 
 
 def materialize_file(fixture: FileFixture) -> str:
@@ -455,6 +490,7 @@ def input_to_event(
         "transcript_path": transcript_path,
         "permission_mode": inp.permission_mode,
         "cwd": inp.cwd,
+        "session_dir": seeded_session_dir(inp.seen) if inp.seen is not None else None,
     }
     match ev:
         case Event.SubagentStop:
@@ -711,7 +747,10 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                             if spec_tools
                             else None,
                         )
-                        with home_env(evt.__dict__.get("_home_dir") or str(scratch_home)):
+                        with (
+                            home_env(evt.__dict__.get("_home_dir") or str(scratch_home)),
+                            stubbed_commands(key.commands),
+                        ):
                             hook_result = (
                                 execute_hook(entry, evt)
                                 if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)

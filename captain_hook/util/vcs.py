@@ -71,6 +71,11 @@ def graphite_lane(directory: Path) -> bool:
     return common is not None and not gt_disabled(common)
 
 
+def graphite_lane_of_git_dir(git: Path) -> bool:
+    common = common_git_dir(git)
+    return (common / GRAPHITE_MARKER).is_file() and not gt_disabled(common)
+
+
 def is_repo_root(resolved: Path) -> bool:
     return any((resolved / marker).exists() for marker in (".git", ".jj"))
 

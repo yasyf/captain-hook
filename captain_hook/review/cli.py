@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from captain_hook.review.sync import SyncReport
 
 STATUS_CHOICES = tuple(status.value for status in CandidateStatus)
+KIND_CHOICES = ("create", "fix")
 
 
 def current_repo(root: Path) -> RepoKey:
@@ -159,9 +160,7 @@ def scan(transcripts: tuple[Path, ...], dirs: tuple[Path, ...]) -> None:
     if not transcripts and not dirs:
         raise click.UsageError("pass at least one --transcript or --dir")
     settings = ReviewSettings()
-    report: ScanReport = run_store(
-        lambda store: run_scan(store, settings=settings, transcripts=[*transcripts, *dirs])
-    )
+    report: ScanReport = run_store(lambda store: run_scan(store, settings=settings, transcripts=[*transcripts, *dirs]))
     click.echo(f"scanned {report.scanned} transcripts, {report.inserted} new corrections")
 
 
@@ -286,6 +285,8 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
     settings = ReviewSettings()
 
     async def body(store: ReviewStore) -> list[str]:
+        from captain_hook.review.store import open_pr_cap, threshold_targets
+
         ids = (
             [candidate_id]
             if candidate_id is not None
@@ -295,10 +296,10 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
         for cid in ids:
             status = await store.threshold_status(cid, settings=settings)
             eligible = await store.eligible(cid, settings=settings)
+            progress = " ".join(f"{label}={done}/{need}" for label, done, need in threshold_targets(status, settings))
             lines.append(
-                f"#{cid} eligible={eligible}"
-                f" sessions={status.sessions}/{settings.min_sessions} days={status.days}/{settings.min_days}"
-                f" open_prs={status.open_prs}/{settings.max_open_prs} watching={status.watching}"
+                f"#{cid} eligible={eligible} {progress}"
+                f" open_prs={status.open_prs}/{open_pr_cap(status.kind, settings=settings)} watching={status.watching}"
             )
         return lines
 
@@ -314,17 +315,30 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
 
 @review.command()
 @click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
+@click.option(
+    "--kind",
+    "kind_",
+    type=click.Choice(KIND_CHOICES),
+    default=None,
+    help="Report one kind's pool and exit 1 when it is full (default: every pool; exit 1 when all are full)",
+)
 @click.pass_obj
-def slots(state: CliState, repo_: str | None) -> None:
-    """Show the available open-PR slots for a repo."""
+def slots(state: CliState, repo_: str | None, kind_: str | None) -> None:
+    """Show the available open-PR slots for a repo, one pool per candidate kind."""
     from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.store import CandidateKind, open_pr_cap
 
     settings = ReviewSettings()
     repo = resolve_repo(repo_, state.root)
-    open_prs = run_store(lambda store: store.open_pr_targets(settings=settings)).get(repo, 0)
-    free = max(settings.max_open_prs - open_prs, 0)
-    click.echo(f"{repo}: open_prs={open_prs}/{settings.max_open_prs} free={free}")
-    if free == 0:
+    open_prs = run_store(lambda store: store.open_pr_slots(repo, settings=settings))
+    free = {
+        kind: max(open_pr_cap(kind, settings=settings) - open_prs[kind], 0)
+        for kind in ([CandidateKind(kind_)] if kind_ else CandidateKind)
+    }
+    for kind, count in free.items():
+        cap = open_pr_cap(kind, settings=settings)
+        click.echo(f"{repo}: kind={kind} open_prs={open_prs[kind]}/{cap} free={count}")
+    if not any(free.values()):
         sys.exit(1)
 
 
@@ -410,9 +424,7 @@ def sync_prs(state: CliState, repo_: str | None) -> None:
 
     settings = ReviewSettings()
     repo = resolve_repo(repo_, state.root)
-    report: SyncReport = run_store(
-        lambda store: sync_open_prs(store, repo, settings=settings, force_refresh=True)
-    )
+    report: SyncReport = run_store(lambda store: sync_open_prs(store, repo, settings=settings, force_refresh=True))
     click.echo(
         f"accepted {report.accepted}, rejected {report.rejected}, "
         f"stale {report.stale}, unreachable {report.unreachable}"

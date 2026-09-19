@@ -251,6 +251,8 @@ event payload; set the fields the target event reads. All fields default to `Non
 | `tasks` | `list[dict]` | The native task list read via `evt.tasks` |
 | `cwd` | `str` | The session working directory, surfaced as `evt.cwd` |
 | `llm` | `dict` | Per-test LLM verdict stub overrides, e.g. `llm={"fire": False}` |
+| `seen` | `dict[str, list[str]]` | Keys `evt.ctx.s.once`/`unseen` already saw this session, per scope (`""` for the unscoped call), behind a real temp session dir |
+| `commands` | `dict[str, str]` | `subprocess.run` stubs by argv prefix; matching argv returns the text as stdout with exit 0, unmatched argv runs for real |
 
 `FileFixture(size=N)` fills a temp file with `N` bytes, `content=...` writes exact text, and
 `name=...` sets the file name an extension- or path-based condition matches. Use it when the

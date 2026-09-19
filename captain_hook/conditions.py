@@ -440,7 +440,18 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case RanCommand(argv, subagents):
             return evt.ctx.transcript.has_command(*argv, subagents=subagents)
         case Runs(argv):
-            return bool(argv and (cmd := evt.cmd).raw and any(c.argv[: len(argv)] == argv for c in cmd.line.commands))
+            return bool(
+                argv
+                and (cmd := evt.cmd).raw
+                and (
+                    any(c.argv[: len(argv)] == argv for c in cmd.line.commands)
+                    or any(
+                        call.verb_argv[: len(argv)] == argv
+                        for call in cmd.calls()
+                        if call.args and call.args[0].startswith("-")
+                    )
+                )
+            )
         case CwdHasFiles(names):
             return bool(names) and evt.cwd is not None and all((evt.cwd / name).is_file() for name in names)
         case InPlanMode():

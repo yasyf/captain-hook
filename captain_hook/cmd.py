@@ -27,6 +27,7 @@ WRAPPER_COMMANDS: frozenset[str] = frozenset(LITERALS["command.WRAPPER_COMMANDS"
 COMMAND_VALUE_FLAGS: dict[str, tuple[str, ...]] = {
     "git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"),
 }
+INFO_OPTIONS = frozenset({"-h", "--help", "--version"})
 
 
 def basename(executable: str) -> str:
@@ -257,6 +258,29 @@ class Call:
     def redirects(self) -> tuple[Redirect, ...]:
         """The command's file redirects."""
         return self.command.redirects
+
+    @property
+    def leading_options(self) -> tuple[str, ...]:
+        """The global options written before the verb, each registered value flag with its argument.
+
+        ``git -C <dir> -c x=y push`` yields ``("-C", "<dir>", "-c", "x=y")``. An informational
+        option (:data:`INFO_OPTIONS`) ends the run, since ``git --help stash`` runs no ``stash``.
+        """
+        value_flags = COMMAND_VALUE_FLAGS.get(self.name, ())
+        args = self.args
+        taken = 0
+        while taken < len(args) and args[taken].startswith("-") and args[taken] not in INFO_OPTIONS:
+            taken += 2 if args[taken] in value_flags and taken + 1 < len(args) else 1
+        return args[:taken]
+
+    @property
+    def verb_argv(self) -> tuple[str, ...]:
+        """``name`` plus the arguments from the verb on, :attr:`leading_options` dropped.
+
+        ``git -C <dir> push`` and ``git -c x=y push`` both read ``("git", "push")``, while
+        ``git --help stash`` keeps its ``--help`` and so never reads as a ``stash``.
+        """
+        return (self.name, *self.args[len(self.leading_options) :])
 
     @property
     def nested(self) -> bool:

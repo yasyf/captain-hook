@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
-from captain_hook.util.vcs import graphite_lane
+from captain_hook.util.vcs import graphite_lane, graphite_lane_of_git_dir
 
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
@@ -58,16 +60,63 @@ def jj_read(call: Call) -> bool:
     return not JJ_INFO_FLAGS.isdisjoint(call.flags) or any(verbs[: len(read)] == read for read in JJ_READS)
 
 
-class GraphiteActive(CustomCondition):
-    """Matches when Graphite owns the workflow at the session cwd.
+def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
+    cwd, git_dir = call.cwd or session_cwd, None
+    options = iter(call.leading_options)
+    for token in options:
+        if token == "-C":
+            hop = next(options, None)
+        elif token.startswith("-C"):
+            hop = token[2:]
+        elif token == "--git-dir":
+            git_dir = next(options, None)
+            continue
+        elif token.startswith("--git-dir="):
+            git_dir = token.removeprefix("--git-dir=")
+            continue
+        else:
+            continue
+        if hop is not None:
+            path = Path(os.path.expanduser(hop))
+            cwd = path if path.is_absolute() else (cwd / path if cwd else None)
+    if git_dir is None:
+        return cwd, None
+    path = Path(os.path.expanduser(git_dir))
+    return cwd, path if path.is_absolute() else (cwd / path if cwd else None)
 
-    A live ``gt repo init`` marker is necessary but not sufficient: a repository that sets
-    ``ccx.nogt`` has opted out of the gt lane — ccx itself declines it there — so a stale
-    marker must not make these hooks steer toward gt.
+
+def graphite_owns(call: Call, session_cwd: Path | None) -> bool:
+    cwd, git_dir = git_location(call, session_cwd)
+    if git_dir is not None:
+        return graphite_lane_of_git_dir(git_dir)
+    return cwd is not None and graphite_lane(cwd)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphiteRuns(CustomCommandLineCondition):
+    """Matches when one call runs one of ``argvs`` inside a repository Graphite owns.
+
+    Ownership and verb are judged on the same call, where it runs: after a leading ``cd``, or
+    through git's own ``-C`` and ``--git-dir`` global options (``--git-dir`` resolves against the
+    ``-C`` cwd, as git does), never at the session cwd unless the call's own cannot be resolved
+    (``cd $OTHER``). So ``cd ../plain-repo && git push`` from a Graphite session is left alone,
+    ``cd ../gt-repo && git push`` from a plain-git session is not, and an unrelated
+    ``git -C ../gt-repo status`` never lends its repository to a ``jj new`` beside it. A live
+    ``gt repo init`` marker is necessary but not sufficient: a repository that sets ``ccx.nogt``
+    has opted out of the gt lane — ccx itself declines it there — so a stale marker must not
+    make these hooks steer toward gt.
     """
 
-    def check(self, evt: BaseHookEvent) -> bool:
-        return evt.cwd is not None and graphite_lane(evt.cwd)
+    argvs: tuple[tuple[str, ...], ...]
+
+    def __init__(self, *argvs: tuple[str, ...]) -> None:
+        object.__setattr__(self, "argvs", argvs)
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return any(
+            any(call.verb_argv[: len(argv)] == argv for argv in self.argvs) and graphite_owns(call, evt.cwd)
+            for call in evt.cmd.calls()
+        )
 
 
 class JJReads(CustomCommandLineCondition):
