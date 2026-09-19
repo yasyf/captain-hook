@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 REPO = RepoKey("github.com/yasyf/scratch")
 NO_JUDGE = JudgeHealth(pending=0, last_verdict_at=None, splits=())
+NO_OPEN_PRS = {CandidateKind.CREATE: 0, CandidateKind.FIX: 0}
 INSERT_EVENT = (
     "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
     "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')"
@@ -304,14 +305,14 @@ class TestRenderFrame:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=1,
+                open_prs={CandidateKind.CREATE: 1, CandidateKind.FIX: 0},
             )
         )
         assert "WATCHING" in out and "ELIGIBLE" in out and "PR OPEN" in out
         assert "#1" in out and "#2" in out and "#3" in out
         assert 'would add a hook: "block force-push"' in out
         assert "https://x/pull/42" in out
-        assert "[watching]" in out and "PR slots 1/2" in out
+        assert "[watching]" in out and "PR slots create 1/2 · fix 0/2" in out
 
     def test_empty_repo_shows_hint(self) -> None:
         out = plain(
@@ -322,7 +323,7 @@ class TestRenderFrame:
                 watching=False,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "[not watching]" in out
@@ -338,7 +339,7 @@ def rendered_stages(views: list[CandidateView]) -> str:
         watching=True,
         health=ok_health(),
         judge=NO_JUDGE,
-        open_prs=0,
+        open_prs=NO_OPEN_PRS,
     )
     return plain(frame)
 
@@ -374,7 +375,7 @@ class TestPackErrors:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
                 load_errors=errors,
             )
         )
@@ -391,7 +392,7 @@ class TestPackErrors:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "HOOK LOAD FAILED" not in out
@@ -416,7 +417,7 @@ class TestHealthLine:
                 watching=True,
                 health=health,
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert out.splitlines()[0].startswith("REVIEWER FAILING")
@@ -433,7 +434,7 @@ class TestHealthLine:
                 watching=True,
                 health=ok_health(ago=timedelta(hours=2), judged=7),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "reviewer ok" in out
@@ -455,7 +456,7 @@ class TestHealthLine:
                 watching=True,
                 health=ok_health(),
                 judge=judge,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "judge: 3 pending · last verdict 5m ago" in out
@@ -470,7 +471,7 @@ class TestHealthLine:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "judge: 0 pending" in out
@@ -486,7 +487,7 @@ class TestHealthLine:
                 watching=True,
                 health=brain_health(exit_code=0, prs=1),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "reviewer ok" in out
@@ -501,7 +502,7 @@ class TestHealthLine:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "reviewer ok" in out
@@ -516,7 +517,7 @@ class TestHealthLine:
                 watching=True,
                 health=brain_health(exit_code=1, prs=0),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "brain: exit 1 · 142s · 0 PRs" in out
@@ -546,7 +547,7 @@ class TestHealthLine:
                 watching=True,
                 health=health,
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert expected in out
@@ -664,6 +665,83 @@ class TestEligibilityParity:
             status = await store.threshold_status(candidate_id, settings=settings)
             direct = await store.eligible(candidate_id, settings=settings)
             assert crosses_thresholds(status, settings=settings) == direct == expected
+
+
+class TestOpenPrPools:
+    async def open_create_prs(self, store: ReviewStore, n: int) -> None:
+        for i in range(n):
+            candidate_id = await store.ensure_candidate(
+                REPO, kind=CandidateKind.CREATE, rule=f"open{i}", source_kind=SourceKind("transcript_message")
+            )
+            await store.transition(
+                candidate_id, CandidateStatus.PR_OPEN, pr_url=f"https://{REPO}/pull/{i}", pr_opened_at=datetime.now(UTC)
+            )
+
+    async def fix_with_sessions(self, store: ReviewStore, n: int) -> int:
+        candidate_id = await store.ensure_candidate(
+            REPO,
+            kind=CandidateKind.FIX,
+            rule="fix-rule",
+            source_kind=SourceKind("hook_complaint"),
+            target_source_file="hooks/h.py",
+            target_hook_name="h",
+        )
+        for i in range(n):
+            await seed_obs(
+                store,
+                candidate_id,
+                f"fix{i}",
+                session=f"f{i}",
+                occurred=f"2026-06-0{i + 1}T10:00:00+00:00",
+                source="hook_complaint",
+            )
+            await store.record_verdict(
+                DedupKey(f"fix{i}"),
+                FakeVerdict(accepted=True, summary="tighten the guard"),
+                role="judge",
+                prompt_version=store.versions.fix,
+                model="m1",
+                fidelity="full",
+            )
+        return candidate_id
+
+    async def test_full_create_pool_does_not_hold_a_fix_back(self, store: ReviewStore) -> None:
+        settings = ReviewSettings()
+        await store.enable(REPO)
+        await self.open_create_prs(store, settings.max_open_prs)
+        fix = await self.fix_with_sessions(store, settings.min_sessions_fix)
+        create = await eligible_create(store, rule="ready", summary="run tests")
+        assert await store.open_pr_slots(REPO, settings=settings) == {CandidateKind.CREATE: 2, CandidateKind.FIX: 0}
+        fix_status = await store.threshold_status(fix, settings=settings)
+        assert (fix_status.open_prs, fix_status.sessions) == (0, settings.min_sessions_fix)
+        assert await store.eligible(fix, settings=settings) is True
+        assert (await store.threshold_status(create, settings=settings)).open_prs == settings.max_open_prs
+        assert await store.eligible(create, settings=settings) is False
+        views = {int(str(v.row["id"])): v.eligible for v in await store.overview(REPO, settings=settings)}
+        assert (views[fix], views[create]) == (True, False)
+
+    async def test_full_fix_pool_holds_only_fix_candidates(self, store: ReviewStore) -> None:
+        settings = ReviewSettings()
+        await store.enable(REPO)
+        for i in range(settings.max_open_prs_fix):
+            open_fix = await store.ensure_candidate(
+                REPO,
+                kind=CandidateKind.FIX,
+                rule=f"open-fix{i}",
+                source_kind=SourceKind("hook_complaint"),
+                target_source_file=f"hooks/open{i}.py",
+                target_hook_name=f"open{i}",
+            )
+            await store.transition(
+                open_fix,
+                CandidateStatus.PR_OPEN,
+                pr_url=f"https://{REPO}/pull/{90 + i}",
+                pr_opened_at=datetime.now(UTC),
+            )
+        fix = await self.fix_with_sessions(store, settings.min_sessions_fix)
+        create = await eligible_create(store, rule="ready", summary="run tests")
+        assert await store.eligible(fix, settings=settings) is False
+        assert await store.eligible(create, settings=settings) is True
 
 
 class TestOverview:
@@ -810,7 +888,7 @@ class TestUnwatchedCanary:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
                 unwatched=repos,
             )
         )
@@ -827,7 +905,7 @@ class TestUnwatchedCanary:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
-                open_prs=0,
+                open_prs=NO_OPEN_PRS,
             )
         )
         assert "unwatched repos" not in out

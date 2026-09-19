@@ -87,7 +87,8 @@ environment variable with the `HOOKS_REVIEW_` prefix:
 | `HOOKS_REVIEW_MIN_SESSIONS_FIX` | `2` | Sessions a hook-misfire fix candidate must recur across. |
 | `HOOKS_REVIEW_JUDGE_TIER` | `medium` | LLM tier that judges each candidate (`small`, `medium`, `large`). |
 | `HOOKS_REVIEW_MIN_JUDGE_CONFIDENCE` | `0.6` | Minimum judge confidence for a candidate to count. |
-| `HOOKS_REVIEW_MAX_OPEN_PRS` | `2` | Open reviewer PRs allowed per repo at once. |
+| `HOOKS_REVIEW_MAX_OPEN_PRS` | `2` | Open reviewer create PRs allowed per repo at once. |
+| `HOOKS_REVIEW_MAX_OPEN_PRS_FIX` | `2` | Open reviewer hook-misfire fix PRs allowed per repo at once, counted apart from create PRs. |
 | `HOOKS_REVIEW_BRAIN_MAX_BUDGET_USD` | `5.0` | Spend cap on the PR-drafting brain per session. |
 | `HOOKS_REVIEW_BRAIN_MAX_TURNS` | `80` | Turn cap on the PR-drafting brain. |
 
@@ -202,8 +203,9 @@ re-enabling later picks up where it left off.
 The reviewer reads your transcripts locally and never uploads them — it sends only the specific
 correction text to the judge, and the brain runs in your own `claude` session. It does spend
 tokens: one judge call per new candidate at the configured tier, and, when a candidate is
-eligible, one brain session bounded by `HOOKS_REVIEW_BRAIN_MAX_BUDGET_USD`. The `max_open_prs`
-cap keeps it from flooding your repo with pull requests while you catch up.
+eligible, one brain session bounded by `HOOKS_REVIEW_BRAIN_MAX_BUDGET_USD`. The `max_open_prs` and
+`max_open_prs_fix` caps keep it from flooding your repo with pull requests while you catch up,
+and a full create pool never holds a hook fix back.
 
 For the kind of correction signal the reviewer mines — and a hook that points you back here when you
 give one — see [Surface tracked corrections](../examples/corrections-nudge.qmd).

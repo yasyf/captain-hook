@@ -23,6 +23,7 @@ from captain_hook.review.fix import (
     COMPLIANCE_RE,
     HOOK_COMPLAINT,
     classify_marker,
+    classify_user_marker,
     fingerprint_of,
     iter_hook_complaint_signals,
     named_hook_target,
@@ -67,6 +68,19 @@ STOP_COMPLAINT = "That stop gate shouldn't have fired - I had already addressed 
 TASK_TRACKING_COMPLAINT = (
     "The task-tracking hook keeps re-firing even though I've been updating the tracker - this is a misfire."
 )
+USER_COMPLAINT = (
+    "open a background lane to fix thay capt hook hook forcing prose to be fable, "
+    "its out of daye and shoild be astra now"
+)
+PROSE_GATE_KIND = "general.models:llm_gate_2f4c9a1e"
+PROSE_GATE_SOURCE = "/x/site-packages/captain_hook/builtin_packs/general/hooks/models.py"
+PROSE_GATE_TARGET = "captain_hook/builtin_packs/general/hooks/models.py"
+PROSE_GATE_MESSAGE = (
+    "This subagent's deliverable is prose/writing work, but it will not run on fable. All writing routes "
+    "to fable: pass model='fable' explicitly."
+)
+PROSE_SPAWN = {"prompt": "Write the README quickstart for this repo", "subagent_type": "general-purpose"}
+PROSE_SPAWN_DIGEST = tool_digest("Agent", PROSE_SPAWN)
 GIT_STATUS_DIGEST = tool_digest("Bash", {"command": "git status"})
 INDEX = PackIndex.load(None)
 NOTIFY_REPO = RepoKey("github.com/acme/notify-hooks")
@@ -295,6 +309,35 @@ class TestMarkers:
     )
     def test_non_complaints_yield_no_marker(self, text: str) -> None:
         assert classify_marker(text) is None
+
+
+class TestUserMarkers:
+    @pytest.mark.parametrize(
+        ("text", "matched"),
+        [
+            pytest.param(USER_COMPLAINT, "fix", id="verbatim-typo-heavy-complaint"),
+            pytest.param("that capt-hook hook is misfiring on every Edit", "misfiring", id="hyphenated-misfiring"),
+            pytest.param("the captain hook prose gate is out of date now", "out of date", id="out-of-date"),
+            pytest.param("capt_hook shouldnt be blocking codex spawns", "shouldnt be", id="shouldnt-be"),
+            pytest.param("this capthook nudge is wrong, remove it", "wrong", id="fused-name-wrong"),
+        ],
+    )
+    def test_user_complaint_names_capt_hook_with_a_defect(self, text: str, matched: str) -> None:
+        marker = classify_user_marker(text)
+        assert marker is not None
+        assert (marker.strength, marker.misfire_class, marker.matched) == ("strong", "user_reported", matched)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("capt-hook is great, keep going", id="praise"),
+            pytest.param("run capt-hook test before you commit", id="instruction"),
+            pytest.param("fix the broken import in cli.py", id="defect-without-capt-hook"),
+            pytest.param("the task tracker reminder misfired again", id="assistant-style-without-capt-hook"),
+        ],
+    )
+    def test_user_text_without_both_halves_yields_no_marker(self, text: str) -> None:
+        assert classify_user_marker(text) is None
 
 
 class TestFingerprints:
@@ -612,6 +655,98 @@ class TestDetector:
 
     async def test_complaint_with_no_decision_row_yields_nothing(self, decisions: DecisionLog) -> None:
         events = fixture_events(MISFIRE_FIXTURE)
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
+
+    async def seed_prose_gate(
+        self, decisions: DecisionLog, *, tool_digest: ToolDigest | None, **overrides: Any
+    ) -> None:
+        await seed_decision(
+            decisions,
+            kind=PROSE_GATE_KIND,
+            source_file=PROSE_GATE_SOURCE,
+            action="block",
+            message=PROSE_GATE_MESSAGE,
+            tool_digest=tool_digest,
+            **overrides,
+        )
+
+    async def test_user_complaint_after_a_deny_attributes_by_fingerprint(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            assistant_tool_use("t1", "Agent", PROSE_SPAWN),
+            tool_result("t1", PROSE_GATE_MESSAGE, is_error=True),
+            assistant_text("The prose gate blocked that spawn; pinning fable and retrying."),
+            user_text(USER_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        await self.seed_prose_gate(decisions, tool_digest=PROSE_SPAWN_DIGEST)
+        events = parse_events_from_bytes(path.read_bytes())
+        [sig] = [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)]
+        assert sig.kind == HOOK_COMPLAINT
+        assert sig.text == USER_COMPLAINT
+        assert sig.evidence["attribution"] == "fingerprint"
+        assert sig.evidence["target_source_file"] == PROSE_GATE_TARGET
+        assert sig.evidence["target_hook_name"] == PROSE_GATE_KIND
+        assert (sig.evidence["target_repo"], sig.evidence["pack_name"]) == (CAPTAIN_HOOK_REPO, "general")
+        assert (sig.evidence["marker"], sig.evidence["misfire_class"]) == ("fix", "user_reported")
+        assert sig.signal is not None
+        assert sig.signal.reasons == ("strong_marker", "user_reported", "tight_proximity")
+        assert sig.signal.confidence == 1.0
+
+    async def test_user_complaint_with_no_trace_attributes_by_fire_message(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("sweep the stale hooks"),
+            assistant_text("starting the sweep"),
+            user_text(USER_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        await self.seed_prose_gate(decisions, tool_digest=PROSE_SPAWN_DIGEST, ts_ms=BASE_MS - 600_000)
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 5_000)
+        events = parse_events_from_bytes(path.read_bytes())
+        [sig] = [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)]
+        assert sig.evidence["attribution"] == "fire_message"
+        assert sig.evidence["target_source_file"] == PROSE_GATE_TARGET
+        assert sig.evidence["target_hook_name"] == PROSE_GATE_KIND
+        assert sig.trigger_index is None
+
+    async def test_user_complaint_about_a_hook_that_never_fired_drops(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        write_transcript(path, [user_text("sweep the stale hooks"), user_text(USER_COMPLAINT)])
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        events = parse_events_from_bytes(path.read_bytes())
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
+
+    async def test_fire_message_attribution_fails_closed_on_two_matching_hooks(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        write_transcript(path, [user_text(USER_COMPLAINT)])
+        await self.seed_prose_gate(decisions, tool_digest=PROSE_SPAWN_DIGEST)
+        await seed_decision(
+            decisions,
+            kind="general.models:llm_nudge_77aa88bb",
+            source_file=PROSE_GATE_SOURCE,
+            message="This workflow runs a prose stage off fable; pin model: 'fable' on that stage.",
+            tool_digest=None,
+            ts_ms=BASE_MS - 20_000,
+        )
+        events = parse_events_from_bytes(path.read_bytes())
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
+
+    async def test_benign_user_mention_of_capt_hook_yields_nothing(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        write_transcript(path, [user_text("run capt-hook test before you commit, the prose gate is fine")])
+        await self.seed_prose_gate(decisions, tool_digest=PROSE_SPAWN_DIGEST)
+        events = parse_events_from_bytes(path.read_bytes())
         assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
     async def test_fingerprints_attributing_to_two_targets_drop(self, decisions: DecisionLog, tmp_path: Path) -> None:

@@ -77,7 +77,7 @@ Commit, push, and `gh pr create` run inside the clone with the same templates as
 below — the commit-message and PR-body shapes for the candidate's kind carry over
 unchanged, and the post-create stamp (`review update <ID> pr_open --pr-url <url>`) is
 identical. The pre-create slot check targets the pack repo —
-`review slots --repo <target_repo>` — not the watched repo. If the
+`review slots --repo <target_repo> --kind <kind>` — not the watched repo. If the
 push is **denied** (no write access to the pack repo), log the skip with its reason in
 the final report and leave the candidate `watching` — never commit the change into the
 watched repo instead: a pack hook patched or copied locally diverges from the pack and
@@ -95,10 +95,11 @@ eligibility was computed when the reviewer spawned, and a concurrent pass may ha
 filled the cap since:
 
 ```bash
-uvx --isolated capt-hook review slots --repo <target_repo_key>
+uvx --isolated capt-hook review slots --repo <target_repo_key> --kind <create|fix>
 ```
 
-When it exits 1 (`free=0`), log the skip and leave the candidate `watching` — no
+Pass the candidate's kind: each kind has its own pool, so a full create pool never
+blocks a fix. When it exits 1 (`free=0`), log the skip and leave the candidate `watching` — no
 commit, no push, no branch left behind; the slot frees when an open PR merges,
 closes, or goes stale. Output format and exit semantics: [review CLI](review-cli.md).
 

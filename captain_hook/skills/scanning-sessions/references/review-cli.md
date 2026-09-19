@@ -156,17 +156,21 @@ the repo:
 
 Counts are **judge-accepted** observations only (distinct sessions, distinct UTC days);
 unjudged observations count as not-yet. `eligible=True` already accounts for the
-watching flag and the repo-wide open-PR cap — never re-derive any of this. `open_prs`
-counts live open PRs by the repo each PR targets, parsed from the PR's URL.
+watching flag and the candidate kind's open-PR cap — never re-derive any of this. `open_prs`
+counts live open PRs of the candidate's kind by the repo each PR targets, parsed from the
+PR's URL.
 
-### `review slots [--repo <key>]`
+### `review slots [--repo <key>] [--kind create|fix]`
 
-The open-PR cap check. Prints one line — `<repo>: open_prs=<n>/<max> free=<free>` —
-counting live open PRs by the repo each PR targets (parsed from the PR's URL), and
-exits 1 when `free=0`. The brain runs it immediately before `gh pr create`, passing
-whatever repo the PR targets — for any pack-targeted PR, routed fix or
-create-as-edit alike, that is the pack repo's key. A full target repo is a logged
-skip, not an error.
+The open-PR cap check. Each candidate kind has its own pool — `max_open_prs` for
+create PRs, `max_open_prs_fix` for hook-misfire fix PRs — so open create PRs never
+hold a fix back. Prints one line per pool — `<repo>: kind=<kind> open_prs=<n>/<max>
+free=<free>` — counting live open PRs by the repo each PR targets (parsed from the
+PR's URL). With `--kind` it prints that pool alone and exits 1 when its `free=0`;
+without it, it exits 1 only when every pool is full. The brain runs it immediately
+before `gh pr create`, passing whatever repo the PR targets — for any pack-targeted
+PR, routed fix or create-as-edit alike, that is the pack repo's key — and the
+candidate's kind. A full target pool is a logged skip, not an error.
 
 ### `review update <ID> <status> [--pr-url <url>] [--pr-title <title>]`
 

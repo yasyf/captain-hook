@@ -692,7 +692,7 @@ class TestPrCap:
             pr_opened_at=datetime.now(UTC),
         )
 
-        assert await store.open_pr_targets(settings=settings) == {REPO: 1}
+        assert await store.open_pr_targets(settings=settings) == {(REPO, CandidateKind.CREATE): 1}
         assert (await store.threshold_status(target_candidate, settings=settings)).open_prs == 1
         assert (await store.threshold_status(origin_candidate, settings=settings)).open_prs == 0
 
@@ -708,7 +708,7 @@ class TestPrCap:
             second, CandidateStatus.PR_OPEN, pr_url=f"https://{REPO}/pull/7", pr_opened_at=datetime.now(UTC)
         )
 
-        assert await store.open_pr_targets(settings=settings) == {REPO: 1}
+        assert await store.open_pr_targets(settings=settings) == {(REPO, CandidateKind.CREATE): 1}
 
 
 class TestFixEligibility:
@@ -788,7 +788,7 @@ class TestFixEligibility:
         assert (status.sessions, status.single_observation) == (1, False)
         assert await store.eligible(candidate_id, settings=settings) is False
 
-    async def test_cap_applies_to_fix_candidates(self, store: ReviewStore, settings: ReviewSettings) -> None:
+    async def test_cap_counts_only_the_fix_pool(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
         candidate_id = await fix_candidate(store)
         await seed(
@@ -803,6 +803,17 @@ class TestFixEligibility:
         await judge(store, "k0")
         await open_pr(store, rule="other-a", opened_at=datetime.now(UTC), n=1)
         await open_pr(store, rule="other-b", opened_at=datetime.now(UTC), n=2)
+        assert (await store.threshold_status(candidate_id, settings=settings)).open_prs == 0
+        assert await store.eligible(candidate_id, settings=settings) is True
+        for i in range(settings.max_open_prs_fix):
+            open_fix = await fix_candidate(store, hook=f"hooks.open:nudge_{i}", file=f".claude/hooks/open{i}.py")
+            await store.transition(
+                open_fix,
+                CandidateStatus.PR_OPEN,
+                pr_url=f"https://{REPO}/pull/{10 + i}",
+                pr_opened_at=datetime.now(UTC),
+            )
+        assert (await store.threshold_status(candidate_id, settings=settings)).open_prs == settings.max_open_prs_fix
         assert await store.eligible(candidate_id, settings=settings) is False
 
 

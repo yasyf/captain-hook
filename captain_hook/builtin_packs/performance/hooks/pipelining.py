@@ -8,7 +8,8 @@ nudge(
     hand, build it concurrently: add an implementation lane with isolation: 'worktree' — never
     the shared working copy; in-flight verification must not observe a mutating tree — and gate
     shipping on the verdict: confirmed applies the ready fix, refuted discards the worktree.
-    See CLAUDE.md § Plan Execution & Orchestration (Speculate while you verify).
+    See CLAUDE.md § Speculate Across Gates (§ Plan Execution & Orchestration in repos not yet
+    re-bootstrapped).
     """,
     only_if=[
         WorkflowScript(
@@ -40,7 +41,8 @@ nudge(
     candidate fix is already in hand, spawn it concurrently in an isolated worktree — never the
     shared working copy; in-flight verification must not observe a mutating tree — and gate
     shipping on the verdict: confirmed applies the ready fix, refuted discards the worktree.
-    See CLAUDE.md § Plan Execution & Orchestration (Speculate while you verify).
+    See CLAUDE.md § Speculate Across Gates (§ Plan Execution & Orchestration in repos not yet
+    re-bootstrapped).
     """,
     only_if=[
         Tool("Agent|Task"),

@@ -223,7 +223,8 @@ class ThresholdStatus:
             the misfire fired in for a pack fix, else the candidate's own repo.
         sessions: How many distinct sessions carry a judge-accepted observation.
         days: How many distinct UTC days carry a judge-accepted observation.
-        open_prs: How many live, non-stale PRs target the candidate's repo.
+        open_prs: How many live, non-stale PRs of the candidate's kind target the
+            candidate's repo — the pool its kind's cap counts against.
         single_observation: Whether any observation is both judge-accepted and
             heuristically at least ``min_confidence_fix_single`` — the fix-mode
             single-observation path.
@@ -238,6 +239,27 @@ class ThresholdStatus:
     single_observation: bool
 
 
+def threshold_targets(status: ThresholdStatus, settings: ReviewSettings) -> tuple[tuple[str, int, int], ...]:
+    """The ``(label, done, need)`` progress pairs a candidate's kind counts toward: sessions, then days."""
+    match status.kind:
+        case CandidateKind.CREATE:
+            return (("sessions", status.sessions, settings.min_sessions), ("days", status.days, settings.min_days))
+        case CandidateKind.FIX:
+            return (
+                ("sessions", status.sessions, settings.min_sessions_fix),
+                ("days", status.days, settings.min_days_fix),
+            )
+
+
+def open_pr_cap(kind: CandidateKind, *, settings: ReviewSettings) -> int:
+    """The open-PR cap for one candidate kind's pool: ``max_open_prs`` for create, ``max_open_prs_fix`` for fix."""
+    match kind:
+        case CandidateKind.CREATE:
+            return settings.max_open_prs
+        case CandidateKind.FIX:
+            return settings.max_open_prs_fix
+
+
 def crosses_thresholds(status: ThresholdStatus, *, settings: ReviewSettings) -> bool:
     """Whether a candidate's judge-accepted evidence clears its kind's PR thresholds.
 
@@ -247,9 +269,14 @@ def crosses_thresholds(status: ThresholdStatus, *, settings: ReviewSettings) -> 
     judge-accepted sessions across ``min_days`` distinct UTC days; fix candidates
     need the ``min_sessions_fix``/``min_days_fix`` pair or one observation that is
     both judge-accepted and heuristically at least ``min_confidence_fix_single``.
-    Both require the repo watched and a free slot under ``max_open_prs``.
+    Both require the repo watched and a free slot in their own kind's pool
+    (:func:`open_pr_cap`), so open create PRs never hold fix candidates back.
     """
-    if status.status != CandidateStatus.WATCHING or not status.watching or status.open_prs >= settings.max_open_prs:
+    if (
+        status.status != CandidateStatus.WATCHING
+        or not status.watching
+        or status.open_prs >= open_pr_cap(status.kind, settings=settings)
+    ):
         return False
     match status.kind:
         case CandidateKind.CREATE:
@@ -1012,22 +1039,33 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
                 await db.execute("UPDATE candidates SET generation = generation + 1 WHERE id = ?", (candidate_id,))
         return len(reopen)
 
-    async def open_pr_targets(self, *, settings: ReviewSettings) -> dict[RepoKey, int]:
+    async def open_pr_targets(self, *, settings: ReviewSettings) -> Counter[tuple[RepoKey, CandidateKind]]:
+        """Counts live, non-stale open PRs per ``(target repo, candidate kind)`` pool.
+
+        The repo is the one each PR targets, parsed from its URL, so a pack fix opened
+        against the pack's repo counts there; a missing key reads as 0.
+        """
         cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
         rows = await self.db.sql(
-            "SELECT repo_key, pr_url FROM candidates WHERE status = ? AND pr_opened_at > ?",
+            "SELECT repo_key, candidate_kind, pr_url FROM candidates WHERE status = ? AND pr_opened_at > ?",
             (CandidateStatus.PR_OPEN, cutoff),
         )
-        counts: Counter[RepoKey] = Counter()
+        counts: Counter[tuple[RepoKey, CandidateKind]] = Counter()
         seen: set[str] = set()
         for row in rows:
+            kind = CandidateKind(str(row["candidate_kind"]))
             match row["pr_url"]:
                 case None:
-                    counts[RepoKey(str(row["repo_key"]))] += 1
+                    counts[RepoKey(str(row["repo_key"])), kind] += 1
                 case url if (u := str(url)) not in seen:
                     seen.add(u)
-                    counts[pr_repo_key(u)] += 1
-        return dict(counts)
+                    counts[pr_repo_key(u), kind] += 1
+        return counts
+
+    async def open_pr_slots(self, repo: RepoKey, *, settings: ReviewSettings) -> dict[CandidateKind, int]:
+        """Returns ``repo``'s live open-PR count per candidate kind — the pools :func:`open_pr_cap` bounds."""
+        counts = await self.open_pr_targets(settings=settings)
+        return {kind: counts[repo, kind] for kind in CandidateKind}
 
     async def threshold_status(self, candidate_id: int, *, settings: ReviewSettings) -> ThresholdStatus:
         """Returns the judge-accepted evidence counts behind one candidate's eligibility.
@@ -1080,7 +1118,7 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
             watching=await self.watching(watching_repo),
             sessions=len({row["session_id"] for row in accepted}),
             days=len({row["day"] for row in accepted}),
-            open_prs=(await self.open_pr_targets(settings=settings)).get(repo, 0),
+            open_prs=(await self.open_pr_targets(settings=settings))[repo, kind],
             single_observation=any(
                 signal_confidence(row["payload_json"]) >= settings.min_confidence_fix_single for row in accepted
             ),
@@ -1219,12 +1257,12 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{ACCEPTED_COLUMN} = 1 AND v.confi
             obs = accepted.get(int(str(row["id"])), [])
             watching_repo = str(row["origin_repo_key"] or row["repo_key"])
             return ThresholdStatus(
-                kind=CandidateKind(str(row["candidate_kind"])),
+                kind=(kind := CandidateKind(str(row["candidate_kind"]))),
                 status=CandidateStatus(str(row["status"])),
                 watching=watching.get(watching_repo, False),
                 sessions=len({o["session_id"] for o in obs}),
                 days=len({o["day"] for o in obs}),
-                open_prs=open_prs.get(RepoKey(str(row["repo_key"])), 0),
+                open_prs=open_prs[RepoKey(str(row["repo_key"])), kind],
                 single_observation=any(
                     signal_confidence(o["payload_json"]) >= settings.min_confidence_fix_single for o in obs
                 ),

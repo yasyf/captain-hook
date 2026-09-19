@@ -269,6 +269,7 @@ class TestUpdateAndSyncPrs:
             "update", "1", "pr_open", "--pr-url", url, "--pr-title", "Block force-pushes", root=scanned_repo
         )
         assert result.exit_code == 0, result.output
+
         async def title_of() -> object:
             async with await ReviewStore.open(db_path()) as store:
                 return (await store.candidate(1))["pr_title"]
@@ -316,21 +317,35 @@ class TestSlots:
         asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1"))
         result = invoke("slots", root=git_repo)
         assert result.exit_code == 0
-        assert result.output == f"{GIT_REPO_KEY}: open_prs=1/2 free=1\n"
+        assert result.output == (
+            f"{GIT_REPO_KEY}: kind=create open_prs=1/2 free=1\n{GIT_REPO_KEY}: kind=fix open_prs=0/2 free=2\n"
+        )
 
     def test_full_slots_exit_one_with_exact_line(self, git_repo: Path) -> None:
         asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
         asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
-        result = invoke("slots", "--repo", str(GIT_REPO_KEY), root=git_repo)
+        result = invoke("slots", "--repo", str(GIT_REPO_KEY), "--kind", "create", root=git_repo)
         assert result.exit_code == 1
-        assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"
+        assert result.output == f"{GIT_REPO_KEY}: kind=create open_prs=2/2 free=0\n"
 
     def test_repo_option_normalizes_case(self, git_repo: Path) -> None:
         asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
         asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
-        result = invoke("slots", "--repo", str(GIT_REPO_KEY).upper(), root=git_repo)
+        result = invoke("slots", "--repo", str(GIT_REPO_KEY).upper(), "--kind", "create", root=git_repo)
         assert result.exit_code == 1
-        assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"
+        assert result.output == f"{GIT_REPO_KEY}: kind=create open_prs=2/2 free=0\n"
+
+    def test_full_create_pool_leaves_the_fix_pool_free(self, git_repo: Path) -> None:
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
+        result = invoke("slots", "--repo", str(GIT_REPO_KEY), "--kind", "fix", root=git_repo)
+        assert result.exit_code == 0
+        assert result.output == f"{GIT_REPO_KEY}: kind=fix open_prs=0/2 free=2\n"
+        both = invoke("slots", "--repo", str(GIT_REPO_KEY), root=git_repo)
+        assert both.exit_code == 0
+        assert both.output == (
+            f"{GIT_REPO_KEY}: kind=create open_prs=2/2 free=0\n{GIT_REPO_KEY}: kind=fix open_prs=0/2 free=2\n"
+        )
 
 
 class TestSnapshot:

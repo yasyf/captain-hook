@@ -1,7 +1,8 @@
 """PR lifecycle sync: fold each open PR's GitHub state back into its candidate.
 
 A merged PR accepts its candidate, a closed PR rejects it, and a PR open past
-``stale_after_days`` goes stale — freeing its slot under ``max_open_prs``. A
+``stale_after_days`` goes stale — freeing its slot in its kind's pool (``max_open_prs``
+for create, ``max_open_prs_fix`` for fix). A
 ``gh`` failure (not installed, not authenticated, network down) is logged and
 skipped so the detached child never dies on it.
 """

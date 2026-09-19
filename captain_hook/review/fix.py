@@ -29,6 +29,16 @@ harness rendered no trace the ledger can join — a complaint that names a hook
 (``"the X hook"``) falls back to :func:`named_hook_target`, attributing to a
 ledger row whose ``kind`` stem uniquely matches the named hook within
 :data:`NAMED_HOOK_WINDOW_MS`, failing closed on zero or ambiguous matches.
+
+USER turns are scanned too, under a different marker: the user naming capt-hook
+(``"capt hook"``, ``"capt-hook"``, ``"captain hook"``) beside a defect verb (fix,
+broken, misfiring, wrong, stale, out of date, forcing, should be) —
+:func:`classify_user_marker`, tolerant of the typos a human types. A user complaint
+attributes through the same fingerprint and named-hook paths, then through
+:func:`fire_message_target`: the one ledger row within :data:`NAMED_HOOK_WINDOW_MS`
+whose fire message shares at least :data:`FIRE_MESSAGE_OVERLAP` content words with
+the complaint, failing closed on zero or ambiguous matches. A user complaint about
+a hook that never fired in that session has no ledger row to join and is dropped.
 The PR target resolves by source location into a :class:`~captain_hook.review.routing.Target`
 naming the file, the hook, and the repo the fix belongs to: a watched-repo hook file is the
 target verbatim (``repo`` ``None`` — fixed in place), but an installed-wheel or plugin-pack
@@ -115,6 +125,44 @@ COMPLIANCE_RE = re.compile(
     r"[\s\S]{0,40}?(?:hook|reminder|gate|nudge)",
     re.IGNORECASE,
 )
+CAPT_HOOK_RE = re.compile(r"\bcapt(?:ain)?[\s_-]*hooks?\b", re.IGNORECASE)
+USER_DEFECT_RE = re.compile(
+    r"\b(?:fix\w*|broken|misfir\w*|wrong\w*|stale|outdated|out\s+of\s+da\w+|forc(?:e[sd]?|ing)"
+    r"|sho\w{1,3}ld(?:n'?t|\s+not)?\s+(?:be|fire|block)|disabl\w+|remov\w+|stop\w*)\b",
+    re.IGNORECASE,
+)
+FIRE_MESSAGE_OVERLAP = 2
+CONTENT_WORD_RE = re.compile(r"[a-z]{5,}")
+CONTENT_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "again",
+        "always",
+        "before",
+        "being",
+        "captain",
+        "could",
+        "every",
+        "hooks",
+        "instead",
+        "never",
+        "other",
+        "please",
+        "should",
+        "still",
+        "their",
+        "there",
+        "these",
+        "thing",
+        "think",
+        "those",
+        "where",
+        "which",
+        "while",
+        "would",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +214,26 @@ def classify_marker(text: str) -> Marker | None:
     if hedged is not None:
         return Marker("hedged", strong[0] if strong is not None else "suspected", hedged.group(0))
     return None
+
+
+def classify_user_marker(text: str) -> Marker | None:
+    if CAPT_HOOK_RE.search(text) is None or (defect := USER_DEFECT_RE.search(text)) is None:
+        return None
+    return Marker("strong", "user_reported", defect.group(0))
+
+
+def turn_marker(event: TranscriptEvent) -> Marker | None:
+    match event:
+        case AssistantEvent(meta=meta, text=text) if not meta.is_sidechain and text.strip():
+            return classify_marker(text)
+        case UserEvent(meta=meta, text=text) if not (meta.is_sidechain or meta.is_meta) and text.strip():
+            return classify_user_marker(text)
+        case _:
+            return None
+
+
+def content_words(text: str) -> frozenset[str]:
+    return frozenset(CONTENT_WORD_RE.findall(text.lower())) - CONTENT_STOPWORDS
 
 
 def fingerprint_of(event: TranscriptEvent) -> Fingerprint | None:
@@ -270,6 +338,23 @@ async def named_hook_target(
     return min(matched, key=lambda decision: abs(decision.ts_ms - near_ts_ms))
 
 
+async def fire_message_target(
+    text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
+) -> Decision | None:
+    words = content_words(text)
+    matched = [
+        decision
+        for decision in await decisions.for_session(session_id)
+        if decision.source_file
+        and decision.message
+        and abs(decision.ts_ms - near_ts_ms) <= NAMED_HOOK_WINDOW_MS
+        and len(words & content_words(decision.message)) >= FIRE_MESSAGE_OVERLAP
+    ]
+    if len({decision.kind for decision in matched}) != 1:
+        return None
+    return min(matched, key=lambda decision: abs(decision.ts_ms - near_ts_ms))
+
+
 def user_repo_source(source_file: str) -> bool:
     """A hook file living in the watched repo, not the installed wheel.
 
@@ -350,7 +435,10 @@ async def iter_hook_complaint_signals(
 
     Fires are joined by the events' own session UUID — the only session key —
     plus the tool call's content digest when the fingerprint carries a tool-use
-    id, or by event name and timestamp proximity when it does not.
+    id, or by event name and timestamp proximity when it does not. Assistant turns
+    carry Claude's own dismissals (:func:`classify_marker`); user turns carry the
+    developer's plain-words complaints about capt-hook (:func:`classify_user_marker`),
+    which also attribute by fire-message overlap (:func:`fire_message_target`).
 
     Args:
         events: The transcript's full ordered event stream.
@@ -361,15 +449,13 @@ async def iter_hook_complaint_signals(
     Returns:
         Signals of kind :data:`HOOK_COMPLAINT` whose ``evidence`` stashes the
         attribution (``hook_name``, ``source_file``, ``event``, ``action``,
-        ``fire_ts_ms``, ``fire_message``, ``marker``, ``attribution`` — either
-        ``fingerprint`` or ``hook_name``) plus the resolved
+        ``fire_ts_ms``, ``fire_message``, ``marker``, ``attribution`` — ``fingerprint``,
+        ``hook_name``, or ``fire_message``) plus the resolved
         ``target_source_file``/``target_hook_name``/``target_repo``/``pack_name``/``misfire_class``.
     """
     uses = tool_uses(events)
     for event_index, event in enumerate(events):
-        if not isinstance(event, AssistantEvent) or event.meta.is_sidechain or not event.text.strip():
-            continue
-        if (marker := classify_marker(event.text)) is None:
+        if (marker := turn_marker(event)) is None:
             continue
         near_ts_ms = int(event.meta.timestamp.timestamp() * 1000)
         session_id = event.meta.session_id
@@ -382,6 +468,11 @@ async def iter_hook_complaint_signals(
             attribution = "fingerprint"
         elif (fire := await named_hook_target(event.text, decisions, session_id, near_ts_ms)) is not None:
             trigger_index, turns_back, attribution = None, None, "hook_name"
+        elif (
+            isinstance(event, UserEvent)
+            and (fire := await fire_message_target(event.text, decisions, session_id, near_ts_ms)) is not None
+        ):
+            trigger_index, turns_back, attribution = None, None, "fire_message"
         else:
             continue
         if (target := resolve_target(fire, index)) is None:

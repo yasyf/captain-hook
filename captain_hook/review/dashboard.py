@@ -23,10 +23,10 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from captain_hook.review.pipeline import review_log_path
-from captain_hook.review.store import CandidateKind, CandidateStatus
+from captain_hook.review.store import CandidateKind, CandidateStatus, open_pr_cap, threshold_targets
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from rich.console import RenderableType
 
@@ -88,12 +88,7 @@ def bar(done: int, need: int, *, width: int = 5) -> str:
 
 
 def targets(view: CandidateView, settings: ReviewSettings) -> tuple[tuple[str, int, int], ...]:
-    t = view.threshold
-    match t.kind:
-        case CandidateKind.CREATE:
-            return (("sessions", t.sessions, settings.min_sessions), ("days", t.days, settings.min_days))
-        case CandidateKind.FIX:
-            return (("sessions", t.sessions, settings.min_sessions_fix), ("days", t.days, settings.min_days_fix))
+    return threshold_targets(view.threshold, settings)
 
 
 def progress_text(view: CandidateView, settings: ReviewSettings) -> str:
@@ -254,7 +249,10 @@ def pack_errors_lines(load_errors: Sequence[LoadError]) -> list[RenderableType]:
     ]
 
 
-def header(repo: RepoKey, settings: ReviewSettings, *, watching: bool, open_prs: int) -> RenderableType:
+def header(
+    repo: RepoKey, settings: ReviewSettings, *, watching: bool, open_prs: Mapping[CandidateKind, int]
+) -> RenderableType:
+    slots = " · ".join(f"{kind} {open_prs[kind]}/{open_pr_cap(kind, settings=settings)}" for kind in CandidateKind)
     line = Text.assemble(
         ("captain-hook", "bold"),
         ("  ·  ", "dim"),
@@ -262,7 +260,7 @@ def header(repo: RepoKey, settings: ReviewSettings, *, watching: bool, open_prs:
         "    ",
         (f"[{'watching' if watching else 'not watching'}]", "green" if watching else "yellow"),
         "    ",
-        (f"PR slots {open_prs}/{settings.max_open_prs}", "dim"),
+        (f"PR slots {slots}", "dim"),
     )
     if watching:
         return line
@@ -297,7 +295,7 @@ def render(
     watching: bool,
     health: SpawnHealth,
     judge: JudgeHealth,
-    open_prs: int,
+    open_prs: Mapping[CandidateKind, int],
     load_errors: Sequence[LoadError] = (),
     unwatched: Sequence[str] = (),
     syncing: bool = False,
@@ -339,7 +337,7 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
         unwatched = await store.unwatched_session_repos()
         watching = await store.watching(repo)
         views = await store.overview(repo, settings=settings)
-        open_prs = (await store.open_pr_targets(settings=settings)).get(repo, 0)
+        open_prs = await store.open_pr_slots(repo, settings=settings)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
             console.print(
                 render(
@@ -372,7 +370,7 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
             fresh = await store.overview(repo, settings=settings)
-            open_prs = (await store.open_pr_targets(settings=settings)).get(repo, 0)
+            open_prs = await store.open_pr_slots(repo, settings=settings)
             live.update(
                 render(
                     fresh,
