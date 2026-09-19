@@ -76,9 +76,6 @@ from captain_hook.ast_grep import (
 if TYPE_CHECKING:
     from captain_hook.ast_grep import CommentBlock, TouchedComment
 
-COMMENT_DENSITY_MIN_ADDED = 6
-COMMENT_DENSITY_FRACTION = 0.5
-
 GO_DOC_RUN = (
     "package p\n\n// F alpha line here\n// F beta line here\n// F gamma line here\n// F delta line here\nfunc F() {}\n"
 )
@@ -203,7 +200,7 @@ class CommentDenseEdit(CustomCondition):
         ]
         added = len(flags)
         comment_added = sum(flags)
-        return added >= COMMENT_DENSITY_MIN_ADDED and comment_added / added > COMMENT_DENSITY_FRACTION
+        return added >= 6 and comment_added / added > 0.5
 
 
 hook(

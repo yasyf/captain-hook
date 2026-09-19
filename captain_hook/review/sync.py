@@ -33,7 +33,6 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
-GH_TIMEOUT = 30
 PR_STATE_TTL = timedelta(minutes=15)
 LANDING_WINDOW_BEFORE = timedelta(hours=3)
 LANDING_WINDOW_AFTER = timedelta(minutes=15)
@@ -128,7 +127,7 @@ def gh_graphql(query: str, **variables: str) -> dict[str, Any] | None:
     for key, value in variables.items():
         argv += ["-F", f"{key}={value}"]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT)
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:

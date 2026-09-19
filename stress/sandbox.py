@@ -31,8 +31,6 @@ DROPPED_ENV = (
     "CLAUDE_PROJECT_DIR",
     "CAPT_HOOK_CLIENT_TIMEOUT",
 )
-GIT_IDENTITY = ("-c", "user.email=stress@capt-hook.test", "-c", "user.name=capt-hook-stress")
-SESSION_PREFIX = "stress-"
 ORIGIN_ORG = "capt-hook-stress"
 REAL_REVIEW_DB = Path.home() / ".claude" / "state" / "review" / "review.db"
 REAL_DECISIONS_DB = Path.home() / ".cc-transcript" / "decisions.db"
@@ -41,7 +39,7 @@ LEAK_QUERIES = (
     (REAL_REVIEW_DB, f"SELECT COUNT(*) FROM candidates WHERE repo_key LIKE '%{ORIGIN_ORG}%'"),
     (REAL_REVIEW_DB, f"SELECT COUNT(*) FROM repos WHERE repo_key LIKE '%{ORIGIN_ORG}%'"),
     (REAL_REVIEW_DB, "SELECT COUNT(*) FROM files WHERE path LIKE '/tmp/capt-stress%'"),
-    (REAL_DECISIONS_DB, f"SELECT COUNT(*) FROM decisions WHERE session_id LIKE '{SESSION_PREFIX}%'"),
+    (REAL_DECISIONS_DB, "SELECT COUNT(*) FROM decisions WHERE session_id LIKE 'stress-%'"),
 )
 
 
@@ -105,7 +103,11 @@ class Sandbox:
 
 
 def git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *GIT_IDENTITY, *args], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=stress@capt-hook.test", "-c", "user.name=capt-hook-stress", *args],
+        check=True,
+        capture_output=True,
+    )
 
 
 def init_repo(repo: Path, *, origin: str) -> None:

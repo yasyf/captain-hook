@@ -25,28 +25,20 @@ from captain_hook.util.caching import ttl_cache
 if TYPE_CHECKING:
     from pathlib import Path
 
-GH_TOKEN_TTL = 300
-
-GH_TOKEN_TIMEOUT = 5
 MAX_ATTEMPTS = 5
-BACKOFF_BASE = 1.0
-BACKOFF_MULTIPLIER = 2.0
-MAX_SLEEP = 30.0
-MAX_TOTAL_WAIT = 90.0
-RATELIMIT_WAIT_THRESHOLD = 30.0
 
 
 class GitHubFetchError(Exception):
     """A GitHub request failed after exhausting retries, or returned a non-retryable status."""
 
 
-@ttl_cache(GH_TOKEN_TTL)
+@ttl_cache(300)
 def github_token() -> str | None:
     if token := os.environ.get("GITHUB_TOKEN"):
         return token
     try:
         token = subprocess.run(
-            ["gh", "auth", "token"], capture_output=True, text=True, timeout=GH_TOKEN_TIMEOUT, check=True
+            ["gh", "auth", "token"], capture_output=True, text=True, timeout=5, check=True
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -87,8 +79,8 @@ def request_with_retry[T](fetch: Callable[[], T]) -> T:
             wait, error = http_wait(e, attempt), e
         except (urllib.error.URLError, OSError) as e:
             wait, error = backoff(attempt), e
-        nap = min(wait, MAX_SLEEP)
-        if attempt == MAX_ATTEMPTS - 1 or waited + nap > MAX_TOTAL_WAIT:
+        nap = min(wait, 30.0)
+        if attempt == MAX_ATTEMPTS - 1 or waited + nap > 90.0:
             raise GitHubFetchError(terminal_message(error)) from error
         time.sleep(nap)
         waited += nap
@@ -112,7 +104,7 @@ def http_wait(error: urllib.error.HTTPError, attempt: int) -> float:
 
 def ratelimit_wait(error: urllib.error.HTTPError) -> float:
     reset_in = int(error.headers.get("X-RateLimit-Reset", "0")) - time.time()
-    if 0 < reset_in <= RATELIMIT_WAIT_THRESHOLD:
+    if 0 < reset_in <= 30.0:
         return reset_in
     raise GitHubFetchError(
         f"GitHub API rate limit exhausted (resets in ~{max(int(reset_in), 0)}s). "
@@ -121,7 +113,7 @@ def ratelimit_wait(error: urllib.error.HTTPError) -> float:
 
 
 def backoff(attempt: int) -> float:
-    return random.uniform(0, BACKOFF_BASE * BACKOFF_MULTIPLIER**attempt)
+    return random.uniform(0, 2.0**attempt)
 
 
 def terminal_message(error: Exception) -> str:

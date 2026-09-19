@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     type Dispatch = Callable[[EventRequest], tuple[EventResponse, Background | None]]
 
 REQUEST_THREADS = 16
-BACKGROUND_THREADS = 4
 
 
 def handshake(input_stream: BinaryIO, output_stream: BinaryIO, *, build: str) -> bool:
@@ -55,7 +54,7 @@ class WorkerService:
         self._output = output_stream
         self._dispatch = dispatch
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="capt-hook-worker")
-        self._background = ThreadPoolExecutor(max_workers=BACKGROUND_THREADS, thread_name_prefix="capt-hook-async")
+        self._background = ThreadPoolExecutor(max_workers=4, thread_name_prefix="capt-hook-async")
         self._write_guard = threading.Lock()
         self._guard = threading.Condition()
         self._outstanding = 0

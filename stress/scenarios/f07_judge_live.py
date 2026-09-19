@@ -25,7 +25,6 @@ from stress.scenarios.base import Scenario, ScenarioResult, Tier, check
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "hook_fires"
 GOLDEN_GATE_MIN = 12
-JUDGE_CONCURRENCY = 3
 JUDGE_RETRIES = 3
 JUDGE_ENV = {"HOOKS_REVIEW_JUDGE_TIER": "medium", "HOOKS_REVIEW_MAX_OPEN_PRS": "0"}
 CREATE_LABELS: tuple[tuple[str, str, bool], ...] = (
@@ -82,7 +81,7 @@ async def judge_golden_texts(rows: list[GoldenRow]) -> list[tuple[bool, str]]:
     from captain_hook.review.judge import FIX_JUDGE_PROMPT, ReviewVerdict
 
     judge = structured_judge(ReviewVerdict, tier="medium")
-    semaphore = asyncio.Semaphore(JUDGE_CONCURRENCY)
+    semaphore = asyncio.Semaphore(3)
 
     async def one(text: str) -> tuple[bool, str]:
         prompt = FIX_JUDGE_PROMPT.format(

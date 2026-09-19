@@ -19,10 +19,8 @@ import captain_hook  # noqa: E402
 BUILD_DIR = Path(__file__).resolve().parents[1]
 SOURCE = BUILD_DIR.parent / "docs"
 FRAGMENTS_SRC = SOURCE / "_fragments"
-MATRIX = SOURCE / "tutorial" / "_src" / "matrix.json"
 WIDGETS_DIR = BUILD_DIR / "docs" / "tutorial" / "widgets"
 PACKS = Path(captain_hook.__file__).parent / "builtin_packs"
-MARKER = re.compile(r"<!-- gd-embed-widget: (\w+)(?: (lite))? -->")
 
 
 def extract_rubric(source: str) -> str:
@@ -125,11 +123,11 @@ def expand(text: str, matrix: dict, qmd: Path) -> str:
             parts.append(widget_block(match.group(1), match.group(2), matrix, qmd))
         return "```{=html}\n" + "\n".join(parts) + "\n```"
 
-    return MARKER.sub(replace, text)
+    return re.sub(r"<!-- gd-embed-widget: (\w+)(?: (lite))? -->", replace, text)
 
 
 def main() -> None:
-    matrix = json.loads(MATRIX.read_text())
+    matrix = json.loads((SOURCE / "tutorial" / "_src" / "matrix.json").read_text())
     for qmd in BUILD_DIR.rglob("*.qmd"):
         text = qmd.read_text()
         if (new := expand(text, matrix, qmd)) != text:

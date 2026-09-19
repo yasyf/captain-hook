@@ -98,7 +98,6 @@ HOOK_COMPLAINT = SourceKind("hook_complaint")
 """The source kind for an assistant turn dismissing a hook fire as a misfire."""
 
 PROXIMITY_TURNS = 3
-TIGHT_PROXIMITY_TURNS = 1
 STOP_FEEDBACK_RE = compile_groups(STOP_HOOK_GROUPS, True)
 CAPTAIN_HOOK_ROOT = "captain_hook"
 NAMED_HOOK_WINDOW_MS = 1_800_000
@@ -335,7 +334,11 @@ def binding_hook_names(text: str) -> set[str]:
 async def named_hook_target(
     text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
 ) -> Decision | None:
-    if not (names := {name_slug(match.group(1)) for match in NAMED_HOOK_RE.finditer(text)}):
+    names = {
+        name_slug(match.group(1))
+        for match in NAMED_HOOK_RE.finditer(text)
+    }
+    if not names:
         return None
     return await decision_named(names, decisions, session_id, near_ts_ms)
 
@@ -452,7 +455,7 @@ def complaint_signal(marker: Marker, turns_back: int | None) -> CandidateSignal:
         VERY_HIGH if marker.strength == "strong" else MEDIUM,
         (f"{marker.strength}_marker", marker.misfire_class),
     )
-    tight = turns_back is not None and turns_back <= TIGHT_PROXIMITY_TURNS
+    tight = turns_back is not None and turns_back <= 1
     return bump(base, CONFIDENCE_STEP, "tight_proximity") if tight else base
 
 

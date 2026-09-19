@@ -84,9 +84,6 @@ nudge(
 )
 
 
-VALUE_FLAGS = ("--scope", "--marketplace")
-
-
 def operands(call: Call, *, after: int = 0) -> list[str]:
     """The call's positional words past ``after``, with flags and their values dropped."""
     rest: list[str] = []
@@ -94,7 +91,7 @@ def operands(call: Call, *, after: int = 0) -> list[str]:
     for arg in call.args[after:]:
         if skip:
             skip = False
-        elif arg in VALUE_FLAGS:
+        elif arg in ("--scope", "--marketplace"):
             skip = True
         elif not arg.startswith("-"):
             rest.append(arg)
@@ -131,16 +128,14 @@ nudge(
 )
 
 
-FLEET_TOOLS = frozenset(
-    {"capt-hook", "captain-hook", "cc-transcript", "cc-notes", "slop-cop", "cc-guides", "cc-context"}
-)
-
-
 def runs_an_unpinned_fleet_tool(evt: BaseHookEvent) -> bool:
     for call in evt.command.calls("uvx"):
         if "UV_EXCLUDE_NEWER" in call.source.args:
             continue
-        if any(name in FLEET_TOOLS for name in operands(call)):
+        if any(
+            name in {"capt-hook", "captain-hook", "cc-transcript", "cc-notes", "slop-cop", "cc-guides", "cc-context"}
+            for name in operands(call)
+        ):
             return True
     return False
 
@@ -188,7 +183,6 @@ nudge(
 )
 
 
-NAME_TEST_TO_GLOB = {"-name": "--glob", "-iname": "--iglob"}
 FIND_TO_RG_NOTE = (
     "Rewrote an unbounded `find` to `rg --files`: a name search rooted at $HOME or / walks every "
     "worktree, node_modules, and build tree on the volume and pins a core for minutes. rg honours "
@@ -227,7 +221,7 @@ def rg_equivalent(command: Command) -> str | None:
         if len(rest) < 2 or rest[1][0] != "f":
             return None
         rest = rest[2:]
-    if len(rest) != 2 or (glob := NAME_TEST_TO_GLOB.get(rest[0][0])) is None:
+    if len(rest) != 2 or (glob := {"-name": "--glob", "-iname": "--iglob"}.get(rest[0][0])) is None:
         return None
     return f"rg --files {words[0].raw} {glob} {rest[1][1].raw}"
 

@@ -17,8 +17,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-STABLE_IDENTIFIER = "capt-hook-stress-python"
-
 
 def is_linker_signed(binary: Path) -> bool:
     proc = subprocess.run(["codesign", "-dv", str(binary)], capture_output=True, text=True)
@@ -29,7 +27,7 @@ def stabilize(binary: Path) -> bool:
     if not is_linker_signed(binary):
         return False
     subprocess.run(
-        ["codesign", "--force", "--sign", "-", "--identifier", STABLE_IDENTIFIER, str(binary)],
+        ["codesign", "--force", "--sign", "-", "--identifier", "capt-hook-stress-python", str(binary)],
         capture_output=True,
         check=True,
     )

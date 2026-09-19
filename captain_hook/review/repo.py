@@ -11,7 +11,6 @@ from typing import NewType
 from captain_hook.util import reqenv
 
 RepoKey = NewType("RepoKey", str)
-PR_URL = re.compile(r"https?://([^/]+/[^/]+/[^/]+)/pull/\d+/?")
 
 
 def pr_repo_key(url: str) -> RepoKey:
@@ -20,7 +19,7 @@ def pr_repo_key(url: str) -> RepoKey:
     Raises:
         ValueError: If ``url`` is not a pull-request URL.
     """
-    if (match := PR_URL.fullmatch(url.strip())) is None:
+    if (match := re.fullmatch(r"https?://([^/]+/[^/]+/[^/]+)/pull/\d+/?", url.strip())) is None:
         raise ValueError(f"not a pull-request URL: {url}")
     return RepoKey(match.group(1).lower())
 

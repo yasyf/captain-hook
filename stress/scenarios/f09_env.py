@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
 FAMILY = "env"
 REAL_CHECKOUT_KEY = "github.com/yasyf/captain-hook"
-EXPECTED_WIRING = "uvx --isolated capt-hook review run"
 PR_URL = "https://example.com/pr/1"
 SENTINEL_VARS = ("HOOKS_REVIEW_MIN_SESSIONS", "HOOKS_STRESS_SENTINEL", "CAPT_HOOK_SPAWNED")
 
@@ -86,7 +85,7 @@ def uvx_wiring(sandbox: Sandbox) -> ScenarioResult:
         checks=(
             check(
                 "enable registers the plugin whose SessionEnd wires the isolated uvx command verbatim",
-                enable.returncode == 0 and EXPECTED_WIRING in commands,
+                enable.returncode == 0 and "uvx --isolated capt-hook review run" in commands,
                 f"rc={enable.returncode} commands={commands} stdout={enable.stdout!r}",
             ),
             check(

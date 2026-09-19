@@ -47,8 +47,6 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.sync import CachedPrState, PrState
 
-SPLIT_THRESHOLD = 0.9
-
 PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
 
 CANDIDATES_QUERY = """
@@ -1464,7 +1462,7 @@ ORDER BY repo
             )
         )
 
-    async def slug_splits(self, *, threshold: float = SPLIT_THRESHOLD) -> list[KeyOverlap]:
+    async def slug_splits(self, *, threshold: float = 0.9) -> list[KeyOverlap]:
         """Returns canonical-key pairs whose evidence centroids nearly coincide — possible slug splits.
 
         Delegates to :func:`cc_transcript.judge.near_duplicate_keys` over this

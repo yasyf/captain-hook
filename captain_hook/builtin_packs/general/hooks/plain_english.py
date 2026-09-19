@@ -14,17 +14,8 @@ from captain_hook.util import reqenv
 if TYPE_CHECKING:
     from captain_hook.events import MessageDisplayEvent
 
-CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
-CEREBRAS_MODEL = "qwen-3.8-27b"
 REWRITE_TIMEOUT_SECONDS = 20
-DEADLINE_MARGIN_SECONDS = 3.0
-FINALIZED_KEPT = 64
 ASSEMBLY_DEADLINE_SECONDS = 2.0
-ASSEMBLY_POLL_SECONDS = 0.05
-MIN_PROSE_CHARS = 200
-QUESTION_CHARS = 800
-FENCED_BLOCK = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
-WHITESPACE = re.compile(r"\s")
 WRAPPING_FENCE = re.compile(r"```[^\n]*\n((?:(?!```).)*)\n```", re.DOTALL)
 REWRITE_RULES = str(Prompt.load("plain_english_rules"))
 
@@ -42,20 +33,20 @@ def assembled(evt: MessageDisplayEvent) -> str:
             chunks = buffer.messages[evt.message_id]
             if all(i in chunks for i in range(evt.index + 1)) or time.monotonic() >= deadline:
                 del buffer.messages[evt.message_id]
-                buffer.finalized = [*buffer.finalized, evt.message_id][-FINALIZED_KEPT:]
+                buffer.finalized = [*buffer.finalized, evt.message_id][-64:]
                 return "".join(chunks[i] for i in sorted(chunks))
-        time.sleep(ASSEMBLY_POLL_SECONDS)
+        time.sleep(0.05)
 
 
 def is_prose(text: str) -> bool:
-    return len(WHITESPACE.sub("", FENCED_BLOCK.sub("", text))) >= MIN_PROSE_CHARS
+    return len(re.sub(r"\s", "", re.sub(r"```.*?(?:```|\Z)", "", text, flags=re.DOTALL))) >= 200
 
 
 def rewrite_prompt(evt: MessageDisplayEvent, text: str) -> Prompt:
     question = next((turn.prompt for turn in reversed(evt.ctx.transcript.turns) if turn.prompt), None)
     context = (
         [
-            f'For context, the user asked the assistant: "{question[:QUESTION_CHARS]}". Use this only to understand '
+            f'For context, the user asked the assistant: "{question[:800]}". Use this only to understand '
             "the message. Do NOT rewrite, answer, or repeat the user's question — rewrite only the assistant's "
             "message that follows."
         ]
@@ -76,13 +67,13 @@ def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
     if not is_prose(text):
         return text
     left = reqenv.seconds_left()
-    budget = REWRITE_TIMEOUT_SECONDS if left is None else min(REWRITE_TIMEOUT_SECONDS, left - DEADLINE_MARGIN_SECONDS)
+    budget = REWRITE_TIMEOUT_SECONDS if left is None else min(REWRITE_TIMEOUT_SECONDS, left - 3.0)
     try:
         future = offload_pool().submit(
             contextvars.copy_context().run,
             evt.ctx.call_llm,
             rewrite_prompt(evt, text),
-            backend=OpenAiEndpointBackend(CEREBRAS_BASE_URL, CEREBRAS_MODEL, api_key=api_key),
+            backend=OpenAiEndpointBackend("https://api.cerebras.ai/v1", "qwen-3.8-27b", api_key=api_key),
             timeout=max(1, int(budget)),
         )
         try:

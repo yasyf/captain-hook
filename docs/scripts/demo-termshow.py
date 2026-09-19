@@ -51,11 +51,6 @@ block_command(
 
 PAYLOAD = '{"tool_name": "Bash", "tool_input": {"command": "git push --force"}}'
 
-# The command lines exactly as the viewer should read them (cosmetic display).
-CMD1_LINE1 = f"$ echo '{PAYLOAD}' |"
-CMD1_LINE2 = "    uvx capt-hook run PreToolUse | jq -r .hookSpecificOutput.permissionDecisionReason"
-CMD2 = "$ uvx capt-hook test"
-
 BOLD, RESET = "\x1b[1m", "\x1b[0m"
 RED, GREEN = "\x1b[1;31m", "\x1b[1;32m"
 
@@ -113,13 +108,18 @@ def build_reel(reason: str, test_lines: list[str]) -> Reel:
     r = Reel()
 
     # Prompt one: replay the PreToolUse payload, watch the guard block it.
-    r.type_line(CMD1_LINE1, lead=0.5, cps=0.022, bold=True)
-    r.type_line(CMD1_LINE2, lead=0.05, cps=0.02, bold=True)
+    r.type_line(f"$ echo '{PAYLOAD}' |", lead=0.5, cps=0.022, bold=True)
+    r.type_line(
+        "    uvx capt-hook run PreToolUse | jq -r .hookSpecificOutput.permissionDecisionReason",
+        lead=0.05,
+        cps=0.02,
+        bold=True,
+    )
     r.print_line(paint(reason), lead=0.55)
 
     # Prompt two: prove the guard with its inline tests.
     r.print_line("", lead=0.3)
-    r.type_line(CMD2, lead=1.1, cps=0.05, bold=True)
+    r.type_line("$ uvx capt-hook test", lead=1.1, cps=0.05, bold=True)
     for i, line in enumerate(test_lines):
         r.print_line(paint(line), lead=0.5 if i == 0 else 0.14)
 

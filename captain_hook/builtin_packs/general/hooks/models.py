@@ -42,7 +42,6 @@ REVIEW_ROUTING_PATTERN = (
     r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
     r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))"
 )
-PROSE_CODEX_ROUTE = r"(?i)\b(codex|astra)\b"
 WRITING_VERBS = (
     "write",
     "draft",
@@ -226,7 +225,7 @@ llm_gate(
     events=Event.PreToolUse,
     only_if=[Tool("Agent|Task")],
     skip_if=[
-        ToolInput("prompt", PROSE_CODEX_ROUTE),
+        ToolInput("prompt", r"(?i)\b(codex|astra)\b"),
         ToolInput("prompt", r"(?i)\b(classif|label|tag|categoriz|count|extract|mechanical)"),
         Agent("Explore|claude-code-guide|codex-wrapper|codex:codex-wrapper"),
     ],

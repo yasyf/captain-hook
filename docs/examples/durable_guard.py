@@ -15,15 +15,13 @@ from captain_hook import (
     on,
 )
 
-SENSITIVE = ("migrations/", "secrets", ".env")
-
 
 class WarnedPaths(DurableState, scope="project"):
     paths: Deque[256]
 
 
 def is_sensitive(path: str) -> bool:
-    return any(marker in path for marker in SENSITIVE)
+    return any(marker in path for marker in ("migrations/", "secrets", ".env"))
 
 
 @on(

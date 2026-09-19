@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from stress.sandbox import Sandbox
 
 CAPT_HOOK_BIN = CHECKOUT / ".venv" / "bin" / "capt-hook"
-SPAWN_PATTERN = "captain_hook review spawn"
 SPAWN_REPORT_RE = re.compile(
     r"SpawnReport\(repo=(?P<repo>None|'[^']*'), watching=(?P<watching>\w+), scanned=(?P<scanned>\d+), "
     r"inserted=(?P<inserted>\d+), judged=(?P<judged>\d+), failed=(?P<failed>\d+), "
@@ -81,7 +80,7 @@ def spawn_pids(sandbox: Sandbox) -> list[int]:
     roots = {str(sandbox.root), str(sandbox.root.resolve())}
     pids: set[int] = set()
     for root in roots:
-        proc = subprocess.run(["pgrep", "-f", f"{SPAWN_PATTERN}.*{root}"], capture_output=True, text=True)
+        proc = subprocess.run(["pgrep", "-f", f"captain_hook review spawn.*{root}"], capture_output=True, text=True)
         pids |= {int(line) for line in proc.stdout.split() if line.isdigit()}
     return sorted(pids)
 

@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from cc_transcript.decisions import Decision, DecisionLog
     from cc_transcript.heartbeats import HeartbeatLog
 
-MAX_QUEUE = 10_000
 MAX_LEDGER_LOGS = 64
 
 
@@ -45,11 +44,8 @@ class Stop:
     __slots__ = ()
 
 
-STOP = Stop()
-
-
 class DecisionWriter:
-    def __init__(self, *, maxsize: int = MAX_QUEUE) -> None:
+    def __init__(self, *, maxsize: int = 10_000) -> None:
         self._queue: queue.Queue[tuple[Path | None, Decision] | Beat | Stop] = queue.Queue(maxsize)
         self._logs: OrderedDict[Path | None, DecisionLog] = OrderedDict()
         self._heartbeats: OrderedDict[Path | None, HeartbeatLog] = OrderedDict()
@@ -71,7 +67,7 @@ class DecisionWriter:
             logger.bind(session_id=session_id).warning("heartbeat queue full; dropping a beat")
 
     def drain(self, timeout: float | None = None) -> None:
-        self._queue.put(STOP)
+        self._queue.put(Stop())
         self._thread.join(timeout)
 
     def _run(self) -> None:

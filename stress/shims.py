@@ -16,8 +16,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-CHECKOUT = Path(__file__).resolve().parents[1]
-VENV_BIN = CHECKOUT / ".venv" / "bin"
+VENV_BIN = Path(__file__).resolve().parents[1] / ".venv" / "bin"
 
 CAPT_HOOK_SHIM = f"""#!/bin/sh
 exec "{VENV_BIN}/capt-hook" "$@"

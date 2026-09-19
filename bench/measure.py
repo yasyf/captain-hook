@@ -29,12 +29,6 @@ from statistics import median
 
 from bench.counter import execs
 
-CONFIDENCE = 0.99
-CONFIRMATIONS = 3
-MINIMUM_SAMPLES = 30
-MAXIMUM_SAMPLES = 20_000
-BUDGET_S = 20.0
-
 
 @dataclass(frozen=True, slots=True)
 class Command:
@@ -73,7 +67,7 @@ class Measurement:
 
     @property
     def counted(self) -> bool:
-        return self.confidence >= CONFIDENCE and self.confirmations >= CONFIRMATIONS
+        return self.confidence >= 0.99 and self.confirmations >= 3
 
     @property
     def execs(self) -> int | None:
@@ -141,9 +135,9 @@ def measure(
     label: str,
     command: Command,
     *,
-    budget_s: float = BUDGET_S,
-    minimum_samples: int = MINIMUM_SAMPLES,
-    maximum_samples: int = MAXIMUM_SAMPLES,
+    budget_s: float = 20.0,
+    minimum_samples: int = 30,
+    maximum_samples: int = 20_000,
 ) -> Measurement:
     """Sample ``command`` until its exec count is confidently counted, or until the budget runs out."""
     deadline = time.monotonic() + budget_s

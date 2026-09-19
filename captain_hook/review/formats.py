@@ -27,25 +27,6 @@ CONDUCTOR_WORKSTREAM_HEADER_RE = re.compile(
     r"^### (?P<id>[A-Z][\w-]*\d*)\s*\[(?P<kind>[A-Z]+)\]\s*—\s*(?P<title>.+)$",
     re.MULTILINE,
 )
-CONDUCTOR_FINDING_FMT = RegexReviewFormat(
-    name="conductor-finding",
-    groups=(
-        (
-            "conductor-finding",
-            r"^- file: (\S+?):(\d+)\s*$"
-            r"(?:\n- theme: .+$)?"
-            r"(?:\n- claim: (.+)$)?"
-            r"(?:\n- suggestion: (.+)$)?",
-        ),
-    ),
-    file_group=1,
-    line_start_group=2,
-    line_end_group=None,
-    comment_groups=(3, 4),
-    join=" ",
-    multiline=True,
-    ignore_case=False,
-)
 
 
 def extract_superset_inline(text: str) -> tuple[ReviewComment, ...]:
@@ -85,7 +66,27 @@ def extract_conductor_workstream(text: str) -> tuple[ReviewComment, ...]:
 
 def review_spec() -> ReviewSpec:
     return ReviewSpec(
-        regex_formats=(CONDUCTOR_FINDING_FMT,),
+        regex_formats=(
+            RegexReviewFormat(
+                name="conductor-finding",
+                groups=(
+                    (
+                        "conductor-finding",
+                        r"^- file: (\S+?):(\d+)\s*$"
+                        r"(?:\n- theme: .+$)?"
+                        r"(?:\n- claim: (.+)$)?"
+                        r"(?:\n- suggestion: (.+)$)?",
+                    ),
+                ),
+                file_group=1,
+                line_start_group=2,
+                line_end_group=None,
+                comment_groups=(3, 4),
+                join=" ",
+                multiline=True,
+                ignore_case=False,
+            ),
+        ),
         callable_formats=(
             CallableReviewFormat("superset-inline", SUPERSET_INLINE_RE, extract_superset_inline),
             CallableReviewFormat("conductor-workstream", CONDUCTOR_WORKSTREAM_HEADER_RE, extract_conductor_workstream),

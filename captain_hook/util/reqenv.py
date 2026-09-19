@@ -9,9 +9,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-ENV_PREFIXES = ("CAPT_HOOK_", "CAPTAIN_HOOK_", "HOOKS_", "CLAUDE_", "FACTORY_")
-ENV_EXACT = frozenset({"XDG_CACHE_HOME", "CEREBRAS_API_KEY"})
-
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
 
@@ -39,7 +36,9 @@ _ABANDONED: ContextVar[threading.Event | None] = ContextVar("captain_hook_abando
 
 
 def is_whitelisted(key: str) -> bool:
-    return key in ENV_EXACT or key.startswith(ENV_PREFIXES)
+    return key in {"XDG_CACHE_HOME", "CEREBRAS_API_KEY"} or key.startswith(
+        ("CAPT_HOOK_", "CAPTAIN_HOOK_", "HOOKS_", "CLAUDE_", "FACTORY_")
+    )
 
 
 def current() -> RequestOverrides | None:

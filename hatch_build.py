@@ -16,19 +16,10 @@ from typing import NamedTuple
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-PYPI_JSON = "https://pypi.org/pypi/ast-grep-py/{version}/json"
-CRATE_URL = "https://static.crates.io/crates/{name}/{name}-{version}.crate"
-USER_AGENT = "capt-hook-build (github.com/yasyf/captain-hook)"
-REGEN_COMMAND = "uv run python hatch_build.py"
-
 KEY_OVERRIDES = {"Cpp": "cpp", "Kotlin": "kotlin", "Solidity": "solidity", "Yaml": "yaml"}
-EXTRA_PARSER_FNS = {"Html": "language_html"}
 NODE_TYPES_SUBDIRS = {"LANGUAGE_TYPESCRIPT": "typescript/", "LANGUAGE_TSX": "tsx/", "LANGUAGE_PHP_ONLY": "php_only/"}
 COMMENT_KIND_OVERRIDES: dict[str, dict[str, tuple[str, ...]]] = {}
-COMMENTLESS_LANGS = frozenset({"md"})
 
-ALIASES_BLOCK = re.compile(r"impl_aliases!\s*\{(.*?)\n\}", re.DOTALL)
-EXTENSIONS_BLOCK = re.compile(r"fn extensions\(.*?\n\}", re.DOTALL)
 MATCH_ARM = re.compile(r"(\w+)\s*=>\s*&\[(.*?)\]", re.DOTALL)
 QUOTED = re.compile(r'"([^"]*)"')
 PARSER_FN = re.compile(r"impl_lang(?:_expando)?!\(\s*(\w+)\s*,\s*(\w+)")
@@ -36,8 +27,6 @@ PARSER_CONDITIONAL = re.compile(
     r'pub fn (\w+)\(\)\s*->\s*TSLanguage\s*\{\s*conditional_lang!\(\s*\w+\s*,\s*"([^"]+)"\s*(?:,\s*(\w+)\s*)?\)',
     re.DOTALL,
 )
-DEP_LINE = re.compile(r"^\s*(tree-sitter-[\w-]+)\s*=\s*\{([^}]*)\}", re.MULTILINE)
-DEP_PACKAGE = re.compile(r'package\s*=\s*"([^"]+)"')
 PACKAGE_BLOCK = re.compile(
     r'\[\[package\]\]\s*\nname = "([^"]+)"\nversion = "([^"]+)"(?:\nsource = "[^"]+")?\nchecksum = "([0-9a-f]+)"'
 )
@@ -72,7 +61,7 @@ def fetch(url: str, *, name: str, sha256: str | None = None) -> bytes:
         (data := path.read_bytes()) and (sha256 is None or hashlib.sha256(data).hexdigest() == sha256)
     ):
         return data
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(url, headers={"User-Agent": "capt-hook-build (github.com/yasyf/captain-hook)"})
     try:
         with urllib.request.urlopen(request) as response:
             data = response.read()
@@ -91,7 +80,9 @@ def fetch(url: str, *, name: str, sha256: str | None = None) -> bytes:
 
 @cache
 def sdist_source() -> tuple[str, str]:
-    payload = json.loads(fetch(PYPI_JSON.format(version=ast_grep_version()), name=f"pypi-{ast_grep_version()}.json"))
+    payload = json.loads(
+        fetch(f"https://pypi.org/pypi/ast-grep-py/{ast_grep_version()}/json", name=f"pypi-{ast_grep_version()}.json")
+    )
     for entry in payload["urls"]:
         if entry["packagetype"] == "sdist":
             return entry["url"], entry["digests"]["sha256"]
@@ -123,19 +114,19 @@ def cargo_checksums(lock: str) -> dict[str, tuple[str, str]]:
 
 
 def parse_aliases(lib: str) -> dict[str, tuple[str, ...]]:
-    if (block := ALIASES_BLOCK.search(lib)) is None:
+    if (block := re.search(r"impl_aliases!\s*\{(.*?)\n\}", lib, re.DOTALL)) is None:
         raise RuntimeError(f"no `impl_aliases!` block in ast-grep-py {ast_grep_version()} lib.rs")
     return {m.group(1): tuple(QUOTED.findall(m.group(2))) for m in MATCH_ARM.finditer(block.group(1))}
 
 
 def parse_extensions(lib: str) -> dict[str, tuple[str, ...]]:
-    if (block := EXTENSIONS_BLOCK.search(lib)) is None:
+    if (block := re.search(r"fn extensions\(.*?\n\}", lib, re.DOTALL)) is None:
         raise RuntimeError(f"no `fn extensions` block in ast-grep-py {ast_grep_version()} lib.rs")
     return {m.group(1): tuple(QUOTED.findall(m.group(2))) for m in MATCH_ARM.finditer(block.group(0))}
 
 
 def parser_fns(lib: str) -> dict[str, str]:
-    return {m.group(1): m.group(2) for m in PARSER_FN.finditer(lib)} | EXTRA_PARSER_FNS
+    return {m.group(1): m.group(2) for m in PARSER_FN.finditer(lib)} | {"Html": "language_html"}
 
 
 def parser_table(parsers: str) -> dict[str, tuple[str, str | None]]:
@@ -144,8 +135,8 @@ def parser_table(parsers: str) -> dict[str, tuple[str, str | None]]:
 
 def dep_packages(cargo_toml: str) -> dict[str, str]:
     return {
-        m.group(1): (pkg.group(1) if (pkg := DEP_PACKAGE.search(m.group(2))) else m.group(1))
-        for m in DEP_LINE.finditer(cargo_toml)
+        m.group(1): (pkg.group(1) if (pkg := re.search(r'package\s*=\s*"([^"]+)"', m.group(2))) else m.group(1))
+        for m in re.finditer(r"^\s*(tree-sitter-[\w-]+)\s*=\s*\{([^}]*)\}", cargo_toml, re.MULTILINE)
     }
 
 
@@ -202,7 +193,7 @@ def crate_table() -> dict[str, Crate]:
 
 def grammar_node_types(crate: Crate) -> list[dict[str, object]]:
     data = fetch(
-        CRATE_URL.format(name=crate.package, version=crate.version),
+        f"https://static.crates.io/crates/{crate.package}/{crate.package}-{crate.version}.crate",
         name=f"{crate.package}-{crate.version}.crate",
         sha256=crate.sha256,
     )
@@ -219,7 +210,7 @@ def grammar_inventories() -> dict[str, list[dict[str, object]]]:
     return {
         key: grammar_node_types(crate)
         for variant, crate in crate_table().items()
-        if (key := keys[variant]) not in COMMENTLESS_LANGS
+        if (key := keys[variant]) not in frozenset({"md"})
     }
 
 
@@ -264,7 +255,7 @@ def render_langs() -> str:
     comments_body = "\n".join(f"        {kind!r}," for kind in sorted(build_comment_types()))
     doc_body = "\n".join(f"        {kind!r}," for kind in sorted(build_doc_comment_kinds()))
     return (
-        f"# GENERATED by `{REGEN_COMMAND}`.\n"
+        "# GENERATED by `uv run python hatch_build.py`.\n"
         f"# ast-grep-py {ast_grep_version()}.\n\n"
         "from __future__ import annotations\n\n"
         "LANG_GLOBS: dict[str, tuple[str, ...]] = {\n"
