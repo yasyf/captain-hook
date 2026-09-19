@@ -444,8 +444,9 @@ llm_nudge(
         "Security review/audit, verification of security-sensitive code, and bug diagnosis "
         "also route to gpt-6-astra at xhigh: spawn codex:codex-wrapper with the self-contained "
         "question as its prompt; from the main conversation, use Skill(codex). "
-        "Design/architecture review and synthesis/accept-reject over findings run on opus "
-        "at xhigh. Escalate an astra miss to opus at xhigh; reach fable only after opus at "
+        "Design/architecture review runs on opus at xhigh; synthesis/accept-reject over findings "
+        "defaults to opus at xhigh, with astra at xhigh an equally accepted route. "
+        "Escalate an astra miss to opus at xhigh; reach fable only after opus at "
         "xhigh has actually fallen short on that work. Security-sensitive implementation "
         "goes directly to a typed model='fable' subagent. "
         "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
@@ -483,6 +484,14 @@ llm_nudge(
         Input(
             prompt="Synthesize the confirmed review findings and decide which to fix",
             llm={"fire": False},
+        ): Allow(),
+        Input(
+            agent_type="codex:codex-wrapper",
+            prompt="Synthesize the confirmed review findings and decide which to fix",
+        ): Allow(),
+        Input(
+            model="opus",
+            prompt="Synthesize the confirmed review findings and decide which to fix",
         ): Allow(),
         Input(prompt="Audit auth/session.py for security vulnerabilities"): Warn(pattern="gpt-6-astra"),
         Input(prompt="Verify the input-validation change blocks path traversal"): Warn(pattern="codex"),
@@ -572,8 +581,9 @@ llm_nudge(
         "Route code/diff finder stages, refuters only at audit depth, security review/audit, "
         "verification of security-sensitive code, and bug diagnosis to gpt-6-astra at xhigh. "
         "Give each stage agentType: 'codex:codex-wrapper' with the self-contained question as "
-        "its prompt. Design/architecture review and synthesis/accept-reject stages run on "
-        "opus at xhigh. Escalate an astra miss to an opus xhigh stage; reach fable only after "
+        "its prompt. Design/architecture review stages run on opus at xhigh; synthesis/accept-reject "
+        "stages default to opus at xhigh, with astra at xhigh an equally accepted route. "
+        "Escalate an astra miss to an opus xhigh stage; reach fable only after "
         "opus at xhigh has actually fallen short on that work. An unpinned stage runs opus; "
         "it does not inherit the session model. Security-sensitive implementation goes "
         "directly to a typed model='fable' subagent. "
@@ -609,6 +619,16 @@ llm_nudge(
         Input(script="agent('fix the failing import in cli.py')"): Allow(),
         Input(
             script="agent(`Synthesize the confirmed review findings and decide which to fix`)",
+            llm={"fire": False},
+        ): Allow(),
+        Input(
+            script="agent(`Synthesize the confirmed review findings and decide which to fix`, "
+            "{agentType: 'codex:codex-wrapper', effort: 'xhigh'})",
+            llm={"fire": False},
+        ): Allow(),
+        Input(
+            script="agent(`Synthesize the confirmed review findings and decide which to fix`, "
+            "{model: 'opus', effort: 'xhigh'})",
             llm={"fire": False},
         ): Allow(),
         Input(script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"): Warn(

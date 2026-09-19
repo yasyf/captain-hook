@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
+    And,
     Block,
     Clause,
     Event,
+    InPlanMode,
     Input,
+    Or,
     Phrase,
     RewritingExistingPlan,
     T,
@@ -57,20 +60,25 @@ hook(
     Event.PreToolUse,
     only_if=[
         Tool.EditTools,
-        UserSaid(
-            Clause(
-                noun=Phrase("mode", "planning"),
-                verb=Phrase("enter", "re-enter", "reenter", "return", "go", "switch", "get", "come"),
-                subject=("unnamed",),
+        Or(
+            UserSaid(
+                Clause(
+                    noun=Phrase("mode", "planning"),
+                    verb=Phrase("enter", "re-enter", "reenter", "return", "go", "switch", "get", "come"),
+                    subject=("unnamed",),
+                ),
+                Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
             ),
-            Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
-            Clause(noun=Phrase("work"), verb=Phrase("stop", "halt", "pause")),
+            And(
+                UserSaid(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt", "pause"))),
+                UserSaid(r"\bplan"),
+            ),
         ),
     ],
-    skip_if=[UsedTool("EnterPlanMode")],
+    skip_if=[InPlanMode(), UsedTool("ExitPlanMode")],
     message=(
-        "The user told you to stop and go back into plan mode. Call EnterPlanMode and "
-        "present a plan for approval before making any more edits."
+        "The user told you to stop and go back into plan mode. Put a plan to the user with "
+        "ExitPlanMode (entering plan mode first if you are not in it) before making any more edits."
     ),
     block=True,
     tests={
@@ -101,5 +109,51 @@ hook(
             content="x = 1",
             transcript=[T.user("please fix the typo in main.py")],
         ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/.claude/plans/p.md",
+            content="# Plan",
+            permission_mode="plan",
+            transcript=[T.user("Stop all work until we agree on a plan.")],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            permission_mode="acceptEdits",
+            transcript=[
+                T.user("The retry loop and the timeout are both wrong. Re-enter plan mode, don't do any more work."),
+                T.assistant(T.tool("ExitPlanMode", plan="# Plan")),
+            ],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            permission_mode="acceptEdits",
+            transcript=[
+                T.user("Re-enter plan mode, don't do any more work."),
+                T.assistant(T.tool("EnterPlanMode")),
+                T.assistant(T.tool("ExitPlanMode", plan="# Plan")),
+            ],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/upload.py",
+            content="x = 1",
+            transcript=[T.user("stop the work on the uploader, just let it fail")],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            permission_mode="acceptEdits",
+            transcript=[
+                T.user("add retries to the uploader"),
+                T.assistant(T.tool("EnterPlanMode")),
+                T.assistant(T.tool("ExitPlanMode", plan="# Plan")),
+                T.user("Stop all work until we agree on a plan."),
+            ],
+        ): Block(),
     },
 )
