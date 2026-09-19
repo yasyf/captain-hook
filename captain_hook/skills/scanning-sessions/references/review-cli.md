@@ -190,9 +190,12 @@ it on `no such option`.
 
 ### `review sync-prs [--repo <key>]`
 
-Folds each open PR's GitHub state back into its candidate via `gh pr view`: merged →
-`accepted`, closed → `rejected`, open past the stale window → `stale` (freeing its slot
-under the open-PR cap). Prints the transition counts. The detached child runs this each
+Folds each open PR's GitHub state back into its candidate via `gh api graphql`: merged →
+`accepted`; closed but landed by a commit — the Graphite merge queue closes a PR after
+landing its own commit, so the base branch is searched for a commit citing the PR number
+near the close — → `accepted`; closed without landing → `rejected`; a close whose landing
+check could not complete → kept; open past the stale window → `stale` (freeing its slot
+in its kind's pool). Prints the transition counts. The detached child runs this each
 pass; run it manually only when reconciling by hand.
 
 ## Companion commands

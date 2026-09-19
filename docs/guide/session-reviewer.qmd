@@ -147,7 +147,9 @@ Each candidate sits in exactly one stage:
   and opens the PR; you do nothing.
 - **PR open** — the reviewer opened a pull request, shown with its URL and age. Review it like any
   other.
-- **Accepted / rejected / stale** — a merged PR accepts the candidate, a closed PR rejects it, and a
+- **Accepted / rejected / stale** — a merged PR accepts the candidate (a PR the Graphite merge queue
+  landed and closed counts as merged: its landing commit on the base branch is found by number), a
+  closed PR that never landed rejects it, and a
   PR left open past the staleness cutoff goes stale and frees its slot.
 
 ### Each row

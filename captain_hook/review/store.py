@@ -240,7 +240,6 @@ class ThresholdStatus:
 
 
 def threshold_targets(status: ThresholdStatus, settings: ReviewSettings) -> tuple[tuple[str, int, int], ...]:
-    """The ``(label, done, need)`` progress pairs a candidate's kind counts toward: sessions, then days."""
     match status.kind:
         case CandidateKind.CREATE:
             return (("sessions", status.sessions, settings.min_sessions), ("days", status.days, settings.min_days))
@@ -252,7 +251,6 @@ def threshold_targets(status: ThresholdStatus, settings: ReviewSettings) -> tupl
 
 
 def open_pr_cap(kind: CandidateKind, *, settings: ReviewSettings) -> int:
-    """The open-PR cap for one candidate kind's pool: ``max_open_prs`` for create, ``max_open_prs_fix`` for fix."""
     match kind:
         case CandidateKind.CREATE:
             return settings.max_open_prs
@@ -899,8 +897,9 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
             return None
         return CachedPrState(
             PrState(
-                state=str(rows[0]["state"]),
+                state=(state := str(rows[0]["state"])),
                 merged_at=str(m) if (m := rows[0]["merged_at"]) is not None else None,
+                landing_checked=state != "CLOSED",
             ),
             datetime.fromisoformat(str(rows[0]["fetched_at"])),
         )
