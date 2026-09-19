@@ -6,6 +6,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.46.0] - 2026-09-19
+
+### Fixed
+
+- **The deferral gate no longer fires on the turn its own prompt exempts.** Its
+  judge is told not to fire when a turn ends in a question to the user about the
+  blocker. It fired on one anyway and cited that question as its evidence. The
+  agent then abandoned the pending question and began unrequested work. A closing
+  question is now decisive in the discriminator. The deterministic veto recognizes
+  `want me to`, `shall I`, `which option/approach/one`, and
+  `would you prefer/rather/like` only as a closing question — a question mark, an
+  optional label lead-in, then bullet or numbered lines to the end of the
+  message. Wording such as "Compiler options: `--strict`" no longer silences a
+  genuine silent downgrade.
+- **Graphite hooks judge the repository the command targets.** `GraphiteActive`
+  read the session's cwd, so `cd /other/repo && git push` inherited the session
+  repository's policy and a plain-git push was told to use `gt`. `GraphiteRuns`
+  replaces it and judges the verb and the repository on the same call, reading
+  only git's leading global options as directory hops and tracking cwd and
+  `--git-dir` separately.
+- **`Runs` sees through git's leading global options.** `Runs("git", "push")`
+  never matched `git -C x push` because it compared a raw argv prefix, so the
+  `-C` and `--git-dir` cases could not fire at all. `Call.verb_argv` strips
+  leading global options and their registered values, and stops at `-h`,
+  `--help`, and `--version`, so `git --help stash` is not read as a mutation.
+- **The pre-submit gate drops its approval demand.** It asked whether the user
+  had approved publishing, which standing instructions grant durably. The
+  required review pass and the never-draft rule remain.
+- **Fix PRs get their own open-PR pool.** `crosses_thresholds` applied one cap
+  to both kinds, so two unmerged create PRs froze every fix candidate in a
+  repository regardless of its evidence. `max_open_prs_fix` supplies the fix
+  cap, open targets count per `(repo, kind)`, and `slots --kind create|fix`
+  reports each pool.
+- **A complaint that names a hook in plain words reaches the fix lane.**
+  Attribution required the exact "the `<name>` hook" form or a message
+  fingerprint. Marker extraction now reads user turns, tolerates typos, and
+  attributes to a hook the complaint itself binds, or to a unique ledger row
+  whose fire message shares at least two content words. A complaint about a hook
+  that never fired in the session is dropped, since no ledger row identifies it.
+- **A closed pull request the Graphite merge queue landed records as accepted.**
+  The queue lands its own rebased commit and closes the pull request through the
+  API, so GitHub reports `CLOSED` with no merge metadata. Every queue merge was
+  therefore stored as a rejection, inverting the lane's learning on every
+  Graphite repository. A closed pull request is now resolved by evidence: the
+  close event's commit, else the base branch's history around `closedAt` carrying
+  a commit that cites the number. An unreadable or ambiguous window leaves the
+  candidate untouched.
+- **Citations in the performance pack name the right section.** The two
+  pipelining messages cited `§ Plan Execution & Orchestration (Speculate while
+  you verify)`; they now read `§ Speculate Across Gates` with the older heading
+  named for repos not yet re-bootstrapped.
+
+### Added
+
+- **Inline tests can seed session state and stub subprocess output.** Every
+  `Input` was built without a session directory, so deduplication always looked
+  fresh, and nothing stubbed a subprocess, so a hook shelling out to `gh` could
+  not reach its fire path. Prose-matching conditions were therefore easy to test
+  while live-state conditions could not be tested at all. `Input.seen` seeds a real
+  temporary session store and `Input.commands` supplies stdout by argv prefix,
+  longest match winning, with unmatched commands running for real.
+
+### Changed
+
+- **The inline-single-use-constants guard exempts values a name documents.** It
+  fired on 347 constants across 125 files, warning on code an edit had not
+  touched. Multi-line strings, strings over 100 characters, and collection
+  literals spanning three lines or more are now exempt, recursing through
+  f-strings and string concatenation. The remaining single-use constants are
+  inlined at their call sites.
+
 ## [12.45.0] - 2026-09-19
 
 ### Fixed
