@@ -1,83 +1,81 @@
-Decide whether this workflow script runs code review or bug diagnosis stages on
-fable that should route to gpt-5.6-sol.
+Decide whether this workflow script runs code/diff review, security review/audit,
+verification of security-sensitive code, or bug diagnosis stages outside their
+gpt-6-astra xhigh lane.
 
 <workflow_script> holds the pending Workflow call's script source.
 {workflow_script_header}
 
-The Models rubric: code/diff review stages — finder sweeps over a diff or codebase,
-adversarial refuters over findings — security review/audit stages and verification
-of security-sensitive code (auth, input validation, crypto, secrets), and bug
-diagnosis route to gpt-5.6-sol via the codex-wrapper agent. A stage does that correctly
-when its agent() call pins agentType 'codex:codex-wrapper' and its prompt is the
-self-contained question (or pointers to the files/diff to gather plus the questions
-to answer). A stage that pins a Claude model and asks its agent to run the codex
-skill is the retired wrapper shape — it is NOT routed. Fable is the escalation
-target when gpt-5.6-sol's output misses: a Claude-model stage that runs only after
-a codex-wrapper stage for the same work returns nothing is the sanctioned
-fallback, not misrouting. Fable keeps the
-synthesis/accept-reject stage over findings and design/architecture judgment — and
-security-sensitive implementation, which is not review.
+The Model Routing rubric: code/diff review is astra's finder lane, with a refuter
+only at audit depth. Security review/audit, verification of security-sensitive
+code (auth, input validation, crypto, secrets), and bug diagnosis also route to
+gpt-6-astra at xhigh. Give each stage agentType: 'codex:codex-wrapper' and a
+self-contained question as its prompt, including the files or diff to inspect.
+A Claude-model stage that asks its agent to run the codex skill is the retired
+wrapper shape. Design/architecture review and synthesis/accept-reject over
+findings run on opus at xhigh. An unpinned stage runs opus; it never inherits the
+session model. An astra miss permits escalation to opus at xhigh. Fable requires
+an actual opus xhigh miss on that work first, except for security-sensitive
+implementation, which goes directly to a typed model='fable' subagent.
 
 {deliverable_rubric}
 
-Set fire=true when at least one review or diagnosis stage would run on a Claude
-model: unpinned (which runs opus), pinned 'fable', or pinned to any model with a
-prompt that runs the codex skill itself — the retired wrapper stays fire=true
-wherever it appears, fallback branches included. Stages routed via agentType
-'codex:codex-wrapper', synthesis stages, and design judgment are routed right:
-fire=false. So is an escalation fallback: a Claude-model review or diagnosis stage
-whose code path is reached only when a codex-wrapper stage for the same work
-returns nothing (an empty result, a miss). A stage gated on anything else — a
-feature flag, an input check — is not a fallback: judge reachability by tracing
-whether the Claude-model call runs before or instead of the codex-wrapper attempt,
-or only after it fails. Before you fire, scan meta and comments for a declared
-escalation: a script that states a codex-wrapper attempt already failed (e.g.
-meta.description: "sol lane quota-dead; escalation per models table") is the
-sanctioned escalation for the stages doing that declared work, even with no
-codex-wrapper call in the script — you cannot verify the claim from the script,
-take it at face value — but an unrelated review stage in the same script is still
-judged on its own. When uncertain, fire=false — a false alarm teaches the agent to
+Set fire=true when an astra-lane review or diagnosis stage runs on a Claude model
+before the required prior attempt. A stage that asks a Claude model to run the
+codex skill itself stays fire=true, including in a fallback branch. Stages
+routed through codex:codex-wrapper to astra at xhigh, and design or synthesis
+stages on opus at xhigh, are routed correctly: fire=false. An opus xhigh review
+or diagnosis stage reached only after an astra stage for the same work returns
+nothing is an allowed escalation: fire=false. A fable escalation requires an
+opus xhigh attempt to have fallen short first. A feature flag or input check
+does not establish an escalation; trace whether the review call runs before,
+instead of, or only after the required attempt. Accept a stated prior failure
+in meta or comments for the work it names, even when that attempt is outside
+the script: "astra lane quota-dead; opus xhigh escalation" clears an opus
+stage, but fable requires a stated opus xhigh miss. Judge unrelated stages
+separately. When uncertain, fire=false — a false alarm teaches the agent to
 ignore this nudge. Keep reasoning under 40 words and name the offending stage.
 
 <examples>
 <example fire="true">
 agent(`Sweep the diff for go-correctness issues; return findings as JSON`)
-An unpinned finder runs opus; finder sweeps are the codex-wrapper agent's lane.
+An unpinned finder runs opus; use gpt-6-astra at xhigh via codex:codex-wrapper.
 </example>
 <example fire="true">
-findings.map(f => agent(`Adversarially refute: ${f.title}`, {effort: 'max'}))
-Refuters over code findings run on a Claude model — route them via agentType 'codex:codex-wrapper'.
+findings.map(f => agent(`At audit depth, adversarially refute: ${f.title}`, {effort: 'xhigh'}))
+Audit-depth refuters belong on gpt-6-astra at xhigh via codex:codex-wrapper.
 </example>
 <example fire="true">
 agent('Write a self-contained codex prompt reviewing this diff, then run the codex skill', {model: 'sonnet', effort: 'low'})
-The retired wrapper shape — a sonnet stage running the codex skill; use agentType 'codex:codex-wrapper'.
+The retired wrapper shape: use agentType: 'codex:codex-wrapper' to reach astra at xhigh.
 </example>
 <example fire="false">
-agent(`Review the diff hunks in src/ for correctness; return findings as JSON`, {agentType: 'codex:codex-wrapper'})
-Routed via the codex-wrapper agent — exactly as mandated.
+agent(`Review the diff hunks in src/ for correctness; return findings as JSON`, {agentType: 'codex:codex-wrapper', effort: 'xhigh'})
+The finder routes through codex:codex-wrapper to gpt-6-astra at xhigh.
 </example>
 <example fire="false">
-agent(`Synthesize the confirmed findings and decide which to fix`)
-Synthesis/accept-reject stays on fable.
+agent(`Synthesize the confirmed findings and decide which to fix`, {model: 'opus', effort: 'xhigh'})
+Synthesis/accept-reject belongs on opus at xhigh.
 </example>
 <example fire="false">
-const r = await agent(q, { agentType: 'codex:codex-wrapper', phase: 'Review', schema: REVIEW })
+const r = await agent(q, { agentType: 'codex:codex-wrapper', effort: 'xhigh', phase: 'Review', schema: REVIEW })
 if (r) return r
-log('sol empty — fable fallback')
-return await agent(q, { phase: 'Review', schema: REVIEW })
-The unpinned Review call runs only after the codex-wrapper stage returned nothing — the sanctioned fable escalation, not misrouting.
+log('astra empty — opus fallback')
+return await agent(q, { effort: 'xhigh', phase: 'Review', schema: REVIEW })
+The unpinned Review call runs opus at xhigh only after astra returns nothing; this is the allowed escalation.
 </example>
 <example fire="false">
-export const meta = { name: 'p1-fable-review', description: 'Fable finder+refuter over the landed P1 commit (sol lane quota-dead; escalation per models table)', phases: [{ title: 'Review' }] }
-const f = await agent(`Review the landed diff for correctness; findings as JSON`, { label: 'find:fable', phase: 'Review', schema: REVIEW })
-The meta declares the codex-wrapper lane already failed — a declared escalation, not misrouting, even though no codex-wrapper call appears in the script.
+export const meta = { name: 'p1-astra-review', description: 'Opus finder+refuter at audit depth over the landed P1 commit (astra lane quota-dead; opus xhigh escalation per models table)', phases: [{ title: 'Review' }] }
+const f = await agent(`Review the landed diff for correctness; findings as JSON`, { effort: 'xhigh', label: 'find:opus', phase: 'Review', schema: REVIEW })
+The meta states a prior astra failure; the unpinned stage runs opus at xhigh for that work.
 </example>
 <example fire="true">
 const findings = await agent(`Review the diff in src/ for correctness; findings as JSON`, {model: 'fable'})
-An unconditional fable review with no codex-wrapper attempt and no declared escalation — route it via agentType 'codex:codex-wrapper'.
+An unconditional fable review lacks the required prior attempts; route the finder to astra at xhigh via codex:codex-wrapper.
 </example>
 <example fire="true">
 agent(`Audit the auth flow for injection and session-fixation issues; return findings as JSON`)
-An unpinned security audit runs opus; security review/audit is the codex-wrapper agent's lane.
+An unpinned audit runs opus; security review/audit belongs on gpt-6-astra at xhigh via codex:codex-wrapper.
 </example>
 </examples>
+
+See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet re-bootstrapped).

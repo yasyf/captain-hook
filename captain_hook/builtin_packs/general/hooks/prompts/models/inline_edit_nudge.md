@@ -5,37 +5,44 @@ The main loop runs on fable-5; this pending edit is fable implementing directly.
 <edit_target> names the file; <before_edit>/<after_edit> hold the text being replaced
 and written.
 
-The Models rubric: implementation belongs off the main loop, and the default lane is a
-delegated opus-5 subagent (~2x cheaper than fable and nearly as capable) — at high
-effort for a bounded, decision-light change (the decisions are already made; execution
-remains), at xhigh for ambiguous, decision-dense, or long-running work. Only a
-repetitive N-unit sweep or terminal-heavy execution goes to gpt-5.6-sol via the codex
-skill. Fable edits inline when the change is small or
-judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
-or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
+The Model Routing rubric: implementation defaults to a delegated model='opus'
+subagent at every horizon. Use high for an individual bounded, decision-light
+change, and xhigh for ambiguous, exploratory, decision-dense, large net-new, or
+long-running implementation. Repetitive bounded N-unit sweeps never run on opus:
+use sonnet at xhigh when the lanes must stay Claude-side, and gpt-6-astra at xhigh
+via codex:codex-wrapper otherwise. Shell-heavy execution also routes to astra at
+xhigh. Very sensitive or error-prone implementation — auth, migrations,
+concurrency, data loss, crypto, or subtle algorithms — goes to a typed
+model='fable' subagent, never inline. For other implementation, the inline
+carve-out covers only a small change or one bound to judgment the main agent
+just exercised. A missed implementation lane crosses between opus xhigh and
+astra xhigh before reaching fable.
 
-Set fire=true only when this edit is clearly substantial routine implementation —
-building out a feature, wiring components, refactoring — that a subagent could own end
-to end. A small fix-up, a sensitive surface, or a change entangled with judgment the
-main agent just exercised stays inline: fire=false. When uncertain, fire=false — the
-agent may be editing inline deliberately, and a false alarm teaches it to ignore this
-nudge. Keep reasoning under 40 words.
+Set fire=true when the edit implements sensitive or error-prone code inline, or
+when it is substantial ordinary implementation a subagent can own end to end.
+Sensitivity requires a typed fable subagent even when the change is small or
+bound to recent judgment. For other implementation, a small fix-up or a change
+bound to judgment the main agent just exercised may stay inline: fire=false.
+When uncertain, fire=false — the agent may be editing inline deliberately, and a
+false alarm teaches it to ignore this nudge. Keep reasoning under 40 words.
 
 <examples>
 <example fire="true">
 after_edit: a new 180-line pagination module written to src/api/pagination.py.
-Substantial net-new code — delegate it: opus high when decision-light, opus xhigh when judgment calls remain.
+Delegate to opus at high when decision-light, or opus at xhigh when judgment calls remain.
 </example>
 <example fire="true">
 after_edit: rewiring three call sites and adding a formatter class in export.py.
-Routine decision-light refactor — the opus high lane.
+A routine decision-light refactor belongs on opus at high.
 </example>
 <example fire="false">
 after_edit: a two-line fix to the retry counter the agent just diagnosed.
-Small fix-up entangled with judgment already exercised — inline is right.
+A small fix-up bound to judgment already exercised may stay inline.
 </example>
-<example fire="false">
+<example fire="true">
 after_edit: reworking the token-refresh lock in auth/middleware.py.
-Auth plus concurrency is a sensitive surface — fable's inline lane.
+Auth plus concurrency requires a typed model='fable' subagent; it never stays inline.
 </example>
 </examples>
+
+See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet re-bootstrapped).

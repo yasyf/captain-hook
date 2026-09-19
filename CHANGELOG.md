@@ -6,6 +6,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.45.0] - 2026-09-19
+
+### Fixed
+
+- **Model-routing messages and rubrics follow the current table.** The general
+  pack's implementation, inline-edit, browser, and review nudges replace retired
+  `gpt-5.6-sol` advice with `gpt-6-astra` at `xhigh` and restore opus as
+  the default implementation lane. Individual bounded, decision-light changes
+  use opus at `high`; ambiguous, exploratory, decision-dense, large net-new,
+  and long-running implementation use `xhigh`. Repetitive bounded sweeps use
+  astra at `xhigh`, or sonnet at `xhigh` when they must stay Claude-side,
+  and never opus. Shell-heavy execution routes to astra at `xhigh`.
+- **Browser work, design review, and findings synthesis route to opus at
+  `xhigh`.** Sustained browser automation and QA sweeps run in a delegated
+  opus subagent, including an `agent-browser-with-cookies` teammate when the
+  site needs the user's login. Code/diff review uses an astra finder and adds a
+  refuter only at audit depth. Security review/audit, verification of
+  security-sensitive code, and bug diagnosis also use astra at `xhigh`.
+  An astra miss escalates to opus at `xhigh`; fable requires an actual opus
+  `xhigh` miss first. Missed implementation lanes cross between opus
+  `xhigh` and astra `xhigh` before reaching fable.
+- **Sensitive implementation no longer qualifies for inline editing.** Auth,
+  migrations, concurrency, data-loss risks, crypto, and subtle algorithms go to
+  a typed `model='fable'` subagent. Only other small changes or changes bound
+  to judgment the agent just exercised retain the inline exception.
+- **Unpinned spawns and stages run opus, and citations resolve under either
+  heading.** The haiku messages no longer claim that omitting a model inherits
+  the session model. The eight replacement messages and five rubrics cite
+  `CLAUDE.md § Model Routing` and name `§ Plan Execution & Orchestration`
+  for repos not yet re-bootstrapped.
+
 ## [12.44.0] - 2026-09-19
 
 ### Fixed

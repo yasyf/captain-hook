@@ -188,14 +188,17 @@ hook(
     message=(
         "This subagent is pinned to haiku. Route a subagent to haiku only for a single-fact "
         "mechanical step — classifying, labeling, tagging, counting, or probing one thing per "
-        "item. Anything that carries judgment should run on sonnet; use model='sonnet', or drop "
-        "model entirely to inherit the session model. If this genuinely is a mechanical "
-        "single-fact step, say 'mechanical' in the prompt and retry — the haiku pin will be "
-        "allowed. See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "item. For judgment-bearing work, use the task's Model Routing lane. An unpinned spawn "
+        "runs opus; use model='sonnet' when the lane calls for sonnet. If this genuinely is a "
+        "mechanical single-fact step, say 'mechanical' in the prompt and retry — the haiku pin "
+        "will be allowed. "
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     block=True,
     tests={
-        Input(model="haiku", prompt="implement the retry backoff in the client"): Block(),
+        Input(model="haiku", prompt="implement the retry backoff in the client"): Block(pattern="An unpinned spawn"),
+        Input(model="haiku", prompt="implement the retry backoff"): Block(pattern="§ Model Routing"),
         Input(model="haiku", prompt="classify each file's language"): Allow(),
         Input(model="haiku", prompt="Probe subagent capacity: spawn and return the word ok"): Allow(),
         Input(model="haiku", prompt="mechanical step: return the repo's default branch name"): Allow(),
@@ -273,7 +276,9 @@ set_tool_input(
     only_if=[Agent("Explore|claude-code-guide")],
     note=(
         "Upgraded this recon subagent from the silent haiku default to sonnet, per the Models "
-        "table in CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "table. "
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     tests={
         Input(agent_type="Explore"): Rewrite(model="sonnet"),
@@ -285,15 +290,16 @@ set_tool_input(
 llm_nudge(
     Prompt.load("models/implementation_spawn_nudge"),
     message=(
-        "This delegation would run on fable, but it reads as routine implementation. {reasoning} "
-        "Implementation defaults to model='opus' (~2x cheaper than fable, nearly as capable): "
-        "effort='high' when bounded and decision-light — the decisions are already made and what "
-        "remains is execution — effort='xhigh' when the implementation is ambiguous, "
-        "decision-dense, or a long-running build. "
-        "Repetitive N-unit sweeps and terminal-heavy execution route to gpt-5.6-sol: spawn the "
-        "codex:codex-wrapper agent with a self-contained prompt. "
+        "This implementation delegation needs a different route. {reasoning} "
+        "Implementation defaults to model='opus': effort='high' for an individual bounded, "
+        "decision-light change; effort='xhigh' for ambiguous, exploratory, decision-dense, "
+        "large net-new, or long-running implementation. Repetitive bounded N-unit sweeps run "
+        "on gpt-6-astra at xhigh via codex:codex-wrapper, or on sonnet at xhigh when the lanes "
+        "must stay Claude-side; they never run on opus. Shell-heavy execution also routes to "
+        "gpt-6-astra at xhigh via codex:codex-wrapper with a self-contained prompt. "
         "Keep fable if this genuinely is sensitive or error-prone. "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     contexts=[DelegatedSpawn()],
     events=Event.PreToolUse,
@@ -313,7 +319,7 @@ llm_nudge(
         ),
         Input(
             prompt="Convert the eleven test modules under tests/legacy/ to pytest, one per lane, per the worked example"
-        ): Warn(pattern="gpt-5.6"),
+        ): Warn(pattern="gpt-6-astra"),
         Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
         Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
         Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),
@@ -324,13 +330,18 @@ llm_nudge(
 llm_nudge(
     Prompt.load("models/inline_edit_nudge"),
     message=(
-        "This inline edit reads as routine implementation on fable. {reasoning} "
-        "Implementation delegates to a model='opus' subagent: effort='high' for a bounded, "
-        "decision-light change, effort='xhigh' for ambiguous, decision-dense, or long-running "
-        "work; a repetitive sweep or terminal-heavy execution routes to gpt-5.6-sol via the "
-        "codex skill. Keep "
-        "editing inline only when the change is small, sensitive, or bound to judgment you just exercised. "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "This inline implementation should be delegated. {reasoning} "
+        "Implementation defaults to a model='opus' subagent: effort='high' for an individual "
+        "bounded, decision-light change; effort='xhigh' for ambiguous, exploratory, "
+        "decision-dense, large net-new, or long-running implementation. Repetitive bounded "
+        "N-unit sweeps run on gpt-6-astra at xhigh via codex:codex-wrapper, or on sonnet at "
+        "xhigh when the lanes must stay Claude-side; they never run on opus. Shell-heavy "
+        "execution also routes to gpt-6-astra at xhigh via codex:codex-wrapper. Sensitive or "
+        "error-prone implementation goes to a typed model='fable' subagent, never inline. "
+        "For other implementation, keep editing inline only when the change is small or "
+        "bound to judgment you just exercised. "
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     contexts=[InlineEdit()],
     events=Event.PreToolUse,
@@ -374,11 +385,13 @@ llm_nudge(
     Prompt.load("models/browser_delegation_nudge"),
     message=(
         "This is sustained browser automation running inline on the main loop. {reasoning} "
-        "Sustained tool-driving is fable's lane, but delegated: spawn a model='fable' subagent "
-        "to drive agent-browser and return findings, or an agent-browser-with-cookies teammate "
-        "when the site needs your login. Keep driving the browser inline only for a single gated, stateful, "
-        "or authenticated interaction you just decided to run (a go/no-go verification). "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "Sustained tool-driving, including browser automation and QA sweeps, routes to an "
+        "opus subagent: spawn model='opus' at effort='xhigh' to drive agent-browser and return "
+        "findings, or use an agent-browser-with-cookies teammate on opus at xhigh when the "
+        "site needs your login. Keep driving the browser inline only for a single gated, "
+        "stateful, or authenticated interaction you just decided to run (a go/no-go verification). "
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     events=Event.PostToolUse,
     only_if=[
@@ -404,18 +417,18 @@ llm_nudge(
     agent=False,
     transcript=True,
     tests={
-        Input(command="agent-browser click '#submit'", transcript=browser_calls(5)): Warn(pattern="model='fable'"),
-        Input(command="npx agent-browser click '#next'", transcript=browser_calls(5)): Warn(pattern="model='fable'"),
-        Input(command="playwright-cli click e15", transcript=browser_calls(5)): Warn(pattern="model='fable'"),
+        Input(command="agent-browser click '#submit'", transcript=browser_calls(5)): Warn(pattern="model='opus'"),
+        Input(command="npx agent-browser click '#next'", transcript=browser_calls(5)): Warn(pattern="model='opus'"),
+        Input(command="playwright-cli click e15", transcript=browser_calls(5)): Warn(pattern="model='opus'"),
         Input(
             tool="Skill",
             tool_input={"skill": "agent-browser-with-cookies"},
             transcript=browser_calls(5),
-        ): Warn(pattern="model='fable'"),
+        ): Warn(pattern="model='opus'"),
         Input(
             command="agent-browser click '#submit'",
             transcript=browser_calls(3) + browser_calls(2, tool="Skill", field="skill", value="agent-browser"),
-        ): Warn(pattern="model='fable'"),
+        ): Warn(pattern="model='opus'"),
         Input(command="agent-browser click '#submit'", agent_id="tm1", transcript=browser_calls(5)): Allow(),
         Input(command="agent-browser screenshot out.png"): Allow(),
         Input(command="agent-browser click '#submit'", transcript=browser_calls(5), llm={"fire": False}): Allow(),
@@ -427,13 +440,17 @@ llm_nudge(
     Prompt.load("models/review_routing_spawn_nudge"),
     label="review_routing_spawn",
     message=(
-        "This review/diagnosis delegation would run on fable. {reasoning} "
-        "Code/diff review, security review/audit and verification of security-sensitive code, "
-        "and bug diagnosis route to gpt-5.6-sol: spawn the codex:codex-wrapper agent with the "
-        "self-contained question as its prompt (from the main conversation, run the codex skill "
-        "directly), and escalate to fable only when gpt-5.6-sol's output misses. "
-        "Design review and findings synthesis stay on fable. "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "This review/diagnosis delegation needs a different route. {reasoning} "
+        "Code/diff review is gpt-6-astra's finder lane, with a refuter only at audit depth. "
+        "Security review/audit, verification of security-sensitive code, and bug diagnosis "
+        "also route to gpt-6-astra at xhigh: spawn codex:codex-wrapper with the self-contained "
+        "question as its prompt; from the main conversation, use Skill(codex). "
+        "Design/architecture review and synthesis/accept-reject over findings run on opus "
+        "at xhigh. Escalate an astra miss to opus at xhigh; reach fable only after opus at "
+        "xhigh has actually fallen short on that work. Security-sensitive implementation "
+        "goes directly to a typed model='fable' subagent. "
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     contexts=[DelegatedSpawn()],
     events=Event.PreToolUse,
@@ -451,7 +468,7 @@ llm_nudge(
     agent=False,
     transcript=False,
     tests={
-        Input(prompt="Review the diff for correctness and concurrency issues"): Warn(pattern="gpt-5.6"),
+        Input(prompt="Review the diff for correctness and concurrency issues"): Warn(pattern="gpt-6-astra"),
         Input(model="fable", prompt="Adversarially refute this finding: the retry loop is wrong"): Warn(
             pattern="codex"
         ),
@@ -468,7 +485,7 @@ llm_nudge(
             prompt="Synthesize the confirmed review findings and decide which to fix",
             llm={"fire": False},
         ): Allow(),
-        Input(prompt="Audit auth/session.py for security vulnerabilities"): Warn(pattern="gpt-5.6"),
+        Input(prompt="Audit auth/session.py for security vulnerabilities"): Warn(pattern="gpt-6-astra"),
         Input(prompt="Verify the input-validation change blocks path traversal"): Warn(pattern="codex"),
         Input(prompt="Verify the pagination change renders the last page correctly"): Allow(),
         Input(
@@ -490,8 +507,9 @@ llm_nudge(
 nudge(
     """
     This workflow script pins agent() steps to haiku. Reserve haiku for mechanical single-fact
-    map steps; a judgment-bearing stage should inherit the session model or route up. See
-    CLAUDE.md § Plan Execution & Orchestration (Models).
+    map steps; route a judgment-bearing stage by its task's Model Routing lane.
+    An unpinned stage runs opus; it does not inherit the session model.
+    See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet re-bootstrapped).
     """,
     only_if=[Tool("Workflow"), WorkflowScript(model="haiku")],
     events=Event.PreToolUse,
@@ -551,11 +569,17 @@ llm_nudge(
     ),
     label="review_routing_workflow",
     message=(
-        "This workflow runs review/diagnosis stages on fable. {reasoning} "
-        "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.6-sol: give each stage "
-        "agentType: 'codex:codex-wrapper' with the self-contained question as its prompt; "
-        "keep the synthesis/accept-reject stage on fable (inherit the session model). "
-        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+        "This workflow's review/diagnosis stages need a different route. {reasoning} "
+        "Route code/diff finder stages, refuters only at audit depth, security review/audit, "
+        "verification of security-sensitive code, and bug diagnosis to gpt-6-astra at xhigh. "
+        "Give each stage agentType: 'codex:codex-wrapper' with the self-contained question as "
+        "its prompt. Design/architecture review and synthesis/accept-reject stages run on "
+        "opus at xhigh. Escalate an astra miss to an opus xhigh stage; reach fable only after "
+        "opus at xhigh has actually fallen short on that work. An unpinned stage runs opus; "
+        "it does not inherit the session model. Security-sensitive implementation goes "
+        "directly to a typed model='fable' subagent. "
+        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
+        "re-bootstrapped)."
     ),
     contexts=[WorkflowScriptSource()],
     events=Event.PreToolUse,
@@ -572,7 +596,7 @@ llm_nudge(
             pattern="codex"
         ),
         Input(script="agent(`Adversarially refute: ${f.title}`, {model: 'fable', effort: 'max'})"): Warn(
-            pattern="gpt-5.6"
+            pattern="gpt-6-astra"
         ),
         Input(
             script="agent('Write a self-contained codex prompt reviewing this diff, "
@@ -589,25 +613,25 @@ llm_nudge(
             llm={"fire": False},
         ): Allow(),
         Input(script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"): Warn(
-            pattern="gpt-5.6"
+            pattern="gpt-6-astra"
         ),
         Input(script="agent('Verify the CLI renders the last page correctly')"): Allow(),
         Input(
             script=(
-                "const solOrFable = async (prompt, key) => {\n"
+                "const astraOrOpus = async (prompt, key) => {\n"
                 "  const r = await agent(prompt, { agentType: 'codex:codex-wrapper', "
-                "label: `${key}:sol`, phase: 'Review', schema: REVIEW })\n"
-                "  if (r) return { ...r, lane_model: 'sol' }\n"
-                "  log(`${key}: sol empty — fable fallback`)\n"
-                "  const f = await agent(prompt, { label: `${key}:fable`, phase: 'Review', schema: REVIEW })\n"
-                "  return f ? { ...f, lane_model: 'fable' } : null\n"
+                "label: `${key}:astra`, phase: 'Review', schema: REVIEW })\n"
+                "  if (r) return { ...r, lane_model: 'astra' }\n"
+                "  log(`${key}: astra empty — opus fallback`)\n"
+                "  const f = await agent(prompt, { label: `${key}:opus`, phase: 'Review', schema: REVIEW })\n"
+                "  return f ? { ...f, lane_model: 'opus' } : null\n"
                 "}"
             ),
             llm={"fire": False},
         ): Allow(),
         Input(
-            script="export const meta = { description: 'refuter pass; sol lane quota-dead this session — "
-            "fable escalation per models table' }\n"
+            script="export const meta = { description: 'refuter pass; astra lane quota-dead this session — "
+            "opus escalation per models table' }\n"
             "const f = await agent(`Adversarially refute: ${finding.title}`)",
             llm={"fire": False},
         ): Allow(),
