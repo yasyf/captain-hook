@@ -18,7 +18,6 @@ from captain_hook import (
     Signals,
     T,
     Tool,
-    Waiting,
     Warn,
     llm_gate,
     llm_nudge,
@@ -216,7 +215,6 @@ tell is clearly present and no do-not-fire condition applies. Put your reasoning
         scope="window",
     ),
     events=Event.Stop,
-    skip_if=[Waiting()],
     diff=True,
     tests={
         Input(

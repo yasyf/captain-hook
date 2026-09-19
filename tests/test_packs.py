@@ -411,7 +411,7 @@ def test_steering_deferral_gate_skips_in_plan_mode() -> None:
         for h in app._state.hooks
         if h.spec.events & (Event.Stop | Event.SubagentStop) and InPlanMode() in h.spec.skip_if
     )
-    assert gate.spec.skip_if == (InPlanMode(), Waiting())
+    assert gate.spec.skip_if == (Waiting(), InPlanMode())
 
 
 def test_gitignore_lines_survives_an_unstattable_path(monkeypatch: pytest.MonkeyPatch) -> None:

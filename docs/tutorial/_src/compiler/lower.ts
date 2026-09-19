@@ -516,13 +516,15 @@ class Lowerer {
           ? ["Stop", "SubagentStop"]
           : ["PreToolUse"];
     const skipIf = this.conditions(args.keywords.get("skip_if"));
+    const guardsWaiting =
+      this.evalBool(args.keywords.get("guards_waiting"), block && (events.includes("Stop") || events.includes("SubagentStop")));
     return {
       events,
       message,
       block,
       advisory_on_deny: this.evalBool(args.keywords.get("advisory_on_deny"), false),
       only_if: this.conditions(args.keywords.get("only_if")),
-      skip_if: skipIf,
+      skip_if: guardsWaiting ? [{ kind: "Waiting", implicit: true }, ...skipIf] : skipIf,
     };
   }
 
