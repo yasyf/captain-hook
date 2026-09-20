@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.48.0] - 2026-09-20
+
+### Removed
+
+- **The maturin rebuild nudge.** It fired on `uv sync` whenever the working
+  directory held both a `Cargo.toml` and a `pyproject.toml`, asking for
+  `--reinstall-package <name>` instead. The footgun is real — `uv sync` does not
+  rebuild a maturin native extension on a Rust-only change, so the stale binary
+  keeps running — but the nudge fired on nearly every sync in such a repository,
+  and most are not Rust-only. A nudge that is wrong most of the times it speaks
+  trains the reader to skip it.
+
+  Its skip test was also defective, which raised the firing rate rather than
+  lowering it: `call.flags` holds raw option tokens, so
+  `--reinstall-package=name` was a single token the membership test missed, and
+  the nudge fired at a user who had already complied. Removing the hook was
+  chosen over narrowing that test, since the firing rate was the complaint.
+
 ## [12.47.0] - 2026-09-19
 
 ### Fixed
