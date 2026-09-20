@@ -6,6 +6,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.47.0] - 2026-09-19
+
+### Fixed
+
+- **The teammate approval gate missed most destructive pushes.** It detected a
+  dangerous push with a regex alternation over `call.flags`, omitting `-d`,
+  git's short form of `--delete`, so `git push -d origin main` from a teammate
+  subagent under skip-permissions returned `Allow(explicit=True)` and deleted
+  the remote branch with no dialog. Nine spellings were approved on the
+  previous release: `-d`, `origin main -d`, `--prune`, `--mirror`, `-uf`, and
+  the refspec deletions `+main`, `+HEAD:main`, `:main`, `:refs/heads/main`. A
+  `GIT_PUSH` `CommandSchema` now binds the flags by name, so every alias and
+  attached spelling is covered by declaration. Because this is an allow/deny
+  boundary it fails closed: when `Arguments.complete` is False — an unknown
+  option, a missing or ill-typed value, a command substitution — the command is
+  treated as dangerous and the human decides.
+- **`CommandSchema.bind` accepts attached short values.** `-oVAL` now binds for
+  options declared with a value, guarded so `FIND`'s find-style words
+  (`-fprint`, `-flags`) do not mis-split. Without this an unknown `-oci.skip`
+  ended binding and hid a following `--force`.
+- **Enforcement hooks stopped enforcing after their first fire.** `gate()`
+  resolves to `nudge(block=True)`, whose handler opens `if block and
+  fired_this_turn(evt): return None`, and `PrimitiveState.last_fired_at` is
+  session-global across every nudge, gate and LLM hook. So the task gate and
+  the Go and Python test gates were one-shot per turn, and any other primitive
+  firing that turn silenced them outright — an agent could end a turn with open
+  tasks, be blocked, reply "acknowledged", end the turn again and stop with the
+  tasks still open. All three are now `hook(..., block=True)`.
+- **`find` rewriting missed shapes it was written to catch.** The argv shape was
+  hard-coded to `[root] [-type f] -i?name PAT`, so a trailing `-type f` or a
+  leading `-L` let a whole-volume walk through untouched. Rebuilt on
+  `CommandSchema` with `options_end_operands`, `Operand` and `PathsMatch`. Note
+  `-H` is accepted but not re-emitted, so `find -H` rewrites without symlink
+  following.
+- **`UsedSkill` stood down for one turn instead of the session.** The docs and
+  prompts nudges left it at its turn-scoped default while their fire cap is per
+  session, so a second turn re-nudged the agent to consult a skill it had
+  already read. `docs.py`'s `FilePath("docs/**")` could never match, since
+  `File.matches` needs a `**/` anchor against the absolute paths tool inputs
+  carry.
+
+### Changed
+
+- Conditions that were hand-rolled now use the built-in that expresses them:
+  `FromSubagent()` in the model nudges, the `Waiting()` the primitives already
+  add on blocking Stop hooks, and `UserSaid(scope="session")` in graphite's
+  `ReviewPassRan`. No behaviour change.
+
 ## [12.46.1] - 2026-09-19
 
 ### Fixed
