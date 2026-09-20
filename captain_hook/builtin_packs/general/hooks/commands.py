@@ -8,7 +8,6 @@ from captain_hook import (
     Block,
     Call,
     CommandSchema,
-    CwdHasFiles,
     Event,
     Input,
     LambdaCondition,
@@ -192,29 +191,6 @@ nudge(
         Input(command="env -u UV_EXCLUDE_NEWER uvx capt-hook test"): Allow(),
         # A non-fleet tool -> silent (scoped narrowly to avoid noise).
         Input(command="uvx ruff check"): Allow(),
-    },
-)
-
-
-nudge(
-    "`uv sync` silently no-ops on Rust-only changes in a maturin project — the native extension is "
-    "not rebuilt, so you keep running the stale binary. Force the rebuild with "
-    "`uv sync --reinstall-package <name>` (the distribution whose Rust you changed).",
-    only_if=[
-        Tool("Bash"),
-        Runs("uv", "sync"),
-        CwdHasFiles("Cargo.toml", "pyproject.toml"),
-    ],
-    skip_if=[LambdaCondition(lambda evt: any("--reinstall-package" in call.flags for call in evt.command.calls("uv")))],
-    events=Event.PreToolUse,
-    # Fire path (markers present) is covered by the CwdHasFiles unit test — the inline fixture can't stage marker files.
-    tests={
-        # --reinstall-package present -> silent.
-        Input(command="uv sync --reinstall-package captain-hook"): Allow(),
-        # No maturin markers at cwd -> silent (the CwdHasFiles gate).
-        Input(command="uv sync"): Allow(),
-        # Not uv sync -> silent.
-        Input(command="git status"): Allow(),
     },
 )
 
