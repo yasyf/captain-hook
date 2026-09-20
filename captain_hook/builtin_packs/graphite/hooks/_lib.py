@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -162,10 +161,7 @@ class PushesTagRef(CustomCommandLineCondition):
 
 
 class ReviewPassRan(CustomCondition):
-    """Matches when a cc-review skill ran, or the user typed a /cc-review command, this session."""
+    """Matches when a cc-review skill ran this session."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        t = evt.ctx.transcript
-        return any(is_review_skill(skill) for window in t.deep_inputs() for skill in window.skills) or any(
-            re.search(r"<command-name>/?cc-review", turn.prompt, re.IGNORECASE) for turn in t.turns if turn.prompt
-        )
+        return any(is_review_skill(skill) for window in evt.ctx.transcript.deep_inputs() for skill in window.skills)

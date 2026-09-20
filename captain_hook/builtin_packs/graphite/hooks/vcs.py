@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Event, Input, Tool, hook
+from captain_hook import Allow, Event, Input, Tool, UserSaid, hook
 from captain_hook.builtin_packs.graphite.hooks._lib import GraphiteRuns, HasFlag, JJReads, PushesTagRef, ReviewPassRan
 
 # Inline tests are Allow-only: a FileFixture can't stage a nested `.git/.graphite_repo_config`, so
@@ -71,6 +71,7 @@ hook(
     ],
     skip_if=[
         ReviewPassRan(),
+        UserSaid(r"<command-name>/?cc-review", scope="session"),
         HasFlag("--dry-run"),
         HasFlag("--no-push"),
     ],

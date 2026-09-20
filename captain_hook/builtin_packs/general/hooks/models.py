@@ -12,6 +12,7 @@ from captain_hook import (
     Clause,
     Event,
     FilePath,
+    FromSubagent,
     Input,
     Not,
     Or,
@@ -348,8 +349,8 @@ llm_nudge(
         Tool("Edit|Write|MultiEdit"),
         FilePath(*SOURCE_FILE_GLOBS),
     ],
-    skip_if=[TestFile()],
-    when=lambda evt: not evt.is_subagent and len(evt.content or "") >= 400,
+    skip_if=[TestFile(), FromSubagent()],
+    when=lambda evt: len(evt.content or "") >= 400,
     max_fires=1,
     agent=False,
     transcript=False,
@@ -367,6 +368,11 @@ llm_nudge(
             content="Pagination lands in the users API.\n" * 20,
         ): Allow(),
         Input(file="src/api/users.py", old="page = 1", content="page = 2"): Allow(),
+        Input(
+            file="src/api/users.py",
+            content="def list_users(page: int):\n    return paginate(page)\n" * 12,
+            agent_id="tm1",
+        ): Allow(),
         Input(
             file="tests/test_users.py",
             content="def test_list_users(page: int):\n    assert paginate(page)\n" * 12,
@@ -400,16 +406,14 @@ llm_nudge(
             ToolInput("skill", r"(?i)\b(agent-browser|playwright)\b"),
         ),
     ],
+    skip_if=[FromSubagent()],
     when=lambda evt: (
-        not evt.is_subagent
-        and (
-            evt.ctx.t.current_turn.tool_calls.named("Bash")
-            .where_input(command=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
-            .count()
-            + evt.ctx.t.current_turn.tool_calls.named("Skill")
-            .where_input(skill=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
-            .count()
-        )
+        evt.ctx.t.current_turn.tool_calls.named("Bash")
+        .where_input(command=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
+        .count()
+        + evt.ctx.t.current_turn.tool_calls.named("Skill")
+        .where_input(skill=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
+        .count()
         >= 5
     ),
     max_fires=1,

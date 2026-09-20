@@ -11,7 +11,7 @@ from captain_hook import (
     Runs,
     Tool,
     Warn,
-    gate,
+    hook,
     nudge,
 )
 from captain_hook.conditions import AllEditsUnder, UserSaid
@@ -26,7 +26,8 @@ nudge(
 )
 
 
-gate(
+hook(
+    Event.PreToolUse,
     "No `go test` execution found. Run tests before committing Go changes.",
     only_if=[Tool("Bash"), Runs("git", "commit"), Commits(".go")],
     skip_if=[
@@ -34,7 +35,7 @@ gate(
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
     ],
-    events=Event.PreToolUse,
+    block=True,
     tests={
         Input(command="git status"): Allow(),
         Input(command="git commit internal/cli/root.go"): Block(),

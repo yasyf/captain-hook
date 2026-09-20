@@ -9,6 +9,7 @@ from cc_transcript.tools import mcp_parts
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
 from captain_hook.cmd import Cmd
+from captain_hook.command_schemas import GIT_PUSH
 from captain_hook.util.shell import SHELLS
 
 if TYPE_CHECKING:
@@ -81,6 +82,10 @@ def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
                     yield from command_texts(item, depth - 1)
 
 
+def forces_or_deletes_ref(refspec: str) -> bool:
+    return refspec.startswith(("+", ":")) and refspec != ":"
+
+
 def is_dangerous_call(call: Call) -> bool:
     if "sudo" in call.wrappers or call.name == "sudo":
         return True
@@ -91,7 +96,17 @@ def is_dangerous_call(call: Call) -> bool:
             case "reset" | "clean" | "restore":
                 return True
             case "push":
-                return any(re.fullmatch(r"(--?force(-with-lease)?|-f|--delete)(=.*)?", flag) for flag in call.flags)
+                arguments = GIT_PUSH.bind(call)
+                return (
+                    not arguments.complete
+                    or not {"force", "delete"}.isdisjoint(arguments.values)
+                    or any(
+                        forces_or_deletes_ref(value if isinstance(value, str) else word.raw)
+                        for word, value in zip(
+                            arguments.words.get("targets", ()), arguments.values.get("targets", ()), strict=True
+                        )
+                    )
+                )
     return False
 
 
@@ -128,11 +143,13 @@ class DangerousCommandLine(CustomCommandLineCondition):
 
     Parses the line (via ``evt.cmd``) and flags a command whose unwrapped executable is
     destructive (``rm``/``dd``/``shred``/``truncate``/``mkfs*``), is ``sudo``, is a dangerous
-    ``git`` subcommand (``reset``/``clean``/``restore``, or ``push`` with a force/delete flag),
-    or a downloader piped into a shell. Nested ``sh -c``/``eval`` payloads and command
-    substitutions are covered because the parser enumerates them as their own commands. A repo
-    or path whose name merely contains ``sudo`` or ``rm`` is an argument token, never in command
-    position, so it does not match. A courtesy speed bump, not a security boundary.
+    ``git`` subcommand (``reset``/``clean``/``restore``, or a ``push`` that forces, deletes or
+    prunes remote refs by option or by ``+``/``:`` refspec, or whose options the push schema
+    cannot fully bind), or a downloader piped into a shell.
+    Nested ``sh -c``/``eval`` payloads and command substitutions are covered because the parser
+    enumerates them as their own commands. A repo or path whose name merely contains ``sudo`` or
+    ``rm`` is an argument token, never in command position, so it does not match. A courtesy
+    speed bump, not a security boundary.
     """
 
     def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:

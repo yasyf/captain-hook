@@ -81,7 +81,9 @@ class CommandSchema:
     Schemas operate on an existing ``Call`` and never parse shell text. With
     ``options_end_operands``, the first non-prefix option starts a trailing expression;
     expression arguments never become positional operands. Unknown options end binding
-    and mark the result incomplete instead of guessing their arity.
+    and mark the result incomplete instead of guessing their arity. A value attached to a
+    short option (``-oVAL``) binds only when every single-dash alias is one letter, since a
+    schema with find-style single-dash words cannot split such a token unambiguously.
     """
 
     program: str
@@ -95,6 +97,7 @@ class CommandSchema:
         from cc_transcript.command import Word
 
         aliases = {flag: option for option in self.options for flag in option.flags}
+        short_values = all(len(flag) == 2 or flag.startswith("--") for flag in aliases)
         words: dict[str, list[Word]] = {}
         values: dict[str, list[Scalar | None]] = {}
         positional: list[Word] = []
@@ -105,7 +108,16 @@ class CommandSchema:
         stream = iter(call.command.words[1:])
         for word in stream:
             token = word.value
-            flag, equals, attached = (token or "").partition("=")
+            flag, joined, attached = (token or "").partition("=")
+            inline = attached if joined else None
+            if (
+                short_values
+                and token is not None
+                and len(token) > 2
+                and (short := aliases.get(token[:2])) is not None
+                and short.type is not bool
+            ):
+                flag, inline = token[:2], token[2:]
             if token == "--" and accept_options:
                 accept_options = False
                 continue
@@ -142,12 +154,12 @@ class CommandSchema:
                 if option.type is bool:
                     values.setdefault(option.name, []).append(True)
                     continue
-                argument = word if equals else next(stream, None)
+                argument = word if inline is not None else next(stream, None)
                 if argument is None:
                     complete = False
                     break
                 words.setdefault(option.name, []).append(argument)
-                value: Scalar | None = attached if equals else argument.value
+                value: Scalar | None = argument.value if inline is None else inline
                 if option.type is int and value is not None:
                     try:
                         value = int(value)

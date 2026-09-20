@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Content, Input, Tool, UsedSkill, Warn, nudge
+from captain_hook import Allow, Content, Input, T, Tool, UsedSkill, Warn, nudge
 
 nudge(
     "You're editing LLM prompt content. The `llm-prompts` skill covers positive framing, "
@@ -22,8 +22,8 @@ nudge(
         ),
     ],
     skip_if=[
-        UsedSkill("llm-prompts"),
-        UsedSkill("slop-cop-check", "slop-cop-prose"),
+        UsedSkill("llm-prompts", scope="session"),
+        UsedSkill("slop-cop-check", "slop-cop-prose", scope="session"),
         Content(r"\.count_tokens\(", project_only=False),
     ],
     tests={
@@ -32,6 +32,16 @@ nudge(
         ): Warn(),
         Input(file="prompt.md", content="<instruction>\nSummarize the document.\n</instruction>\n"): Warn(),
         Input(file="util.py", content="def add(a, b):\n    return a + b\n"): Allow(),
+        Input(
+            file="prompt.md",
+            content="<instruction>\nSummarize the document.\n</instruction>\n",
+            transcript=[
+                T.user("write the prompt"),
+                T.assistant(T.tool("Skill", skill="llm-prompts")),
+                T.user("now the second prompt"),
+                T.assistant("ok"),
+            ],
+        ): Allow(),
         Input(
             file="tokens.py",
             content=(

@@ -11,7 +11,7 @@ from captain_hook import (
     TestFile,
     Tool,
     Warn,
-    gate,
+    hook,
     nudge,
 )
 from captain_hook.conditions import AllEditsUnder, UserSaid
@@ -26,7 +26,8 @@ nudge(
 )
 
 
-gate(
+hook(
+    Event.PreToolUse,
     "No `uv run pytest` execution found. Run tests before committing Python changes.",
     only_if=[Tool("Bash"), Runs("git", "commit"), Commits(".py")],
     skip_if=[
@@ -35,7 +36,7 @@ gate(
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
     ],
-    events=Event.PreToolUse,
+    block=True,
     tests={
         Input(command="git status"): Allow(),
         Input(command="git commit pkg/mod.py"): Block(),
