@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
     from typing import Any
 
+    from cc_transcript.decisions import DecisionLog
     from cc_transcript.mining.signals import MiningSignal
     from cc_transcript.models import Transcript, TranscriptEvent
 
@@ -414,22 +415,31 @@ def collapse_cross_detector(
 
 
 async def ingest(
-    store: ReviewStore, parsed: Transcript, *, settings: ReviewSettings, repo_key: RepoKey | None
+    store: ReviewStore,
+    parsed: Transcript,
+    *,
+    settings: ReviewSettings,
+    repo_key: RepoKey | None,
+    decisions: DecisionLog,
 ) -> ScanReport:
     repo_key = repo_key or transcript_repo(parsed.events)
     if repo_key is None or is_reviewer_session(parsed.events):
         await store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
-    async with await open_decision_log(decisions_db_path()) as decisions:
-        complaints = [
-            sig
-            async for sig in iter_hook_complaint_signals(
-                parsed.events, decisions=decisions, index=PackIndex.load(transcript_cwd(parsed.events))
-            )
-        ]
-    signals = chain(complaints, detect(parsed.events))
-    raw = parsed.path.read_bytes()
-    kept = collapse_cross_detector(list(candidates_from(raw, parsed.events, signals, settings=settings)))
+    complaints = [
+        sig
+        async for sig in iter_hook_complaint_signals(
+            parsed.events, decisions=decisions, index=PackIndex.load(transcript_cwd(parsed.events))
+        )
+    ]
+    signals = list(chain(complaints, detect(parsed.events)))
+    kept = (
+        collapse_cross_detector(
+            list(candidates_from(parsed.path.read_bytes(), parsed.events, signals, settings=settings))
+        )
+        if signals
+        else []
+    )
     inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
     for sig, candidate in kept:
         async with store.db.transaction():
@@ -484,8 +494,9 @@ async def scan_transcript(
     mtime = stat_mtime(path)
     if mtime is None or ((prev := known.get(str(path))) is not None and prev >= mtime):
         return ScanReport(scanned=0, inserted=0)
-    for parsed in stream([path]):
-        return await ingest(store, parsed, settings=settings, repo_key=repo_key)
+    async with await open_decision_log(decisions_db_path()) as decisions:
+        for parsed in stream([path]):
+            return await ingest(store, parsed, settings=settings, repo_key=repo_key, decisions=decisions)
     return ScanReport(scanned=0, inserted=0)
 
 
@@ -513,10 +524,13 @@ async def scan(store: ReviewStore, *, settings: ReviewSettings, transcripts: Seq
             paths.extend(path for path, _ in find_in(entry, known_mtimes=known))
         elif (mtime := stat_mtime(entry)) is not None and ((prev := known.get(str(entry))) is None or prev < mtime):
             paths.append(entry)
+    if not paths:
+        return ScanReport(scanned=0, inserted=0)
     scanned = 0
     inserted = 0
-    for parsed in stream(paths):
-        report = await ingest(store, parsed, settings=settings, repo_key=None)
-        scanned += report.scanned
-        inserted += report.inserted
+    async with await open_decision_log(decisions_db_path()) as decisions:
+        for parsed in stream(paths):
+            report = await ingest(store, parsed, settings=settings, repo_key=None, decisions=decisions)
+            scanned += report.scanned
+            inserted += report.inserted
     return ScanReport(scanned=scanned, inserted=inserted)

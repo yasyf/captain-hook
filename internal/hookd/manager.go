@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -102,10 +103,11 @@ func (e *workerEntry) observe(concurrency int, elapsed time.Duration) {
 }
 
 type workerKey struct {
-	id    string
-	root  string
-	env   map[string]string
-	shard int
+	id       string
+	root     string
+	env      map[string]string
+	affinity string
+	shard    int
 }
 
 func (k workerKey) member() string {
@@ -260,6 +262,16 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 	var evicted *workerClient
 	view := m.poolLocked(key.id)
 	entry := view.ready
+	if key.affinity != "" && !ephemeralRoot(key.root) {
+		shard := affinityShard(key.affinity, m.poolSize)
+		target := key
+		target.shard = shard
+		if member := m.entries[target.member()]; member != nil {
+			entry = member
+		} else if view.starting == nil && view.size < m.poolSize && len(m.entries) < maxLiveWorkers {
+			entry = m.startMemberLocked(key, shard)
+		}
+	}
 	switch {
 	case entry == nil && view.starting != nil:
 		entry = view.starting
@@ -274,7 +286,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 			evicted = victim.worker
 		}
 		entry = m.startMemberLocked(key, view.shard)
-	case entry.load > 0 && !entry.ephemeral && view.starting == nil &&
+	case key.affinity == "" && entry.load > 0 && !entry.ephemeral && view.starting == nil &&
 		view.size < m.poolSize && len(m.entries) < maxLiveWorkers:
 		m.startMemberLocked(key, view.shard)
 	}
@@ -730,7 +742,38 @@ func makeWorkerKey(request wireproto.EventRequest) (workerKey, error) {
 		parts = append(parts, name+"="+env[name])
 	}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env}, nil
+	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env, affinity: workerAffinity(request.PayloadRaw)}, nil
+}
+
+func workerAffinity(payload string) string {
+	var fields struct {
+		SessionID           string `json:"session_id"`
+		TranscriptPath      string `json:"transcript_path"`
+		AgentTranscriptPath string `json:"agent_transcript_path"`
+		AgentID             string `json:"agent_id"`
+	}
+	if json.Unmarshal([]byte(payload), &fields) != nil {
+		return ""
+	}
+	if fields.AgentTranscriptPath != "" {
+		return fields.AgentTranscriptPath
+	}
+	if fields.TranscriptPath != "" && fields.AgentID != "" {
+		return fields.TranscriptPath + "\x00" + fields.AgentID
+	}
+	if fields.TranscriptPath != "" {
+		return fields.TranscriptPath
+	}
+	return fields.SessionID
+}
+
+func affinityShard(affinity string, size int) int {
+	digest := sha256.Sum256([]byte(affinity))
+	value := uint64(0)
+	for _, part := range digest[:8] {
+		value = value<<8 | uint64(part)
+	}
+	return int(value % uint64(size))
 }
 
 func semanticWorkerEnvironment(env map[string]string) map[string]string {

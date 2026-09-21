@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
@@ -119,6 +121,24 @@ class TestEventsFor:
         transcache.cache_clear()
         assert transcache._entry_for(target).events is not first
 
+    def test_concurrent_cold_reads_share_one_parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
+        original = transcache._full
+        calls = 0
+
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            time.sleep(0.05)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(transcache, "_full", counted)
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            entries = list(pool.map(lambda _: transcache._entry_for(target), range(16)))
+
+        assert calls == 1
+        assert all(entry is entries[0] for entry in entries)
+
 
 @dataclass
 class PromptClassifier:
@@ -175,6 +195,24 @@ class TestLoad:
         assert after is not before
         assert after.turns == load_transcript(target).turns
         assert len(after) > len(before)
+
+    def test_concurrent_loads_share_one_lift(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
+        original = transcache._lift
+        calls = 0
+
+        def counted(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            time.sleep(0.05)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(transcache, "_lift", counted)
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            sessions = list(pool.map(lambda _: transcache.load(target), range(16)))
+
+        assert calls == 1
+        assert all(session is sessions[0] for session in sessions)
 
 
 class TestSourceByteBudget:

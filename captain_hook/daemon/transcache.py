@@ -26,10 +26,12 @@ class _Entry:
     events: list[TranscriptEvent]
     lifts: dict[int, ActivityLift] = field(default_factory=dict)
     lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
+    lock: threading.RLock = field(default_factory=threading.RLock)
 
 
 _CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(128 * 1024 * 1024, weigh=attrgetter("size"))
 _LOCK = threading.Lock()
+_REFILL_LOCK = threading.Lock()
 
 
 def load(path: str | Path | None) -> Session:
@@ -39,9 +41,12 @@ def load(path: str | Path | None) -> Session:
         return Session(())
     entry = _entry_for(resolved)
     classifier = user_classifier(entry.events, path=resolved)
-    if (held := entry.lifted.get(id(classifier))) is not None:
-        return held[1]
-    return entry.lifted.setdefault(id(classifier), (classifier, _lift(entry, classifier, resolved)))[1]
+    with entry.lock:
+        if (held := entry.lifted.get(id(classifier))) is not None:
+            return held[1]
+        session = _lift(entry, classifier, resolved)
+        entry.lifted[id(classifier)] = (classifier, session)
+        return session
 
 
 def cache_clear() -> None:
@@ -51,14 +56,33 @@ def cache_clear() -> None:
 
 def _entry_for(path: Path) -> _Entry:
     st = path.stat()
-    size, mtime_ns, ctime_ns = st.st_size, st.st_mtime_ns, st.st_ctime_ns
-    with _LOCK:
-        entry = _CACHE.get(path)
-    match entry:
-        case _Entry(size=cached, mtime_ns=mstamp, ctime_ns=cstamp) if (
-            cached == size and mstamp == mtime_ns and cstamp == ctime_ns
-        ):
+    entry = _lookup(path)
+    if _current(entry, st):
+        return _store(path, entry)
+    with _REFILL_LOCK:
+        st = path.stat()
+        entry = _lookup(path)
+        if _current(entry, st):
             return _store(path, entry)
+        return _refill(path, st, entry)
+
+
+def _lookup(path: Path) -> _Entry | None:
+    with _LOCK:
+        return _CACHE.get(path)
+
+
+def _current(entry: _Entry | None, st: os.stat_result) -> bool:
+    return entry is not None and (entry.size, entry.mtime_ns, entry.ctime_ns) == (
+        st.st_size,
+        st.st_mtime_ns,
+        st.st_ctime_ns,
+    )
+
+
+def _refill(path: Path, st: os.stat_result, entry: _Entry | None) -> _Entry:
+    size, mtime_ns, ctime_ns = st.st_size, st.st_mtime_ns, st.st_ctime_ns
+    match entry:
         case _Entry(size=cached) if size > cached:
             try:
                 return _store(path, _grow(entry, path, _appended(path, entry.consumed, st), size, mtime_ns, ctime_ns))
@@ -76,13 +100,12 @@ def _lift(entry: _Entry, classifier: UserClassifier, path: Path) -> Session:
     from cc_transcript.activity import ActivityLift
     from cc_transcript.query import Session
 
-    with _LOCK:
+    with entry.lock:
         activity = None if (lift := entry.lifts.get(id(classifier))) is None else lift.activity
-    if activity is None:
-        lift = ActivityLift(transcript_session_id(entry.events, path=path), user_classifier=classifier)
-        activity = lift.extend(entry.events)
-        with _LOCK:
-            entry.lifts.setdefault(id(classifier), lift)
+        if activity is None:
+            lift = ActivityLift(transcript_session_id(entry.events, path=path), user_classifier=classifier)
+            activity = lift.extend(entry.events)
+            entry.lifts[id(classifier)] = lift
     return Session.from_activity(activity, path=path)
 
 
@@ -123,7 +146,7 @@ def _grow(entry: _Entry, path: Path, appended: bytes, size: int, mtime_ns: int, 
         committed + parse_events_from_bytes(appended[cut:]),
     )
     if len(entry.events) == len(entry.committed):
-        with _LOCK:
+        with entry.lock:
             lifts, entry.lifts = entry.lifts, {}
         session_id = transcript_session_id(grown.events, path=path)
         grown.lifts = {

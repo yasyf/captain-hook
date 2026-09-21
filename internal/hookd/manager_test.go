@@ -422,6 +422,81 @@ func TestAcquireRoutesToTheLeastLoadedMember(t *testing.T) {
 	}
 }
 
+func TestAcquireKeepsOneTranscriptOnOneMember(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	manager.poolSize = 2
+	first := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 3)
+	second := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 0)
+	affinity := affinityForShard(t, manager.poolSize, first.key.shard)
+
+	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live", affinity: affinity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != first {
+		t.Fatalf("transcript moved from shard %d to less-loaded shard %d", first.key.shard, second.key.shard)
+	}
+}
+
+func TestAcquireDistributesDifferentTranscripts(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	manager.poolSize = 2
+	members := []*workerEntry{
+		readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 0),
+		readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 0),
+	}
+
+	for shard, member := range members {
+		affinity := affinityForShard(t, manager.poolSize, shard)
+		entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live", affinity: affinity})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entry != member {
+			t.Fatalf("transcript for shard %d routed to shard %d", shard, entry.key.shard)
+		}
+	}
+}
+
+func TestAcquireStartsAnIdlePoolsMissingAffinityShard(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	manager.poolSize = 2
+	readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 0)
+	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
+		worker, _ := silentWorker(t)
+		return worker, nil
+	}
+	affinity := affinityForShard(t, manager.poolSize, 1)
+	key := workerKey{id: "pool", root: "/live", affinity: affinity}
+
+	first, _, err := manager.acquire(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.settleLoad(first)
+	manager.release(first)
+	second, _, err := manager.acquire(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.key.shard != 1 || second != first {
+		t.Fatalf("affinity routed first to shard %d and then shard %d, want stable shard 1", first.key.shard, second.key.shard)
+	}
+}
+
+func affinityForShard(t *testing.T, size, shard int) string {
+	t.Helper()
+	for candidate := 0; ; candidate++ {
+		affinity := fmt.Sprintf("transcript-%d", candidate)
+		if affinityShard(affinity, size) == shard {
+			return affinity
+		}
+	}
+}
+
 func TestBusyPoolGrowsOneMemberAtATime(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
