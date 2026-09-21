@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.50.1] - 2026-09-21
+
+### Fixed
+
+- **The `git stash` block no longer refuses the read-only and tagged forms.**
+  The condition matched an argv prefix, so `git stash list`, `git stash show`
+  and the documented `git stash push -u -m "<tag>"` / `apply <sha>` / `drop <n>`
+  pattern were blocked alongside the dangerous ones. Across eleven sessions the
+  hook fired on 109 of 116 calls, and agents that could not use the tagged
+  pattern either reinvented a WIP-commit workaround instead. Bare `git stash`,
+  `pop`, an untagged `push`, and `clear` still block, and the message now walks
+  the tagged pattern rather than only refusing.
+
 ## [12.50.0] - 2026-09-20
 
 ### Changed
