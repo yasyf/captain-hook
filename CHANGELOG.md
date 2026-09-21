@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.49.0] - 2026-09-20
+
+### Changed
+
+- **Concurrent hooks share one transcript load.** The host now derives stable
+  worker affinity from each request's transcript identity, with separate agent
+  lanes and a session fallback. Events for one transcript reach the same worker
+  while separate transcripts still spread across the pool. Inside that worker,
+  cache misses and classifier lifts are single-flight. A burst of hooks over one
+  transcript therefore performs one parse and lift instead of duplicating that
+  work and retained memory across the worker shards.
+- **Review scans reuse their decision ledger and leave quiet transcripts
+  alone.** One decision-log session now covers the scan batch instead of
+  reopening the database for every transcript. When mining yields no signals,
+  the scan does not read the transcript a second time to build candidate
+  context. A scan with no changed paths returns before opening the ledger.
+- **The review queue filters before loading context.** SQLite selects the
+  eligible event IDs at each prompt version, removes junk-triaged create events,
+  and preserves queue order before the larger context rows are fetched in
+  bounded pages. The queue no longer loads and sorts every candidate's context
+  in Python before discarding most of it.
+
 ## [12.48.0] - 2026-09-20
 
 ### Removed
