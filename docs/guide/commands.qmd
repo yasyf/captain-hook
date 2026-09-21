@@ -117,11 +117,11 @@ from captain_hook import RanCommand, TouchedFile, gate
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"\bpytest\b")],
+    skip_if=[RanCommand("uv", "run", "pytest"), RanCommand("pytest")],
 )
 ```
 
-`RanCommand` with argv tokens is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal — `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` are separate entries.
+`RanCommand` takes argv tokens, never a regex. Matching is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal — `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` are separate entries, which is why both appear above. A regex handed to it is read as a literal token, so `RanCommand(r"\bpytest\b")` looks for a command named `\bpytest\b` and can never match; on a gate's `skip_if` that is an exemption which silently never fires.
 
 ## Where to go next
 

@@ -105,7 +105,8 @@ def deny(
         tests: Inline tests run by ``capt-hook test``.
 
     Example:
-        >>> deny("No force pushes from subagents", only_if=[FromSubagent(), Command(r"push\\s+--force")])
+        >>> deny("No force pushes from subagents",
+        ...      only_if=[FromSubagent(), Runs("git", "push"), Command(r"--force\\b(?!-)")])
     """
 
     def handler(evt: BaseHookEvent) -> HookResult | None:

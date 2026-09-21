@@ -97,7 +97,7 @@ from captain_hook import RanCommand, TouchedFile, gate
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"\bpytest\b")],
+    skip_if=[RanCommand("uv", "run", "pytest"), RanCommand("pytest")],
 )
 ```
 

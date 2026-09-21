@@ -139,29 +139,39 @@ python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensur
 You add a hook that blocks `git stash`, because your team uses `jj` instead.
 
 ```python
-from captain_hook import hook, Event, Tool
-from captain_hook.types import Command
+from captain_hook import hook, Event, Runs, Tool
 
 hook(
     Event.PreToolUse,
     message="Use jj shelve instead of git stash",
     block=True,
-    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+    only_if=[Tool("Bash"), Runs("git", "stash")],
 )
 ```
 
-The block works. It also blocks `git stash pop`, because `git\s+stash` is a substring of `git stash pop` and `Command` matches anywhere in the command text. Popping a stash is safe, so the hook now blocks a command you want to allow.
+The block works. It also blocks `git stash pop`, because `Runs` matches an argv *prefix* and `["git", "stash", "pop"]` starts with `["git", "stash"]`. Popping a stash is safe, so the hook now blocks a command you want to allow.
 
-Fix it with a `skip_if`, which skips the hook when any of its conditions match. List the safe subcommands there.
+Fix it with a `skip_if`, which skips the hook when any of its conditions match. List the safe subcommands there, each as its own argv prefix.
 
 ```python
+from captain_hook import Or
+
 hook(
     Event.PreToolUse,
     message="Use jj shelve instead of git stash",
     block=True,
-    only_if=[Tool("Bash"), Command(r"git\s+stash")],
-    skip_if=[Command(r"git\s+stash\s+(pop|apply|list|show)")],
+    only_if=[Tool("Bash"), Runs("git", "stash")],
+    skip_if=[
+        Or(
+            Runs("git", "stash", "pop"),
+            Runs("git", "stash", "apply"),
+            Runs("git", "stash", "list"),
+            Runs("git", "stash", "show"),
+        )
+    ],
 )
 ```
 
 Now the safe subcommands pass through while a bare `git stash` still blocks. A re-run of `uvx capt-hook --hooks <dir> test` with a test for each subcommand confirms the split.
+
+Write the exemption structurally, the way the block itself is written. A regex `skip_if` on a blocking hook fails in the direction nobody notices: `Command(r"git\s+stash\s+(pop|apply|list|show)")` also matches `echo "git stash pop"`, and an exemption that is too wide stands the block down without saying so. `Runs` compares tokens, so the exemption covers the four commands it names and nothing else.

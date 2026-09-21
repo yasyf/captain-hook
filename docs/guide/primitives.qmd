@@ -166,18 +166,20 @@ approve(
 Answer a permission dialog with *deny*. The first argument is both the hook's label and the message the user sees. Same event default and no fire cap as `approve`.
 
 ```python
-from captain_hook import Ask, Block, FromSubagent, Input, deny
+from captain_hook import Ask, Block, FromSubagent, Input, Runs, deny
 from captain_hook.types import Command
 
 deny(
     "No force pushes from subagents",
-    only_if=[FromSubagent(), Command(r"push\s+--force")],
+    only_if=[FromSubagent(), Runs("git", "push"), Command(r"--force\b(?!-)")],
     tests={
         Input(command="git push --force origin main", agent_id="tm1"): Block(pattern="force"),
         Input(command="git push origin main", agent_id="tm1"): Ask(),
     },
 )
 ```
+
+The two command conditions do different jobs. `Runs` names the command structurally, so a subagent writing `echo "git push --force"` into a file never trips the deny; `Command` then matches the one piece of text no argv prefix names, the flag, with `(?!-)` keeping `--force-with-lease` out. Reaching for `Command(r"git\s+push\s+--force")` alone is what makes a guard fire on its own documentation.
 
 Note the import: the `Command` *condition* lives in `captain_hook.types` — top-level `captain_hook.Command` is the parsed-command dataclass, a different class that fails loudly if you pass it to `only_if` ([details](commands.qmd)). An unconditioned `deny()` rejects every dialog, which bricks every prompting tool, so scope it the same way. For the LLM-judged variant that approves only what a safety rubric clears, see [`llm_approve`](llm-hooks.qmd#llm_approve).
 
@@ -208,14 +210,13 @@ coverage in a standalone test file with a stub script.
 Conditions decide when a hook fires. Every registration takes two lists: a hook fires when **every** `only_if` condition matches and **no** `skip_if` condition does.
 
 ```python
-from captain_hook import hook, Event, Tool, RanCommand
-from captain_hook.types import Command
+from captain_hook import hook, Event, RanCommand, Runs, Tool
 
 hook(
     Event.PreToolUse,
     message="git stash is not allowed; use jj",
     block=True,
-    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+    only_if=[Tool("Bash"), Runs("git", "stash")],
     skip_if=[RanCommand("jj", "shelve")],
 )
 ```
@@ -227,7 +228,8 @@ For an "or" inside one condition, use pipe-alternation instead of separate entri
 | You want to match | Use |
 |---|---|
 | A file path | `FilePath("*.py", "*.pyi")` |
-| A bash command | `Command(r"git\s+push")` — or the structural [`Runs`](commands.qmd) |
+| A bash command by name | `Runs("git", "push")` — structural, no false fires |
+| Command text no argv prefix names | `Command(r"curl.*\|\s*sh")` — a pipeline, redirect, or flag |
 | An edit to a source file in a language | `SourceEdits(lang="ts")` |
 | The current tool | `Tool("Bash")` |
 | A file edited earlier this session | `TouchedFile("**/*.py")` |
@@ -235,15 +237,24 @@ For an "or" inside one condition, use pipe-alternation instead of separate entri
 | A typed tool call's fields | `CustomInputTypeCondition[ReadCall]` |
 | A parsed Bash command line | `CustomCommandLineCondition` |
 
-The first four inspect the current event; `TouchedFile` and `RanCommand` inspect the session transcript, so they tell you whether something already happened. The last two are typed custom-condition bases, covered below. For every condition with its pattern type and defaults, see the [conditions reference](../reference/conditions.qmd).
+The first five inspect the current event; `TouchedFile` and `RanCommand` inspect the session transcript, so they tell you whether something already happened. The last two are typed custom-condition bases, covered below. For every condition with its pattern type and defaults, see the [conditions reference](../reference/conditions.qmd).
 
 `FilePath`, `Content`, `TestFile`, and `SourceEdits` match project files only by default — pass `project_only=False` to target scratch files, attachments, or logs. `SourceEdits` skips test files unless you pass `include_tests=True`. `ToolInput` reads one top-level field of any tool's raw input; `WorkflowScript` reads a `Workflow` script whether it arrives inline or as a `script_path` on disk.
 
+::: {.callout-warning title="Name a command with `Runs`, not `Command`"}
+`Command` searches the raw command line, so `Command(r"git\s+stash")` fires on
+`echo "git stash"` and on a heredoc that quotes the phrase. `Runs("git", "stash")`
+compares argv tokens, so a mention never matches. Constructing a `Command` whose pattern is
+a plain command-name prefix warns with the `Runs` spelling to use. Keep `Command` for what
+an argv prefix cannot name — `Command(r"curl.*\|\s*sh")`, a redirect, a flag's value.
+:::
+
 ::: {.callout-tip title="Regex patterns"}
 `Tool`, `Command`, and `Content` match with regex — escape special characters and use
-raw strings (`r"..."`) to avoid backslash issues. `RanCommand` takes argv tokens instead:
-matching is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal,
-so list `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` as separate entries.
+raw strings (`r"..."`) to avoid backslash issues. `Runs` and `RanCommand` take argv tokens
+instead. `RanCommand` matching is wrapper-transparent (`sudo`/`env`/`timeout` are stripped)
+but launcher-literal, so list `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")`
+as separate entries.
 :::
 
 ### Write a custom condition {#write-a-custom-condition}
@@ -337,14 +348,16 @@ hook(
 Block history-rewriting commands, except during plan mode.
 
 ```python
-from captain_hook import hook, Event, Tool, InPlanMode
-from captain_hook.types import Command
+from captain_hook import hook, Event, InPlanMode, Or, Runs, Tool
 
 hook(
     Event.PreToolUse,
     message="This command modifies git history",
     block=True,
-    only_if=[Tool("Bash"), Command(r"git\s+(rebase|reset|push\s+--force)")],
+    only_if=[
+        Tool("Bash"),
+        Or(Runs("git", "rebase"), Runs("git", "reset"), Runs("git", "push", "--force")),
+    ],
     skip_if=[InPlanMode()],
 )
 ```

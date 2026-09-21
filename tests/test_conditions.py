@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, get_args
@@ -20,7 +21,7 @@ from captain_hook.events import (
     StopEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.primitives.commands import block_command_pattern
+from captain_hook.primitives.commands import block_command, block_command_pattern
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import (
     ALL_EVENTS,
@@ -45,6 +46,7 @@ from captain_hook.types import (
     Runs,
     SkipPermissions,
     SourceEdits,
+    StructuralConditionWarning,
     TCondition,
     TestFile,
     Tool,
@@ -277,11 +279,55 @@ class TestCommandCondition:
     def test_command(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
         assert check_condition(cond, evt) is expected
 
+    @pytest.mark.filterwarnings("ignore::captain_hook.types.StructuralConditionWarning")
     def test_command_uses_search_not_match(self) -> None:
 
         evt = make_tool_event("Bash", {"command": "uv run mtest run bioqa/"})
         assert check_condition(Command(r"mtest\s+run"), evt) is True
         assert check_condition(Command(r"git"), evt) is False
+
+
+class TestCommandNamePrefixWarning:
+    @pytest.mark.parametrize(
+        ("pattern", "spelling"),
+        [
+            pytest.param(
+                r"\bgh\s+pr\s+create\b|\bgt\s+(submit|ship)\b|\bccx\s+vcs\s+ship\b",
+                "Or(Runs('gh', 'pr', 'create'), Runs('gt', 'submit'), Runs('gt', 'ship'), Runs('ccx', 'vcs', 'ship'))",
+                id="alternation_of_prefixes",
+            ),
+            pytest.param(r"git\s+stash", "Runs('git', 'stash')", id="two_token_prefix"),
+            pytest.param(r"uv run pytest", "Runs('uv', 'run', 'pytest')", id="literal_spaces"),
+            pytest.param(r"^npm\s+(run|exec)$", "Or(Runs('npm', 'run'), Runs('npm', 'exec'))", id="anchored_group"),
+        ],
+    )
+    def test_warns_with_the_runs_spelling(self, pattern: str, spelling: str) -> None:
+        with pytest.warns(StructuralConditionWarning, match=re.escape(spelling)):
+            Command(pattern)
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            pytest.param(r"curl.*\|\s*sh", id="pipeline"),
+            pytest.param(r"tee\s+>\s*out", id="redirect"),
+            pytest.param(r"git\s+push\s+--force", id="long_flag"),
+            pytest.param(r"rm\s+-rf", id="short_flag"),
+            pytest.param(r"git\s+(rebase|reset|push\s+--force)", id="group_holding_a_flag"),
+            pytest.param(r"^cat\s", id="partial_token"),
+            pytest.param(r"git", id="bare_name"),
+        ],
+    )
+    def test_silent_when_runs_cannot_say_it(self, pattern: str) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", StructuralConditionWarning)
+            Command(pattern)
+
+    def test_blames_the_author_not_the_primitive(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", StructuralConditionWarning)
+            Command(r"git\s+stash")
+            block_command(r"gh\s+pr\s+create", reason="no")
+        assert [w.filename for w in caught] == [__file__, __file__]
 
 
 class TestContentCondition:
@@ -623,6 +669,7 @@ class TestCommandRawMatching:
             pytest.param(r">\s*/dev/null", "echo hi > /dev/null", True, id="redirect"),
         ],
     )
+    @pytest.mark.filterwarnings("ignore::captain_hook.types.StructuralConditionWarning")
     def test_command_matches_raw_line(self, pattern: str, command: str, expected: bool) -> None:
         assert check_condition(Command(pattern), make_tool_event("Bash", {"command": command})) is expected
 
@@ -1485,7 +1532,7 @@ class TestOnlyIfSemantics:
 
         spec = HookSpec(
             events=Event.PreToolUse,
-            only_if=(Tool("Bash"), Command(r"git\s+push")),
+            only_if=(Tool("Bash"), Runs("git", "push")),
         )
         evt_match = make_tool_event("Bash", {"command": "git push origin"})
         assert matches_conditions(spec, evt_match) is True
