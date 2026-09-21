@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.50.0] - 2026-09-20
+
+### Changed
+
+- **Fresh installs reclaim stale Python environments.** Every captain-hook
+  release left its `~/.daemonkit/tools/capt-hook/<version>/` environment behind
+  indefinitely; one host had accumulated 49 environments taking 14 GB. The
+  generated `captain_hook/scripts/install-binary.sh` and `install-mcp.sh` were
+  re-rendered from cc-skills' `binrun-shim` fragment (cc-skills#52), moving the
+  pinned runner from binrun v0.7.0 to v0.8.0 (yasyf/binrun#9) through
+  `RUNNER_TAG` and all four `RUNNER_SHA_*` digests.
+
+  After a resolve installs a new environment, binrun now prunes that
+  distribution's environments beyond the newest three. It skips any environment
+  referenced in the argv of a live process owned by the same uid, using
+  `KERN_PROCARGS2` on Darwin and `/proc/<pid>/cmdline` on Linux. `binrun -- gc`
+  uses the same guard. A hook invocation that bootstraps a fresh environment
+  now reclaims stale ones in the same run; environments still serving a running
+  worker are never removed.
+
 ## [12.49.0] - 2026-09-20
 
 ### Changed
