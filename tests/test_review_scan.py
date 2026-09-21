@@ -480,6 +480,44 @@ class TestIncrementalScan:
         report = await scan_transcript(store, tmp_path / "gone.jsonl", settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=0, inserted=0)
 
+    async def test_batch_reuses_one_decision_ledger(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import captain_hook.review.scan as review_scan
+
+        root = tmp_path / "project"
+        write_transcript(root / "a.jsonl", [assistant_text("done")])
+        write_transcript(root / "b.jsonl", [assistant_text("done")])
+        open_decision_log = review_scan.open_decision_log
+        opens: list[Path] = []
+
+        async def track_open(path: Path) -> Any:
+            opens.append(path)
+            return await open_decision_log(path)
+
+        monkeypatch.setattr(review_scan, "open_decision_log", track_open)
+        assert await scan(store, settings=settings, transcripts=[root]) == ScanReport(scanned=2, inserted=0)
+        assert len(opens) == 1
+
+    async def test_signal_free_transcript_is_not_read_twice(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = write_transcript(tmp_path / "s.jsonl", [assistant_text("done")])
+
+        def forbidden_read(_path: Path) -> bytes:
+            raise AssertionError("the parsed transcript must not be read again without signals")
+
+        monkeypatch.setattr(type(path), "read_bytes", forbidden_read)
+        assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
+
 
 class TestReviewCommentFormats:
     async def test_superset_inline_comment_extracted_and_persisted(
@@ -554,8 +592,16 @@ class TestCollapseCrossDetector:
 
 class TestCrossDetectorCollapseIngest:
     async def test_plan_reentry_shadows_transcript_message_to_one_candidate(
-        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        async def no_correction(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr("cc_transcript.extract.extract_correction", no_correction)
         entries = [
             assistant_tool_use("t1", "Edit", {"file_path": "foo.py", "old_string": "a", "new_string": "b"}),
             {"type": "mode", "sessionId": "sess-1", "mode": "plan"},

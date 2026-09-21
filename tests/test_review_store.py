@@ -998,28 +998,31 @@ class TestPerLaneVersions:
     async def test_judge_backlog_skips_the_hydration_probe(
         self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        probes: list[bool] = []
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "ka", fidelity="summary")
 
-        async def fake_unjudged(*, probe_hydration: bool = True, **_: object) -> list[dict[str, object]]:
-            probes.append(probe_hydration)
-            return []
+        def forbidden_hydration(_context_json: str) -> bool:
+            raise AssertionError("the backlog count must not resolve transcripts")
 
-        monkeypatch.setattr(store, "unjudged", fake_unjudged)
-        await store.judge_backlog()
-        assert probes == [False, False]
+        monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", forbidden_hydration)
+        assert await store.judge_backlog() == 1
 
     async def test_judge_queue_probes_hydration_by_default(
         self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        probes: list[bool] = []
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "ka", fidelity="summary")
+        probes: list[str] = []
 
-        async def fake_unjudged(*, probe_hydration: bool = True, **_: object) -> list[dict[str, object]]:
-            probes.append(probe_hydration)
-            return []
+        def failed_hydration(context_json: str) -> bool:
+            probes.append(context_json)
+            return False
 
-        monkeypatch.setattr(store, "unjudged", fake_unjudged)
-        await store.judge_queue(refresh_summary=True)
-        assert probes == [True, True]
+        monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", failed_hydration)
+        assert await store.judge_queue(refresh_summary=True) == []
+        assert probes == ["{}"]
 
     async def test_judge_health_recency_is_lane_exact(self, store: ReviewStore, tmp_path: Path) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))
@@ -1582,13 +1585,26 @@ class TestJunkTriage:
             await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
         assert len(await store.untriaged_create_events(limit=3)) == 3
 
-    async def test_judge_queue_excludes_junk_triaged_events(self, store: ReviewStore) -> None:
+    async def test_judge_queue_excludes_junk_before_loading_context(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         candidate_id = await create_candidate(store)
         await seed(store, candidate_id, "junk", session="s1", occurred="2026-06-01T10:00:00+00:00")
         await seed(store, candidate_id, "keep", session="s2", occurred="2026-06-02T10:00:00+00:00")
         await store.record_triage(DedupKey("junk"), junk=True)
+        loaded: list[str] = []
+        sql = store.db.sql
+
+        async def trace(statement: str, params: Sequence[object] = ()) -> list[dict[str, object]]:
+            rows = await sql(statement, params)
+            if "e.context_json" in statement:
+                loaded.extend(str(row["dedup_key"]) for row in rows)
+            return rows
+
+        monkeypatch.setattr(store.db, "sql", trace)
         keys = {str(row["dedup_key"]) for row in await store.judge_queue()}
         assert keys == {"keep"}
+        assert loaded == ["keep"]
 
     @pytest.mark.parametrize(
         ("first_junk", "second_junk", "landed"),
