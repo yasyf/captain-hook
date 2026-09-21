@@ -61,19 +61,77 @@ UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktr
 HOME_VARIABLE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
 
+STASH_READ_ONLY_VERBS = frozenset({"list", "show"})
+STASH_ADDRESSED_VERBS = frozenset({"apply", "drop"})
+
+
+def tagged_stash(args: tuple[str, ...]) -> bool:
+    """Whether a push carries ``-m``/``--message``, so its entry stays findable by its own tag."""
+    return any(
+        arg.startswith("--message") or (not arg.startswith("--") and "m" in arg) for arg in args if arg.startswith("-")
+    )
+
+
+def safe_stash(args: tuple[str, ...]) -> bool:
+    """Whether one ``git stash`` invocation reads the stack, names the entry it takes, or tags the entry it adds."""
+    verb = args[0] if args and not args[0].startswith("-") else ""
+    if verb in STASH_READ_ONLY_VERBS or "-h" in args or "--help" in args:
+        return True
+    if verb in STASH_ADDRESSED_VERBS:
+        return any(not arg.startswith("-") for arg in args[1:])
+    return verb in ("", "push") and tagged_stash(args)
+
+
+def clobbers_the_shared_stash(evt: BaseHookEvent) -> bool:
+    """Whether any ``git stash`` call can lose work: an untagged push, or one taking an entry blind."""
+    return any(
+        argv[:1] == ("stash",) and not safe_stash(argv[1:])
+        for call in evt.cmd.calls("git")
+        for argv in (call.verb_argv[1:],)
+    )
+
+
 hook(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), Runs("git", "stash")],
+    only_if=[Tool("Bash"), LambdaCondition(clobbers_the_shared_stash)],
     message=(
-        "BLOCKED: git stash is not allowed. In a jj repo you never need to stash — the working copy "
-        "is commit @; use `jj new` to set it aside or `jj rebase` directly (no clean tree required). "
-        "In plain git, commit your changes to a branch."
+        "BLOCKED: this git stash takes from the stack blind, and the stack is shared with every "
+        "other worktree and session on the machine — a bare stash or a pop can swallow work that is "
+        'not yours. Set work aside under a tag instead: `git stash push -u -m "<unique-tag>"`, then '
+        "`git stash list --format='%H %gs'` to find your entry, `git stash apply <sha>` to restore it "
+        "(never pop), and `git stash drop <n>` once you are done. In a jj repo you never need to "
+        "stash — the working copy is commit @; use `jj new` to set it aside or `jj rebase` directly. "
+        "In plain git, a WIP commit on a branch works too."
     ),
     block=True,
     tests={
         Input(command="git stash"): Block(),
+        Input(command="git stash -u"): Block(),
         Input(command="git stash pop"): Block(),
+        Input(command="git stash pop --index stash@{0}"): Block(),
+        Input(command="git stash push"): Block(),
+        Input(command="git stash push -u"): Block(),
+        Input(command="git stash clear"): Block(),
+        Input(command="git stash apply"): Block(),
+        Input(command="git stash drop"): Block(),
+        Input(command="git -C /repo stash pop"): Block(),
+        Input(command="git stash list && git stash pop"): Block(),
+        Input(command="sh -c 'git stash pop'"): Block(),
+        Input(command="git stash list"): Allow(),
+        Input(command="git stash list --format='%H %gs'"): Allow(),
+        Input(command="git stash show"): Allow(),
+        Input(command="git stash show -p stash@{0}"): Allow(),
+        Input(command="git stash --help"): Allow(),
+        Input(command="git stash push -h"): Allow(),
+        Input(command='git stash push -u -m "lane-stash-unblock"'): Allow(),
+        Input(command='git stash push -um "lane-stash-unblock"'): Allow(),
+        Input(command='git stash -u -m "lane-stash-unblock"'): Allow(),
+        Input(command="git stash apply 0c4f3a1"): Allow(),
+        Input(command="git stash apply --index stash@{1}"): Allow(),
+        Input(command="git stash drop stash@{2}"): Allow(),
+        Input(command="git stash drop -q 2"): Allow(),
         Input(command="git status"): Allow(),
+        Input(command="echo git stash"): Allow(),
     },
 )
 
