@@ -43,6 +43,7 @@ from captain_hook.types import (
     Pattern,
     RanCommand,
     ReadFile,
+    Regex,
     Runs,
     SkipPermissions,
     SourceEdits,
@@ -1815,6 +1816,79 @@ class TestSubagentFlags:
 
 
 PYRIGHT_IN_SUBAGENT = {"type": "tool_use", "name": "Bash", "input": {"command": "uvx pyright src"}, "id": "tu_p"}
+
+
+@pytest.fixture
+def event_after_running(tmp_path: Path) -> Callable[[str], BaseHookEvent]:
+    def make(command: str) -> BaseHookEvent:
+        session_file = tmp_path / "session.jsonl"
+        tool_use = raw_tool_use("Bash", dict(command=command), "tu_r")
+        lines = [raw_text("user", "hi"), raw_assistant(tool_use)]
+        session_file.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        return make_event(
+            PreToolUseEvent,
+            raw=dict(tool_name="Bash", tool_input=dict(command="echo")),
+            ctx=build_ctx(transcript=load_transcript(session_file)),
+        )
+
+    return make
+
+
+class TestRanCommandRegex:
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param("uv run pytest -x", True, id="uv_launcher"),
+            pytest.param("pytest", True, id="bare"),
+            pytest.param("poetry run pytest tests/", True, id="poetry_launcher"),
+            pytest.param("sudo env pytest", True, id="wrappers"),
+            pytest.param("ruff check .", False, id="unrelated"),
+        ],
+    )
+    def test_one_regex_covers_every_launcher(
+        self, event_after_running: Callable[[str], BaseHookEvent], command: str, expected: bool
+    ) -> None:
+        assert check_condition(RanCommand(Regex(r"\bpytest\b")), event_after_running(command)) is expected
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param("a.out --run", True, id="literal_dot_matches"),
+            pytest.param("axout --run", False, id="dot_is_not_a_wildcard"),
+        ],
+    )
+    def test_literal_tokens_keep_metacharacters_literal(
+        self, event_after_running: Callable[[str], BaseHookEvent], command: str, expected: bool
+    ) -> None:
+        assert check_condition(RanCommand("a.out"), event_after_running(command)) is expected
+
+    def test_bare_regex_string_stays_a_literal_token(self, event_after_running: Callable[[str], BaseHookEvent]) -> None:
+        evt = event_after_running("uv run pytest")
+        assert check_condition(RanCommand(r"\bpytest\b"), evt) is False
+        assert check_condition(RanCommand(Regex(r"\bpytest\b")), evt) is True
+
+    @pytest.mark.parametrize(
+        ("command", "skipped"),
+        [
+            pytest.param("poetry run pytest", True, id="regex_entry_matches"),
+            pytest.param("make lint", True, id="literal_entry_matches"),
+            pytest.param("ruff check .", False, id="neither_matches"),
+        ],
+    )
+    def test_one_batched_walk_mixes_literal_and_regex_entries(
+        self, event_after_running: Callable[[str], BaseHookEvent], command: str, skipped: bool
+    ) -> None:
+        skip_if = (RanCommand("make", "lint"), RanCommand(Regex(r"\bpytest\b")))
+        spec = HookSpec(events=Event.PreToolUse, skip_if=skip_if)
+        assert matches_conditions(spec, event_after_running(command)) is not skipped
+
+    def test_regex_does_not_mix_with_tokens(self) -> None:
+        with pytest.raises(TypeError, match="not a mix"):
+            RanCommand(Regex(r"pytest"), "x")
+
+    def test_regex_compiles_at_construction(self) -> None:
+        with pytest.raises(re.error):
+            Regex(r"(unbalanced")
 
 
 class TestRanCommandSpellings:

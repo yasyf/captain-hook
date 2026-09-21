@@ -172,6 +172,7 @@ EXPORTS: dict[str, str] = {
     "Or": "captain_hook.types",
     "Pattern": "captain_hook.types",
     "RanCommand": "captain_hook.types",
+    "Regex": "captain_hook.types",
     "ReadFile": "captain_hook.types",
     "Runs": "captain_hook.types",
     "Signal": "captain_hook.types",

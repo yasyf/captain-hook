@@ -597,6 +597,28 @@ class TouchedFile(PatternsCondition):
 
 
 @dataclass(frozen=True, slots=True)
+class Regex:
+    """A regex standing in for the literal argv a token-matching condition otherwise takes.
+
+    ``RanCommand(Regex(r"\bpytest\b"))`` matches when any parsed command's argv join matches
+    the pattern, so one entry covers ``pytest``, ``uv run pytest`` and ``poetry run pytest``
+    where the literal form needs one ``RanCommand`` per launcher and silently misses the one
+    you forgot. Opting in is a visible call rather than a property of the string, so a literal
+    token that happens to hold metacharacters (``c++``, ``a.out``) keeps matching literally.
+
+    The pattern is searched against each parsed command's argv join, never the raw line, so a
+    heredoc body and a redirect target cannot match. It is still text: ``echo pytest`` matches.
+    Where that distinction decides whether a gate stands down, list the literal spellings.
+    The regex is compiled at construction.
+    """
+
+    pattern: str
+
+    def __post_init__(self) -> None:
+        re.compile(self.pattern)
+
+
+@dataclass(frozen=True, slots=True)
 class RanCommand:
     """Transcript-history condition: true when a Bash tool use running ``argv`` exists.
 
@@ -608,12 +630,24 @@ class RanCommand:
     as its own entry.
     """
 
-    argv: tuple[str, ...]
+    argv: tuple[str, ...] | tuple[Regex]
     subagents: bool
 
-    def __init__(self, *argv: str, subagents: bool = True) -> None:
+    def __init__(self, *argv: str | Regex, subagents: bool = True) -> None:
+        if any(isinstance(token, Regex) for token in argv) and len(argv) != 1:
+            raise TypeError("RanCommand takes either literal argv tokens or one Regex, not a mix")
         object.__setattr__(self, "argv", argv)
         object.__setattr__(self, "subagents", subagents)
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """The literal argv tokens, empty when this condition carries a :class:`Regex` instead."""
+        return tuple(token for token in self.argv if isinstance(token, str))
+
+    @property
+    def regex(self) -> Regex | None:
+        """The regex this condition matches with, ``None`` when it compares literal tokens."""
+        return next((token for token in self.argv if isinstance(token, Regex)), None)
 
 
 @dataclass(frozen=True, slots=True)

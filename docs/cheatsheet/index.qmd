@@ -157,6 +157,7 @@ SourceEdits(lang="py", include_tests=False)
 **RanCommand** / **ReadFile** / **TouchedFile** — something already happened this session
 ```python
 RanCommand("uv", "run", "pytest")
+RanCommand(Regex(r"\bpytest\b"))
 ```
 
 **UsedSkill** / **UsedTool** / **InPlanMode** / **Waiting** — session mode and history

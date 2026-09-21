@@ -112,16 +112,18 @@ The conditional form takes `to=` — a callable receiving the event, returning t
 Pre-flight isn't the only hook point. `warn_command` fires on `PostToolUse` — after the command ran — and `RanCommand` matches the session's command history in a Stop gate's `skip_if`:
 
 ```python
-from captain_hook import RanCommand, TouchedFile, gate
+from captain_hook import RanCommand, Regex, TouchedFile, gate
 
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand("uv", "run", "pytest"), RanCommand("pytest")],
+    skip_if=[RanCommand(Regex(r"\bpytest\b"))],
 )
 ```
 
-`RanCommand` takes argv tokens, never a regex. Matching is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal — `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` are separate entries, which is why both appear above. A regex handed to it is read as a literal token, so `RanCommand(r"\bpytest\b")` looks for a command named `\bpytest\b` and can never match; on a gate's `skip_if` that is an exemption which silently never fires.
+`RanCommand`'s arguments are argv tokens, matched as a leading prefix: wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal, so `RanCommand("pytest")` does not match `uv run pytest`. Listing every launcher is what `Regex` avoids. One `RanCommand(Regex(r"\bpytest\b"))` covers `pytest`, `uv run pytest` and `poetry run pytest`, where the literal form needs an entry each and silently misses the one you forgot.
+
+Opting in is the `Regex` call, never the shape of the string, so a literal token holding metacharacters (`a.out`, `c++`) keeps matching literally. The trade is that a regex matches command *text*: it searches each parsed command's argv join, so a heredoc body cannot match it, but `echo pytest` can. Where that decides whether a gate stands down, list the literal spellings instead.
 
 ## Where to go next
 

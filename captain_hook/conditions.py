@@ -27,6 +27,7 @@ from captain_hook.types import (
     Pattern,
     RanCommand,
     ReadFile,
+    Regex,
     Runs,
     SkipPermissions,
     SourceEdits,
@@ -46,7 +47,7 @@ from captain_hook.util.scratch import is_scratch_path
 
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
-    from cc_transcript.query import Session
+    from cc_transcript.query import PredicateInputs, Session
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import Clause
@@ -436,8 +437,14 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return has_read_glob(evt.ctx.transcript, *patterns, subagents=subagents)
         case TouchedFile(patterns, subagents):
             return evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
-        case RanCommand(argv, subagents):
-            return evt.ctx.transcript.has_command(*argv, subagents=subagents)
+        case RanCommand() as ran if regex := ran.regex:
+            from cc_transcript.query import any_inputs
+
+            return any_inputs(
+                evt.ctx.transcript, lambda inputs: matches_ran_regex(inputs, regex), subagents=ran.subagents
+            )
+        case RanCommand() as ran:
+            return evt.ctx.transcript.has_command(*ran.tokens, subagents=ran.subagents)
         case Runs(argv):
             return bool(
                 argv
@@ -475,10 +482,32 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
     return False
 
 
-def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...]], *, subagents: bool) -> bool:
+def matches_ran_regex(inputs: PredicateInputs, regex: Regex) -> bool:
+    """Whether any command in one window of transcript inputs has an argv join matching ``regex``.
+
+    Shares the walk and the ``PredicateInputs.answer`` memo the literal argv path already uses,
+    so a regex entry costs the same transcript traversal as the token entries beside it. The
+    raw line is deliberately not searched: a heredoc body is not a command that ran.
+    """
+    return inputs.answer(
+        ("command_regex", regex.pattern),
+        lambda: any(re.search(regex.pattern, str(cmd)) for line in inputs.command_lines for cmd in line),
+    )
+
+
+def inputs_ran(inputs: PredicateInputs, argv: tuple[str, ...] | tuple[Regex]) -> bool:
+    """Whether one window of transcript inputs ran ``argv``, literal tokens or a single regex."""
+    match argv:
+        case (Regex() as regex,):
+            return matches_ran_regex(inputs, regex)
+        case _:
+            return inputs.has_command(argv)
+
+
+def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...] | tuple[Regex]], *, subagents: bool) -> bool:
     from cc_transcript.query import any_inputs
 
-    return any_inputs(t, lambda inputs: any(inputs.has_command(argv) for argv in argvs), subagents=subagents)
+    return any_inputs(t, lambda inputs: any(inputs_ran(inputs, argv) for argv in argvs), subagents=subagents)
 
 
 def ran_any_in_run(run: Sequence[RanCommand], evt: BaseHookEvent) -> bool:
