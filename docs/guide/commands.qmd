@@ -7,7 +7,7 @@ Every Bash-carrying event gives you the parsed command line as `evt.command` —
 
 ## Block a command family
 
-`block_command` compiles a deliberately conservative match: it searches the raw line *and* each parsed command's argv join, so the command is caught anywhere in a `&&` chain or pipeline — and a quoted mention like `echo "git stash"` blocks too. For a safety hook that's the right trade: false positives are cheap, false negatives are not.
+`block_command` reads its first argument by shape. A token list is argv and lowers to `Runs`, which catches the command anywhere in a `&&` chain or pipeline and never fires on a line that only quotes the words.
 
 ```python
 from captain_hook import Allow, Block, Input, block_command
@@ -23,7 +23,9 @@ block_command(
 )
 ```
 
-Pass a raw string when you need a precise pattern — `r"git\s+push\s+--force(?!-)"` blocks a force-push while allowing `--force-with-lease`. The conservative match also covers text the shell parser can't structure (comments, malformed lines): the raw regex still fires.
+Pass a string when you mean text no argv prefix names — `r"git\s+push\s+--force(?!-)"` blocks a force-push while allowing `--force-with-lease`, and `r"curl.*\|\s*sh"` guards a pipeline. A string compiles to a `Command` regex over the raw line, which also reaches text the shell parser cannot structure, such as a comment or a malformed line. It reaches quoted mentions too, so scope it accordingly.
+
+One token list keeps the regex: `["rm", "-rf", "*"]`. The `"*"` stands for a word that must be there, and `Runs` matches an argv *prefix*, so lowering it would widen the block onto the bare `rm -rf` it used to let through.
 
 ## Match the exact program
 

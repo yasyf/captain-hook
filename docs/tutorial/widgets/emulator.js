@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: 23fda2c3413fe374370456ebe6012f76435722054c05de4a7b229437e18f8d9d
+// capt-hook-widget src-sha256: f6e7e57e27ff4da875729e7c199fed82067989450873cdcb055f58602a76fcdf
 
 // autocomplete.ts
 var counter = 0;

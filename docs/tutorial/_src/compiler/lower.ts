@@ -440,19 +440,31 @@ class Lowerer {
     };
   }
 
-  private commandPattern(node: SyntaxNode): string {
+  // Mirrors captain_hook.primitives.commands.command_condition: tokens mean structure and lower
+  // to Runs, a string means a pattern and stays a Command regex, and a token list holding "*"
+  // keeps the regex because Runs matches an argv prefix and cannot require the extra word.
+  private commandCondition(node: SyntaxNode): Condition {
     const n = this.unwrap(node);
-    if (n.name === "ArrayExpression") {
-      return blockCommandPattern(this.listElements(n).map((e) => this.evalString(e)));
-    }
     if (n.name === "TupleExpression") {
       throw new CompileError("command pattern must be a string or list, not a tuple");
     }
-    return this.evalString(n);
+    if (n.name !== "ArrayExpression") {
+      return { kind: "Command", pattern: checkRegexDialect(this.evalString(n)) };
+    }
+    const tokens = this.listElements(n).map((e) => this.evalString(e));
+    if (tokens.includes("*")) {
+      return { kind: "Command", pattern: checkRegexDialect(blockCommandPattern(tokens)) };
+    }
+    let argvs: string[][] = [[]];
+    for (const token of tokens) {
+      argvs = argvs.flatMap((argv) => token.split("|").map((spelling) => [...argv, spelling]));
+    }
+    const runs = argvs.map((argv) => ({ kind: "Runs", argv }) as Condition);
+    return runs.length === 1 ? runs[0] : { kind: "Or", conditions: runs };
   }
 
   private lowerBlockCommand(args: Args): SerializedHook {
-    const pattern = this.commandPattern(this.required(args, 0, "pattern", "block_command"));
+    const condition = this.commandCondition(this.required(args, 0, "pattern", "block_command"));
     const reason = this.evalString(this.requiredKeyword(args, "reason", "block_command"));
     const hintNode = args.keywords.get("hint");
     const hint = hintNode ? this.evalOptString(hintNode) : null;
@@ -462,13 +474,13 @@ class Lowerer {
       message,
       block: true,
       advisory_on_deny: false,
-      only_if: [this.toolCondition(["Bash"]), { kind: "Command", pattern: checkRegexDialect(pattern) }, ...this.conditions(args.keywords.get("only_if"))],
+      only_if: [this.toolCondition(["Bash"]), condition, ...this.conditions(args.keywords.get("only_if"))],
       skip_if: this.conditions(args.keywords.get("skip_if")),
     };
   }
 
   private lowerWarnCommand(args: Args): SerializedHook {
-    const pattern = this.commandPattern(this.required(args, 0, "pattern", "warn_command"));
+    const condition = this.commandCondition(this.required(args, 0, "pattern", "warn_command"));
     const message = this.evalString(this.requiredKeyword(args, "message", "warn_command"));
     const eventsNode = args.keywords.get("events");
     return {
@@ -476,7 +488,7 @@ class Lowerer {
       message,
       block: false,
       advisory_on_deny: false,
-      only_if: [this.toolCondition(["Bash"]), { kind: "Command", pattern: checkRegexDialect(pattern) }, ...this.conditions(args.keywords.get("only_if"))],
+      only_if: [this.toolCondition(["Bash"]), condition, ...this.conditions(args.keywords.get("only_if"))],
       skip_if: this.conditions(args.keywords.get("skip_if")),
     };
   }

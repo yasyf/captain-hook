@@ -13,6 +13,6 @@ Two things worth noticing:
 
 **The family is covered.** `cd /tmp && git stash`, `true | git stash`, `git stash pop` — one declaration catches the command anywhere in the line, not just at position zero.
 
-**The quoted mention blocks too.** `echo "git stash"` is harmless, and it still blocks. That's deliberate: `block_command` compiles to a conservative match that stops an innocent echo rather than miss a real stash smuggled through quoting. For a safety hook, false positives are cheap and false negatives are not.
+**A mention is not a command.** `echo "git stash"` names the command without running it, and it does not block. A token list is argv, so capt-hook compares it against the argv the shell parsed: the words have to *be* the command, not appear in it.
 
-Cheap for a guardrail — expensive if you need the command to run. [Next: buy back precision with `Runs`.](02-command-vs-runs.qmd)
+Hand `block_command` a string instead of a list and you get the other behavior — a regex over the raw line, which does block that echo. [Next: when each one is right.](02-command-vs-runs.qmd)

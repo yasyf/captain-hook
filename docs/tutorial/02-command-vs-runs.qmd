@@ -3,11 +3,11 @@ title: "Precision with Runs"
 description: "The same guard two ways — recall vs precision."
 ---
 
-The conservative match has a cost: `git commit -m "git stash"` blocks too, and that's a command you actually want to run. capt-hook gives you both ends of the tradeoff. Page one's `block_command` sits at one end; here's the other — the same guard rebuilt on `Runs`, which matches the parsed argv of each command in the line. Same input, two verdicts, side by side:
+Page one's token list lowers to `Runs`, which matches the parsed argv of each command in the line. The other spelling, `block_command(r"git\s+stash", ...)`, keeps a regex over the raw text. That reach is what lets a pattern span a pipe, a redirect, or a flag's value, and it is also what makes this one block `git commit -m "git stash"` — a command you actually want to run. Same input, two verdicts, side by side:
 
 <!-- gd-embed-widget: runs_guard -->
 
-Work through the presets and watch the verdicts split. The table shows what the real engine answers — Pattern is page one's guard, `Runs` is the hook above, and the widget runs the `Runs` version (it declines wrapper payloads honestly; `capt-hook test` covers those for real):
+Work through the presets and watch the verdicts split. The table shows what the real engine answers — Pattern is the string spelling, `Runs` is the token spelling page one used, and the widget runs the `Runs` version (it declines wrapper payloads honestly; `capt-hook test` covers those for real):
 
 | Command | Pattern | `Runs` |
 |---|---|---|
@@ -19,6 +19,6 @@ Work through the presets and watch the verdicts split. The table shows what the 
 
 The last two rows are the lesson, and they cut in opposite directions. `Runs` matches structure, so a wrapper like `sudo` hides the command from it — cover wrappers with their own entry. But a string payload doesn't hide anything: the parser descends into `sh -c` and finds the `git stash` inside. Precision costs you wrappers, not depth.
 
-So pick by stakes: `Runs` when false positives break real workflows, the conservative pattern when the command must never slip through. For `rm -rf`, take the false positives.
+So pick by shape, not by nerve. Tokens when you mean a command: `block_command(["rm", "-rf"], ...)` names one, and a line that only quotes the words never trips it. A string when you mean text no argv prefix names — `block_command(r"curl.*\|\s*sh", ...)` guards a pipeline, which no token list can describe.
 
 [Next: stack conditions into one guard.](03-secret-guard.qmd)

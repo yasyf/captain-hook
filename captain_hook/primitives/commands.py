@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from captain_hook import ast_grep
 from captain_hook.app import hook as register_hook
 from captain_hook.app import on
-from captain_hook.types import Command, Event, HookResponse, HookResult, InlineTests, Tool
+from captain_hook.types import Command, Event, HookResponse, HookResult, InlineTests, Or, Runs, TCondition, Tool
 from captain_hook.util.shell import normalize_executable, plain_words, resolve_cd
 
 if TYPE_CHECKING:
@@ -75,6 +75,35 @@ def block_command_pattern(tokens: list[str]) -> str:
     return r"\s+".join(convert(t) for t in tokens)
 
 
+def expand_tokens(tokens: list[str]) -> list[tuple[str, ...]]:
+    """Every argv a token list names, one per combination of its ``"a|b"`` alternations."""
+    argvs: list[tuple[str, ...]] = [()]
+    for token in tokens:
+        argvs = [(*argv, spelling) for argv in argvs for spelling in token.split("|")]
+    return argvs
+
+
+def command_condition(pattern: str | list[str]) -> TCondition:
+    """The condition a command primitive's ``pattern`` means.
+
+    Tokens mean structure: a token list lowers to [`Runs`][captain_hook.types.Runs], which
+    compares parsed argv, so a heredoc body, an ``echo`` argument or a quoted mention of the
+    words never trips the hook. A string means a pattern and stays a
+    [`Command`][captain_hook.types.Command] regex, the one form that can span a pipe, a
+    redirect, or a flag's value.
+
+    A token list holding ``"*"`` keeps the regex: ``Runs`` matches an argv *prefix* and cannot
+    require the extra word ``"*"`` stands for, so lowering it would widen the hook onto commands
+    it used to let through.
+    """
+    if not isinstance(pattern, list):
+        return Command(pattern)
+    if "*" in pattern:
+        return Command(block_command_pattern(pattern))
+    argvs = expand_tokens(pattern)
+    return Runs(*argvs[0]) if len(argvs) == 1 else Or(*(Runs(*argv) for argv in argvs))
+
+
 def block_command(
     pattern: str | list[str],
     *,
@@ -86,14 +115,23 @@ def block_command(
 ) -> None:
     """Register a declarative hook that blocks a Bash command matching a pattern.
 
+    Tokens mean structure, a string means a pattern. A token list is argv and lowers to
+    [`Runs`][captain_hook.types.Runs], so the block catches the command anywhere in the line
+    and never fires on one that merely quotes the words. A string stays a
+    [`Command`][captain_hook.types.Command] regex over the raw line, the one form that can span
+    a pipe, a redirect, or a flag's value. See
+    [`command_condition`][captain_hook.primitives.commands.command_condition] for the ``"*"``
+    carve-out.
+
     Scope the block further with ``only_if``/``skip_if`` (ANDed onto the built-in
     ``[Tool("Bash"), <pattern>]``), e.g. to allow it in plan mode or only under a path.
 
     Example:
         >>> block_command(["git", "stash"], reason="git stash is not allowed", hint="Use jj")
+        >>> block_command(r"curl.*\|\s*sh", reason="no curl-pipe-shell")
     """
     msg = f"BLOCKED: {reason.rstrip('.')}.{f' {hint.rstrip(".")}.' if hint else ''}"
-    cmd = Command(block_command_pattern(pattern) if isinstance(pattern, list) else pattern)
+    cmd = command_condition(pattern)
     register_hook(
         Event.PreToolUse, msg, only_if=[Tool("Bash"), cmd, *only_if], skip_if=skip_if, block=True, tests=tests
     )
@@ -113,7 +151,7 @@ def warn_command(
     Example:
         >>> warn_command(["python", "-c", "*"], message="Prefer uv run mtest")
     """
-    cmd = Command(block_command_pattern(pattern) if isinstance(pattern, list) else pattern)
+    cmd = command_condition(pattern)
     register_hook(events, message, only_if=[Tool("Bash"), cmd, *only_if], skip_if=skip_if, tests=tests)
 
 
