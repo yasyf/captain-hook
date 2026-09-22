@@ -95,9 +95,15 @@ def command_condition(pattern: str | list[str]) -> TCondition:
     A token list holding ``"*"`` keeps the regex: ``Runs`` matches an argv *prefix* and cannot
     require the extra word ``"*"`` stands for, so lowering it would widen the hook onto commands
     it used to let through.
+
+    An empty list is refused rather than lowered. It used to compile to ``Command("")``, which
+    matched every command; as ``Runs()`` it would match none. Both are a rule nobody wrote on
+    purpose, and a hook that silently stops firing is the worse of the two to ship.
     """
     if not isinstance(pattern, list):
         return Command(pattern)
+    if not pattern:
+        raise ValueError("a command pattern needs at least one token; an empty list names no command")
     if "*" in pattern:
         return Command(block_command_pattern(pattern))
     argvs = expand_tokens(pattern)
@@ -113,7 +119,7 @@ def block_command(
     skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
 ) -> None:
-    """Register a declarative hook that blocks a Bash command matching a pattern.
+    r"""Register a declarative hook that blocks a Bash command matching a pattern.
 
     Tokens mean structure, a string means a pattern. A token list is argv and lowers to
     [`Runs`][captain_hook.types.Runs], so the block catches the command anywhere in the line

@@ -299,7 +299,9 @@ class TestCommandNamePrefixWarning:
             ),
             pytest.param(r"git\s+stash", "Runs('git', 'stash')", id="two_token_prefix"),
             pytest.param(r"uv run pytest", "Runs('uv', 'run', 'pytest')", id="literal_spaces"),
-            pytest.param(r"^npm\s+(run|exec)$", "Or(Runs('npm', 'run'), Runs('npm', 'exec'))", id="anchored_group"),
+            pytest.param(
+                r"^npm\s+(run|exec)", "Or(Runs('npm', 'run'), Runs('npm', 'exec'))", id="start_anchored_group"
+            ),
         ],
     )
     def test_warns_with_the_runs_spelling(self, pattern: str, spelling: str) -> None:
@@ -316,6 +318,8 @@ class TestCommandNamePrefixWarning:
             pytest.param(r"git\s+(rebase|reset|push\s+--force)", id="group_holding_a_flag"),
             pytest.param(r"^cat\s", id="partial_token"),
             pytest.param(r"git", id="bare_name"),
+            pytest.param(r"^git\s+stash$", id="end_anchored_would_widen"),
+            pytest.param(r"git" + r"\s+(a|b)" * 5, id="too_many_argvs_to_suggest"),
         ],
     )
     def test_silent_when_runs_cannot_say_it(self, pattern: str) -> None:

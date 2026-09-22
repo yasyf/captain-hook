@@ -40,11 +40,12 @@ PACKAGE_ROOT = str(Path(__file__).parent)
 ARGV_WORD = r"[A-Za-z0-9_]+"
 ARGV_GROUP = rf"\((?:\?:)?{ARGV_WORD}(?:\|{ARGV_WORD})+\)"
 ARGV_TOKEN = re.compile(rf"(?:\\s\+|\ )({ARGV_WORD}|{ARGV_GROUP})")
+MAX_RUNS_SUGGESTION = 16
 ARGV_PREFIX = re.compile(
     rf"""\A (?: \^ | \\b )?
          (?P<first> {ARGV_WORD} )
          (?P<rest> (?: (?: \\s\+ | \  ) (?: {ARGV_WORD} | {ARGV_GROUP} ) )+ )
-         (?: \\b | \$ )? \Z""",
+         (?: \\b )? \Z""",
     re.VERBOSE,
 )
 
@@ -98,6 +99,8 @@ def expand_argv(alternative: str) -> list[tuple[str, ...]] | None:
     argvs = [(matched["first"],)]
     for token in ARGV_TOKEN.findall(matched["rest"]):
         spellings = token.strip("()").removeprefix("?:").split("|")
+        if len(argvs) * len(spellings) > MAX_RUNS_SUGGESTION:
+            return None
         argvs = [(*argv, spelling) for argv in argvs for spelling in spellings]
     return argvs
 
@@ -106,9 +109,15 @@ def runs_spelling(pattern: str) -> list[tuple[str, ...]]:
     """The ``Runs`` argvs a ``Command`` pattern is really asking for, empty when it needs the regex.
 
     A pattern qualifies only when every alternative is a bare command-name prefix — words
-    joined by whitespace, optionally anchored, with alternation groups of words. Anything a
-    ``Runs`` argv prefix cannot carry (a flag, a pipe, a redirect, a wildcard, a partial
-    token) disqualifies the whole pattern, so the caller keeps its regex.
+    joined by whitespace, optionally led by ``^`` or ``\\b``, with alternation groups of
+    words. Anything a ``Runs`` argv prefix cannot carry (a flag, a pipe, a redirect, a
+    wildcard) disqualifies the whole pattern, so the caller keeps its regex.
+
+    An end anchor disqualifies it too. ``$`` makes the regex reject the longer forms of the
+    command, which an argv *prefix* accepts, so the suggestion would widen the hook rather
+    than narrow it. A pattern naming more argvs than ``MAX_RUNS_SUGGESTION`` is dropped
+    instead of expanded: the product of its alternation groups grows exponentially, and
+    expanding it eagerly would cost that memory even where the warning is filtered out.
     """
     expanded = [expand_argv(alternative) for alternative in top_level_alternatives(pattern)]
     return [argv for alternative in expanded if alternative for argv in alternative] if all(expanded) else []
@@ -279,8 +288,9 @@ class Command:
         if argvs := runs_spelling(self.pattern):
             warnings.warn(
                 f'Command(r"{self.pattern}") matches a command-name prefix as raw text, so it also fires on a '
-                f"mention — a quoted string, a heredoc body, `echo {' '.join(argvs[0])}`. Use the structural "
-                f"condition instead: {render_runs(argvs)}.",
+                f"mention — a quoted string, a heredoc body, `echo {' '.join(argvs[0])}`. If you meant the "
+                f"command, say so structurally: {render_runs(argvs)}, which compares whole argv tokens "
+                f"rather than searching the line.",
                 StructuralConditionWarning,
                 stacklevel=author_stacklevel(),
             )
