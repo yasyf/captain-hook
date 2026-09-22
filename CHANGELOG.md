@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.50.2] - 2026-09-21
+
+### Fixed
+
+- **The plan-mode hook no longer gags a subagent with its own brief.**
+  The hook read prose, so a lane whose task description quoted the words it
+  was sent to fix, or merely said verification agents must not outnumber the
+  agents doing the work, had every `Edit` and `Write` denied for the lane's
+  whole life. `FromSubagent()` joins `skip_if`, which reads the payload's
+  `agent_id` rather than any wording, so a brief can never stand in for the
+  user. The trigger also separates the two clauses it had conflated: a
+  stop-work instruction now blocks only alongside a mention of a plan. A
+  main-agent turn that does tell you to go back to plan mode still blocks.
+
+### Documentation
+
+- `UserSaid` says that its patterns are OR-ed, so `UserSaid(a, b)` is a
+  disjunction rather than a pair of requirements. Patterns that must both
+  hold belong in separate conditions under an `And`.
+
 ## [12.50.1] - 2026-09-21
 
 ### Fixed
