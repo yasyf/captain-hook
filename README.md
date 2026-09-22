@@ -92,12 +92,12 @@ The agent declares victory while the suite is red. A Stop gate holds the line:
 
 ```python
 # .claude/hooks/quality.py
-from captain_hook import RanCommand, TouchedFile, gate
+from captain_hook import RanCommand, Regex, TouchedFile, gate
 
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"\bpytest\b")],
+    skip_if=[RanCommand(Regex(r"\bpytest\b"))],
 )
 ```
 

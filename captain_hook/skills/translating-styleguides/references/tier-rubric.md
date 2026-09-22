@@ -78,7 +78,7 @@ dropped** — the user must see what their guide asks for that hooks cannot deli
 
 Process rules ("atomic commits") are Tier 4 by default; gate them only when the guide
 is explicit about a command ritual — that is command-hook territory
-(`gate` / `block_command` on `Command(r"git\s+commit")`), not a style rule.
+(`gate` on `Runs("git", "commit")`), not a style rule.
 
 ## Non-Python repos
 

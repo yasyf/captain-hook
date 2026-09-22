@@ -11,6 +11,6 @@ The widget below simulates a session instead of a command line. Toggle what happ
 
 Walk the combinations. Edit `/repo/src/components/Button.tsx` without a review and the stop bounces: the agent gets the gate's message and keeps working, so you never see a "done" that isn't. Flip on `agent-browser` and `skip_if` stands down — the gate isn't a nag, it's a condition, and the condition is satisfiable. Edit only `/repo/README.md` and the gate has no opinion at all.
 
-`TouchedFile` and `UsedSkill` read the session's history, not the current tool call — that's what makes gating "done" possible at all. The same machinery drives test gates (`RanCommand(r"\bpytest\b")`) and artifact checks.
+`TouchedFile` and `UsedSkill` read the session's history, not the current tool call — that's what makes gating "done" possible at all. The same machinery drives test gates (`RanCommand(Regex(r"\bpytest\b"))`) and artifact checks.
 
 [Last stop: turn the widget's cases into tests.](06-test-then-ship.qmd)

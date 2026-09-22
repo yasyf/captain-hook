@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, get_args
@@ -20,7 +21,7 @@ from captain_hook.events import (
     StopEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.primitives.commands import block_command_pattern
+from captain_hook.primitives.commands import block_command, block_command_pattern
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import (
     ALL_EVENTS,
@@ -42,9 +43,11 @@ from captain_hook.types import (
     Pattern,
     RanCommand,
     ReadFile,
+    Regex,
     Runs,
     SkipPermissions,
     SourceEdits,
+    StructuralConditionWarning,
     TCondition,
     TestFile,
     Tool,
@@ -277,11 +280,59 @@ class TestCommandCondition:
     def test_command(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
         assert check_condition(cond, evt) is expected
 
+    @pytest.mark.filterwarnings("ignore::captain_hook.types.StructuralConditionWarning")
     def test_command_uses_search_not_match(self) -> None:
 
         evt = make_tool_event("Bash", {"command": "uv run mtest run bioqa/"})
         assert check_condition(Command(r"mtest\s+run"), evt) is True
         assert check_condition(Command(r"git"), evt) is False
+
+
+class TestCommandNamePrefixWarning:
+    @pytest.mark.parametrize(
+        ("pattern", "spelling"),
+        [
+            pytest.param(
+                r"\bgh\s+pr\s+create\b|\bgt\s+(submit|ship)\b|\bccx\s+vcs\s+ship\b",
+                "Or(Runs('gh', 'pr', 'create'), Runs('gt', 'submit'), Runs('gt', 'ship'), Runs('ccx', 'vcs', 'ship'))",
+                id="alternation_of_prefixes",
+            ),
+            pytest.param(r"git\s+stash", "Runs('git', 'stash')", id="two_token_prefix"),
+            pytest.param(r"uv run pytest", "Runs('uv', 'run', 'pytest')", id="literal_spaces"),
+            pytest.param(
+                r"^npm\s+(run|exec)", "Or(Runs('npm', 'run'), Runs('npm', 'exec'))", id="start_anchored_group"
+            ),
+        ],
+    )
+    def test_warns_with_the_runs_spelling(self, pattern: str, spelling: str) -> None:
+        with pytest.warns(StructuralConditionWarning, match=re.escape(spelling)):
+            Command(pattern)
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            pytest.param(r"curl.*\|\s*sh", id="pipeline"),
+            pytest.param(r"tee\s+>\s*out", id="redirect"),
+            pytest.param(r"git\s+push\s+--force", id="long_flag"),
+            pytest.param(r"rm\s+-rf", id="short_flag"),
+            pytest.param(r"git\s+(rebase|reset|push\s+--force)", id="group_holding_a_flag"),
+            pytest.param(r"^cat\s", id="partial_token"),
+            pytest.param(r"git", id="bare_name"),
+            pytest.param(r"^git\s+stash$", id="end_anchored_would_widen"),
+            pytest.param(r"git" + r"\s+(a|b)" * 5, id="too_many_argvs_to_suggest"),
+        ],
+    )
+    def test_silent_when_runs_cannot_say_it(self, pattern: str) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", StructuralConditionWarning)
+            Command(pattern)
+
+    def test_blames_the_author_not_the_primitive(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", StructuralConditionWarning)
+            Command(r"git\s+stash")
+            block_command(r"gh\s+pr\s+create", reason="no")
+        assert [w.filename for w in caught] == [__file__, __file__]
 
 
 class TestContentCondition:
@@ -623,6 +674,7 @@ class TestCommandRawMatching:
             pytest.param(r">\s*/dev/null", "echo hi > /dev/null", True, id="redirect"),
         ],
     )
+    @pytest.mark.filterwarnings("ignore::captain_hook.types.StructuralConditionWarning")
     def test_command_matches_raw_line(self, pattern: str, command: str, expected: bool) -> None:
         assert check_condition(Command(pattern), make_tool_event("Bash", {"command": command})) is expected
 
@@ -1485,7 +1537,7 @@ class TestOnlyIfSemantics:
 
         spec = HookSpec(
             events=Event.PreToolUse,
-            only_if=(Tool("Bash"), Command(r"git\s+push")),
+            only_if=(Tool("Bash"), Runs("git", "push")),
         )
         evt_match = make_tool_event("Bash", {"command": "git push origin"})
         assert matches_conditions(spec, evt_match) is True
@@ -1768,6 +1820,79 @@ class TestSubagentFlags:
 
 
 PYRIGHT_IN_SUBAGENT = {"type": "tool_use", "name": "Bash", "input": {"command": "uvx pyright src"}, "id": "tu_p"}
+
+
+@pytest.fixture
+def event_after_running(tmp_path: Path) -> Callable[[str], BaseHookEvent]:
+    def make(command: str) -> BaseHookEvent:
+        session_file = tmp_path / "session.jsonl"
+        tool_use = raw_tool_use("Bash", dict(command=command), "tu_r")
+        lines = [raw_text("user", "hi"), raw_assistant(tool_use)]
+        session_file.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        return make_event(
+            PreToolUseEvent,
+            raw=dict(tool_name="Bash", tool_input=dict(command="echo")),
+            ctx=build_ctx(transcript=load_transcript(session_file)),
+        )
+
+    return make
+
+
+class TestRanCommandRegex:
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param("uv run pytest -x", True, id="uv_launcher"),
+            pytest.param("pytest", True, id="bare"),
+            pytest.param("poetry run pytest tests/", True, id="poetry_launcher"),
+            pytest.param("sudo env pytest", True, id="wrappers"),
+            pytest.param("ruff check .", False, id="unrelated"),
+        ],
+    )
+    def test_one_regex_covers_every_launcher(
+        self, event_after_running: Callable[[str], BaseHookEvent], command: str, expected: bool
+    ) -> None:
+        assert check_condition(RanCommand(Regex(r"\bpytest\b")), event_after_running(command)) is expected
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param("a.out --run", True, id="literal_dot_matches"),
+            pytest.param("axout --run", False, id="dot_is_not_a_wildcard"),
+        ],
+    )
+    def test_literal_tokens_keep_metacharacters_literal(
+        self, event_after_running: Callable[[str], BaseHookEvent], command: str, expected: bool
+    ) -> None:
+        assert check_condition(RanCommand("a.out"), event_after_running(command)) is expected
+
+    def test_bare_regex_string_stays_a_literal_token(self, event_after_running: Callable[[str], BaseHookEvent]) -> None:
+        evt = event_after_running("uv run pytest")
+        assert check_condition(RanCommand(r"\bpytest\b"), evt) is False
+        assert check_condition(RanCommand(Regex(r"\bpytest\b")), evt) is True
+
+    @pytest.mark.parametrize(
+        ("command", "skipped"),
+        [
+            pytest.param("poetry run pytest", True, id="regex_entry_matches"),
+            pytest.param("make lint", True, id="literal_entry_matches"),
+            pytest.param("ruff check .", False, id="neither_matches"),
+        ],
+    )
+    def test_one_batched_walk_mixes_literal_and_regex_entries(
+        self, event_after_running: Callable[[str], BaseHookEvent], command: str, skipped: bool
+    ) -> None:
+        skip_if = (RanCommand("make", "lint"), RanCommand(Regex(r"\bpytest\b")))
+        spec = HookSpec(events=Event.PreToolUse, skip_if=skip_if)
+        assert matches_conditions(spec, event_after_running(command)) is not skipped
+
+    def test_regex_does_not_mix_with_tokens(self) -> None:
+        with pytest.raises(TypeError, match="not a mix"):
+            RanCommand(Regex(r"pytest"), "x")
+
+    def test_regex_compiles_at_construction(self) -> None:
+        with pytest.raises(re.error):
+            Regex(r"(unbalanced")
 
 
 class TestRanCommandSpellings:

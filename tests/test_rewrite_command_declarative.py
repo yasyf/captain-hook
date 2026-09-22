@@ -7,7 +7,7 @@ import pytest
 from captain_hook.app import get_matching_hooks
 from captain_hook.dispatch import execute_hook
 from captain_hook.primitives.commands import rewrite_command
-from captain_hook.types import Action, Command
+from captain_hook.types import Action, Command, Runs
 from tests.helpers import make_ctx, make_pre_tool_event
 
 
@@ -30,7 +30,7 @@ class TestConditionalRewrite:
         assert result.note == "Rewrote cat to ccx read"
 
     def test_blocks_when_to_returns_none_and_block_given(self, tmp_path: Path) -> None:
-        rewrite_command(only_if=[Command(r"git\s+push")], to=lambda evt: None, block="Pushing is disabled")
+        rewrite_command(only_if=[Runs("git", "push")], to=lambda evt: None, block="Pushing is disabled")
         result = next(r for r in fire(tmp_path, "git push origin") if r)
         assert result.action == Action.block
         assert result.message == "Pushing is disabled"

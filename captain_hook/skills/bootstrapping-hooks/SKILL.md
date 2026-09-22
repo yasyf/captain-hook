@@ -86,7 +86,7 @@ Map every signal onto the taxonomy below. Record per candidate: the **source quo
 | A. Command safety | "never run X", destructive ops (`rm -rf`, db reset, deploy, force-push), tool substitutions ("use uv not pip") in docs; reverts in git log | `block_command` / `warn_command`; `@on` + `evt.command.q` for compound commands (curl-pipe-sh) |
 | B. Code quality | lint configs, "use logger not print", banned imports/idioms in docs | `hook(only_if=[Content(...)])`, `lint()`, `nudge(signals=...)`, `llm_gate` escalation |
 | C. Test integrity | `tests/` dir + CI test job; "never skip tests", coverage rules | `gate(only_if=[TouchedFile], skip_if=[RanCommand])`; `prompt_check` on test-file edits |
-| D. Workflow rituals | CONTRIBUTING rituals ("run make lint before pushing", "update CHANGELOG"), multi-step done-criteria | `gate` on `PreToolUse` + `Command(r"git\s+push")`; `workflow()` for ordered checklists |
+| D. Workflow rituals | CONTRIBUTING rituals ("run make lint before pushing", "update CHANGELOG"), multi-step done-criteria | `gate` on `PreToolUse` + `Runs("git", "push")`; `workflow()` for ordered checklists |
 | E. Styleguide rules | `STYLEGUIDE.md`, style sections in CONTRIBUTING/AGENTS/CLAUDE | **delegate to `translating-styleguides`** |
 
 Worked code per category: the pattern catalog in the `authoring-hooks` skill
@@ -179,13 +179,12 @@ category A). The gate goes in `.claude/hooks/workflow.py`:
 ```python
 from __future__ import annotations
 
-from captain_hook import Allow, Block, Event, Input, RanCommand, Tool, gate
-from captain_hook.types import Command
+from captain_hook import Allow, Block, Event, Input, RanCommand, Runs, Tool, gate
 
 gate(
     "CONTRIBUTING.md requires `make lint` before pushing.",
     events=Event.PreToolUse,
-    only_if=[Tool("Bash"), Command(r"git\s+push")],
+    only_if=[Tool("Bash"), Runs("git", "push")],
     skip_if=[RanCommand("make", "lint")],
     tests={
         Input(command="git push origin main"): Block(pattern="make lint"),

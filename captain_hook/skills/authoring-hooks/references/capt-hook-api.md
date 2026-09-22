@@ -176,7 +176,7 @@ evaluated first.
 | Match only test files | `TestFile()` (`**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/tests/**/*.py`, `**/*_test.go`, `**/*.test.*`, `**/*.spec.*`) |
 | Python source edits (skips tests by default, in-repo only) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ...; `project_only=False` to also match out-of-repo files |
 | File was previously edited | `TouchedFile("**/*.py")` |
-| Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry) |
+| Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry, or pass one `Regex(r"\bpytest\b")` in place of tokens to cover every launcher) |
 | Bash argv prefix (structural, no false positives) | `Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash` |
 | Working directory contains files | `CwdHasFiles("Cargo.toml", "pyproject.toml")` — all names present under `evt.cwd` (AND), no parent walk |
 | During plan mode | `InPlanMode()` |

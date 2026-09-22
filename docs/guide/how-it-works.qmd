@@ -97,22 +97,23 @@ One captain-hook process handles every event the same way, in five stages.
 Take the same hook in its full declarative form, so every part the pipeline reads is visible:
 
 ```python
-from captain_hook import hook, Event, Tool
-from captain_hook.types import Command
+from captain_hook import hook, Event, Runs, Tool
 
 hook(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+    only_if=[Tool("Bash"), Runs("git", "stash")],
     message="git stash is not allowed; use jj shelve",
     block=True,
 )
 ```
 
-`block_command` expands to this same call. Watch it run the four stages when Claude tries `git stash pop`.
+`block_command` expands to the same shape, with a `Command` regex where this one names the command structurally. Watch it run the four stages when Claude tries `git stash pop`.
 
 **Parse the event.** Claude Code pauses the tool call and writes the payload to stdin. The CLI parses that JSON into a typed `PreToolUseEvent`, where `evt.tool_name` reads `"Bash"` and `evt.command` is the parsed command — `evt.command.raw` reads `"git stash pop"`, and [the walkable structure](commands.qmd) hangs off the same object. The exact stdin fields live in the [events reference](../reference/events.qmd).
 
-**Match conditions.** `Event.PreToolUse` is in the hook's event set, so the event qualifies, and the `only_if` conditions then run against it. `Tool("Bash")` reads `evt.tool_name` and matches, while `Command(r"git\s+stash")` searches the command's raw text and each parsed command's argv join, and matches. No `skip_if` is registered, so with every condition holding, the hook is matched.
+**Match conditions.** `Event.PreToolUse` is in the hook's event set, so the event qualifies, and the `only_if` conditions then run against it. `Tool("Bash")` reads `evt.tool_name` and matches, while `Runs("git", "stash")` compares its tokens against the argv prefix of every command in the parsed line, and matches — `["git", "stash", "pop"]` starts with `["git", "stash"]`.
+
+The regex condition would have matched here too: `Command(r"git\s+stash")` searches the command's raw text and each parsed command's argv join. It is the wrong reach for this job, because raw text includes text that is not a command. `echo "git stash"`, a heredoc documenting the ban, and a `--message` quoting it all match the regex and none of them run `git stash`. The structural condition reads the same line the shell would, so a mention stays a mention. Save `Command` for what an argv prefix cannot name: a pipeline, a redirect, a flag's value.
 
 **Run the action.** This hook has no handler function, so it returns its configured message as a blocking verdict, `HookResult(action=Action.block, message="git stash is not allowed; use jj shelve")`. A block is final. Any handler-backed hook still waiting for a thread is skipped, and the fold carries the deny forward whatever else came back.
 

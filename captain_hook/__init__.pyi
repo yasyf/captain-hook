@@ -169,6 +169,7 @@ from captain_hook.types import Or as Or
 from captain_hook.types import Pattern as Pattern
 from captain_hook.types import RanCommand as RanCommand
 from captain_hook.types import ReadFile as ReadFile
+from captain_hook.types import Regex as Regex
 from captain_hook.types import Runs as Runs
 from captain_hook.types import Signal as Signal
 from captain_hook.types import Signals as Signals

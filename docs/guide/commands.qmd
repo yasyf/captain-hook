@@ -7,7 +7,7 @@ Every Bash-carrying event gives you the parsed command line as `evt.command` —
 
 ## Block a command family
 
-`block_command` compiles a deliberately conservative match: it searches the raw line *and* each parsed command's argv join, so the command is caught anywhere in a `&&` chain or pipeline — and a quoted mention like `echo "git stash"` blocks too. For a safety hook that's the right trade: false positives are cheap, false negatives are not.
+`block_command` reads its first argument by shape. A token list is argv and lowers to `Runs`, which catches the command anywhere in a `&&` chain or pipeline and never fires on a line that only quotes the words.
 
 ```python
 from captain_hook import Allow, Block, Input, block_command
@@ -23,7 +23,9 @@ block_command(
 )
 ```
 
-Pass a raw string when you need a precise pattern — `r"git\s+push\s+--force(?!-)"` blocks a force-push while allowing `--force-with-lease`. The conservative match also covers text the shell parser can't structure (comments, malformed lines): the raw regex still fires.
+Pass a string when you mean text no argv prefix names — `r"git\s+push\s+--force(?!-)"` blocks a force-push while allowing `--force-with-lease`, and `r"curl.*\|\s*sh"` guards a pipeline. A string compiles to a `Command` regex over the raw line, which also reaches text the shell parser cannot structure, such as a comment or a malformed line. It reaches quoted mentions too, so scope it accordingly.
+
+One token list keeps the regex: `["rm", "-rf", "*"]`. The `"*"` stands for a word that must be there, and `Runs` matches an argv *prefix*, so lowering it would widen the block onto the bare `rm -rf` it used to let through.
 
 ## Match the exact program
 
@@ -112,16 +114,18 @@ The conditional form takes `to=` — a callable receiving the event, returning t
 Pre-flight isn't the only hook point. `warn_command` fires on `PostToolUse` — after the command ran — and `RanCommand` matches the session's command history in a Stop gate's `skip_if`:
 
 ```python
-from captain_hook import RanCommand, TouchedFile, gate
+from captain_hook import RanCommand, Regex, TouchedFile, gate
 
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"\bpytest\b")],
+    skip_if=[RanCommand(Regex(r"\bpytest\b"))],
 )
 ```
 
-`RanCommand` with argv tokens is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal — `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` are separate entries.
+`RanCommand`'s arguments are argv tokens, matched as a leading prefix: wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal, so `RanCommand("pytest")` does not match `uv run pytest`. Listing every launcher is what `Regex` avoids. One `RanCommand(Regex(r"\bpytest\b"))` covers `pytest`, `uv run pytest` and `poetry run pytest`, where the literal form needs an entry each and silently misses the one you forgot.
+
+Opting in is the `Regex` call, never the shape of the string, so a literal token holding metacharacters (`a.out`, `c++`) keeps matching literally. The trade is that a regex matches command *text*: it searches each parsed command's argv join, so a heredoc body cannot match it, but `echo pytest` can. Where that decides whether a gate stands down, list the literal spellings instead.
 
 ## Where to go next
 

@@ -35,7 +35,7 @@ These check what happened earlier in the session, from the transcript.
 |-----------|--------------|---------|---------|
 | `ReadFile(*p, subagents=True)` | A file matching the glob was read | Glob | `ReadFile("TESTING.md")` |
 | `TouchedFile(*p, subagents=False)` | A file matching the glob was edited or written | Glob | `TouchedFile("**/*.py")` |
-| `RanCommand(*argv, subagents=True)` | A Bash command running the argv prefix ran (wrapper-transparent, launcher-literal) | Argv tokens | `RanCommand("uv", "run", "pytest")` |
+| `RanCommand(*argv, subagents=True)` | A Bash command running the argv prefix ran (wrapper-transparent, launcher-literal) | Argv tokens, or one `Regex` in their place | `RanCommand("uv", "run", "pytest")`, `RanCommand(Regex(r"\bpytest\b"))` |
 | `UsedSkill(*names, subagents=True, scope="turn")` | A skill named one of `names` was invoked in the current turn (a bare name also matches `plugin:name`); `scope="session"` searches the whole session | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
 | `UsedTool(*names, subagents=True, scope="turn")` | A tool use named one of `names` exists in the current turn; `scope="session"` searches the whole session | Exact names; a `\|`-joined string still works | `UsedTool("EnterPlanMode")` |
 | `UserSaid(*patterns, scope="turn")` | The current turn's prompt matches a pattern; `scope="session"` scans every prompt in the session | Case-insensitive regex strings and/or `Clause`s | `UserSaid("just commit")` |

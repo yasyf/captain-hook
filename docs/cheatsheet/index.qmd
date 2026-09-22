@@ -138,15 +138,15 @@ Tool("Edit|Write")
 FilePath("src/**/*.py")
 ```
 
-**Command** / **Content** — the Bash command, or the written content, matches a regex
-```python
-Command(r"git\s+push\s+--force")
-Content(r"\bprint\(")
-```
-
-**Runs** — a parsed command's argv starts with these tokens
+**Runs** — a parsed command's argv starts with these tokens; how you name a command
 ```python
 Runs("git", "stash")
+```
+
+**Command** / **Content** — the raw Bash line, or the written content, matches a regex; reach for `Command` only for text no argv prefix names
+```python
+Command(r"curl.*\|\s*sh")
+Content(r"\bprint\(")
 ```
 
 **TestFile** / **SourceEdits** — the edit hits a test, or a source file in a language
@@ -157,6 +157,7 @@ SourceEdits(lang="py", include_tests=False)
 **RanCommand** / **ReadFile** / **TouchedFile** — something already happened this session
 ```python
 RanCommand("uv", "run", "pytest")
+RanCommand(Regex(r"\bpytest\b"))
 ```
 
 **UsedSkill** / **UsedTool** / **InPlanMode** / **Waiting** — session mode and history

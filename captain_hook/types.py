@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import re
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
@@ -34,10 +36,97 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound="ToolCallBase")
 
+PACKAGE_ROOT = str(Path(__file__).parent)
+ARGV_WORD = r"[A-Za-z0-9_]+"
+ARGV_GROUP = rf"\((?:\?:)?{ARGV_WORD}(?:\|{ARGV_WORD})+\)"
+ARGV_TOKEN = re.compile(rf"(?:\\s\+|\ )({ARGV_WORD}|{ARGV_GROUP})")
+MAX_RUNS_SUGGESTION = 16
+ARGV_PREFIX = re.compile(
+    rf"""\A (?: \^ | \\b )?
+         (?P<first> {ARGV_WORD} )
+         (?P<rest> (?: (?: \\s\+ | \  ) (?: {ARGV_WORD} | {ARGV_GROUP} ) )+ )
+         (?: \\b )? \Z""",
+    re.VERBOSE,
+)
+
 
 def _split_names(names: Sequence[str]) -> tuple[str, ...]:
     """Flatten any embedded ``|`` alternations so ``("Edit|Write",)`` becomes ``("Edit", "Write")``."""
     return tuple(part for name in names for part in name.split("|"))
+
+
+class StructuralConditionWarning(UserWarning):
+    """Raised when a regex condition says what a structural condition says without the false fires."""
+
+
+def author_stacklevel() -> int:
+    """Frames out to the first caller outside this package, so a wrapping primitive is not blamed.
+
+    ``Command`` is constructed both directly in a hook file and inside ``block_command`` and its
+    siblings; a fixed stacklevel is right for one and points at framework internals for the other.
+    The dataclass-generated ``__init__`` reports ``<string>`` and carries no ``__file__``, which is
+    why ``warnings.warn(skip_file_prefixes=...)`` cannot walk past it.
+    """
+    level, frame = 0, inspect.currentframe()
+    while frame and (frame.f_code.co_filename.startswith(PACKAGE_ROOT) or frame.f_code.co_filename == "<string>"):
+        level, frame = level + 1, frame.f_back
+    return level
+
+
+def top_level_alternatives(pattern: str) -> list[str]:
+    """Split a regex on its unescaped, unparenthesized ``|``."""
+    parts: list[str] = []
+    start = depth = index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "\\":
+            index += 1
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "|" and depth == 0:
+            parts.append(pattern[start:index])
+            start = index + 1
+        index += 1
+    return [*parts, pattern[start:]]
+
+
+def expand_argv(alternative: str) -> list[tuple[str, ...]] | None:
+    """Every argv a command-name-prefix alternative names, or ``None`` when it names something else."""
+    if not (matched := ARGV_PREFIX.fullmatch(alternative)):
+        return None
+    argvs = [(matched["first"],)]
+    for token in ARGV_TOKEN.findall(matched["rest"]):
+        spellings = token.strip("()").removeprefix("?:").split("|")
+        if len(argvs) * len(spellings) > MAX_RUNS_SUGGESTION:
+            return None
+        argvs = [(*argv, spelling) for argv in argvs for spelling in spellings]
+    return argvs
+
+
+def runs_spelling(pattern: str) -> list[tuple[str, ...]]:
+    """The ``Runs`` argvs a ``Command`` pattern is really asking for, empty when it needs the regex.
+
+    A pattern qualifies only when every alternative is a bare command-name prefix — words
+    joined by whitespace, optionally led by ``^`` or ``\\b``, with alternation groups of
+    words. Anything a ``Runs`` argv prefix cannot carry (a flag, a pipe, a redirect, a
+    wildcard) disqualifies the whole pattern, so the caller keeps its regex.
+
+    An end anchor disqualifies it too. ``$`` makes the regex reject the longer forms of the
+    command, which an argv *prefix* accepts, so the suggestion would widen the hook rather
+    than narrow it. A pattern naming more argvs than ``MAX_RUNS_SUGGESTION`` is dropped
+    instead of expanded: the product of its alternation groups grows exponentially, and
+    expanding it eagerly would cost that memory even where the warning is filtered out.
+    """
+    expanded = [expand_argv(alternative) for alternative in top_level_alternatives(pattern)]
+    return [argv for alternative in expanded if alternative for argv in alternative] if all(expanded) else []
+
+
+def render_runs(argvs: Sequence[tuple[str, ...]]) -> str:
+    """The suggested source spelling for ``argvs``, wrapped in ``Or(...)`` when there is more than one."""
+    calls = [f"Runs({', '.join(repr(token) for token in argv)})" for argv in argvs]
+    return calls[0] if len(calls) == 1 else f"Or({', '.join(calls)})"
 
 
 class Event(Flag):
@@ -176,12 +265,19 @@ class Command:
     """Condition matching the current event's bash command against a regex.
 
     Searched against the raw command line *and* each parsed command's argv join, so a
-    pattern spanning pipes/operators/redirects (``curl ... | sh``) matches. Only relevant
-    for ``PreToolUse`` events targeting the Bash/Execute tool. The regex is compiled at
-    construction, so a malformed pattern raises immediately rather than at dispatch.
+    pattern spanning pipes/operators/redirects (``curl ... | sh``) matches. That raw-text
+    reach is also the hazard: a command *named* inside a quoted string, a heredoc body, or
+    an ``echo`` argument matches too. Match a command by name with
+    [`Runs`][captain_hook.types.Runs] instead, and keep ``Command`` for the text no argv
+    prefix names — a flag, a pipeline, a redirect. Constructing a ``Command`` whose pattern
+    is a plain command-name prefix warns with the ``Runs`` spelling to use.
+
+    Only relevant for ``PreToolUse`` events targeting the Bash/Execute tool. The regex is
+    compiled at construction, so a malformed pattern raises immediately rather than at
+    dispatch.
 
     Example:
-        >>> hook(Event.PreToolUse, only_if=[Command(r"git\\s+stash")], message="blocked", block=True)
+        >>> hook(Event.PreToolUse, only_if=[Command(r"curl.*\\|\\s*sh")], message="blocked", block=True)
     """
 
     valid_events: ClassVar[Event] = TOOL_EVENTS
@@ -189,6 +285,15 @@ class Command:
 
     def __post_init__(self) -> None:
         re.compile(self.pattern)
+        if argvs := runs_spelling(self.pattern):
+            warnings.warn(
+                f'Command(r"{self.pattern}") matches a command-name prefix as raw text, so it also fires on a '
+                f"mention — a quoted string, a heredoc body, `echo {' '.join(argvs[0])}`. If you meant the "
+                f"command, say so structurally: {render_runs(argvs)}, which compares whole argv tokens "
+                f"rather than searching the line.",
+                StructuralConditionWarning,
+                stacklevel=author_stacklevel(),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -502,6 +607,28 @@ class TouchedFile(PatternsCondition):
 
 
 @dataclass(frozen=True, slots=True)
+class Regex:
+    """A regex standing in for the literal argv a token-matching condition otherwise takes.
+
+    ``RanCommand(Regex(r"\bpytest\b"))`` matches when any parsed command's argv join matches
+    the pattern, so one entry covers ``pytest``, ``uv run pytest`` and ``poetry run pytest``
+    where the literal form needs one ``RanCommand`` per launcher and silently misses the one
+    you forgot. Opting in is a visible call rather than a property of the string, so a literal
+    token that happens to hold metacharacters (``c++``, ``a.out``) keeps matching literally.
+
+    The pattern is searched against each parsed command's argv join, never the raw line, so a
+    heredoc body and a redirect target cannot match. It is still text: ``echo pytest`` matches.
+    Where that distinction decides whether a gate stands down, list the literal spellings.
+    The regex is compiled at construction.
+    """
+
+    pattern: str
+
+    def __post_init__(self) -> None:
+        re.compile(self.pattern)
+
+
+@dataclass(frozen=True, slots=True)
 class RanCommand:
     """Transcript-history condition: true when a Bash tool use running ``argv`` exists.
 
@@ -513,12 +640,24 @@ class RanCommand:
     as its own entry.
     """
 
-    argv: tuple[str, ...]
+    argv: tuple[str, ...] | tuple[Regex]
     subagents: bool
 
-    def __init__(self, *argv: str, subagents: bool = True) -> None:
+    def __init__(self, *argv: str | Regex, subagents: bool = True) -> None:
+        if any(isinstance(token, Regex) for token in argv) and len(argv) != 1:
+            raise TypeError("RanCommand takes either literal argv tokens or one Regex, not a mix")
         object.__setattr__(self, "argv", argv)
         object.__setattr__(self, "subagents", subagents)
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """The literal argv tokens, empty when this condition carries a :class:`Regex` instead."""
+        return tuple(token for token in self.argv if isinstance(token, str))
+
+    @property
+    def regex(self) -> Regex | None:
+        """The regex this condition matches with, ``None`` when it compares literal tokens."""
+        return next((token for token in self.argv if isinstance(token, Regex)), None)
 
 
 @dataclass(frozen=True, slots=True)

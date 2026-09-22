@@ -134,6 +134,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "ReadFile",
     "Redirect",
     "Redirects",
+    "Regex",
     "RegisteredTranscript",
     "RegisteredTranscripts",
     "Rewrite",
