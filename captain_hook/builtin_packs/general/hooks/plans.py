@@ -6,6 +6,7 @@ from captain_hook import (
     Block,
     Clause,
     Event,
+    FromSubagent,
     InPlanMode,
     Input,
     Or,
@@ -66,16 +67,18 @@ hook(
                     noun=Phrase("mode", "planning"),
                     verb=Phrase("enter", "re-enter", "reenter", "return", "go", "switch", "get", "come"),
                     subject=("unnamed",),
-                ),
-                Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
+                )
             ),
             And(
-                UserSaid(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt", "pause"))),
+                UserSaid(
+                    Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
+                    Clause(noun=Phrase("work"), verb=Phrase("stop", "halt", "pause")),
+                ),
                 UserSaid(r"\bplan"),
             ),
         ),
     ],
-    skip_if=[InPlanMode(), UsedTool("ExitPlanMode")],
+    skip_if=[FromSubagent(), InPlanMode(), UsedTool("ExitPlanMode")],
     message=(
         "The user told you to stop and go back into plan mode. Put a plan to the user with "
         "ExitPlanMode (entering plan mode first if you are not in it) before making any more edits."
@@ -109,6 +112,12 @@ hook(
             content="x = 1",
             transcript=[T.user("please fix the typo in main.py")],
         ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("go back to plan mode")],
+        ): Block(pattern="plan mode"),
         Input(
             tool="Write",
             file="/x/.claude/plans/p.md",
@@ -155,5 +164,23 @@ hook(
                 T.user("Stop all work until we agree on a plan."),
             ],
         ): Block(),
+        Input(
+            tool="Write",
+            file="/x/LANE-REPORT.md",
+            content="# report",
+            agent_id="tm1",
+            transcript=[
+                T.user(
+                    "STOP and report rather than guessing. If a write is refused with "
+                    "'The user told you to stop and go back into plan mode', that is the hook you are fixing."
+                )
+            ],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("In a workflow, verification agents never outnumber the agents doing the work.")],
+        ): Allow(),
     },
 )

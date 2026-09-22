@@ -201,6 +201,10 @@ def is_project_file(evt: BaseHookEvent) -> bool:
 class UserSaid(CustomCondition):
     """Matches when a user prompt matches one of ``patterns``.
 
+    Patterns are OR-ed: any single one matching fires the condition, so
+    ``UserSaid(a, b)`` is a disjunction, not a pair of requirements. Patterns that
+    must both hold belong in separate conditions under an ``And``.
+
     A string pattern is a case-insensitive regex, so plain keywords keep their
     substring behavior; a :class:`~captain_hook.Clause` runs the dependency-clause
     scan against each prompt. The default scans only what the user said in the
