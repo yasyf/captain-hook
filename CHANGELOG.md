@@ -6,6 +6,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.51.0] - 2026-09-21
+
+### Changed
+
+- **`block_command` with a token list now compares argv, which narrows the
+  block it builds.** The tokens were joined into a regex and matched against
+  the raw command line, so `block_command(["git", "stash"])` fired on
+  `echo git stash`, on a heredoc quoting the phrase, and on
+  `git commit -m "git stash"`. A token list lowers to `Runs` and a string
+  still compiles to a `Command` regex: tokens mean structure, a string means a
+  pattern. `git stash`, `git stash pop` and `a && git stash` still block. One
+  carve-out keeps the regex — a list holding `"*"`, where `"*"` stands for a
+  word that must be present, and `Runs` matching an argv prefix would widen
+  the block onto the bare command the form deliberately lets through. An empty
+  token list is refused rather than lowered, because it used to compile to
+  `Command("")` and match everything while `Runs()` matches nothing.
+
+### Added
+
+- **`RanCommand` takes a `Regex(...)` in place of its argv tokens.** One
+  `RanCommand(Regex(r"\bpytest\b"))` covers `pytest`, `uv run pytest` and
+  `poetry run pytest`, where the literal form needs an entry per launcher and
+  silently misses the one the author forgot. Opting in through a call rather
+  than sniffing the string keeps a literal token holding metacharacters —
+  `a.out`, `c++` — matching literally.
+
+- **Constructing a `Command` whose pattern is a plain command-name prefix
+  warns with the `Runs` spelling to use.** `Command` searches raw text, so a
+  command-name regex fires on any command that merely mentions the phrase; one
+  such hook hard-blocked three read-only commands in a single session. The
+  suggestion is bounded and skips an end-anchored pattern, which `Runs` would
+  widen rather than sharpen.
+
+### Documentation
+
+- The guides, cheatsheet and `Command` docstring teach `Runs` for command
+  matching instead of the regex, and four `RanCommand(r"\bpytest\b")`
+  examples are corrected — `RanCommand` took argv tokens, so that regex was a
+  literal token that could never match, and on a gate's `skip_if` it was an
+  exemption that silently never fired.
+
 ## [12.50.2] - 2026-09-21
 
 ### Fixed
