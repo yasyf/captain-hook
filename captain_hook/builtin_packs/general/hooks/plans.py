@@ -9,6 +9,7 @@ from captain_hook import (
     FromSubagent,
     InPlanMode,
     Input,
+    LambdaCondition,
     Or,
     Phrase,
     RewritingExistingPlan,
@@ -18,6 +19,23 @@ from captain_hook import (
     UserSaid,
     hook,
 )
+from captain_hook.signals.nlp import dep_related, find_lemma_matches, parse, verb_candidates
+
+ENTER_PLAN_MODE = Clause(
+    noun=Phrase("mode", "planning"),
+    verb=Phrase("enter", "re-enter", "reenter", "return", "go", "switch", "get", "come"),
+    subject=("unnamed",),
+)
+
+
+def directs_plan_mode(text: str) -> bool:
+    return bool(text.strip()) and any(
+        not any(c.dep_ == "neg" for c in verb.children)
+        and any(dep_related(noun, verb) for noun in find_lemma_matches(ENTER_PLAN_MODE.noun, sent, {"NOUN", "PROPN"}))
+        for sent in parse(text).sents
+        for verb in verb_candidates(ENTER_PLAN_MODE, sent)
+    )
+
 
 hook(
     Event.PreToolUse,
@@ -62,13 +80,7 @@ hook(
     only_if=[
         Tool.EditTools,
         Or(
-            UserSaid(
-                Clause(
-                    noun=Phrase("mode", "planning"),
-                    verb=Phrase("enter", "re-enter", "reenter", "return", "go", "switch", "get", "come"),
-                    subject=("unnamed",),
-                )
-            ),
+            LambdaCondition(lambda evt: directs_plan_mode(evt.ctx.turn.user_text)),
             And(
                 UserSaid(
                     Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
@@ -118,6 +130,31 @@ hook(
             content="x = 1",
             transcript=[T.user("go back to plan mode")],
         ): Block(pattern="plan mode"),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[
+                T.user("The retry loop and the timeout are both wrong. Re-enter plan mode, don't do any more work.")
+            ],
+        ): Block(pattern="plan mode"),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("don't go back to plan mode, just fix it")],
+        ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/.claude/plans/p.md",
+            content="# Plan",
+            transcript=[
+                T.user(
+                    "update the plan again so we can compact again (dont enter plan mode), dump all context that "
+                    "would be needed on restpr, and lets be more cautious about our main agent context moving forward"
+                )
+            ],
+        ): Allow(),
         Input(
             tool="Write",
             file="/x/.claude/plans/p.md",
