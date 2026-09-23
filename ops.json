@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"verify_note","witness":null,"verified_commit":"746e052e0472eb718ec68576a6da742c43b5c0fe"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"add_attachment","name":"codex-port-rereview-ccx.txt","oid":"5dc81517c418790a3b9e6a243f36176ec480dc824b6396118098fd001db7e806","size":5155}]}
