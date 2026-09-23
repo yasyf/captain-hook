@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Block, Event, Input, Signal, Signals, T, UsedTool, llm_gate
+from captain_hook import (
+    Allow,
+    Block,
+    Event,
+    Input,
+    RanCommand,
+    Regex,
+    Signal,
+    Signals,
+    T,
+    UsedSkill,
+    UsedTool,
+    llm_gate,
+)
 
 O1_PROSE_DECISION = (
     "One decision for you, O1: the IMDS firewall is what forces three hand-rolled scripts. Keep it, and an "
@@ -31,7 +44,9 @@ or "should I ...?" offers closing the message.
 Do NOT fire when: the question is rhetorical and the agent answers it itself; the agent
 quotes or reports someone else's question; the question is addressed to a subagent,
 teammate, or tool rather than the user; the message reports finished work with no open
-decision; or the agent already called AskUserQuestion or ExitPlanMode for it.
+decision; the agent already called AskUserQuestion or ExitPlanMode for it; or the decision
+is already presented on a live cc-present board (a `present` skill or `cc-present start` in
+this session) and the prose refers the user to it.
 
 When uncertain, return block=false. Put your reasoning (under 40 words, quoting the
 prose question) in `reasoning`.""",
@@ -63,7 +78,11 @@ prose question) in `reasoning`.""",
         window=6,
         scope="text",
     ),
-    skip_if=[UsedTool("AskUserQuestion", "ExitPlanMode")],
+    skip_if=[
+        UsedTool("AskUserQuestion", "ExitPlanMode"),
+        UsedSkill("present", scope="session"),
+        RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=True),
+    ],
     guards_waiting=False,
     events=Event.Stop,
     tests={
@@ -98,6 +117,25 @@ prose question) in `reasoning`.""",
             transcript=[
                 T.assistant(O1_PROSE_DECISION),
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Keep the IMDS firewall?"}])),
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.assistant(T.tool("Skill", skill="cc-present:present")),
+                T.assistant(
+                    "Board is live at http://localhost:4173; if you'd rather skip the board, say 'use defaults'."
+                ),
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.assistant(
+                    T.tool(
+                        "Bash",
+                        command="/Users/me/.claude/plugins/cache/cc-present/bin/cc-present start --session x --doc y",
+                    )
+                ),
+                T.assistant("Your call on the board."),
             ]
         ): Allow(),
         Input(transcript=[T.assistant("Shipped #94; CI is green.")]): Allow(),
