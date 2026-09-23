@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"verify_note","witness":[{"anchor":{"kind":"path","value":"captain_hook/app.py"},"oid":"1bf29c5d46fecdd9c96ef8ba82e924a289de2326"},{"anchor":{"kind":"path","value":"captain_hook/cli.py"},"oid":"6d5a0001816795668a0885a43b2b29a96ea16e03"},{"anchor":{"kind":"path","value":"captain_hook/loader.py"},"oid":"51af3cb9d621eb67f87a8363e00a20fc6efc8603"}],"verified_commit":"746e052e0472eb718ec68576a6da742c43b5c0fe"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"add_superseded_by","id":"21075b53540c9c7fb1d6beaedc1910806faa6b61"}]}
