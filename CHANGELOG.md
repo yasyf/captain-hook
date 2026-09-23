@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.51.1] - 2026-09-23
+
+### Fixed
+
+- **The prose-question gate stands down while a `cc-present` board is live.**
+  It could block prose that sent the user to a decision already on the board.
+  `UsedSkill("present", scope="session")` and a `RanCommand` match for
+  `cc-present start` now join `skip_if`, including commands run by subagents.
+  The classifier prompt also exempts prose that refers the user to the live
+  board, so the same decision needn't go through `AskUserQuestion` or
+  `ExitPlanMode` as well.
+
+- **A negated plan-mode request no longer trips the stop-and-replan guard.**
+  The guard blocked a plan write after "update the plan again ... (dont enter
+  plan mode)" because the clause still matched the negated verb.
+  `directs_plan_mode` now counts an enter-plan-mode verb only when it has no
+  direct `neg` child. It keeps `dep_related` for the link to the mode noun
+  without borrowing negation from a sibling verb: "Re-enter plan mode, don't
+  do any more work." still blocks, while "don't go back to plan mode, just fix
+  it" allows the edit.
+
 ## [12.51.0] - 2026-09-21
 
 ### Changed
