@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Hooks see the `ORCA_*` environment.** The client forwards every `ORCA_`
+  variable with each request, as it does `CLAUDE_*`, so a hook running in an Orca
+  terminal can read `ORCA_TERMINAL_HANDLE` through `reqenv.getenv` and pass it to
+  `orca terminal send --terminal`. Workers no longer inherit the daemon's own
+  `ORCA_*` values.
+
 ## [12.55.0] - 2026-09-24
 
 ### Changed

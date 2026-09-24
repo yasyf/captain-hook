@@ -98,7 +98,7 @@ func TestWorkerBaseEnvironmentSeedsDiscoveryWithoutLeakingFirstClientScope(t *te
 	base := workerBaseEnvironment([]string{
 		"PATH=/opt/homebrew/bin:/bin", "LANG=en_US.UTF-8", "HOME=/tmp/home",
 		"CLAUDE_CONFIG_DIR=/account/18", "CLAUDE_CODE_SESSION_ID=session-a",
-		"HOOKS_PROFILE=strict", "CAPT_HOOK_RUN_DIR=/old",
+		"HOOKS_PROFILE=strict", "CAPT_HOOK_RUN_DIR=/old", "ORCA_TERMINAL_HANDLE=term-a",
 	})
 	want := map[string]bool{"PATH=/opt/homebrew/bin:/bin": true, "LANG=C": true, "HOME=/tmp/home": true}
 	if len(base) != len(want) {
