@@ -249,6 +249,12 @@ class TestPendingToolCall:
         evt = mock_tool_event("Bash", event=Event.PermissionRequest, command="git push")
         assert PendingToolCall().content(evt) == "git push"
 
+    def test_renders_the_call_in_full(self) -> None:
+        text = "x" * 5_000
+        evt = mock_tool_event("mcp__slack__slack_send_message", tool_input={"channel_id": "C1", "text": text})
+        call = f'mcp__slack__slack_send_message({{"channel_id":"C1","text":"{text}"}})'
+        assert PendingToolCall().content(evt) == call
+
     def test_omitted_after_the_call_ran(self) -> None:
         assert PendingToolCall().content(mock_tool_event("Bash", event=Event.PostToolUse, command="ls")) is None
         assert PendingToolCall().content(mock_event("Stop")) is None

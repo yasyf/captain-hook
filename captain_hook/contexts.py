@@ -12,6 +12,7 @@ is deciding.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 
 WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
 PIN_EXCERPT_CAP = 2_000  # the pin header must not crowd out the source under the enclosing max_context slice
+UNCLIPPED = Budget(turn_chars=sys.maxsize, tool_chars=sys.maxsize)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,8 +192,9 @@ class PendingToolCall:
     Claude Code writes the in-flight call to the transcript asynchronously, so a hook that
     reads ``transcript=`` at ``PreToolUse`` can run before the call it judges is on disk.
     This block renders the call from the event itself, the way the transcript renders tool
-    calls. Attached to every LLM primitive as a default context; ``required=False``, and
-    omitted on every other event.
+    calls, in full: the primitive's ``max_context`` is the one clip, so a judge that must
+    compare the call against an approved text raises that. Attached to every LLM primitive
+    as a default context; ``required=False``, and omitted on every other event.
     """
 
     tag: str = "pending_tool_call"
@@ -200,7 +203,7 @@ class PendingToolCall:
     def content(self, evt: BaseHookEvent) -> str | None:
         if not evt.event & (Event.PreToolUse | Event.PermissionRequest):
             return None
-        return render_tool_call(evt.input, budget=Budget())
+        return render_tool_call(evt.input, budget=UNCLIPPED)
 
 
 @dataclass(frozen=True, slots=True)

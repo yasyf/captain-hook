@@ -540,8 +540,38 @@ class TestCallLlm:
         )
         assert ctx.transcript_block() == "<transcript>\nuser: post it\nls\nfalse\n</transcript>"
         assert ctx.transcript_block(tool_results=True) == (
-            "<transcript>\nuser: post it\nls\nresult: a.py\nfalse\nfailed: exit 1\n</transcript>"
+            "<transcript>\nuser: post it\nls\nresult: Bash\n> a.py\nfalse\nfailed: Bash\n> exit 1\n</transcript>"
         )
+
+    def test_transcript_block_renders_under_the_given_budget(self) -> None:
+        from cc_transcript.render import Budget
+
+        from captain_hook.testing.helpers import fixture_session
+
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([T.user("post it"), T.assistant(T.tool("Bash", id="b1", command="x" * 2_000))]),
+            settings=None,
+        )
+        assert ctx.transcript_block() == f"<transcript>\nuser: post it\n{'x' * 1_500}…(+500ch)\n</transcript>"
+        assert ctx.transcript_block(budget=Budget(tool_chars=2_000)) == (
+            f"<transcript>\nuser: post it\n{'x' * 2_000}\n</transcript>"
+        )
+
+    def test_call_llm_renders_the_transcript_under_the_given_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript.render import Budget
+
+        from captain_hook.testing.helpers import fixture_session
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([T.user("post it"), T.assistant(T.tool("Bash", id="b1", command="x" * 2_000))]),
+            settings=None,
+        )
+        with patch("spawnllm.call_sync", return_value="mocked") as mock_call:
+            ctx.call_llm("test", transcript=True, budget=Budget(tool_chars=2_000))
+        assert "x" * 2_000 in mock_call.call_args.args[0]
 
     def test_with_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")

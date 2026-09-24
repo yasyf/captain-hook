@@ -15,6 +15,7 @@ from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
     from cc_transcript.query import Session
+    from cc_transcript.render import Budget
     from pydantic import BaseModel
     from spawnllm import LlmBackend, TModel, TSpecialty
 
@@ -138,12 +139,15 @@ class HookContext:
 
         return scan_text(text, patterns)
 
-    def transcript_text(self, *, window: int | None = None, tool_results: bool = False) -> str:
-        """The transcript rendered turn by turn under the default budget.
+    def transcript_text(
+        self, *, window: int | None = None, tool_results: bool = False, budget: Budget | None = None
+    ) -> str:
+        """The transcript rendered turn by turn under ``budget``.
 
         Args:
-            window: Render only the span covering the most recent ``window`` messages; ``None`` renders the whole session.
+            window: Render only the span covering the most recent ``window`` messages; ``None`` is the whole session.
             tool_results: Render each tool result after its call, as ``result:`` or ``failed:``.
+            budget: Character budgets for prose, tool calls and answer previews; ``None`` is cc-transcript's default.
         """
         from cc_transcript.render import Budget, render_turn
 
@@ -151,10 +155,12 @@ class HookContext:
         return "\n\n".join(
             rendered
             for turn in src.turns
-            if (rendered := render_turn(turn, budget=Budget(), tool_results=tool_results))
+            if (rendered := render_turn(turn, budget=budget or Budget(), tool_results=tool_results))
         )
 
-    def transcript_block(self, *, window: int | None = RECENT_WINDOW, tool_results: bool = False) -> str:
+    def transcript_block(
+        self, *, window: int | None = RECENT_WINDOW, tool_results: bool = False, budget: Budget | None = None
+    ) -> str:
         """The rendered transcript wrapped in a ``<transcript>`` tag carrying its source path.
 
         Defaults to a recent-message window rather than the whole session. The render clips long
@@ -162,10 +168,11 @@ class HookContext:
         the untruncated content (e.g. a full ``ExitPlanMode`` plan) or earlier history.
 
         Args:
-            window: Render only the span covering the most recent ``window`` messages; ``None`` renders the whole session.
+            window: Render only the span covering the most recent ``window`` messages; ``None`` is the whole session.
             tool_results: Render each tool result after its call, as ``result:`` or ``failed:``.
+            budget: Character budgets for prose, tool calls and answer previews; ``None`` is cc-transcript's default.
         """
-        rendered = self.transcript_text(window=window, tool_results=tool_results)
+        rendered = self.transcript_text(window=window, tool_results=tool_results, budget=budget)
         if (path := self.transcript.path) is not None:
             return f'<transcript path="{path}">\n{rendered}\n</transcript>'
         return f"<transcript>\n{rendered}\n</transcript>"
@@ -276,6 +283,7 @@ class HookContext:
         timeout: int = 180,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
@@ -293,6 +301,7 @@ class HookContext:
         timeout: int = 180,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
@@ -309,6 +318,7 @@ class HookContext:
         timeout: int = 180,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
@@ -328,7 +338,7 @@ class HookContext:
                 UNSUPPORTED_MODELS.pop((specialty, model), None)
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         prompt = self.assemble_prompt(
-            template, args, kwargs, transcript=transcript, tool_results=tool_results, diff_text=diff_text
+            template, args, kwargs, transcript=transcript, tool_results=tool_results, budget=budget, diff_text=diff_text
         )
         cwd = resolve_project_dir()
         timeout = reqenv.clamp_timeout(timeout)
@@ -360,17 +370,18 @@ class HookContext:
         *,
         transcript: bool | int | Literal["recent", "full"],
         tool_results: bool,
+        budget: Budget | None = None,
         diff_text: str | None,
     ) -> str:
         window = transcript_window(transcript) if transcript else None
+        block = self.transcript_block(window=window, tool_results=tool_results, budget=budget) if transcript else ""
         match template:
             case Prompt():
                 prompt = str(template.context("diff", diff_text))
                 if not transcript:
                     return prompt
-                return f"{self.transcript_block(window=window, tool_results=tool_results)}\n\n<task>\n{prompt}\n</task>"
+                return f"{block}\n\n<task>\n{prompt}\n</task>"
             case str():
-                block = self.transcript_block(window=window, tool_results=tool_results) if transcript else ""
                 wrapped = f"{{transcript}}\n\n<task>\n{template}\n</task>" if transcript else template
                 body = wrapped.format(*args, **kwargs, transcript=block)
                 return f"<diff>\n{diff_text}\n</diff>\n\n{body}" if diff_text is not None else body
