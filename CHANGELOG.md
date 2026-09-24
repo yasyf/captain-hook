@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `systemMessage` beside the event's usual envelope. A `Stop` that allows
   renders `{"systemMessage": ...}` on its own. Several hooks' messages join in
   registration order, and `PreCompact`, whose stdout is plain text, drops them.
+- **Inline tests seed session state and assert `system_message`.**
+  `Input(state=[ReviewState(intent="ship")])` saves each model into a real
+  temporary session directory, so `ReviewState.load(evt)` and `evt.ctx.s` read
+  it in the handler, alongside any `seen=` keys. `Allow`, `Warn` and `Block`
+  take a `system_message=` regex, and `Allow(system_message=...)` requires an
+  allow result.
 
 ### Changed
 

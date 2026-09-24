@@ -106,12 +106,16 @@ def home_fixture_dir() -> Path:
     return root
 
 
-def seeded_session_dir(seen: dict[str, list[str]]) -> Path:
+def seeded_session_dir(seen: dict[str, list[str]] | None, state: list[BaseModel] | None) -> Path:
     from captain_hook.state import SeenKeys
 
     session_dir = fixture_file_dir() / f"session-{next(FIXTURE_FILE_COUNTER)}"
     session_dir.mkdir()
-    SessionStore(session_dir)[SeenKeys].set(SeenKeys(seen={scope: list(keys) for scope, keys in seen.items()}))
+    store = SessionStore(session_dir)
+    if seen is not None:
+        store[SeenKeys].set(SeenKeys(seen={scope: list(keys) for scope, keys in seen.items()}))
+    for model in state or ():
+        store[type(model)].set(model)
     return session_dir
 
 
@@ -490,7 +494,9 @@ def input_to_event(
         "transcript_path": transcript_path,
         "permission_mode": inp.permission_mode,
         "cwd": inp.cwd,
-        "session_dir": seeded_session_dir(inp.seen) if inp.seen is not None else None,
+        "session_dir": seeded_session_dir(inp.seen, inp.state)
+        if inp.seen is not None or inp.state is not None
+        else None,
     }
     match ev:
         case Event.SubagentStop:
@@ -605,25 +611,31 @@ def transcript_event_payloads(
             yield base
 
 
+def system_message_matches(result: HookResult | None, pattern: str | None) -> bool:
+    return pattern is None or bool(result and result.system_message and re.search(pattern, result.system_message))
+
+
 def matches_expected(result: HookResult | None, expected: Block | Warn | Allow | Rewrite | Ask) -> bool:
     match expected:
         case Ask():
             return result is None
-        case Allow(explicit=True):
-            return result is not None and result.action == "allow"
-        case Allow():
+        case Allow(explicit=False, system_message=None):
             return result is None or result.action == "allow"
-        case Block(pattern=pat):
+        case Allow(system_message=sm):
+            return result is not None and result.action == "allow" and system_message_matches(result, sm)
+        case Block(pattern=pat, system_message=sm):
             return (
                 result is not None
                 and result.action == "block"
                 and (not pat or bool(result.message and re.search(pat, result.message)))
+                and system_message_matches(result, sm)
             )
-        case Warn(pattern=pat):
+        case Warn(pattern=pat, system_message=sm):
             return (
                 result is not None
                 and result.action == "warn"
                 and (not pat or bool(result.message and re.search(pat, result.message)))
+                and system_message_matches(result, sm)
             )
         case Rewrite(pattern=pat, fields=fields):
             if result is None or result.action != "rewrite":
@@ -643,22 +655,31 @@ def assert_result(
     match expected:
         case Ask():
             assert result is None, f"{prefix}Expected Ask (no result), got {result}"
-        case Allow(explicit=True):
-            assert result is not None and result.action == "allow", f"{prefix}Expected explicit Allow, got {result}"
-        case Allow():
+        case Allow(explicit=False, system_message=None):
             assert result is None or result.action == "allow", f"{prefix}Expected Allow, got {result}"
-        case Block(pattern=pat):
+        case Allow(system_message=sm):
+            assert result is not None and result.action == "allow", f"{prefix}Expected explicit Allow, got {result}"
+            assert system_message_matches(result, sm), (
+                f"{prefix}system_message {result.system_message!r} doesn't match '{sm}'"
+            )
+        case Block(pattern=pat, system_message=sm):
             assert result is not None and result.action == "block", f"{prefix}Expected Block, got {result}"
             if pat:
                 assert result.message and re.search(pat, result.message), (
                     f"{prefix}Block message {result.message!r} doesn't match '{pat}'"
                 )
-        case Warn(pattern=pat):
+            assert system_message_matches(result, sm), (
+                f"{prefix}system_message {result.system_message!r} doesn't match '{sm}'"
+            )
+        case Warn(pattern=pat, system_message=sm):
             assert result is not None and result.action == "warn", f"{prefix}Expected Warn, got {result}"
             if pat:
                 assert result.message and re.search(pat, result.message), (
                     f"{prefix}Warn message {result.message!r} doesn't match '{pat}'"
                 )
+            assert system_message_matches(result, sm), (
+                f"{prefix}system_message {result.system_message!r} doesn't match '{sm}'"
+            )
         case Rewrite(pattern=pat, fields=fields):
             assert result is not None and result.action == "rewrite", f"{prefix}Expected Rewrite, got {result}"
             ui = result.updated_input or {}

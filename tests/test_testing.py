@@ -1045,6 +1045,80 @@ class TestSeenSeedsTheSessionStore:
             Input(command="x", seen={"push": "origin"})
 
 
+class TestStateSeedsTheSessionStore:
+    def test_seeded_workflow_state_reaches_the_handler(self):
+        from captain_hook.app import on
+        from captain_hook.state import WorkflowState, workflow_state
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+
+        @workflow_state("phase-probe")
+        class PhaseState(WorkflowState):
+            phase: str = "idle"
+
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(): Allow(),
+                Input(state=[PhaseState(phase="compacting")]): Warn(pattern="compacting"),
+            },
+        )
+        def report_phase(evt):
+            state = PhaseState.load(evt)
+            return evt.warn(f"phase {state.phase}") if state.phase != "idle" else None
+
+        results = run_inline_tests()
+        assert len(results) == 2
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_state_rejects_non_models(self):
+        from captain_hook.testing.types import Input
+
+        with pytest.raises(TypeError, match="pydantic models"):
+            Input(state=[{"phase": "compacting"}])  # type: ignore[list-item]
+
+
+class TestSystemMessageExpectation:
+    @pytest.mark.parametrize(
+        ("result", "expected", "matches"),
+        [
+            pytest.param(
+                HookResult(action=Action.allow, system_message="Compacting now"),
+                Allow(system_message="Compacting"),
+                True,
+                id="allow-matches",
+            ),
+            pytest.param(None, Allow(system_message="Compacting"), False, id="allow-needs-a-result"),
+            pytest.param(
+                HookResult(action=Action.allow), Allow(system_message="Compacting"), False, id="allow-needs-the-message"
+            ),
+            pytest.param(
+                HookResult(action=Action.warn, message="w", system_message="shown"),
+                Warn(pattern="w", system_message="shown"),
+                True,
+                id="warn-matches",
+            ),
+            pytest.param(
+                HookResult(action=Action.block, message="b", system_message="other"),
+                Block(system_message="shown"),
+                False,
+                id="block-mismatch",
+            ),
+        ],
+    )
+    def test_system_message_pattern(self, result, expected, matches):
+        from captain_hook.testing.helpers import matches_expected
+
+        assert matches_expected(result, expected) is matches
+        if matches:
+            assert_result(result, expected)
+        else:
+            with pytest.raises(AssertionError):
+                assert_result(result, expected)
+
+
 class TestCommandsStubSubprocess:
     def test_stubbed_argv_prefix_reaches_the_fire_path(self):
         import subprocess

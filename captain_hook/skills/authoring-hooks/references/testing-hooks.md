@@ -37,6 +37,7 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
 | `skip_permissions` | Pre-seeds `evt.skip_permissions` / `SkipPermissions()`; `None` leaves the real process-tree walk in place | `Input(command="ls", skip_permissions=True)` |
 | `transcript` | Session history | `Input(transcript=[T.user("ship it"), T.assistant(T.tool("Bash", command="uv run pytest"))])` |
 | `seen` | Keys `evt.ctx.s.once`/`unseen` already saw this session, per scope (`""` for the unscoped call); backed by a real temp session dir, so "the repeat is silent" is one `Input` | `Input(command="git push", seen={"push": ["origin"]})` |
+| `state` | Session state models to seed, each saved under its own class in the same real temp session dir, so `Model.load(evt)` and `evt.ctx.s` read it | `Input(state=[ReviewState(intent="ship")])` |
 | `commands` | `subprocess.run` stubs by argv prefix: matching argv returns the text as stdout with exit 0 (the `llm=` convention for shell-outs); unmatched argv runs for real | `Input(commands={"gh pr view": '{"isDraft": true}'})` |
 
 ## Expected outcomes
@@ -47,6 +48,8 @@ All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`.
 - `Warn(pattern=None)` — the hook must warn; optional regex searched in the warning.
 - `Allow()` — the hook must allow (return `None` or action `"allow"`);
   `Allow(explicit=True)` requires an actual allow result, so `None` fails.
+- `system_message=` on `Block`, `Warn`, or `Allow` — a regex searched in the result's
+  `system_message`; on `Allow` it also requires an actual allow result.
 - `Ask()` — the hook must return no result (`None`); for `PermissionRequest` hooks that
   means the dialog shows.
 

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "command": (str,),
     "content": (str,),
@@ -28,6 +30,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "tasks": (list,),
     "background_tasks": (list,),
     "seen": (dict,),
+    "state": (list,),
     "commands": (dict,),
 }
 
@@ -70,16 +73,24 @@ class FileFixture:
 
 @dataclass(frozen=True, kw_only=True)
 class Block:
-    """Inline test expectation: the hook should block. Optional regex ``pattern`` matches the block message."""
+    """Inline test expectation: the hook should block. Optional regex ``pattern`` matches the block message.
+
+    Optional regex ``system_message`` matches the result's ``system_message``.
+    """
 
     pattern: str | None = None
+    system_message: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class Warn:
-    """Inline test expectation: the hook should warn. Optional regex ``pattern`` matches the warning message."""
+    """Inline test expectation: the hook should warn. Optional regex ``pattern`` matches the warning message.
+
+    Optional regex ``system_message`` matches the result's ``system_message``.
+    """
 
     pattern: str | None = None
+    system_message: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -87,10 +98,12 @@ class Allow:
     """Inline test expectation: the hook should allow (return None or action ``"allow"``).
 
     ``explicit=True`` requires an actual allow result — ``None`` no longer matches, so
-    e.g. a ``PermissionRequest`` hook must have answered the dialog itself.
+    e.g. a ``PermissionRequest`` hook must have answered the dialog itself. A regex
+    ``system_message`` requires an allow result whose ``system_message`` it matches.
     """
 
     explicit: bool = False
+    system_message: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -174,6 +187,9 @@ class Input:
             a ``subprocess.run`` whose argv starts with a key returns that text as stdout with
             exit 0, the way ``llm`` stubs the model call, so a hook that shells out to ``gh``
             or ``git`` can reach its fire path. Unmatched argv runs for real.
+        state: Session state models to seed (``state=[ReviewState(intent="x")]``), each written to a
+            real temporary session directory under its own class, so ``ReviewState.load(evt)`` and
+            ``evt.ctx.s`` read it exactly as in production. Shares the directory ``seen`` seeds.
     """
 
     command: str | None = None
@@ -202,6 +218,7 @@ class Input:
     llm: dict[str, Any] | None = None
     seen: dict[str, list[str]] | None = None
     commands: dict[str, str] | None = None
+    state: list[BaseModel] | None = None
 
     def __post_init__(self) -> None:
         match self.transcript:
@@ -224,6 +241,9 @@ class Input:
             for key in getattr(self, name) or ():
                 if not isinstance(key, str):
                     raise TypeError(f"Input field {name!r} must have str keys, got {type(key).__name__}")
+        for model in self.state or ():
+            if not isinstance(model, BaseModel):
+                raise TypeError(f"Input field 'state' must contain pydantic models, got {type(model).__name__}")
         for scope, keys in (self.seen or {}).items():
             if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
                 raise TypeError(f"Input field 'seen' scope {scope!r} must map to a list of str keys")
