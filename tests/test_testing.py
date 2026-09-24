@@ -1118,6 +1118,37 @@ class TestStateSeedsTheSessionStore:
             Input(state=[{"phase": "compacting"}])  # type: ignore[list-item]
 
 
+class TestEnvIsHermetic:
+    def test_request_env_comes_only_from_the_input(self, monkeypatch):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+        from captain_hook.util import reqenv
+
+        monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "live-terminal")
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "600000")
+        seen: list[tuple[str | None, str | None, str | None]] = []
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(): Allow(),
+                Input(env={"ORCA_TERMINAL_HANDLE": "term-7"}): Warn(pattern="term-7"),
+            },
+        )
+        def probe(evt):
+            handle = reqenv.getenv("ORCA_TERMINAL_HANDLE")
+            seen.append(
+                (handle, reqenv.env_map().get("ORCA_TERMINAL_HANDLE"), reqenv.getenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
+            )
+            return evt.warn(f"send to {handle}") if handle else None
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert seen == [(None, None, None), ("term-7", "term-7", None)]
+
+
 class TestSystemMessageExpectation:
     @pytest.mark.parametrize(
         ("result", "expected", "matches"),

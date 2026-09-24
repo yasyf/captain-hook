@@ -39,6 +39,7 @@ from captain_hook.testing.session_cache import SessionCache
 from captain_hook.testing.types import Allow, Ask, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.transcripts import lift_session, load_transcript
 from captain_hook.types import Event, HookResult, Tool
+from captain_hook.util import reqenv
 
 STUB_FIELD_VALUES: dict[str, Any] = {
     "block": True,
@@ -744,6 +745,21 @@ def home_env(home: str) -> Iterator[None]:
             os.environ["HOME"] = saved
 
 
+@contextmanager
+def hermetic_request(
+    env: dict[str, str] | None = None, cwd: str | None = None, session_id: str | None = None
+) -> Iterator[None]:
+    pinned = {key: os.environ[key] for key in ("CAPTAIN_HOOK_STATE_DIR", "XDG_CACHE_HOME")}
+    overrides = reqenv.RequestOverrides(
+        env=pinned | (env or {}),
+        cwd=cwd or os.getcwd(),
+        client_ppid=os.getpid(),
+        session_id=session_id or "fixture",
+    )
+    with reqenv.use_request(overrides):
+        yield
+
+
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
     from captain_hook.app import _state, is_planning_agent_skip
 
@@ -762,25 +778,27 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                         # named tool, else pins the first named tool (families infer_tool can't
                         # shape, e.g. WebFetch/WebSearch). No Tool condition => pure inference.
                         spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
-                        evt = input_to_event(
-                            next(iter(entry.spec.events)),
-                            key,
-                            (inferred if (inferred := infer_tool(key)) in spec_tools else spec_tools[0])
-                            if spec_tools
-                            else None,
-                        )
-                        with (
-                            home_env(evt.__dict__.get("_home_dir") or str(scratch_home)),
-                            stubbed_commands(key.commands),
-                        ):
-                            hook_result = (
-                                execute_hook(entry, evt)
-                                if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
-                                else None
+                        with hermetic_request(key.env, key.cwd, key.session_id):
+                            evt = input_to_event(
+                                next(iter(entry.spec.events)),
+                                key,
+                                (inferred if (inferred := infer_tool(key)) in spec_tools else spec_tools[0])
+                                if spec_tools
+                                else None,
                             )
+                            with (
+                                home_env(evt.__dict__.get("_home_dir") or str(scratch_home)),
+                                stubbed_commands(key.commands),
+                            ):
+                                hook_result = (
+                                    execute_hook(entry, evt)
+                                    if matches_conditions(entry.spec, evt)
+                                    and not is_planning_agent_skip(entry.spec, evt)
+                                    else None
+                                )
                         assert_result(hook_result, expected, entry.name)
                     elif jsonl := SessionCache.for_root().load(key):
-                        with home_env(str(scratch_home)):
+                        with hermetic_request(), home_env(str(scratch_home)):
                             replays = list(replay_session(entry, jsonl))
                         if not any(matches_expected(r, expected) for r in replays):
                             assert_result(replays[-1] if replays else None, expected, entry.name)

@@ -33,6 +33,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "seen": (dict,),
     "state": (list,),
     "commands": (dict,),
+    "env": (dict,),
 }
 
 
@@ -190,6 +191,10 @@ class Input:
             a ``subprocess.run`` whose argv starts with a key returns that text as stdout with
             exit 0, the way ``llm`` stubs the model call, so a hook that shells out to ``gh``
             or ``git`` can reach its fire path. Unmatched argv runs for real.
+        env: The request environment, exactly: every key :func:`captain_hook.util.reqenv.getenv`
+            forwards per request (``CLAUDE_*``, ``ORCA_*``, ``CAPT_HOOK_*``, ...) resolves from this
+            mapping alone, never the runner's own environment, as it does for a real request's env.
+            ``reqenv.env_map()`` hands the same mapping to subprocesses. Defaults to empty.
         state: Session state models to seed (``state=[ReviewState(intent="x")]``), each written to a
             real temporary session directory under its own class, so ``ReviewState.load(evt)`` and
             ``evt.ctx.s`` read it exactly as in production. Shares the directory ``seen`` seeds.
@@ -223,6 +228,7 @@ class Input:
     seen: dict[str, list[str]] | None = None
     commands: dict[str, str] | None = None
     state: list[BaseModel] | None = None
+    env: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         match self.transcript:
@@ -241,7 +247,7 @@ class Input:
             for task in getattr(self, name) or ():
                 if not isinstance(task, dict):
                     raise TypeError(f"Input field {name!r} must contain dict elements, got {type(task).__name__}")
-        for name in ("tool_input", "llm", "seen", "commands"):
+        for name in ("tool_input", "llm", "seen", "commands", "env"):
             for key in getattr(self, name) or ():
                 if not isinstance(key, str):
                     raise TypeError(f"Input field {name!r} must have str keys, got {type(key).__name__}")

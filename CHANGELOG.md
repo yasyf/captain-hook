@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `evt.transcript_path` on every event, not only tool events. A
   `FileFixture`, including `home=True` and its `$HOME` swap, now materializes
   on every event too.
+- **Inline tests run in a hermetic request environment.** Each test is bound
+  as its own request whose forwarded environment is exactly `Input(env={...})`,
+  empty by default, so `reqenv.getenv` and `reqenv.env_map()` never see the
+  runner's `CLAUDE_*`, `ORCA_*` or other per-request variables. A test run in
+  an Orca terminal can no longer reach that terminal through
+  `ORCA_TERMINAL_HANDLE`.
 
 ### Changed
 

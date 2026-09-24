@@ -36,7 +36,10 @@ From your project root, run the test command. With no `--hooks` flag it covers y
 project's own hooks in `.claude/hooks`; pass `--hooks DIR` to test only that directory.
 The wheel builtins are tested by captain-hook itself, and a plugin's pack is tested from
 its own repo with `pack test`, so neither is swept in here. Tests execute under a throwaway
-`$HOME`, so hooks that read machine state behave identically on every machine.
+`$HOME`, so hooks that read machine state behave identically on every machine. Each test
+also runs as its own request whose forwarded environment (`CLAUDE_*`, `ORCA_*`,
+`CAPT_HOOK_*`, and the rest `reqenv.getenv` reads per request) is exactly `Input(env={...})`,
+empty by default, so a test never picks up the terminal or session it runs in.
 
 ```bash
 uvx capt-hook test
