@@ -299,7 +299,6 @@ reference:
       - apply_contexts
       - BeforeEdit
       - AfterEdit
-      - PendingToolCall
       - Introduced
       - WorkflowScriptSource
       - UserMessages
