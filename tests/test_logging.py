@@ -184,7 +184,7 @@ class TestLlmLogging:
         ctx = make_ctx()
         ctx.call_llm = MagicMock(side_effect=RuntimeError("LLM down"))
 
-        evt = MagicMock(replaced=None, content=None)
+        evt = MagicMock(replaced=None, content=None, event=Event.Stop)
         evt.ctx = ctx
 
         with patch("captain_hook.primitives.llm.fired_this_turn", return_value=False):

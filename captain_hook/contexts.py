@@ -4,7 +4,9 @@ A :class:`PromptContext` resolves one ``<tag>…</tag>`` block from the current 
 evaluation time. Pass instances via ``contexts=[...]`` on ``llm_nudge``/``llm_gate``;
 a ``required`` context whose content is empty skips the LLM call entirely. The ambient
 defaults :class:`BeforeEdit` and :class:`AfterEdit` attach to every primitive, carrying
-the pending edit's before/after text on edit-shaped events and nothing elsewhere.
+the pending edit's before/after text on edit-shaped events and nothing elsewhere, and
+:class:`PendingToolCall` carries the call a ``PreToolUse`` or ``PermissionRequest`` event
+is deciding.
 """
 
 from __future__ import annotations
@@ -14,10 +16,11 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
-from cc_transcript.render import clip
+from cc_transcript.render import Budget, clip, render_tool_call
 
 from captain_hook.ast_grep import find_all, find_kinds, introduced, lang_for_path
 from captain_hook.conditions import workflow_opt_matches, workflow_script_source
+from captain_hook.types import Event
 
 if TYPE_CHECKING:
     from collections.abc import Sequence, Set
@@ -181,6 +184,26 @@ class AfterEdit:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingToolCall:
+    """The call a ``PreToolUse`` or ``PermissionRequest`` event is deciding, as a ``<pending_tool_call>`` block.
+
+    Claude Code writes the in-flight call to the transcript asynchronously, so a hook that
+    reads ``transcript=`` at ``PreToolUse`` can run before the call it judges is on disk.
+    This block renders the call from the event itself, the way the transcript renders tool
+    calls. Attached to every LLM primitive as a default context; ``required=False``, and
+    omitted on every other event.
+    """
+
+    tag: str = "pending_tool_call"
+    required: bool = False
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if not evt.event & (Event.PreToolUse | Event.PermissionRequest):
+            return None
+        return render_tool_call(evt.input, budget=Budget())
+
+
+@dataclass(frozen=True, slots=True)
 class Introduced:
     """Constructs the pending edit newly introduces, as an auto-tagged block.
 
@@ -322,7 +345,7 @@ class UserMessages:
 
 
 def with_defaults(contexts: Sequence[PromptContext]) -> tuple[PromptContext, ...]:
-    defaults: tuple[PromptContext, ...] = (BeforeEdit(), AfterEdit())
+    defaults: tuple[PromptContext, ...] = (BeforeEdit(), AfterEdit(), PendingToolCall())
     return (*contexts, *(d for d in defaults if not any(isinstance(c, type(d)) for c in contexts)))
 
 

@@ -21,6 +21,7 @@ from captain_hook.contexts import (
     BeforeEdit,
     Excerpts,
     Introduced,
+    PendingToolCall,
     UserMessages,
     WorkflowScriptSource,
     apply_contexts,
@@ -230,14 +231,27 @@ class TestApplyContexts:
 class TestWithDefaults:
     def test_defaults_appended_after_user_contexts(self) -> None:
         mine = Introduced(kind="comment")
-        assert with_defaults([mine]) == (mine, BeforeEdit(), AfterEdit())
+        assert with_defaults([mine]) == (mine, BeforeEdit(), AfterEdit(), PendingToolCall())
 
     def test_empty_yields_just_defaults(self) -> None:
-        assert with_defaults(()) == (BeforeEdit(), AfterEdit())
+        assert with_defaults(()) == (BeforeEdit(), AfterEdit(), PendingToolCall())
 
     def test_user_instance_replaces_default_of_same_type(self) -> None:
         mine = BeforeEdit(required=True)
-        assert with_defaults([mine]) == (mine, AfterEdit())
+        assert with_defaults([mine]) == (mine, AfterEdit(), PendingToolCall())
+
+
+class TestPendingToolCall:
+    def test_renders_the_call_a_pre_tool_use_event_decides(self) -> None:
+        assert PendingToolCall().content(mock_tool_event("Bash", command="rm -rf build")) == "rm -rf build"
+
+    def test_renders_a_permission_request(self) -> None:
+        evt = mock_tool_event("Bash", event=Event.PermissionRequest, command="git push")
+        assert PendingToolCall().content(evt) == "git push"
+
+    def test_omitted_after_the_call_ran(self) -> None:
+        assert PendingToolCall().content(mock_tool_event("Bash", event=Event.PostToolUse, command="ls")) is None
+        assert PendingToolCall().content(mock_event("Stop")) is None
 
 
 def prompts_event(*prompts: str) -> Any:
