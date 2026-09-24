@@ -6,6 +6,7 @@ from captain_hook import (
     Block,
     Clause,
     Event,
+    FilePath,
     FromSubagent,
     InPlanMode,
     Input,
@@ -90,7 +91,7 @@ hook(
             ),
         ),
     ],
-    skip_if=[FromSubagent(), InPlanMode(), UsedTool("ExitPlanMode")],
+    skip_if=[FromSubagent(), InPlanMode(), UsedTool("ExitPlanMode"), FilePath("**/plans/*.md", project_only=False)],
     message=(
         "The user told you to stop and go back into plan mode. Put a plan to the user with "
         "ExitPlanMode (entering plan mode first if you are not in it) before making any more edits."
@@ -155,6 +156,32 @@ hook(
                 )
             ],
         ): Allow(),
+        Input(
+            tool="Edit",
+            file="/Users/me/.claude/plans/p.md",
+            content="# Plan",
+            permission_mode="bypassPermissions",
+            transcript=[
+                T.user(
+                    "update the plan again so we can compact again (dont enter"
+                    + " " * 112
+                    + "\n              plan mode), dump all context that would be needed on restpr. also fix the hook "
+                    "that blocked you from doing this in a background agent"
+                )
+            ],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/Users/me/.claude/plans/p.md",
+            content="# Plan",
+            transcript=[T.user("Stop all work until we agree on a plan. Put the new plan in the plan file.")],
+        ): Allow(),
+        Input(
+            tool="Edit",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("stop, go back to plan mode")],
+        ): Block(pattern="plan mode"),
         Input(
             tool="Write",
             file="/x/.claude/plans/p.md",
