@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.52.0] - 2026-09-23
+
+### Changed
+
+- **`transcript=` windows count messages, not events.** `HookContext.transcript_text`
+  and `transcript_block` window with cc-transcript's `Session.recent_messages`, so
+  a window of N spans the last N user, assistant and queued-command events. Hook,
+  reminder and other attachments between them ride along uncounted. Before, they
+  filled the window: right before one Slack send the default 15-event window
+  rendered empty. cc-transcript 14.20 also renders messages the user typed
+  mid-turn and AskUserQuestion answers, so an LLM judge reading `transcript=` now
+  sees both.
+
+### Fixed
+
+- **A blocking LLM gate on a tool event judges every call.** After an `llm_gate`
+  on `PreToolUse` blocked once, every later call in the same turn skipped the
+  judge and went through, so a retried call bypassed the gate. `llm_evaluate`
+  gains `once_per_turn`, and a blocking primitive on a tool event passes
+  `False`. Gates on `Stop` and `SubagentStop` keep one block per turn so they
+  cannot loop, and `llm_nudge` still fires once per turn.
+
 ## [12.51.1] - 2026-09-23
 
 ### Fixed
