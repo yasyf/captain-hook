@@ -251,6 +251,24 @@ class TestFormatOutput:
         output = format_output(event, HookResult(action=Action.allow))
         assert output is None
 
+    @pytest.mark.parametrize(
+        "result",
+        [
+            pytest.param(HookResult(action=Action.warn, message="Keep the plan path."), id="warn"),
+            pytest.param(HookResult(action=Action.warn, message="Keep the plan path.", approve=False), id="context"),
+            pytest.param(HookResult(action=Action.allow, message="Keep the plan path."), id="allow"),
+        ],
+    )
+    def test_pre_compact_renders_plain_text(self, result: HookResult) -> None:
+        assert format_output(Event.PreCompact, result) == "Keep the plan path."
+
+    def test_pre_compact_block_uses_decision_format(self) -> None:
+        output = format_output(Event.PreCompact, HookResult(action=Action.block, message="not now"))
+        assert output == {"decision": "block", "reason": "not now"}
+
+    def test_pre_compact_allow_without_message_returns_none(self) -> None:
+        assert format_output(Event.PreCompact, HookResult(action=Action.allow)) is None
+
     def test_stop_warn_returns_block_format(self) -> None:
         result = HookResult(action=Action.warn, message="warning stop")
         output = format_output(Event.Stop, result)

@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `p.2026-09-24-1530-pre-compact.md` beside `p.md`. The archive keeps what the
   rewrite replaces.
 
+### Fixed
+
+- **`PreCompact` hooks feed the compaction instead of failing it.** Claude Code
+  has no `hookSpecificOutput` for `PreCompact` and appends each successful
+  hook's raw stdout to the compaction's custom instructions, so the
+  `additionalContext` envelope a warn rendered failed schema validation. A warn,
+  context, or allow message now prints as plain text, and a block renders
+  `{"decision": "block"}`, which cancels the compaction.
+
 ### Removed
 
 - **The stray `captain_hook/packs/general/plans.py`.** Nothing loaded it; the

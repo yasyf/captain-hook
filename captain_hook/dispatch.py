@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
@@ -29,6 +30,8 @@ ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
 HOOK_FANOUT_THREADS = 64
 BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
+
+type Envelope = dict[str, Any] | str
 
 
 @once
@@ -327,10 +330,17 @@ def format_permission_decision(result: HookResult) -> dict[str, Any] | None:
     return {"hookSpecificOutput": {"hookEventName": Event.PermissionRequest.name, "decision": decision}}
 
 
-def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
-    """Render a ``HookResult`` as the JSON envelope Claude Code expects on stdout for *event*."""
+def format_output(event: Event, result: HookResult) -> Envelope | None:
+    """Render a ``HookResult`` as the stdout Claude Code expects for *event*.
+
+    Every event takes a JSON envelope except ``PreCompact``, whose schema has no
+    ``hookSpecificOutput``: Claude Code appends each successful hook's raw trimmed stdout to the
+    compaction's custom instructions, so a non-block result renders as its plain message.
+    """
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
+    if event is Event.PreCompact:
+        return {"decision": "block", "reason": result.message} if result.action is Action.block else result.message
     if event is Event.PermissionRequest:
         return format_permission_decision(result)
     if event is Event.MessageDisplay:
@@ -381,7 +391,7 @@ def combine(
     entries: Sequence[RegisteredHook],
     futures: Sequence[Future[HookResult | None]],
     margin: float,
-) -> dict[str, Any] | None:
+) -> Envelope | None:
     """Fold the running hooks' results into one envelope in registration order, deny-wins.
 
     The fold drives the waiting: it reaches a hook, decides whether the verdicts so far leave it
@@ -466,7 +476,7 @@ def dispatch(
     event: Event,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
-) -> dict[str, Any] | None:
+) -> Envelope | None:
     """Dispatch an event to all matching hooks at once and combine their results, deny-wins.
 
     The event's hooks are independent, so they all start together on the event's own
@@ -490,6 +500,10 @@ def dispatch(
         return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
     finally:
         fanout.close()
+
+
+def envelope_text(envelope: Envelope) -> str:
+    return envelope if isinstance(envelope, str) else json.dumps(envelope)
 
 
 def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:

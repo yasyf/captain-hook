@@ -16,6 +16,7 @@ from captain_hook.cli import EVENT_NAMES, dispatch_event
 from captain_hook.daemon import decision_writer, transcache
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
+from captain_hook.dispatch import envelope_text
 from captain_hook.session import ensure_session
 from captain_hook.state import RESOURCES
 from captain_hook.types import Event
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     type Background = Callable[[], None]
 
     from captain_hook.cli import CliState
+    from captain_hook.dispatch import Envelope
 
     class RegistryLike(Protocol):
         def get(self) -> Any: ...
@@ -52,7 +54,7 @@ class ProductRuntime:
         self,
         *,
         registry_factory: Callable[[CliState], RegistryLike] = Registry,
-        dispatcher: Callable[..., tuple[dict[str, Any] | None, Background]] = dispatch_event,
+        dispatcher: Callable[..., tuple[Envelope | None, Background]] = dispatch_event,
         transcript_loader: Callable[..., Any] = transcache.load,
         install_writer: bool = True,
         nlp_warmer: Callable[[], None] = RESOURCES.warm,
@@ -151,7 +153,7 @@ class ProductRuntime:
             )
             context = contextvars.copy_context()
         if output:
-            buffers.stdout.write(json.dumps(output) + "\n")
+            buffers.stdout.write(envelope_text(output) + "\n")
         return lambda: self._after_reply(context, background)
 
     def _after_reply(self, context: contextvars.Context, background: Background) -> None:
