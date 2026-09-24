@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.54.0] - 2026-09-24
+
 ### Added
 
 - **`budget=` sets the transcript render budget of an LLM judge.** `llm_gate`,
