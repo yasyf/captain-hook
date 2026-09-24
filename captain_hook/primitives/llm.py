@@ -128,7 +128,7 @@ def llm_evaluate[M: BaseModel](
     )
 
     base = (prompt if isinstance(prompt, Prompt) else Prompt().system(prompt)).context("context", context or None)
-    if (built := apply_contexts(base, evt, with_defaults(contexts), max_len=max_context)) is None:
+    if (built := apply_contexts(base, evt, with_defaults(contexts, budget), max_len=max_context)) is None:
         return None
 
     diff_text = evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None

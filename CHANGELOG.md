@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`PendingToolCall` renders under the gate's budget.** 12.54.0 rendered the
+  pending call unclipped, so every `PreToolUse` gate carried whole Write and Edit
+  payloads into its `max_context`. The block now clips under the primitive's
+  `budget=`, and under cc-transcript's default `Budget()` when the hook passes
+  none, the 1,500 tool characters 12.53 clipped to. `PendingToolCall(budget=)`
+  pins one explicitly; `with_defaults` fills a `None` from the gate.
+- **cc-transcript 14.24.0.** A `transcript=` window renders every message queued
+  mid-turn under who sent it: `user:` for the user's own, as before, and now
+  `notification:` for a task notification, `peer:` for another agent or session and
+  `channel:` for an MCP channel event, so a judge can see a condition the user set
+  being met by a background task.
+
 ## [12.54.0] - 2026-09-24
 
 ### Added
