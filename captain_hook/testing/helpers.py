@@ -498,6 +498,7 @@ def input_to_event(
         if inp.seen is not None or inp.state is not None
         else None,
     }
+    file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
     match ev:
         case Event.SubagentStop:
             evt = mock_subagent_stop_event(
@@ -517,7 +518,6 @@ def input_to_event(
         case Event.SessionEnd:
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
-            file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
             # {file} is an opt-in substitution: only fires when a FileFixture materialized a real
             # path AND the command spells the literal token, so no other brace in a command is touched.
             command = (
@@ -544,10 +544,11 @@ def input_to_event(
                 tool_input=inp.tool_input,
                 **ctx_kw,
             )
-            if isinstance(inp.file, FileFixture) and inp.file.home:
-                # Scoped here: `file` only binds in this branch, so a home fixture on a
-                # non-tool event stays inert instead of raising.
-                evt.__dict__["_home_dir"] = str(Path(file).parent)
+    if isinstance(inp.file, FileFixture) and inp.file.home:
+        evt.__dict__["_home_dir"] = str(Path(file).parent)
+    evt._raw |= ({"transcript_path": str(transcript_path)} if transcript_path else {}) | (
+        {"session_id": inp.session_id} if inp.session_id else {}
+    )
 
     if inp.tasks is not None:
         from captain_hook.tasks import Task, Tasks

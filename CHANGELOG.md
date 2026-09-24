@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it in the handler, alongside any `seen=` keys. `Allow`, `Warn` and `Block`
   take a `system_message=` regex, and `Allow(system_message=...)` requires an
   allow result.
+- **Inline tests reach session-aware `Stop` handlers.** `Input(session_id=...)`
+  sets the payload's `session_id`, and `Input(transcript=<path>)` now also sets
+  `evt.transcript_path` on every event, not only tool events. A
+  `FileFixture`, including `home=True` and its `$HOME` swap, now materializes
+  on every event too.
 
 ### Changed
 

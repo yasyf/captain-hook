@@ -1073,6 +1073,44 @@ class TestStateSeedsTheSessionStore:
         assert len(results) == 2
         assert all(r[2] for r in results), f"Failed: {results}"
 
+    def test_stop_carries_transcript_path_session_id_and_a_home_fixture(self, tmp_path):
+        import os
+
+        from captain_hook.app import on
+        from captain_hook.state import WorkflowState, workflow_state
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import FileFixture, Input, Warn
+
+        @workflow_state("plan-probe")
+        class PlanState(WorkflowState):
+            plan_path: str | None = None
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("")
+        seen: dict[str, object] = {}
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(
+                    file=FileFixture(home=True, name="brook.md", content="# plan\n"),
+                    state=[PlanState(plan_path="~/brook.md")],
+                    transcript=transcript,
+                    session_id="0123456789abcdef",
+                ): Warn(pattern="archived"),
+            },
+        )
+        def archive(evt):
+            plan = Path(os.path.expanduser(PlanState.load(evt).plan_path))
+            (plan.parent / f"brook.{evt.session_id[:8]}.md").write_text(plan.read_text())
+            seen["transcript_path"] = evt.transcript_path
+            return evt.warn("archived")
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert seen["transcript_path"] == transcript
+
     def test_state_rejects_non_models(self):
         from captain_hook.testing.types import Input
 

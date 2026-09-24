@@ -22,6 +22,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "source": (str,),
     "permission_mode": (str,),
     "cwd": (str,),
+    "session_id": (str,),
     "offset": (int,),
     "limit": (int,),
     "skip_permissions": (bool,),
@@ -165,13 +166,15 @@ class Input:
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
         cwd: The session working directory surfaced as ``evt.cwd``, for hooks
             that resolve relative tool paths.
+        session_id: The payload's ``session_id``, surfaced as ``evt.session_id``.
         skip_permissions: Pre-seeds ``evt.skip_permissions`` (normally the
             process-tree walk for ``--dangerously-skip-permissions``); ``None``
             leaves the real walk in place.
         offset: ``Read`` call offset.
         limit: ``Read`` call limit.
         transcript: Session history for transcript conditions — a path, a
-            ``TranscriptFixture``, or a raw list of transcript-line dicts.
+            ``TranscriptFixture``, or a raw list of transcript-line dicts. A path
+            also lands in the payload as ``evt.transcript_path``, on every event.
         tasks: The native task list read via ``evt.tasks``.
         background_tasks: Background-task mappings for the ``Stop``/``SubagentStop``
             payload, surfaced as ``evt.background_tasks`` — the shape that makes a
@@ -209,6 +212,7 @@ class Input:
     source: str | None = None
     permission_mode: str | None = None
     cwd: str | None = None
+    session_id: str | None = None
     skip_permissions: bool | None = None
     offset: int | None = None
     limit: int | None = None

@@ -153,7 +153,8 @@ Two more knobs cover command guards that stat their operands. A `{file}` token i
 `Input.command` is replaced with the materialized fixture's absolute path, so the command
 names a real file. `home=True` (requires `name`) materializes the fixture under a private
 temp home and swaps `$HOME` to it for just that test, so a literal `~` in the command
-exercises an `os.path.expanduser`-based guard deterministically:
+exercises an `os.path.expanduser`-based guard deterministically. Both work on every event,
+so a `Stop` hook can read or write a real file under `~` too:
 
 ```python
 tests={
