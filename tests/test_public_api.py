@@ -119,6 +119,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "PathMatches",
     "PathsMatch",
     "Pattern",
+    "PendingToolCall",
     "PermissionRequestEvent",
     "Phrase",
     "PostToolUseEvent",

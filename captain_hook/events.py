@@ -342,6 +342,7 @@ class BaseHookEvent:
         size: TModel = "small",
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
     ) -> str | None: ...
     @overload
@@ -360,6 +361,7 @@ class BaseHookEvent:
         size: TModel = "small",
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
     ) -> bool | None: ...
     @overload
@@ -378,6 +380,7 @@ class BaseHookEvent:
         size: TModel = "small",
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
     ) -> int | None: ...
     @overload
@@ -396,6 +399,7 @@ class BaseHookEvent:
         size: TModel = "small",
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
     ) -> M | None: ...
     def llm(
@@ -413,6 +417,7 @@ class BaseHookEvent:
         size: TModel = "small",
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
     ) -> BaseModel | str | bool | int | None:
         """Ask an LLM a question about this event and return a typed answer.
@@ -447,6 +452,7 @@ class BaseHookEvent:
             model=size,
             agent=agent,
             transcript=transcript,
+            tool_results=tool_results,
             diff=diff,
             retries=retries,
         )

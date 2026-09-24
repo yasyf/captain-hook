@@ -61,6 +61,7 @@ EXPORTS: dict[str, str] = {
     "HookContext": "captain_hook.context",
     "AfterEdit": "captain_hook.contexts",
     "BeforeEdit": "captain_hook.contexts",
+    "PendingToolCall": "captain_hook.contexts",
     "Excerpts": "captain_hook.contexts",
     "Introduced": "captain_hook.contexts",
     "PromptContext": "captain_hook.contexts",

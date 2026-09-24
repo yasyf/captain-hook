@@ -57,6 +57,7 @@ from captain_hook.conditions import workflow_script_source as workflow_script_so
 from captain_hook.context import HookContext as HookContext
 from captain_hook.contexts import AfterEdit as AfterEdit
 from captain_hook.contexts import BeforeEdit as BeforeEdit
+from captain_hook.contexts import PendingToolCall as PendingToolCall
 from captain_hook.contexts import Excerpts as Excerpts
 from captain_hook.contexts import Introduced as Introduced
 from captain_hook.contexts import PromptContext as PromptContext
