@@ -138,18 +138,23 @@ class HookContext:
 
         return scan_text(text, patterns)
 
-    def transcript_text(self, *, window: int | None = None) -> str:
+    def transcript_text(self, *, window: int | None = None, tool_results: bool = False) -> str:
         """The transcript rendered turn by turn under the default budget.
 
         Args:
             window: Render only the span covering the most recent ``window`` messages; ``None`` renders the whole session.
+            tool_results: Render each tool result after its call, as ``result:`` or ``failed:``.
         """
         from cc_transcript.render import Budget, render_turn
 
         src = self.transcript if window is None else self.transcript.recent_messages(window)
-        return "\n\n".join(rendered for turn in src.turns if (rendered := render_turn(turn, budget=Budget())))
+        return "\n\n".join(
+            rendered
+            for turn in src.turns
+            if (rendered := render_turn(turn, budget=Budget(), tool_results=tool_results))
+        )
 
-    def transcript_block(self, *, window: int | None = RECENT_WINDOW) -> str:
+    def transcript_block(self, *, window: int | None = RECENT_WINDOW, tool_results: bool = False) -> str:
         """The rendered transcript wrapped in a ``<transcript>`` tag carrying its source path.
 
         Defaults to a recent-message window rather than the whole session. The render clips long
@@ -158,8 +163,9 @@ class HookContext:
 
         Args:
             window: Render only the span covering the most recent ``window`` messages; ``None`` renders the whole session.
+            tool_results: Render each tool result after its call, as ``result:`` or ``failed:``.
         """
-        rendered = self.transcript_text(window=window)
+        rendered = self.transcript_text(window=window, tool_results=tool_results)
         if (path := self.transcript.path) is not None:
             return f'<transcript path="{path}">\n{rendered}\n</transcript>'
         return f"<transcript>\n{rendered}\n</transcript>"
@@ -269,6 +275,7 @@ class HookContext:
         model: TModel = "small",
         timeout: int = 180,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
@@ -285,6 +292,7 @@ class HookContext:
         model: TModel = "small",
         timeout: int = 180,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
@@ -300,6 +308,7 @@ class HookContext:
         model: TModel = "small",
         timeout: int = 180,
         transcript: bool | int | Literal["recent", "full"] = False,
+        tool_results: bool = False,
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
@@ -318,7 +327,9 @@ class HookContext:
             with UNSUPPORTED_MODELS_LOCK:
                 UNSUPPORTED_MODELS.pop((specialty, model), None)
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
-        prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
+        prompt = self.assemble_prompt(
+            template, args, kwargs, transcript=transcript, tool_results=tool_results, diff_text=diff_text
+        )
         cwd = resolve_project_dir()
         timeout = reqenv.clamp_timeout(timeout)
         try:
@@ -348,15 +359,18 @@ class HookContext:
         kwargs: dict[str, Any],
         *,
         transcript: bool | int | Literal["recent", "full"],
+        tool_results: bool,
         diff_text: str | None,
     ) -> str:
         window = transcript_window(transcript) if transcript else None
         match template:
             case Prompt():
                 prompt = str(template.context("diff", diff_text))
-                return f"{self.transcript_block(window=window)}\n\n<task>\n{prompt}\n</task>" if transcript else prompt
+                if not transcript:
+                    return prompt
+                return f"{self.transcript_block(window=window, tool_results=tool_results)}\n\n<task>\n{prompt}\n</task>"
             case str():
-                block = self.transcript_block(window=window) if transcript else ""
+                block = self.transcript_block(window=window, tool_results=tool_results) if transcript else ""
                 wrapped = f"{{transcript}}\n\n<task>\n{template}\n</task>" if transcript else template
                 body = wrapped.format(*args, **kwargs, transcript=block)
                 return f"<diff>\n{diff_text}\n</diff>\n\n{body}" if diff_text is not None else body

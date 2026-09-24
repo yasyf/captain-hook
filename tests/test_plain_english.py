@@ -41,7 +41,9 @@ class CerebrasStub(HookContext):
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def call_llm(self, template: str | Prompt, *args: Any, **kwargs: Any) -> str:
-        self.calls.append((self.assemble_prompt(template, args, {}, transcript=False, diff_text=None), kwargs))
+        self.calls.append(
+            (self.assemble_prompt(template, args, {}, transcript=False, tool_results=False, diff_text=None), kwargs)
+        )
         time.sleep(self.delay)
         if isinstance(self.answer, Exception):
             raise self.answer

@@ -85,6 +85,7 @@ def llm_evaluate[M: BaseModel](
     model: TModel = "small",
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
+    tool_results: bool = False,
     diff: bool | str = False,
     retries: int = 2,
     once_per_turn: bool = True,
@@ -141,6 +142,7 @@ def llm_evaluate[M: BaseModel](
                 model=model,
                 agent=agent,
                 transcript=transcript,
+                tool_results=tool_results,
                 response_model=response_model,
             )
         except ValidationError as e:
@@ -199,6 +201,7 @@ def llm_primitive[M: BaseModel](
     model: TModel = "small",
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
+    tool_results: bool = False,
     diff: bool | str = False,
 ) -> None:
     prompt = str(prompt)
@@ -221,6 +224,7 @@ def llm_primitive[M: BaseModel](
                 model=model,
                 agent=agent,
                 transcript=transcript,
+                tool_results=tool_results,
                 diff=diff,
             )
         except Exception:
@@ -280,6 +284,7 @@ def llm_gate(
     model: TModel = "small",
     agent: bool = True,
     transcript: bool | int | Literal["recent", "full"] = True,
+    tool_results: bool = False,
     diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered blocking gate.
@@ -294,8 +299,10 @@ def llm_gate(
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the gate has tool access and a recent transcript window (the path lets the agent
-    read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
-    ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
+    read full history). Pass ``tool_results=True`` to render each tool result after its call
+    in that window, as ``result:`` or ``failed:``. Pass ``diff=True`` to attach a compact
+    working-tree diff as a ``<diff>`` block, or ``agent=False, transcript=False`` for cheap,
+    stateless yes/no checks.
     An empty diff (or no repo) skips the LLM call entirely, consuming no fire.
 
     ``contexts`` attaches declarative evidence blocks
@@ -355,6 +362,7 @@ def llm_gate(
         model=model,
         agent=agent,
         transcript=transcript,
+        tool_results=tool_results,
         diff=diff,
     )
 
@@ -381,6 +389,7 @@ def llm_nudge(
     model: TModel = "small",
     agent: bool = True,
     transcript: bool | int | Literal["recent", "full"] = True,
+    tool_results: bool = False,
     diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered advisory nudge.
@@ -391,8 +400,10 @@ def llm_nudge(
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the nudge has tool access and a recent transcript window (the path lets the agent
-    read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
-    ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
+    read full history). Pass ``tool_results=True`` to render each tool result after its call
+    in that window, as ``result:`` or ``failed:``. Pass ``diff=True`` to attach a compact
+    working-tree diff as a ``<diff>`` block, or ``agent=False, transcript=False`` for cheap,
+    stateless yes/no checks.
     An empty diff (or no repo) skips the LLM call entirely, consuming no fire.
 
     ``contexts`` attaches declarative evidence blocks
@@ -452,6 +463,7 @@ def llm_nudge(
         model=model,
         agent=agent,
         transcript=transcript,
+        tool_results=tool_results,
         diff=diff,
     )
 

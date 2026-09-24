@@ -522,6 +522,27 @@ class TestCallLlm:
             "<transcript>\nuser: post an ack in the thread\nuser: once you have the draft, send it\n</transcript>"
         )
 
+    def test_transcript_block_renders_tool_results_only_when_asked(self) -> None:
+        from captain_hook.testing.helpers import fixture_session
+
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session(
+                [
+                    T.user("post it"),
+                    T.assistant(T.tool("Bash", id="b1", command="ls")),
+                    T.user(T.result("a.py", of="b1")),
+                    T.assistant(T.tool("Bash", id="b2", command="false")),
+                    T.user(T.result("exit 1", of="b2", is_error=True)),
+                ]
+            ),
+            settings=None,
+        )
+        assert ctx.transcript_block() == "<transcript>\nuser: post it\nls\nfalse\n</transcript>"
+        assert ctx.transcript_block(tool_results=True) == (
+            "<transcript>\nuser: post it\nls\nresult: a.py\nfalse\nfailed: exit 1\n</transcript>"
+        )
+
     def test_with_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
