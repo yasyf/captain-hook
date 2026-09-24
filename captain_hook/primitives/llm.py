@@ -18,6 +18,7 @@ from captain_hook.prompt import Prompt, render_template
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
+    TOOL_EVENTS,
     Action,
     Event,
     HookResult,
@@ -86,18 +87,19 @@ def llm_evaluate[M: BaseModel](
     transcript: bool | int | Literal["recent", "full"] = False,
     diff: bool | str = False,
     retries: int = 2,
+    once_per_turn: bool = True,
 ) -> M | str | None:
     """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
 
-    Applies signals/when gating, renders ``contexts`` (a ``required`` context with no content skips
-    the call), attaches the transcript window and optional diff, then calls the backend — retrying up
+    Skips once ``hook`` has fired this turn unless ``once_per_turn`` is False, then applies
+    signals/when gating, renders ``contexts`` (a ``required`` context with no content skips the call), attaches the transcript window and optional diff, then calls the backend — retrying up
     to ``retries`` times, feeding a schema validation failure back to the model on re-ask. Returns
     ``None`` on a skip; raises when the call still fails after the final retry, and at once when the
     backend rejects the model itself.
     """
     from cc_transcript.render import clip
 
-    if fired_this_turn(evt):
+    if once_per_turn and fired_this_turn(evt):
         return None
     if when is not None and not when(evt):
         return None
@@ -210,6 +212,7 @@ def llm_primitive[M: BaseModel](
                 prompt,
                 response_model,
                 hook=name,
+                once_per_turn=action is not Action.block or not evt.event & TOOL_EVENTS,
                 signals=signals,
                 when=when,
                 contexts=contexts,
@@ -280,6 +283,10 @@ def llm_gate(
     diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered blocking gate.
+
+    On a tool event the gate judges every call, so a call retried after a block is judged
+    again rather than let through. On any other event a gate that blocked stays quiet for
+    the rest of the turn, which keeps a Stop gate from looping.
 
     ``message`` may be a literal string, a ``{field}`` template with the verdict model's fields
     splatted in (same placeholder rules as :meth:`~captain_hook.Prompt.from_template`: only

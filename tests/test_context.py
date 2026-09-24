@@ -500,6 +500,28 @@ class TestCallLlm:
         )
         assert no_path.transcript_block().startswith("<transcript>\n")
 
+    def test_transcript_block_window_counts_messages_not_harness_noise(self) -> None:
+        from captain_hook.testing.helpers import fixture_session
+
+        hook_noise = [{"type": "attachment", "attachment": {"type": "hook_success", "content": "ok"}}] * 40
+        queued = {
+            "type": "attachment",
+            "attachment": {
+                "type": "queued_command",
+                "prompt": "once you have the draft, send it",
+                "commandMode": "prompt",
+                "origin": {"kind": "human"},
+            },
+        }
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([T.user("post an ack in the thread"), *hook_noise, queued, *hook_noise]),
+            settings=None,
+        )
+        assert ctx.transcript_block(window=2) == (
+            "<transcript>\nuser: post an ack in the thread\nuser: once you have the draft, send it\n</transcript>"
+        )
+
     def test_with_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
