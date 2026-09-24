@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`system_message=` shows a hook's text to the user.** `evt.allow`,
+  `evt.warn`, `evt.context` and `evt.block` take `system_message=`, carried on
+  `HookResult.system_message` and rendered as Claude Code's top-level
+  `systemMessage` beside the event's usual envelope. A `Stop` that allows
+  renders `{"systemMessage": ...}` on its own. Several hooks' messages join in
+  registration order, and `PreCompact`, whose stdout is plain text, drops them.
+
 ### Changed
 
 - **Hooks see the `ORCA_*` environment.** The client forwards every `ORCA_`

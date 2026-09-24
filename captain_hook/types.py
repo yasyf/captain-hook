@@ -991,7 +991,9 @@ class HookResult:
     input and the advisory context surfaced alongside it. ``approve`` gates the
     ``PreToolUse`` ``permissionDecision: allow`` rider a ``warn`` normally carries:
     ``False`` surfaces the message as pure ``additionalContext`` without pre-approving
-    the tool (the ``evt.context`` variant).
+    the tool (the ``evt.context`` variant). ``system_message`` is shown to the user as
+    Claude Code's top-level ``systemMessage`` alongside whatever the action renders, including
+    a ``Stop`` that allows; ``PreCompact``, whose stdout is plain text, drops it.
     """
 
     action: Action
@@ -999,6 +1001,7 @@ class HookResult:
     updated_input: dict[str, Any] | None = None
     note: str | None = None
     approve: bool = True
+    system_message: str | None = None
 
     @classmethod
     def of(cls, action: Action, message: str | None = None) -> HookResult:

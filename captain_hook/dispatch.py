@@ -426,6 +426,7 @@ def combine(
     warns: list[str] = []
     deny_advisories: list[str] = []
     warn_approve = False
+    notices: list[str] = []
     for index, entry in enumerate(entries):
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
@@ -435,7 +436,9 @@ def combine(
             logger.bind(hook=entry.name).warning("caller deadline reached; abandoning this hook's verdict")
             reqenv.abandoned().append(entry.name)
             continue
-        match future.result():
+        if (result := future.result()) is not None and result.system_message:
+            notices.append(result.system_message)
+        match result:
             case HookResult(action=Action.block, message=msg):
                 blocked = True
                 if msg:
@@ -452,24 +455,28 @@ def combine(
             case _:
                 pass
 
+    envelope: Envelope | None = None
     if blocked:
         parts = list(blocks)
         if deny_advisories:
             parts.append(ADVISORY_SEPARATOR)
             parts.extend(deny_advisories)
-        return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
-    if (winner := rewrite or approval) is not None:
+        envelope = format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
+    elif (winner := rewrite or approval) is not None:
         if warns:
             winner = (
                 replace(winner, note="\n\n".join(([winner.note] if winner.note else []) + warns))
                 if winner.action is Action.rewrite
                 else replace(winner, message="\n\n".join(warns))
             )
-        return format_output(event, winner)
-    if warns:
-        return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve))
-
-    return None
+        envelope = format_output(event, winner)
+    elif warns:
+        envelope = format_output(
+            event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve)
+        )
+    if not notices or event is Event.PreCompact:
+        return envelope
+    return (envelope or {}) | {"systemMessage": "\n\n".join(notices)}
 
 
 def dispatch(
