@@ -83,6 +83,12 @@ nudge(
             # the third person — not the assistant electing to leave an issue unaddressed — but
             # still trips the issue/leave clause above (misfire watched live 2026-07-24).
             Signal(pattern=r"(?i)\b(?:which|that)\s+leaves?\b"),
+            # "leaving X [unedited/unaddressed/...] means ..." states the consequence of NOT
+            # acting as the reason a fix is happening in this same turn — not a decision to
+            # skip it. The gerund "leaving" dependency-links to a nearby "issue"/"bug"/... noun
+            # within the clause's 3-hop window even though it isn't that noun's object
+            # (misfire 2026-09-19, session a568684c).
+            Signal(pattern=r"(?i)\bleaving\b[^.!?]{0,80}?\bmeans?\b"),
         ],
     ),
     tests={
@@ -284,6 +290,21 @@ nudge(
         # m7 boundary: a genuine first-person decision to leave an issue still warns even though
         # the mechanism-description veto is now active
         Input(transcript=[T.assistant("I'll leave that issue alone for now.")]): Warn(),
+        # f23 same-turn motivation: "leaving X unedited means Y" states the reason a fix is
+        # happening right now, not a decision to skip it (misfire 2026-09-19, session a568684c)
+        Input(
+            transcript=[
+                T.assistant(
+                    "There's also the CLAUDE.md issue: the hooks reference a Model Routing "
+                    "section that lists opus as handling synthesis/accept-reject over review "
+                    "findings, so leaving that section unedited means it contradicts the hooks "
+                    "and could get reverted later."
+                )
+            ]
+        ): Allow(),
+        # f23-genuine: a first-person prospective dismissal still warns even with the
+        # same-turn-motivation veto active
+        Input(transcript=[T.assistant("I'll leave that CLAUDE.md issue unaddressed for now.")]): Warn(),
     },
 )
 
