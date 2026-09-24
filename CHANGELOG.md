@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.53.0] - 2026-09-24
+
+### Added
+
+- **LLM judges see the pending tool call.** `PendingToolCall` renders the event's
+  tool call as a `<pending_tool_call>` block on `PreToolUse` and
+  `PermissionRequest`, and nothing elsewhere. It joins `BeforeEdit` and
+  `AfterEdit` in the default contexts of every LLM primitive. Claude Code writes
+  the assistant entry to the transcript about three seconds after `PreToolUse`
+  fires, so a `transcript=` judge could decide on a call it could not see.
+- **`tool_results=True` renders tool results in the `transcript=` window.**
+  `llm_gate`, `llm_nudge`, `llm_evaluate`, `evt.llm` and `HookContext.call_llm`
+  take `tool_results`. When it is set, each finished call in the window is
+  followed by its `result:`, or `failed:` when it errored or a hook blocked it.
+  The default window is unchanged.
+
+### Changed
+
+- **cc-transcript 14.22.0.** AskUserQuestion answers in a `transcript=` window
+  render as `user answered: <question> -> <label>`, followed by the chosen
+  option's description, the selected preview and any notes.
+
 ## [12.52.0] - 2026-09-23
 
 ### Changed
