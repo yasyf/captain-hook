@@ -3,6 +3,7 @@ from __future__ import annotations
 from importlib import import_module
 
 EXPORTS: dict[str, str] = {
+    "Budget": "cc_transcript.render",
     "Command": "cc_transcript.command",
     "CommandLine": "cc_transcript.command",
     "Occurrence": "cc_transcript.command",

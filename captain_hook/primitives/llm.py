@@ -31,6 +31,7 @@ from captain_hook.types import (
 from captain_hook.util.paths import resolve_cache_dir
 
 if TYPE_CHECKING:
+    from cc_transcript.render import Budget
     from spawnllm import TModel, TSpecialty
 
     from captain_hook.contexts import PromptContext
@@ -86,6 +87,7 @@ def llm_evaluate[M: BaseModel](
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
     tool_results: bool = False,
+    budget: Budget | None = None,
     diff: bool | str = False,
     retries: int = 2,
     once_per_turn: bool = True,
@@ -93,7 +95,8 @@ def llm_evaluate[M: BaseModel](
     """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
 
     Skips once ``hook`` has fired this turn unless ``once_per_turn`` is False, then applies
-    signals/when gating, renders ``contexts`` (a ``required`` context with no content skips the call), attaches the transcript window and optional diff, then calls the backend — retrying up
+    signals/when gating, renders ``contexts`` (a ``required`` context with no content skips the call),
+    attaches the transcript window and optional diff, then calls the backend — retrying up
     to ``retries`` times, feeding a schema validation failure back to the model on re-ask. Returns
     ``None`` on a skip; raises when the call still fails after the final retry, and at once when the
     backend rejects the model itself.
@@ -143,6 +146,7 @@ def llm_evaluate[M: BaseModel](
                 agent=agent,
                 transcript=transcript,
                 tool_results=tool_results,
+                budget=budget,
                 response_model=response_model,
             )
         except ValidationError as e:
@@ -202,6 +206,7 @@ def llm_primitive[M: BaseModel](
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
     tool_results: bool = False,
+    budget: Budget | None = None,
     diff: bool | str = False,
 ) -> None:
     prompt = str(prompt)
@@ -225,6 +230,7 @@ def llm_primitive[M: BaseModel](
                 agent=agent,
                 transcript=transcript,
                 tool_results=tool_results,
+                budget=budget,
                 diff=diff,
             )
         except Exception:
@@ -285,6 +291,7 @@ def llm_gate(
     agent: bool = True,
     transcript: bool | int | Literal["recent", "full"] = True,
     tool_results: bool = False,
+    budget: Budget | None = None,
     diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered blocking gate.
@@ -300,7 +307,8 @@ def llm_gate(
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the gate has tool access and a recent transcript window (the path lets the agent
     read full history). Pass ``tool_results=True`` to render each tool result after its call
-    in that window, as ``result:`` or ``failed:``. Pass ``diff=True`` to attach a compact
+    in that window, as ``result:`` or ``failed:``, and ``budget=`` a cc-transcript ``Budget`` to
+    widen what each prose chunk, tool call and answer preview keeps. Pass ``diff=True`` to attach a compact
     working-tree diff as a ``<diff>`` block, or ``agent=False, transcript=False`` for cheap,
     stateless yes/no checks.
     An empty diff (or no repo) skips the LLM call entirely, consuming no fire.
@@ -363,6 +371,7 @@ def llm_gate(
         agent=agent,
         transcript=transcript,
         tool_results=tool_results,
+        budget=budget,
         diff=diff,
     )
 
@@ -390,6 +399,7 @@ def llm_nudge(
     agent: bool = True,
     transcript: bool | int | Literal["recent", "full"] = True,
     tool_results: bool = False,
+    budget: Budget | None = None,
     diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered advisory nudge.
@@ -401,7 +411,8 @@ def llm_nudge(
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the nudge has tool access and a recent transcript window (the path lets the agent
     read full history). Pass ``tool_results=True`` to render each tool result after its call
-    in that window, as ``result:`` or ``failed:``. Pass ``diff=True`` to attach a compact
+    in that window, as ``result:`` or ``failed:``, and ``budget=`` a cc-transcript ``Budget`` to
+    widen what each prose chunk, tool call and answer preview keeps. Pass ``diff=True`` to attach a compact
     working-tree diff as a ``<diff>`` block, or ``agent=False, transcript=False`` for cheap,
     stateless yes/no checks.
     An empty diff (or no repo) skips the LLM call entirely, consuming no fire.
@@ -464,6 +475,7 @@ def llm_nudge(
         agent=agent,
         transcript=transcript,
         tool_results=tool_results,
+        budget=budget,
         diff=diff,
     )
 

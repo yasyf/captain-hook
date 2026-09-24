@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`budget=` sets the transcript render budget of an LLM judge.** `llm_gate`,
+  `llm_nudge`, `llm_evaluate`, `evt.llm`, `HookContext.call_llm`,
+  `transcript_text` and `transcript_block` take a cc-transcript `Budget`, now
+  exported from `captain_hook`, so a judge that compares a pending call against an
+  approved preview can keep both in full instead of the default 1,500 tool
+  characters. The default budget is unchanged.
+
+### Changed
+
+- **`PendingToolCall` renders the call in full.** The primitive's `max_context` is
+  its one clip. Before, the block clipped the call to the default 1,500 tool
+  characters first, so a long pending Slack message and an edited one with the same
+  prefix rendered identically.
+- **cc-transcript 14.23.0.** With `tool_results=True`, a result in a `transcript=`
+  window renders as a `result:` or `failed:` head naming its tool, then its output on
+  `> ` lines, so no line of tool output can read as a `user:` or `user answered:` line.
+  Calls batched in one assistant message and their results carry `call i/n` and
+  `result i/n` ordinals.
+
 ## [12.53.0] - 2026-09-24
 
 ### Added

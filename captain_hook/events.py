@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from cc_transcript.ids import ToolDigest
+    from cc_transcript.render import Budget
     from cc_transcript.tools import FallbackCall, ToolCall
     from pydantic import BaseModel
     from spawnllm import TModel, TSpecialty
@@ -343,6 +344,7 @@ class BaseHookEvent:
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
     ) -> str | None: ...
     @overload
@@ -362,6 +364,7 @@ class BaseHookEvent:
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
     ) -> bool | None: ...
     @overload
@@ -381,6 +384,7 @@ class BaseHookEvent:
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
     ) -> int | None: ...
     @overload
@@ -400,6 +404,7 @@ class BaseHookEvent:
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
     ) -> M | None: ...
     def llm(
@@ -418,6 +423,7 @@ class BaseHookEvent:
         agent: bool = False,
         transcript: bool | int | Literal["recent", "full"] = False,
         tool_results: bool = False,
+        budget: Budget | None = None,
         diff: bool | str = False,
     ) -> BaseModel | str | bool | int | None:
         """Ask an LLM a question about this event and return a typed answer.
@@ -453,6 +459,7 @@ class BaseHookEvent:
             agent=agent,
             transcript=transcript,
             tool_results=tool_results,
+            budget=budget,
             diff=diff,
             retries=retries,
         )

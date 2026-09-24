@@ -57,6 +57,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "BashCall",
     "BeforeEdit",
     "Block",
+    "Budget",
     "COMMENT_TYPES",
     "Call",
     "Clause",
