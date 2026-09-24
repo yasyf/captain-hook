@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Set
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from cc_transcript.render import Budget, clip
 
 from captain_hook import T
 from captain_hook.ast_grep import COMMENT_TYPES
@@ -249,11 +251,29 @@ class TestPendingToolCall:
         evt = mock_tool_event("Bash", event=Event.PermissionRequest, command="git push")
         assert PendingToolCall().content(evt) == "git push"
 
-    def test_renders_the_call_in_full(self) -> None:
+    def test_clips_the_call_to_the_default_budget_without_one(self) -> None:
+        tool_input = {"channel_id": "C1", "text": "x" * 5_000}
+        evt = mock_tool_event("mcp__slack__slack_send_message", tool_input=tool_input)
+        clipped = clip(json.dumps(tool_input, separators=(",", ":")), 1_500)
+        assert PendingToolCall().content(evt) == f"mcp__slack__slack_send_message({clipped})"
+
+    def test_renders_the_call_under_its_budget(self) -> None:
         text = "x" * 5_000
         evt = mock_tool_event("mcp__slack__slack_send_message", tool_input={"channel_id": "C1", "text": text})
         call = f'mcp__slack__slack_send_message({{"channel_id":"C1","text":"{text}"}})'
-        assert PendingToolCall().content(evt) == call
+        assert PendingToolCall(budget=Budget(tool_chars=6_000)).content(evt) == call
+
+    def test_with_defaults_hands_the_gate_budget_to_the_pending_call(self) -> None:
+        wide = Budget(tool_chars=6_000)
+        assert with_defaults((), budget=wide) == (BeforeEdit(), AfterEdit(), PendingToolCall(budget=wide))
+        assert with_defaults([PendingToolCall()], budget=wide) == (
+            PendingToolCall(budget=wide),
+            BeforeEdit(),
+            AfterEdit(),
+        )
+        narrow = Budget(tool_chars=10)
+        assert with_defaults([PendingToolCall(budget=narrow)], budget=wide)[0] == PendingToolCall(budget=narrow)
+        assert with_defaults(()) == (BeforeEdit(), AfterEdit(), PendingToolCall())
 
     def test_omitted_after_the_call_ran(self) -> None:
         assert PendingToolCall().content(mock_tool_event("Bash", event=Event.PostToolUse, command="ls")) is None
