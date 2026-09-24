@@ -424,6 +424,36 @@ class TestLlmEvaluateFiredThisTurn:
         assert result2 is None
         ctx.call_llm.assert_not_called()
 
+    def test_tool_event_gate_judges_a_retry_after_blocking(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, events=Event.PreToolUse)
+
+        first = dispatch(Event.PreToolUse, make_pre_tool_event(ctx=ctx), session_dir=tmp_path)
+        assert first is not None
+
+        ctx.call_llm.reset_mock()
+        ctx.call_llm.return_value = GateVerdict(block=False, reasoning="granted")
+        assert dispatch(Event.PreToolUse, make_pre_tool_event(ctx=ctx), session_dir=tmp_path) is None
+        ctx.call_llm.assert_called_once()
+
+        ctx.call_llm.reset_mock()
+        ctx.call_llm.return_value = GateVerdict(block=True, reasoning="still bad")
+        assert dispatch(Event.PreToolUse, make_pre_tool_event(ctx=ctx), session_dir=tmp_path) is not None
+        ctx.call_llm.assert_called_once()
+
+    def test_tool_event_nudge_stays_once_per_turn(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=True, reasoning="hm"))
+        register_llm_nudge("Check this", message="WARNING", when=lambda evt: True, events=Event.PostToolUse)
+
+        assert dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path) is not None
+        ctx.call_llm.reset_mock()
+        assert dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
 
 class TestLlmEvaluateWhenPredicate:
     def test_llm_evaluate_when_true_triggers_llm(self, tmp_path: Path) -> None:

@@ -142,22 +142,22 @@ class HookContext:
         """The transcript rendered turn by turn under the default budget.
 
         Args:
-            window: Render only the most recent ``window`` events; ``None`` renders the whole session.
+            window: Render only the span covering the most recent ``window`` messages; ``None`` renders the whole session.
         """
         from cc_transcript.render import Budget, render_turn
 
-        src = self.transcript if window is None else self.transcript.recent(window)
+        src = self.transcript if window is None else self.transcript.recent_messages(window)
         return "\n\n".join(rendered for turn in src.turns if (rendered := render_turn(turn, budget=Budget())))
 
     def transcript_block(self, *, window: int | None = RECENT_WINDOW) -> str:
         """The rendered transcript wrapped in a ``<transcript>`` tag carrying its source path.
 
-        Defaults to a recent-event window rather than the whole session. The render clips long
+        Defaults to a recent-message window rather than the whole session. The render clips long
         turns and tool calls under :class:`Budget`, so an agent-mode LLM uses the path to read
         the untruncated content (e.g. a full ``ExitPlanMode`` plan) or earlier history.
 
         Args:
-            window: Render only the most recent ``window`` events; ``None`` renders the whole session.
+            window: Render only the span covering the most recent ``window`` messages; ``None`` renders the whole session.
         """
         rendered = self.transcript_text(window=window)
         if (path := self.transcript.path) is not None:
