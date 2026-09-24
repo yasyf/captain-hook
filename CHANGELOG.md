@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal can read `ORCA_TERMINAL_HANDLE` through `reqenv.getenv` and pass it to
   `orca terminal send --terminal`. Workers no longer inherit the daemon's own
   `ORCA_*` values.
+- **`RewritingExistingPlan` allows a rewrite once the plan is archived.** A
+  `Write` over a plan already written this session no longer matches when a
+  sibling `<stem>.*.md` holds the plan's current bytes, such as
+  `p.2026-09-24-1530-pre-compact.md` beside `p.md`. The archive keeps what the
+  rewrite replaces.
+
+### Removed
+
+- **The stray `captain_hook/packs/general/plans.py`.** Nothing loaded it; the
+  plan-rewrite guard lives in the `general` builtin pack.
 
 ## [12.55.0] - 2026-09-24
 

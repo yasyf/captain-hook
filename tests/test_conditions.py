@@ -13,7 +13,14 @@ from cc_transcript.query import DEEP_LIFTS
 
 from captain_hook import EditedSource, T, cli
 from captain_hook.app import on
-from captain_hook.conditions import UserSaid, check_condition, is_project_path, matches_conditions, workflow_opt_matches
+from captain_hook.conditions import (
+    RewritingExistingPlan,
+    UserSaid,
+    check_condition,
+    is_project_path,
+    matches_conditions,
+    workflow_opt_matches,
+)
 from captain_hook.events import (
     BaseHookEvent,
     PermissionRequestEvent,
@@ -62,6 +69,7 @@ from captain_hook.types import (
 from tests.helpers import (
     async_agent_launch,
     build_ctx,
+    fixture_session,
     make_event,
     make_messages_ctx,
     make_transcript,
@@ -1183,6 +1191,42 @@ class TestInPlanModeCondition:
         ctx = make_transcript_ctx(count_tools_map=count_tools_map)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx, permission_mode=permission_mode)
         assert check_condition(InPlanMode(), evt) is expected
+
+
+class TestRewritingExistingPlanCondition:
+    def rewrite(self, plan: Path) -> PreToolUseEvent:
+        ctx = build_ctx(
+            transcript=fixture_session(
+                [
+                    T.assistant(T.tool("Write", file_path=str(plan), content="# Plan v1")),
+                    T.assistant(T.tool("Write", file_path=str(plan), content="# Plan v2")),
+                ]
+            )
+        )
+        return make_tool_event("Write", {"file_path": str(plan), "content": "# Plan v2"}, ctx=ctx)
+
+    @pytest.mark.parametrize(
+        ("archive", "expected"),
+        [
+            pytest.param(None, True, id="matches_without_archive"),
+            pytest.param("# Plan v0", True, id="matches_when_archive_differs"),
+            pytest.param("# Plan v1", False, id="rejects_when_archive_holds_current_content"),
+        ],
+    )
+    def test_archive_sibling(self, tmp_path: Path, archive: str | None, expected: bool) -> None:
+        plan = tmp_path / "plans" / "p.md"
+        plan.parent.mkdir()
+        plan.write_text("# Plan v1")
+        if archive is not None:
+            (plan.parent / "p.2026-09-24-1530-pre-compact.md").write_text(archive)
+        assert check_condition(RewritingExistingPlan(), self.rewrite(plan)) is expected
+
+    def test_ignores_archive_of_another_plan(self, tmp_path: Path) -> None:
+        plan = tmp_path / "plans" / "p.md"
+        plan.parent.mkdir()
+        plan.write_text("# Plan v1")
+        (plan.parent / "q.2026-09-24-pre-compact.md").write_text("# Plan v1")
+        assert check_condition(RewritingExistingPlan(), self.rewrite(plan)) is True
 
 
 class TestWaitingCondition:

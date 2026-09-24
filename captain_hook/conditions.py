@@ -286,11 +286,13 @@ class Headless(CustomCondition):
 
 class RewritingExistingPlan(CustomCondition):
     """Matches a ``Write`` to a plan file (``.md`` under ``plans/`` or ``specs/``) already written this
-    session, with no new plan cycle (``EnterPlanMode``) since the last ``Write`` to it.
+    session, with no new plan cycle (``EnterPlanMode``) since the last ``Write`` to it, and no archived
+    copy of its current content.
 
     Reads from ``evt.ctx.prior`` (the window before the current turn's last exchange) so the pending
-    ``Write`` being evaluated is never itself counted as the prior edit. A write to the file this
-    session already implies it exists, so no filesystem check is needed.
+    ``Write`` being evaluated is never itself counted as the prior edit. A sibling ``<stem>.*.md``
+    whose bytes equal the plan on disk (e.g. ``p.2026-09-24-1530-pre-compact.md`` beside ``p.md``)
+    preserves everything the rewrite replaces, so the ``Write`` does not match.
 
     Example:
         >>> hook(Event.PreToolUse, only_if=[Tool("Write"), RewritingExistingPlan()],
@@ -303,7 +305,12 @@ class RewritingExistingPlan(CustomCondition):
             return False
         if not evt.ctx.prior.has_edit_to(str(fp)):
             return False
-        return not evt.ctx.prior.after(tool="Write", file=str(fp)).has_tool("EnterPlanMode")
+        if evt.ctx.prior.after(tool="Write", file=str(fp)).has_tool("EnterPlanMode"):
+            return False
+        if not fp.exists():
+            return True
+        current = fp.path.read_bytes()
+        return not any(sibling.read_bytes() == current for sibling in fp.parent.glob(f"{fp.stem}.*.md"))
 
 
 class Commits(CustomCommandLineCondition):
