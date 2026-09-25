@@ -14,6 +14,7 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     ReviewPassRan,
     force_pushes,
     git_location,
+    git_probe,
     graphite_owns,
     rebases_onto_own_upstream,
 )
@@ -135,10 +136,11 @@ SUBMIT = (
     "lease of its last submitted version"
 )
 FORCE_PUSH = (
-    "`ccx vcs stack submit` restacks every lane and submits the whole stack, pushing each branch under the lease "
-    "of its last submitted version. It replays a branch from its recorded base, so it is not the route for a "
-    "branch whose history you rewrote on purpose, and it opens pull requests, which Graphite declines on a repo "
-    "it has no access to"
+    "`ccx vcs push` moves this branch's remote to the local head: it fetches, fast-forwards when it can, "
+    "force-pushes under a lease pinned to the head it observed when the branch was rewritten, and refuses a "
+    "remote head this branch never held. `ccx vcs stack submit` restacks and submits the whole stack, but it "
+    "replays a branch from its recorded base, so it is not the route for a branch whose history you rewrote on "
+    "purpose"
 )
 RESTACK = (
     "`ccx vcs stack restack` fetches the remote trunk and replays every branch of the stack onto its parent, "
@@ -180,6 +182,7 @@ SUBMIT_FLAGS = frozenset({"--stack", "-s", "--no-edit", "-n", "--publish", "-p",
 DRAFT_FLAGS = frozenset({"--draft", "-d"})
 REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
 REBASE_RESUMES = {"--continue": "continue", "--abort": "abort"}
+LEASE_FLAGS = frozenset({"--force-with-lease", "--force-if-includes"})
 LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
 
 
@@ -214,6 +217,26 @@ def resume_to(call: Call) -> str | None:
     return f"ccx vcs stack {verb}"
 
 
+def lease_push_to(call: Call, evt: BaseHookEvent) -> str | None:
+    """``ccx vcs push`` for a bare-lease push of the checked-out branch to ``origin``, the one push it makes.
+
+    A plain ``--force`` overwrites a divergence ``ccx vcs push`` refuses, and a ``--force-with-lease=<ref>``
+    pins a lease of its own, so neither is rewritten.
+    """
+    flags = frozenset(call.flags)
+    refs = tuple(target.value for target in call.targets.targets[1:])
+    if (
+        "--force-with-lease" not in flags
+        or not flags <= LEASE_FLAGS
+        or len(refs) > 2
+        or refs[:1] not in {(), ("origin",)}
+    ):
+        return None
+    if len(refs) == 2 and refs[1] != git_probe(call, evt.cwd, "symbolic-ref", "--short", "-q", "HEAD"):
+        return None
+    return "ccx vcs push"
+
+
 def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
     argv = call.verb_argv
     if len(argv) < 2 or "--help" in call.flags or "-h" in call.flags:
@@ -234,7 +257,7 @@ def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
         case "git", "rebase" if not rebases_onto_own_upstream(call, evt.cwd):
             route = Route(REBASE)
         case "git", "push" if force_pushes(call):
-            route = Route(FORCE_PUSH, act="overwrites remote history by hand")
+            route = Route(FORCE_PUSH, lease_push_to(call, evt), act="overwrites remote history by hand")
         case _:
             return None
     return route if graphite_owns(call, evt.cwd) else None

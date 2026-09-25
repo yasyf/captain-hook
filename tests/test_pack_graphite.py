@@ -514,6 +514,23 @@ def test_force_push_advises_without_blocking(
     assert "ccx vcs stack submit" in warn_context(dispatch_command(command, gt_repo, tmp_path))
 
 
+def test_a_bare_lease_push_of_the_current_branch_becomes_ccx_vcs_push(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "feat"], check=True)
+    for command in ["git push --force-with-lease", "git push --force-with-lease origin feat"]:
+        assert rewritten_command(dispatch_command(command, repo, tmp_path)) == "ccx vcs push"
+    for command in [
+        "git push -f origin feat",
+        "git push --force-with-lease origin other",
+        "git push --force-with-lease=feat:abc origin feat",
+        "git push --force-with-lease upstream feat",
+    ]:
+        assert "ccx vcs push" in warn_context(dispatch_command(command, repo, tmp_path))
+
+
 def test_force_push_advice_admits_the_rewrite_case(
     isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path
 ) -> None:

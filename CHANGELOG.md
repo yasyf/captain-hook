@@ -25,11 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write with a ccx twin is rewritten to it: `gt submit`, `gt s`, and `gt ss`
   become `ccx vcs stack submit`, a bare `gt restack` becomes
   `ccx vcs stack restack`, and `git rebase --continue` / `--abort` inside a
-  ccx conflict workspace become `ccx vcs stack continue` / `abort`. The
+  ccx conflict workspace become `ccx vcs stack continue` / `abort`. A bare
+  `git push --force-with-lease` of the checked-out branch to `origin` becomes
+  `ccx vcs push`, which refuses a remote head the branch never held. The
   rewrite applies only when the ccx verb covers every flag on the call and
   no wrapper, env prefix, or global option would be lost; a user-visible
   system message names each swap. Every other routed write, from `gt sync`,
-  `gt create`, `gt modify`, and `git rebase` to a force push, runs as written
+  `gt create`, `gt modify`, and `git rebase` to a plain `git push --force`, runs as written
   with a note naming the ccx command. A jj write in a Graphite repository
   gets a note instead of a refusal.
 - **`# ccx:raw` runs a command as written.** A trailing `# ccx:raw` comment on
