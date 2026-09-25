@@ -34,10 +34,10 @@ REVIEWED_VIA_COMMAND = [
 
 HOOK_CASES = [
     pytest.param("jj new", "deny", "Graphite", id="jj-ban"),
-    pytest.param("git commit -m x", "warn", "gt create", id="git-write"),
-    pytest.param("git switch -C main", "warn", "gt create", id="git-write-switch-force"),
+    pytest.param("git commit -m x", "warn", "ccx vcs ship", id="git-write"),
+    pytest.param("git switch -C main", "warn", "ccx vcs ship", id="git-write-switch-force"),
     pytest.param("gt submit", "warn", "review pass", id="submit-gate"),
-    pytest.param("git rebase main", "warn", "gt restack", id="restack"),
+    pytest.param("git rebase main", "warn", "ccx vcs stack submit", id="restack"),
 ]
 
 
@@ -146,10 +146,10 @@ def test_submit_gate_mentions_review_and_draft(isolate_modules: None, gt_repo: P
 @pytest.mark.parametrize(
     ("command", "kind", "needle"),
     [
-        pytest.param("cd {other} && git push", "warn", "gt create", id="cd-then-git-write"),
-        pytest.param("git -C {other} push", "warn", "gt create", id="git-C-write"),
-        pytest.param("git --git-dir={other}/.git push", "warn", "gt create", id="git-dir-write"),
-        pytest.param("cd {other} && git rebase main", "warn", "gt restack", id="cd-then-restack"),
+        pytest.param("cd {other} && git push", "warn", "ccx vcs ship", id="cd-then-git-write"),
+        pytest.param("git -C {other} push", "warn", "ccx vcs ship", id="git-C-write"),
+        pytest.param("git --git-dir={other}/.git push", "warn", "ccx vcs ship", id="git-dir-write"),
+        pytest.param("cd {other} && git rebase main", "warn", "ccx vcs stack submit", id="cd-then-restack"),
         pytest.param("cd {other} && jj new", "deny", "Graphite", id="cd-then-jj"),
     ],
 )

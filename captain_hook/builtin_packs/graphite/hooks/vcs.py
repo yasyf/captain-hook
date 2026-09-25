@@ -15,8 +15,8 @@ hook(
     skip_if=[JJReads()],
     message=(
         "BLOCKED: the repository this command targets runs on Graphite (gt), not jj — its stack metadata "
-        'lives in Graphite. Use `gt create -m "<msg>"` to start a stacked branch, `gt modify` to amend, '
-        "`gt log` to inspect the stack, and `gt checkout` to move between branches."
+        "lives in Graphite. Use `ccx vcs ship` to commit and submit, `ccx vcs stack new <name>` to cut a "
+        "stacked branch, and `gt log` or `ccx vcs stack list` to inspect the stack."
     ),
     block=True,
     tests={
@@ -46,9 +46,9 @@ hook(
     ],
     skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef()],
     message=(
-        "Committing, branching, and pushing go through gt in the repository this command targets — "
-        "`gt create -m` starts a stacked branch, `gt modify` amends and restacks, `gt submit` opens/updates "
-        'PRs. Prefer `ccx vcs ship -m "<msg>"`, which drives the whole gt lane. Raw git rewrites leave '
+        "Committing, branching, and pushing go through ccx vcs in the repository this command targets. "
+        'Use `ccx vcs ship -m "<msg>"` to commit and submit, `ccx vcs stack new <name>` to cut a stacked '
+        "branch, and `ccx vcs stack submit` to restack and resubmit the stack. Raw git writes leave "
         "Graphite's stack metadata stale."
     ),
     tests={
@@ -97,8 +97,8 @@ hook(
     ],
     skip_if=[HasFlag("--abort", "--continue", "--quit")],
     message=(
-        "Prefer `gt restack` / `gt sync` — a raw rebase, merge, or pull desyncs Graphite's stack "
-        "metadata, and `ccx vcs ship` refuses to submit a stack that needs a restack."
+        "Use `ccx vcs stack submit`, which fetches trunk and replays every lane. A raw rebase, merge, "
+        "or pull leaves Graphite's parent revision stale."
     ),
     tests={
         Input(command="git rebase main", cwd="/"): Allow(),
