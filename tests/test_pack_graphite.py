@@ -35,7 +35,7 @@ REVIEWED_VIA_COMMAND = [
 ]
 
 HOOK_CASES = [
-    pytest.param("jj new", "deny", "Graphite", id="jj-ban"),
+    pytest.param("jj new", "warn", "Graphite", id="jj-nudge"),
     pytest.param("git commit -m x", "warn", "ccx vcs ship", id="git-write"),
     pytest.param("git switch -C main", "warn", "ccx vcs ship", id="git-write-switch-force"),
     pytest.param("gt submit", "warn", "review pass", id="submit-gate"),
@@ -110,6 +110,13 @@ def assert_not_denied(result: dict[str, Any] | None) -> None:
     assert result is None or result["hookSpecificOutput"].get("permissionDecision") != "deny"
 
 
+def rewritten_command(result: dict[str, Any] | None) -> str:
+    assert result is not None
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "allow"
+    return output["updatedInput"]["command"]
+
+
 def warn_context(result: dict[str, Any] | None) -> str:
     assert result is not None
     output = result["hookSpecificOutput"]
@@ -170,7 +177,7 @@ def test_submit_gate_mentions_review_and_draft(isolate_modules: None, gt_repo: P
         pytest.param("git -C {other} push", "warn", "ccx vcs ship", id="git-C-write"),
         pytest.param("git --git-dir={other}/.git push", "warn", "ccx vcs ship", id="git-dir-write"),
         pytest.param("cd {other} && git rebase main", "warn", "ccx vcs stack submit", id="cd-then-restack"),
-        pytest.param("cd {other} && jj new", "deny", "Graphite", id="cd-then-jj"),
+        pytest.param("cd {other} && jj new", "warn", "Graphite", id="cd-then-jj"),
     ],
 )
 def test_hooks_judge_the_repository_the_command_targets(
@@ -196,7 +203,7 @@ def test_ownership_and_verb_are_judged_on_the_same_call(
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert dispatch_command(f"git -C {gt_repo} status && jj new", git_repo, tmp_path) is None
     assert dispatch_command(f"git -C {gt_repo} status && git push", git_repo, tmp_path) is None
-    assert_fires(dispatch_command(f"git -C {git_repo} status && jj new", gt_repo, tmp_path), "deny", "Graphite")
+    assert_fires(dispatch_command(f"git -C {git_repo} status && jj new", gt_repo, tmp_path), "warn", "Graphite")
 
 
 def test_a_verbs_own_dash_C_is_not_a_directory_hop(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
@@ -348,7 +355,7 @@ def test_nogt_value_parity_with_ccx(isolate_modules: None, tmp_path: Path, value
     ],
 )
 def test_read_only_jj_is_allowed(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
-    """The ban protects stack metadata; a read mutates none, so blocking it only costs work."""
+    """The nudge protects stack metadata; a read mutates none, so naming the gt route there only costs work."""
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert dispatch_command(command, gt_repo, tmp_path) is None
 
@@ -365,33 +372,87 @@ def test_read_only_jj_is_allowed(isolate_modules: None, gt_repo: Path, tmp_path:
         "jj status; jj abandon",
     ],
 )
-def test_mutating_jj_still_blocked(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
+def test_mutating_jj_is_nudged(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
     """Every jj call on the line must be a read: skip_if is an any(), so a per-call carve-out
-    would let the mutation in `jj log && jj new` through."""
+    would let the mutation in `jj log && jj new` through unnoted."""
     discover_pack("graphite", GRAPHITE_HOOKS)
-    assert_fires(dispatch_command(command, gt_repo, tmp_path), "deny", "Graphite")
+    assert_fires(dispatch_command(command, gt_repo, tmp_path), "warn", "Graphite")
+
+
+@pytest.mark.parametrize(
+    ("command", "rewritten"),
+    [
+        pytest.param("gt submit", "ccx vcs stack submit", id="gt-submit"),
+        pytest.param("gt ss --no-interactive", "ccx vcs stack submit", id="gt-ss"),
+        pytest.param("gt s --stack --no-edit", "ccx vcs stack submit", id="gt-s"),
+        pytest.param("gt submit -d", "ccx vcs stack submit --draft", id="gt-submit-draft"),
+        pytest.param("gt restack", "ccx vcs stack restack", id="gt-restack"),
+        pytest.param("git status && gt submit --stack", "git status && ccx vcs stack submit", id="second-call"),
+        pytest.param("gt restack && gt submit", "ccx vcs stack restack && ccx vcs stack submit", id="two-calls"),
+    ],
+)
+def test_stack_writes_with_a_ccx_twin_are_rewritten(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, rewritten: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command(command, gt_repo, tmp_path)
+    assert rewritten_command(result) == rewritten
+    assert result is not None
+    assert "Rewrote" in result["hookSpecificOutput"]["additionalContext"]
+    assert "# ccx:raw" in result["hookSpecificOutput"]["additionalContext"]
+    assert "capt-hook rewrote" in result["systemMessage"]
 
 
 @pytest.mark.parametrize(
     ("command", "needle"),
     [
-        pytest.param("gt submit", "ccx vcs stack submit", id="gt-submit"),
-        pytest.param("gt ss --no-interactive", "ccx vcs stack submit", id="gt-ss"),
-        pytest.param("gt restack", "ccx vcs stack restack", id="gt-restack"),
+        pytest.param("gt submit --no-stack", "ccx vcs stack submit", id="gt-submit-downstack"),
+        pytest.param("gt submit --ai", "ccx vcs stack submit", id="gt-submit-unmapped-flag"),
+        pytest.param("GT_DEBUG=1 gt submit", "ccx vcs stack submit", id="gt-submit-env"),
+        pytest.param("timeout 60 gt submit", "ccx vcs stack submit", id="gt-submit-wrapper"),
+        pytest.param("gt restack --upstack", "ccx vcs stack restack", id="gt-restack-scoped"),
         pytest.param("gt sync -f", "ccx vcs stack restack", id="gt-sync"),
         pytest.param('gt create feat -m "x"', "--new-branch", id="gt-create"),
         pytest.param('gt modify -m "x"', "ccx vcs ship --amend", id="gt-modify"),
         pytest.param("gt m -a", "ccx vcs ship --amend", id="gt-m"),
         pytest.param("git rebase main", "ccx vcs stack restack", id="git-rebase"),
         pytest.param("git rebase --onto origin/dev old-base feat", "ccx vcs stack restack", id="git-rebase-onto"),
-        pytest.param("git status && gt submit --stack", "ccx vcs stack submit", id="second-call"),
     ],
 )
-def test_stack_writes_blocked_when_ccx_installed(
+def test_stack_writes_without_a_ccx_twin_are_nudged(
     isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, needle: str
 ) -> None:
+    """No ccx verb does the same job with these flags, so the command runs and the route is named."""
     discover_pack("graphite", GRAPHITE_HOOKS)
-    assert_fires(dispatch_command(command, gt_repo, tmp_path), "deny", needle)
+    result = dispatch_command(command, gt_repo, tmp_path)
+    assert result is not None
+    output = result["hookSpecificOutput"]
+    assert "updatedInput" not in output
+    assert output.get("permissionDecision") != "deny"
+    assert needle in output["additionalContext"]
+    assert "# ccx:raw" in output["additionalContext"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["gt submit # ccx:raw", "gt restack #ccx:raw", "jj new # ccx:raw", "git rebase main # ccx:raw"],
+)
+def test_raw_marker_runs_the_command_as_written(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command(command, gt_repo, tmp_path)
+    assert result is None or "updatedInput" not in result["hookSpecificOutput"]
+    assert result is None or "ccx vcs stack" not in result["hookSpecificOutput"].get("additionalContext", "")
+
+
+def test_raw_env_runs_every_command_as_written(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    monkeypatch.setenv("CAPT_HOOK_CCX_RAW", "1")
+    assert dispatch_command("gt restack", gt_repo, tmp_path) is None
+    assert dispatch_command("jj new", gt_repo, tmp_path) is None
 
 
 @pytest.mark.parametrize(
@@ -453,6 +514,23 @@ def test_force_push_advises_without_blocking(
     assert "ccx vcs stack submit" in warn_context(dispatch_command(command, gt_repo, tmp_path))
 
 
+def test_a_bare_lease_push_of_the_current_branch_becomes_ccx_vcs_push(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "feat"], check=True)
+    for command in ["git push --force-with-lease", "git push --force-with-lease origin feat"]:
+        assert rewritten_command(dispatch_command(command, repo, tmp_path)) == "ccx vcs push"
+    for command in [
+        "git push -f origin feat",
+        "git push --force-with-lease origin other",
+        "git push --force-with-lease=feat:abc origin feat",
+        "git push --force-with-lease upstream feat",
+    ]:
+        assert "ccx vcs push" in warn_context(dispatch_command(command, repo, tmp_path))
+
+
 def test_force_push_advice_admits_the_rewrite_case(
     isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path
 ) -> None:
@@ -462,11 +540,14 @@ def test_force_push_advice_admits_the_rewrite_case(
     assert "rewrote on purpose" in context
 
 
-def test_a_blocking_arm_on_the_line_outranks_the_advisory_one(
+def test_a_rewrite_on_the_line_carries_the_advice_for_the_rest(
     isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
-    assert_fires(dispatch_command("git push -f origin feat && gt submit", gt_repo, tmp_path), "deny", "BLOCKED")
+    result = dispatch_command("git push -f origin feat && gt submit", gt_repo, tmp_path)
+    assert rewritten_command(result) == "git push -f origin feat && ccx vcs stack submit"
+    assert result is not None
+    assert "rewrote on purpose" in result["hookSpecificOutput"]["additionalContext"]
 
 
 @pytest.mark.parametrize(("command", "kind", "needle"), HOOK_CASES)
@@ -507,12 +588,12 @@ def test_hooks_fire_when_ccx_rides_the_gt_lane(
     assert dispatch_command(command, gt_repo, tmp_path) is not None
 
 
-def test_stack_writes_block_when_ccx_rides_the_gt_lane(
+def test_stack_writes_rewrite_when_ccx_rides_the_gt_lane(
     isolate_modules: None, ccx_lane: Callable[[str], None], gt_repo: Path, tmp_path: Path
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     ccx_lane("gt")
-    assert_fires(dispatch_command("gt submit", gt_repo, tmp_path), "deny", "ccx vcs stack submit")
+    assert rewritten_command(dispatch_command("gt submit", gt_repo, tmp_path)) == "ccx vcs stack submit"
 
 
 def test_stack_writes_only_warn_without_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
@@ -549,18 +630,33 @@ def test_rebase_onto_own_upstream_is_ccx_ships_recovery(
         "git rebase --onto=main origin/feat",
         "git rebase origin/feat $(printf other)",
     ]:
-        assert_fires(dispatch_command(command, repo, tmp_path), "deny", "ccx vcs stack restack")
+        assert_fires(dispatch_command(command, repo, tmp_path), "warn", "ccx vcs stack restack")
 
 
-@pytest.mark.parametrize("command", ["git rebase --continue", "git rebase --abort", "git rebase --skip"])
-def test_conflict_workspace_routes_rebase_controls_to_ccx(
-    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
-) -> None:
-    discover_pack("graphite", GRAPHITE_HOOKS)
+@pytest.fixture
+def conflict_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "worktrees" / "repo" / "conflict-feat"
     (workspace / ".git").mkdir(parents=True)
     (workspace / ".git" / ".graphite_repo_config").write_text("")
-    assert_fires(dispatch_command(command, workspace, tmp_path), "deny", "ccx vcs stack continue")
+    return workspace
+
+
+@pytest.mark.parametrize(
+    ("command", "rewritten"),
+    [("git rebase --continue", "ccx vcs stack continue"), ("git rebase --abort", "ccx vcs stack abort")],
+)
+def test_conflict_workspace_rewrites_rebase_controls_to_ccx(
+    isolate_modules: None, ccx_installed: None, conflict_workspace: Path, tmp_path: Path, command: str, rewritten: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert rewritten_command(dispatch_command(command, conflict_workspace, tmp_path)) == rewritten
+
+
+def test_conflict_workspace_nudges_the_other_rebase_controls(
+    isolate_modules: None, ccx_installed: None, conflict_workspace: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_fires(dispatch_command("git rebase --skip", conflict_workspace, tmp_path), "warn", "ccx vcs stack continue")
 
 
 @pytest.mark.parametrize("command", ["gh pr view 42 --json state,mergedAt", "gh pr view 42 --json=mergeable"])
