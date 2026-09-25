@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
+from filelock import FileLock
 
 from captain_hook.app import _state, get_matching_hooks
 from captain_hook.dispatch import dispatch
 from captain_hook.primitives.nudge import DEFAULT_FIRES
+from captain_hook.state import EchoTracker, PrimitiveState
 from captain_hook.testing.helpers import mock_subagent_start_event, mock_subagent_stop_event
 from captain_hook.types import Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
@@ -112,6 +116,43 @@ class TestNudgeSignalsSkip:
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert result is None
+
+    def test_signal_scoring_does_not_hold_session_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import captain_hook.signals as signals
+
+        register_nudge("No match", signals=[Signal(pattern="absent")], max_fires=None)
+        ctx = make_ctx(tmp_path, texts=["ordinary assistant text"])
+        path = ctx.s[PrimitiveState].path
+        assert path is not None
+
+        def unmatched(patterns: Any, text: str) -> list[int]:
+            with FileLock(str(path) + ".lock", timeout=0):
+                return []
+
+        monkeypatch.setattr(signals, "matching_signals", unmatched)
+        handler = _state.hooks[-1].handler
+        assert handler is not None
+        assert handler(make_post_tool_event(ctx=ctx)) is None
+        assert not path.exists()
+
+    def test_parallel_scoring_consumes_signal_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import captain_hook.signals as signals
+
+        register_nudge("Matched", signals=[Signal(pattern="needle")], max_fires=None)
+        ctx = make_ctx(tmp_path, texts=["needle"])
+        handler = _state.hooks[-1].handler
+        assert handler is not None
+        barrier = Barrier(2, timeout=5)
+
+        def matched(patterns: Any, text: str) -> list[int]:
+            barrier.wait()
+            return [0]
+
+        monkeypatch.setattr(signals, "matching_signals", matched)
+        monkeypatch.setattr(EchoTracker, "record", lambda *args, **kwargs: None)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: handler(make_post_tool_event(ctx=ctx)), range(2)))
+        assert sum(result is not None for result in results) == 1
 
 
 class TestGateBlock:

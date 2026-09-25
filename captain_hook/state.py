@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, lru_cache
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, TypeVar
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     import spacy
 
     from captain_hook.events import BaseHookEvent
+    from captain_hook.signals import SignalMatches
     from captain_hook.types import Signals
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
@@ -122,6 +123,15 @@ ECHO_VERBATIM_CAP = 40
 ECHO_VERBATIM_MIN_CHARS = 20
 
 
+@lru_cache(maxsize=128)
+def cached_content_lemmas(text: str) -> frozenset[str]:
+    return frozenset(
+        tok.lemma_.lower()
+        for tok in RESOURCES.spacy(text, disable=("ner",))
+        if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
+    )
+
+
 class PrimitiveState(BaseModel):
     """Per-primitive nudge/gate state shared across all hooks in a session.
 
@@ -143,11 +153,7 @@ class PrimitiveState(BaseModel):
 
     @staticmethod
     def content_lemmas(text: str) -> set[str]:
-        return {
-            tok.lemma_.lower()
-            for tok in RESOURCES.spacy(text, disable=("ner",))
-            if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
-        }
+        return set(cached_content_lemmas(text))
 
     def is_echo(self, text: str) -> bool:
         return bool(
@@ -187,10 +193,12 @@ class PrimitiveState(BaseModel):
         self.echo_window_end = transcript_len + ECHO_WINDOW
 
     def seed_echo_verbatim(self, message: str) -> None:
+        from captain_hook.signals.nlp import parse
+
         seen = set(self.echo_verbatim)
         fresh = [
             norm
-            for sent in RESOURCES.spacy(message).sents
+            for sent in parse(message).sents
             if len(norm := normalize_ws(sent.text)) >= ECHO_VERBATIM_MIN_CHARS
             and norm not in seen
             and not seen.add(norm)
@@ -213,14 +221,13 @@ class PrimitiveState(BaseModel):
         entry — consumed or not — suppresses the fire and consumes nothing under either scope.
         Consumption is scoped to ``hook``'s own ledger.
         """
-        from captain_hook.signals import matching_signals
+        from captain_hook.signals import matching_texts
 
-        if sig.vetoes and any(matching_signals(sig.vetoes, text) for text in texts):
-            return None
+        return self.consume_matches(sig, matching_texts(sig, texts, consumed=self.consumed.get(hook, ())), hook)
+
+    def consume_matches(self, sig: Signals, matches: SignalMatches, hook: str) -> list[str] | None:
         spent = self.consumed.get(hook, frozenset[str]())
-        candidates = [
-            (text, set(matching_signals(sig.patterns, text))) for text in texts if text_hash(text) not in spent
-        ]
+        candidates = [(text, matched) for text, matched in matches if text_hash(text) not in spent]
         match sig.scope:
             case "window":
                 union = {i for _, matched in candidates for i in matched}
@@ -320,14 +327,18 @@ class EchoTracker:
         """The echo-stripped remainder of *text* to score, or ``None`` when it is a pure verbatim
         quote of fired output or a lemma echo of the last nudge within the forward window. A quoted
         warn carrying a genuinely new violation survives as the stripped remainder."""
+        return next(iter(self.survivors([text], evt=evt)), None)
+
+    def survivors(self, texts: list[str], *, evt: BaseHookEvent) -> list[str]:
         ps = evt.ctx.s[PrimitiveState].get()
         if ps is None:
-            return text
-        if not (remainder := ps.strip_fired_output(text)):
-            return None
-        if ps.echo_lemmas and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(remainder):
-            return None
-        return remainder
+            return texts
+        check_echo = ps.echo_lemmas and len(evt.ctx.t) < ps.echo_window_end
+        return [
+            remainder
+            for text in texts
+            if (remainder := ps.strip_fired_output(text)) and not (check_echo and ps.is_echo(remainder))
+        ]
 
     def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
         with evt.ctx.s[PrimitiveState].mutate() as ps:

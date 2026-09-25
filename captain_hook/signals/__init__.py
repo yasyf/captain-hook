@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from cc_transcript.models import AssistantEvent, ThinkingBlock, ToolUseBlock, UserEvent
@@ -23,6 +23,7 @@ PROSE_TOOLS: dict[str, Callable[[Mapping[str, Any]], list[str]]] = {
 }
 
 TSignalPattern = Signal | NlpSignal
+SignalMatches = list[tuple[str, set[int]]]
 
 
 def matching_signals(patterns: Sequence[TSignalPattern], text: str) -> list[int]:
@@ -47,6 +48,18 @@ def matching_signals(patterns: Sequence[TSignalPattern], text: str) -> list[int]
 
 def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
     return sum(patterns[i].weight for i in matching_signals(patterns, text))
+
+
+def matching_texts(sig: Signals, texts: list[str], *, consumed: Collection[str] = ()) -> SignalMatches:
+    from captain_hook.state import text_hash
+
+    if sig.vetoes and any(matching_signals(sig.vetoes, text) for text in texts):
+        return []
+    return [
+        (text, set(matched))
+        for text in texts
+        if text_hash(text) not in consumed and (matched := matching_signals(sig.patterns, text))
+    ]
 
 
 def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> list[str]:
