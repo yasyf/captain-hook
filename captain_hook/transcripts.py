@@ -92,9 +92,8 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
             project_dir = resolve_project_dir()
             policy = {
                 "id": "captain-configured",
-                "version": Fingerprint.compute(
-                    CliState(root=Path(project_dir) if project_dir else reqenv.cwd())
-                ).digest,
+                "version": _state.registry_fingerprint
+                or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest,
             }
             return client.classify(session, _state.classifier, policy)
         data = list(
