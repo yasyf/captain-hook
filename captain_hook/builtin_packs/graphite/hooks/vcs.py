@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, BaseHookEvent, Event, HookResult, Input, RanCommand, Tool, UserSaid, hook, on
@@ -130,6 +131,12 @@ SUBMIT = (
     "submits this branch and its downstack. Both fetch the remote trunk first and push each branch under the "
     "lease of its last submitted version"
 )
+FORCE_PUSH = (
+    "`ccx vcs stack submit` restacks every lane and submits the whole stack, pushing each branch under the lease "
+    "of its last submitted version. It replays a branch from its recorded base, so it is not the route for a "
+    "branch whose history you rewrote on purpose, and it opens pull requests, which Graphite declines on a repo "
+    "it has no access to"
+)
 RESTACK = (
     "`ccx vcs stack restack` fetches the remote trunk and replays every branch of the stack onto its parent, "
     "across every working copy that holds one"
@@ -170,7 +177,20 @@ def in_conflict_workspace(call: Call, evt: BaseHookEvent) -> bool:
     return cwd is not None and "worktrees" in cwd.parts and any(part.startswith("conflict-") for part in cwd.parts)
 
 
-def ccx_route(call: Call, evt: BaseHookEvent) -> str | None:
+@dataclass(frozen=True, slots=True)
+class Route:
+    """The ccx route for a hand-run stack write, and whether missing it is worth refusing over.
+
+    Every blocking route has a ccx verb that does the same job. A force-push does not: the
+    branch may have been rewritten on purpose, which `ccx vcs stack submit` replays away
+    rather than overwrites, so that arm advises and steps aside.
+    """
+
+    advice: str
+    blocking: bool = True
+
+
+def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
     argv = call.verb_argv
     if len(argv) < 2 or "--help" in call.flags or "-h" in call.flags:
         return None
@@ -178,15 +198,15 @@ def ccx_route(call: Call, evt: BaseHookEvent) -> str | None:
         case "gt", "restack" if "--only" in call.flags:
             return None
         case "gt", verb if verb in GT_ROUTES:
-            route = GT_ROUTES[verb]
+            route = Route(GT_ROUTES[verb])
         case "git", "rebase" if not REBASE_CONTROL.isdisjoint(call.flags):
             if not in_conflict_workspace(call, evt):
                 return None
-            route = CONFLICT
+            route = Route(CONFLICT)
         case "git", "rebase" if not rebases_onto_own_upstream(call, evt.cwd):
-            route = REBASE
+            route = Route(REBASE)
         case "git", "push" if force_pushes(call):
-            route = SUBMIT
+            route = Route(FORCE_PUSH, blocking=False)
         case _:
             return None
     return route if graphite_owns(call, evt.cwd) else None
@@ -204,16 +224,24 @@ def ccx_route(call: Call, evt: BaseHookEvent) -> str | None:
     },
 )
 def stack_writes_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
-    for call in evt.cmd.calls():
-        if (route := ccx_route(call, evt)) is not None:
-            return evt.block(
-                f"BLOCKED: `{' '.join(call.verb_argv[:2])}` rewrites a Graphite stack by hand, and ccx is installed. "
-                f"{route}. A hand-run gt verb or force-push works from the local trunk, which lags the remote, and "
-                "leaves the other working copies of the stack and Graphite's parent records behind. "
-                "`gt restack --only --branch <b>`, the conflict step a ccx refusal prints, stays open, as do "
-                "`gt continue`, `gt abort`, and `git rebase --continue`/`--abort` outside a ccx conflict workspace."
-            )
-    return None
+    routed = [(call, route) for call in evt.cmd.calls() if (route := ccx_route(call, evt)) is not None]
+    if not routed:
+        return None
+    call, route = next((pair for pair in routed if pair[1].blocking), routed[0])
+    verb = " ".join(call.verb_argv[:2])
+    if not route.blocking:
+        return evt.warn(
+            f"`{verb}` overwrites remote history by hand, and ccx is installed. {route.advice}. A raw force-push "
+            "works from the local trunk, which lags the remote, and leaves the other working copies of the stack "
+            "and Graphite's parent records behind, so take the ccx route wherever it fits."
+        )
+    return evt.block(
+        f"BLOCKED: `{verb}` rewrites a Graphite stack by hand, and ccx is installed. "
+        f"{route.advice}. A hand-run gt verb works from the local trunk, which lags the remote, and "
+        "leaves the other working copies of the stack and Graphite's parent records behind. "
+        "`gt restack --only --branch <b>`, the conflict step a ccx refusal prints, stays open, as do "
+        "`gt continue`, `gt abort`, and `git rebase --continue`/`--abort` outside a ccx conflict workspace."
+    )
 
 
 def landing_fields(call: Call) -> frozenset[str]:

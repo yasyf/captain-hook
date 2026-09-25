@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -383,11 +384,6 @@ def test_mutating_jj_still_blocked(isolate_modules: None, gt_repo: Path, tmp_pat
         pytest.param("gt m -a", "ccx vcs ship --amend", id="gt-m"),
         pytest.param("git rebase main", "ccx vcs stack restack", id="git-rebase"),
         pytest.param("git rebase --onto origin/dev old-base feat", "ccx vcs stack restack", id="git-rebase-onto"),
-        pytest.param("git push --force-with-lease origin feat", "ccx vcs stack submit", id="push-lease"),
-        pytest.param("git push --force-with-lease=feat:abc origin feat", "ccx vcs stack submit", id="push-lease-value"),
-        pytest.param("git push -f origin feat", "ccx vcs stack submit", id="push-f"),
-        pytest.param("git push -uf origin feat", "ccx vcs stack submit", id="push-short-bundle"),
-        pytest.param("git push origin +feat", "ccx vcs stack submit", id="push-plus-refspec"),
         pytest.param("git status && gt submit --stack", "ccx vcs stack submit", id="second-call"),
     ],
 )
@@ -423,6 +419,100 @@ def test_ccx_escape_hatches_stay_unblocked(
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert_not_denied(dispatch_command(command, gt_repo, tmp_path))
+
+
+FORCE_PUSHES = [
+    pytest.param("git push --force-with-lease origin feat", id="push-lease"),
+    pytest.param("git push --force-with-lease=feat:abc origin feat", id="push-lease-value"),
+    pytest.param("git push -f origin feat", id="push-f"),
+    pytest.param("git push -uf origin feat", id="push-short-bundle"),
+    pytest.param("git push origin +feat", id="push-plus-refspec"),
+]
+
+
+@pytest.fixture
+def ccx_lane(ccx_absent: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
+    """Install a ``ccx`` whose ``vcs lane --json`` reports the given lane."""
+
+    def install(lane: str) -> None:
+        (bindir := tmp_path / "ccx-lane-bin").mkdir()
+        (ccx := bindir / "ccx").write_text(f'#!/bin/sh\nprintf \'{{"lane": "{lane}"}}\'\n')
+        ccx.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+    return install
+
+
+@pytest.mark.parametrize("command", FORCE_PUSHES)
+def test_force_push_advises_without_blocking(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    """A rewritten branch has no ccx route: `ccx vcs stack submit` replays it from its recorded
+    base rather than overwriting the remote, so this arm names the route and steps aside."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert "ccx vcs stack submit" in warn_context(dispatch_command(command, gt_repo, tmp_path))
+
+
+def test_force_push_advice_admits_the_rewrite_case(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path
+) -> None:
+    """The refusal this replaces named two routes that could not do the job."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    context = warn_context(dispatch_command("git push -f origin feat", gt_repo, tmp_path))
+    assert "rewrote on purpose" in context
+
+
+def test_a_blocking_arm_on_the_line_outranks_the_advisory_one(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_fires(dispatch_command("git push -f origin feat && gt submit", gt_repo, tmp_path), "deny", "BLOCKED")
+
+
+@pytest.mark.parametrize(("command", "kind", "needle"), HOOK_CASES)
+def test_hooks_stay_silent_when_ccx_declines_the_gt_lane(
+    isolate_modules: None,
+    ccx_lane: Callable[[str], None],
+    gt_repo: Path,
+    tmp_path: Path,
+    command: str,
+    kind: str,
+    needle: str,
+) -> None:
+    """`gt repo init` writes the marker for good, but submitting also needs Graphite's grant on
+    the remote. Without it every ccx stack verb declines and raw git is the only route, so a pack
+    steering toward gt is guarding a repo it has no business guarding."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    ccx_lane("git")
+    assert dispatch_command(command, gt_repo, tmp_path) is None
+
+
+@pytest.mark.parametrize("command", [*FORCE_PUSHES, pytest.param("gt submit", id="gt-submit")])
+def test_stack_writes_stay_silent_when_ccx_declines_the_gt_lane(
+    isolate_modules: None, ccx_lane: Callable[[str], None], gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    ccx_lane("git")
+    assert dispatch_command(command, gt_repo, tmp_path) is None
+
+
+@pytest.mark.parametrize("command", [param.values[0] for param in HOOK_CASES])
+def test_hooks_fire_when_ccx_rides_the_gt_lane(
+    isolate_modules: None, ccx_lane: Callable[[str], None], gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    """The positive control: the lane probe silences the pack only where ccx says git. Severity is
+    HOOK_CASES' business, and it reads the ccx-absent lane, where no arm of the stack rule fires."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    ccx_lane("gt")
+    assert dispatch_command(command, gt_repo, tmp_path) is not None
+
+
+def test_stack_writes_block_when_ccx_rides_the_gt_lane(
+    isolate_modules: None, ccx_lane: Callable[[str], None], gt_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    ccx_lane("gt")
+    assert_fires(dispatch_command("gt submit", gt_repo, tmp_path), "deny", "ccx vcs stack submit")
 
 
 def test_stack_writes_only_warn_without_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
