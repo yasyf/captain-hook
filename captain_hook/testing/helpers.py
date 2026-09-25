@@ -577,12 +577,18 @@ def input_to_event(
 
 def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
     transcript = fixture_transcript(jsonl)
-    ctx = StubbedContext(session=SessionStore(None), transcript=transcript, settings=None)
     transcript_path = str(jsonl)
-
-    for ev_type in entry.spec.events:
-        for raw in transcript_event_payloads(ev_type, transcript, transcript_path):
-            yield execute_hook(entry, ev_type.event_class(_raw=raw, ctx=ctx))
+    try:
+        for ev_type in entry.spec.events:
+            for raw in transcript_event_payloads(ev_type, transcript, transcript_path):
+                branch = transcript.retain()
+                ctx = StubbedContext(session=SessionStore(None), transcript=branch, settings=None)
+                try:
+                    yield execute_hook(entry, ev_type.event_class(_raw=raw, ctx=ctx))
+                finally:
+                    branch.release()
+    finally:
+        transcript.release()
 
 
 def transcript_event_payloads(

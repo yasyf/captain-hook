@@ -211,7 +211,22 @@ def run_cli(
     cwd: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "captain_hook"]
+        [
+            sys.executable,
+            "-c",
+            """
+import runpy
+from captain_hook.snapshots.client import CURRENT_CLIENT
+from captain_hook.testing.snapshots import FixtureOwner
+fixture = FixtureOwner()
+token = CURRENT_CLIENT.set(fixture.client)
+try:
+    runpy.run_module("captain_hook", run_name="__main__", alter_sys=True)
+finally:
+    CURRENT_CLIENT.reset(token)
+    fixture.close()
+""",
+        ]
         + (["--hooks", hooks_dir] if hooks_dir else [])
         + (["--root", root_dir] if root_dir else [])
         + list(args),

@@ -1,16 +1,14 @@
 {
   "repository": "yasyf/cc-transcript",
-  "run_id": 36128686682,
-  "artifact_id": null,
-  "artifact_name": "cc-transcript-macos-a3e195b7f1d01c33f5118ac41b03592018fcbc12",
-  "artifact_digest": null,
-  "head_sha": "bfdb0b76d7dc77a8823b5832951660ccfbbfde73",
-  "merge_sha": "a3e195b7f1d01c33f5118ac41b03592018fcbc12",
-  "tree_sha": "13cd0313f1c77e1695a32c7ea2461b515cae1c99",
-  "wheel_name": null,
-  "wheel_sha256": null,
-  "pending_api_changes": [
-    "request-scoped tool registry admission",
-    "lease expiry and active-borrow lifetime"
-  ]
+  "run_id": 36130482380,
+  "artifact_id": 10861518305,
+  "artifact_name": "cc-transcript-macos-539779bdbb858bf2cec3c23f8d99aaef5a10918c",
+  "artifact_digest": "sha256:b23ff2de5dd68399eb8221d360502b3d1f18a777854e649ea2f0c454dbfcd605",
+  "head_sha": "ce5c2d498af9985dc41a541d96a5cf64c4f731d5",
+  "merge_sha": "539779bdbb858bf2cec3c23f8d99aaef5a10918c",
+  "tree_sha": "6b85524ef5f615bf15a63764751b5c3148d52aaf",
+  "wheel_name": "cc_transcript-14.9.0-cp313-abi3-macosx_11_0_arm64.whl",
+  "wheel_sha256": "76a1333151c29e09cc99e2d557a790564e69812f53a8c7c1b0cb199f79134f63",
+  "pending_api_changes": [],
+  "install_candidate": false
 }
