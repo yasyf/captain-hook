@@ -154,11 +154,11 @@ class Input:
             over the input synthesized from the other fields.
         prompt: An Agent/Task call's prompt, or ``UserPromptSubmit`` text.
         script: A ``Workflow`` tool's script source (synthesizes a Workflow call).
-        agent_type: Subagent type for subagent events (an Agent/Task call's
-            ``subagent_type``).
-        agent_id: Subagent/teammate id — a non-empty value makes ``evt.is_subagent``
-            true (and fills subagent events' ``agent_id``); each id also gets its
-            own ``max_fires`` budget.
+        agent_type: The payload's ``agent_type`` on every event (an Agent/Task call's
+            ``subagent_type`` too).
+        agent_id: Subagent/teammate id, set in the payload on every event — a non-empty
+            value makes ``evt.is_subagent`` true; each id also gets its own ``max_fires``
+            budget.
         model: Model for an Agent/Task call's ``model`` input field.
         output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
         error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.

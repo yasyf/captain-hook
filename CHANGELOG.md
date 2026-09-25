@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runner's `CLAUDE_*`, `ORCA_*` or other per-request variables. A test run in
   an Orca terminal can no longer reach that terminal through
   `ORCA_TERMINAL_HANDLE`.
+- **`Input(agent_id=..., agent_type=...)` reach every event's payload.**
+  `Stop`, `PreCompact`, `SessionEnd` and `UserPromptSubmit` tests dropped them,
+  so a `skip_if=[FromSubagent()]` guard on those events could not be tested.
 
 ### Changed
 

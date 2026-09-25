@@ -1149,6 +1149,39 @@ class TestEnvIsHermetic:
         assert seen == [(None, None, None), ("term-7", "term-7", None)]
 
 
+class TestAgentIdReachesEveryEvent:
+    @pytest.mark.parametrize("event", [Event.Stop, Event.PreCompact, Event.SessionEnd, Event.UserPromptSubmit])
+    def test_subagent_skip_holds_on_non_tool_events(self, event):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+        from captain_hook.types import FromSubagent
+
+        ran: list[tuple[bool, str | None]] = []
+        reset()
+
+        @on(
+            event,
+            skip_if=[FromSubagent()],
+            tests={Input(): Warn(), Input(agent_id="a1b2c3", agent_type="worker"): Allow()},
+        )
+        def main_only(evt):
+            ran.append((evt.is_subagent, evt._raw.get("agent_type")))
+            return evt.warn("main thread")
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert ran == [(False, None)]
+
+    @pytest.mark.parametrize("event", [Event.Stop, Event.PreCompact, Event.SessionEnd, Event.UserPromptSubmit])
+    def test_agent_fields_land_in_the_payload(self, event):
+        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        evt = input_to_event(event, Input(agent_id="a1b2c3", agent_type="worker"))
+        assert (evt._raw["agent_id"], evt._raw["agent_type"], evt.is_subagent) == ("a1b2c3", "worker", True)
+
+
 class TestSystemMessageExpectation:
     @pytest.mark.parametrize(
         ("result", "expected", "matches"),
