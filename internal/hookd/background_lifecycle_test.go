@@ -170,3 +170,48 @@ func TestBackgroundTicketProcessedBeforeForegroundResult(t *testing.T) {
 	close(release)
 	<-end
 }
+
+func TestRestartObservesLastBusyWorkerForgotten(t *testing.T) {
+	manager := mustWorkerManager(t)
+	worker, peer := silentWorker(t)
+	defer peer.Close()
+	backgroundEntry(manager, worker)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	changed := manager.changed
+	done := make(chan error, 1)
+	go func() { done <- manager.restart(ctx) }()
+	<-changed
+	manager.forget(worker)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestartRetainsCohortOnSettlementError(t *testing.T) {
+	manager := mustWorkerManager(t)
+	worker, peer := silentWorker(t)
+	defer peer.Close()
+	entry := backgroundEntry(manager, worker)
+	entry.background = 0
+	worker.stopped = true
+	worker.stopErr = errors.New("unsettled owned process")
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := manager.restart(ctx); !errors.Is(err, worker.stopErr) {
+		t.Fatalf("restart = %v", err)
+	}
+	if manager.entries[entry.key.member()] != entry || manager.restarting {
+		t.Fatal("failed settlement lost cohort/admission")
+	}
+	if _, _, err := manager.acquire(ctx, workerKey{id: "replacement"}); !errors.Is(err, errWorkerAdmissionPaused) {
+		t.Fatalf("unsettled cohort admitted new work: %v", err)
+	}
+	worker.stopErr = nil
+	if err := manager.restart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.entries) != 0 {
+		t.Fatal("successful settlement retained cohort")
+	}
+}

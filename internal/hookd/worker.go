@@ -363,10 +363,12 @@ func (w *workerClient) fail(err error) {
 	}
 }
 
-// stop closes the session and terminates the child, latching only a proven
-// exit. An unsettled stop stays retryable: the next caller — restart, Close, or
-// the manager's own settlement — asks again instead of reading a cached refusal
-// for a process that is still running.
+func (w *workerClient) settled() bool {
+	w.stopMu.Lock()
+	defer w.stopMu.Unlock()
+	return w.stopped && w.stopErr == nil
+}
+
 func (w *workerClient) stop(ctx context.Context) error {
 	w.stopMu.Lock()
 	defer w.stopMu.Unlock()

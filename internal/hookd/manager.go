@@ -168,14 +168,15 @@ type workerManager struct {
 	lifetime context.Context
 	end      context.CancelFunc
 
-	mu         sync.Mutex
-	closed     bool
-	restarting bool
-	changed    chan struct{}
-	entries    map[string]*workerEntry
-	poolSize   int
-	snapshots  *snapshotService
-	wg         sync.WaitGroup
+	mu           sync.Mutex
+	closed       bool
+	restarting   bool
+	restartError error
+	changed      chan struct{}
+	entries      map[string]*workerEntry
+	poolSize     int
+	snapshots    *snapshotService
+	wg           sync.WaitGroup
 }
 
 func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
@@ -264,7 +265,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		m.mu.Unlock()
 		return nil, admission{}, errWorkerManagerClosed
 	}
-	if m.restarting {
+	if m.restarting || m.restartError != nil {
 		m.mu.Unlock()
 		return nil, admission{}, errWorkerAdmissionPaused
 	}
@@ -384,10 +385,6 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 	m.release(entry)
 }
 
-// release drops the caller's hold on entry. The last hold to drop retires an
-// ephemeral entry — a scratch root never revisited — at once rather than at the
-// sweep, and settles an entry the cache has already let go of (restart, Close,
-// a dead child), so a worker still in use at that moment never leaks.
 func (m *workerManager) release(entry *workerEntry) {
 	m.mu.Lock()
 	entry.inflight--
@@ -682,6 +679,7 @@ func (m *workerManager) forget(worker *workerClient) {
 	for id, entry := range m.entries {
 		if entry.worker == worker {
 			delete(m.entries, id)
+			m.notifyChangedLocked()
 		}
 	}
 	m.mu.Unlock()
@@ -761,11 +759,27 @@ func (m *workerManager) restart(ctx context.Context) error {
 			workers = append(workers, entry.worker)
 		}
 	}
-	m.entries = make(map[string]*workerEntry)
+	cohort := make(map[string]*workerEntry, len(m.entries))
+	for id, entry := range m.entries {
+		cohort[id] = entry
+	}
 	m.mu.Unlock()
 	stopCtx, cancel := context.WithTimeout(ctx, workerSettlementTimeout)
 	defer cancel()
-	return m.stopAll(stopCtx, workers)
+	stopErr := m.stopAll(stopCtx, workers)
+	settled := make(map[*workerClient]bool, len(workers))
+	for _, worker := range workers {
+		settled[worker] = worker.settled()
+	}
+	m.mu.Lock()
+	m.restartError = stopErr
+	for id, entry := range cohort {
+		if (entry.worker == nil || settled[entry.worker]) && m.entries[id] == entry {
+			delete(m.entries, id)
+		}
+	}
+	m.mu.Unlock()
+	return stopErr
 }
 
 func (m *workerManager) Close(ctx context.Context) (bool, error) {
