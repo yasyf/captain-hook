@@ -1008,6 +1008,90 @@ class TestPerLaneVersions:
         monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", forbidden_hydration)
         assert await store.judge_backlog() == 1
 
+    async def test_judge_backlog_never_loads_context_rows(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        sql = store.db.sql
+
+        async def trace(statement: str, params: Sequence[object] = ()) -> list[dict[str, object]]:
+            assert "context_json" not in statement
+            return await sql(statement, params)
+
+        monkeypatch.setattr(store.db, "sql", trace)
+        assert await store.judge_backlog() == 1
+
+    async def test_judge_queue_bounds_context_reads_and_hydration(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate_id = await create_candidate(store)
+        for i in range(8):
+            await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
+            await judge(store, f"k{i}", fidelity="summary")
+        loaded: list[str] = []
+        probes: list[str] = []
+        sql = store.db.sql
+
+        async def trace(statement: str, params: Sequence[object] = ()) -> list[dict[str, object]]:
+            rows = await sql(statement, params)
+            if "e.context_json" in statement:
+                loaded.extend(str(row["dedup_key"]) for row in rows)
+            return rows
+
+        monkeypatch.setattr(store.db, "sql", trace)
+        monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", lambda value: probes.append(value) or True)
+        assert [row["dedup_key"] for row in await store.judge_queue(refresh_summary=True, limit=2)] == ["k0", "k1"]
+        assert loaded == ["k0", "k1"]
+        assert probes == ["{}", "{}"]
+
+    async def test_summary_probe_budget_rotates_past_unavailable_transcripts(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        candidate_id = await create_candidate(store)
+        for i in range(6):
+            await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
+            await store.db.execute(
+                "UPDATE feedback_events SET context_json = ? WHERE dedup_key = ?", (f"c{i}", f"k{i}")
+            )
+            await judge(store, f"k{i}", fidelity="summary")
+        probes: list[str] = []
+        monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", lambda value: probes.append(value) or False)
+        for expected in (["c0", "c1"], ["c2", "c3"], ["c4", "c5"], ["c0", "c1"]):
+            probes.clear()
+            assert await store.judge_queue(refresh_summary=True, limit=2) == []
+            assert probes == expected
+
+    async def test_unjudged_fix_is_not_starved_by_create_summary_refresh(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        create_id = await create_candidate(store)
+        await seed(store, create_id, "create", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "create", fidelity="summary")
+        fix_id = await fix_candidate(store)
+        await seed(
+            store, fix_id, "fix", session="s1", occurred="2026-06-01T10:00:00+00:00", source_kind="hook_complaint"
+        )
+        probes: list[str] = []
+        monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", lambda value: probes.append(value) or False)
+        assert [row["dedup_key"] for row in await store.judge_queue(refresh_summary=True, limit=1)] == ["fix"]
+        assert probes == []
+
+    async def test_zero_judge_budget_never_reads_the_queue(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def forbidden_read(*args: object, **kwargs: object) -> list[dict[str, object]]:
+            raise AssertionError("a zero-budget queue must not read metadata")
+
+        monkeypatch.setattr(store.db, "sql", forbidden_read)
+        assert await store.judge_queue(limit=0) == []
+
+    async def test_judge_queue_limit_excludes_noise_before_loading_context(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "noise", session="s0", occurred="2026-06-01T10:00:00+00:00", heuristic=0.1)
+        await seed(store, candidate_id, "keep", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        assert [row["dedup_key"] for row in await store.judge_queue(limit=1)] == ["keep"]
+
     async def test_judge_queue_probes_hydration_by_default(
         self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1695,3 +1779,22 @@ class TestJunkTriage:
 
         await judge_pass(store, settings=settings)
         assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.WATCHING
+
+
+async def test_empty_judge_pass_skips_embedding_even_with_existing_evidence(
+    store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_resolved_model(monkeypatch)
+
+    async def evidence(self: ReviewStore) -> bool:
+        return True
+
+    def forbidden_embedder() -> None:
+        raise AssertionError("an empty pass must not load the embedding model")
+
+    monkeypatch.setattr(ReviewStore, "has_verdict_evidence", evidence)
+    monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", forbidden_embedder)
+    monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *args, **kwargs: None)
+    assert await judge_pass(store, settings=settings) == JudgeReport(
+        judged=0, failed=0, pending=0, merged=0, retired=0, reopened=0
+    )

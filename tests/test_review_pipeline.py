@@ -45,11 +45,14 @@ from captain_hook.review.pipeline import (
     SpawnReport,
     _claim_stamp,
     brain_argv,
+    brain_lock,
     brain_prompt,
     dispatch_review,
     enrolled,
     guard_and_spawn,
     guard_and_sweep,
+    judge_lock,
+    queued_review_lock,
     repo_lock,
     review_log_path,
     review_session,
@@ -1045,6 +1048,29 @@ class TestFidelity:
         assert await verdict_fidelities(store) == ["summary"]
         assert SUMMARY_LABEL in calls[0]
 
+    async def test_unavailable_summary_windows_do_not_starve_a_later_live_session(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        projects_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
+        await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
+        live = tmp_path / "s2.jsonl"
+        content = live.read_bytes()
+        (tmp_path / "s1.jsonl").unlink()
+        live.unlink()
+        assert (await judge_pass(store, settings=settings)).judged == 2
+        live.write_bytes(content)
+        first = await judge_pass(store, settings=settings, refresh_summary=True, limit=1)
+        assert (first.judged, first.pending) == (0, 2)
+        second = await judge_pass(store, settings=settings, refresh_summary=True, limit=1)
+        assert (second.judged, second.pending) == (1, 1)
+        assert len(calls) == 3
+
     async def test_refresh_summary_rejudges_once_the_window_hydrates_again(
         self,
         store: ReviewStore,
@@ -1876,3 +1902,88 @@ class TestRescanIdempotency:
         await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert await count_rows(store, "candidate_observations") == 2
         assert await count_rows(store, "feedback_events") == 2
+
+
+class TestQueuedReviewLock:
+    def test_only_one_pending_pass_per_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        transcript = tmp_path / "projects" / "s1.jsonl"
+        waiting = threading.Event()
+        acquired = threading.Event()
+        release = threading.Event()
+        outcome: list[bool] = []
+
+        def observe_lock(settings: ReviewSettings, cwd: str, *, wait: bool):
+            if wait:
+                waiting.set()
+            return repo_lock(settings, cwd, wait=wait)
+
+        monkeypatch.setattr("captain_hook.review.pipeline.repo_lock", observe_lock)
+
+        def waiter() -> None:
+            with queued_review_lock(settings, str(tmp_path), transcript) as claimed:
+                outcome.append(claimed)
+                acquired.set()
+                release.wait(timeout=10)
+
+        with repo_lock(settings, str(tmp_path), wait=False) as claimed:
+            assert claimed
+            thread = threading.Thread(target=waiter)
+            thread.start()
+            assert waiting.wait(timeout=10)
+            with queued_review_lock(settings, str(tmp_path), transcript.with_name("s2.jsonl")) as duplicate:
+                assert duplicate is False
+            assert not acquired.is_set()
+        assert acquired.wait(timeout=10)
+        release.set()
+        thread.join(timeout=10)
+        assert outcome == [True]
+        with queued_review_lock(settings, str(tmp_path), transcript) as claimed:
+            assert claimed
+
+
+async def test_busy_global_judge_phase_defers_without_blocking_scan(
+    tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from captain_hook.review.triage import TriageReport
+
+    settings = ReviewSettings(db_path=tmp_path / "review.db")
+    calls: list[str] = []
+
+    async def triage(*args: object, **kwargs: object) -> TriageReport:
+        calls.append("triage")
+        return TriageReport(triaged=2, junk=1, rejected=0)
+
+    async def judge(*args: object, **kwargs: object) -> JudgeReport:
+        calls.append("judge")
+        return JudgeReport(judged=1, failed=0, pending=0, merged=0, retired=0, reopened=0)
+
+    monkeypatch.setattr("captain_hook.review.triage.triage_pass", triage)
+    monkeypatch.setattr("captain_hook.review.judge.judge_pass", judge)
+    transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+    with judge_lock(settings) as claimed:
+        assert claimed
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings, sweep=True)
+        assert (report.scanned, report.triaged, report.judged) == (1, 0, 0)
+        assert calls == []
+        with brain_lock(settings) as brain_available:
+            assert brain_available
+    report = await review_session(transcript, cwd=str(git_repo), settings=settings, sweep=True)
+    assert (report.scanned, report.triaged, report.triage_junk, report.judged) == (0, 2, 1, 1)
+    assert calls == ["triage", "judge"]
+
+
+async def test_failed_global_judge_phase_releases_its_lock(
+    tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = ReviewSettings(db_path=tmp_path / "review.db")
+
+    async def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("triage failed")
+
+    monkeypatch.setattr("captain_hook.review.triage.triage_pass", fail)
+    transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+    with pytest.raises(RuntimeError, match="triage failed"):
+        await review_session(transcript, cwd=str(git_repo), settings=settings, sweep=True)
+    with judge_lock(settings) as claimed:
+        assert claimed

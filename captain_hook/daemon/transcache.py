@@ -24,12 +24,13 @@ class _Entry:
     consumed: int
     committed: list[TranscriptEvent]
     events: list[TranscriptEvent]
+    identity: tuple[int, int]
     lifts: dict[int, ActivityLift] = field(default_factory=dict)
     lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
 
 
-_CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(128 * 1024 * 1024, weigh=attrgetter("size"))
+_CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(256 * 1024 * 1024, weigh=attrgetter("size"))
 _LOCK = threading.Lock()
 _REFILL_LOCK = threading.Lock()
 
@@ -58,22 +59,26 @@ def _entry_for(path: Path) -> _Entry:
     st = path.stat()
     entry = _lookup(path)
     if _current(entry, st):
-        return _store(path, entry)
+        return entry
     with _REFILL_LOCK:
         st = path.stat()
         entry = _lookup(path)
         if _current(entry, st):
-            return _store(path, entry)
+            return entry
         return _refill(path, st, entry)
 
 
 def _lookup(path: Path) -> _Entry | None:
     with _LOCK:
-        return _CACHE.get(path)
+        entry = _CACHE.get(path)
+        if entry is not None:
+            _CACHE.move_to_end(path)
+        return entry
 
 
 def _current(entry: _Entry | None, st: os.stat_result) -> bool:
-    return entry is not None and (entry.size, entry.mtime_ns, entry.ctime_ns) == (
+    return entry is not None and (entry.identity, entry.size, entry.mtime_ns, entry.ctime_ns) == (
+        (st.st_dev, st.st_ino),
         st.st_size,
         st.st_mtime_ns,
         st.st_ctime_ns,
@@ -83,7 +88,7 @@ def _current(entry: _Entry | None, st: os.stat_result) -> bool:
 def _refill(path: Path, st: os.stat_result, entry: _Entry | None) -> _Entry:
     size, mtime_ns, ctime_ns = st.st_size, st.st_mtime_ns, st.st_ctime_ns
     match entry:
-        case _Entry(size=cached) if size > cached:
+        case _Entry(size=cached, identity=identity) if size > cached and identity == (st.st_dev, st.st_ino):
             try:
                 return _store(path, _grow(entry, path, _appended(path, entry.consumed, st), size, mtime_ns, ctime_ns))
             except Exception:
@@ -92,7 +97,7 @@ def _refill(path: Path, st: os.stat_result, entry: _Entry | None) -> _Entry:
         before = os.fstat(fh.fileno())
         raw = fh.read(before.st_size)
         settled = _stamp(os.fstat(fh.fileno())) == _stamp(before)
-    full = _full(raw, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    full = _full(raw, before.st_size, before.st_mtime_ns, before.st_ctime_ns, (before.st_dev, before.st_ino))
     return _store(path, full) if settled else full
 
 
@@ -124,8 +129,8 @@ def _appended(path: Path, offset: int, st: os.stat_result) -> bytes:
     return appended
 
 
-def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
-    return st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int, int]:
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
 class _ChangedUnderRead(Exception):
@@ -144,6 +149,7 @@ def _grow(entry: _Entry, path: Path, appended: bytes, size: int, mtime_ns: int, 
         entry.consumed + cut,
         committed,
         committed + parse_events_from_bytes(appended[cut:]),
+        entry.identity,
     )
     if len(entry.events) == len(entry.committed):
         with entry.lock:
@@ -164,9 +170,11 @@ def _fed(lift: ActivityLift) -> int:
     return sum(len(turn.events) for turn in lift.activity.turns)
 
 
-def _full(raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
+def _full(raw: bytes, size: int, mtime_ns: int, ctime_ns: int, identity: tuple[int, int]) -> _Entry:
     from cc_transcript.parser import parse_events_from_bytes
 
     consumed = raw.rfind(b"\n") + 1
     committed = parse_events_from_bytes(raw[:consumed])
-    return _Entry(size, mtime_ns, ctime_ns, consumed, committed, committed + parse_events_from_bytes(raw[consumed:]))
+    return _Entry(
+        size, mtime_ns, ctime_ns, consumed, committed, committed + parse_events_from_bytes(raw[consumed:]), identity
+    )
