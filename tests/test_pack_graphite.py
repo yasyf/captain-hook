@@ -460,3 +460,37 @@ def test_rebase_onto_own_upstream_is_ccx_ships_recovery(
         "git rebase origin/feat $(printf other)",
     ]:
         assert_fires(dispatch_command(command, repo, tmp_path), "deny", "ccx vcs stack restack")
+
+
+@pytest.mark.parametrize("command", ["git rebase --continue", "git rebase --abort", "git rebase --skip"])
+def test_conflict_workspace_routes_rebase_controls_to_ccx(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    workspace = tmp_path / "worktrees" / "repo" / "conflict-feat"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / ".graphite_repo_config").write_text("")
+    assert_fires(dispatch_command(command, workspace, tmp_path), "deny", "ccx vcs stack continue")
+
+
+@pytest.mark.parametrize("command", ["gh pr view 42 --json state,mergedAt", "gh pr view 42 --json=mergeable"])
+def test_landing_fields_nudge_toward_ccx_pr_status(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert "ccx vcs pr status" in warn_context(dispatch_command(command, gt_repo, tmp_path))
+
+
+def test_landing_nudge_stays_quiet_off_its_shape(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command("gh pr view 42 --json title,body", gt_repo, tmp_path) is None
+    assert dispatch_command("gh pr view 42 --json state", git_repo, tmp_path) is None
+    ran = [raw_tool_msg("Bash", {"command": "ccx vcs pr status 42"})]
+    assert dispatch_command("gh pr view 42 --json state", gt_repo, tmp_path, transcript=ran) is None
+
+
+def test_landing_nudge_needs_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command("gh pr view 42 --json state", gt_repo, tmp_path) is None

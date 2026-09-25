@@ -31,10 +31,14 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   `bookmark list`, …) when *every* `jj` call on the line is a read. It steers raw
   `git commit`/`git push`/branch writes to `ccx vcs ship`/`ccx vcs stack new`. Its pre-submit review
   reminder quiets once a cc-review pass has run. Rebase, merge, and pull nudges name
-  `ccx vcs stack submit`. When ccx is on PATH, it blocks agent-run `gt submit`, `gt restack`,
-  `gt sync`, `gt create`, `gt modify`, `git rebase`, and force pushes, naming the ccx command to
-  run instead. The conflict steps a ccx refusal prints (`gt restack --only --branch <b>`,
-  `gt continue`, `gt abort`, `git rebase --continue`/`--abort`) stay open.
+  `ccx vcs stack rebase` (ccx 0.65.0 or later) or `ccx vcs stack submit`. When ccx is on PATH, it
+  blocks agent-run `gt submit`, `gt restack`, `gt sync`, `gt create`, `gt modify`, `git rebase`, and
+  force pushes, naming the ccx command to run instead. The conflict steps a ccx refusal prints
+  (`gt restack --only --branch <b>`, `gt continue`, `gt abort`) stay open, as do rebase controls
+  outside a ccx conflict workspace. Inside one, it blocks raw rebase controls and names
+  `ccx vcs stack continue` / `ccx vcs stack abort` (ccx 0.65.0 or later). With ccx on PATH, a
+  `gh pr view --json` query for landing fields warns and names `ccx vcs pr status <n>` (ccx 0.64.1
+  or later) or `ccx vcs status`; the warning quiets after either command runs this session.
 
 Two more activate by language, detected from the repo's build manifests:
 
@@ -60,7 +64,7 @@ uvx capt-hook pack list
 ```
   builtin:fixes                      builtin  2 hooks
   builtin:general                    builtin  13 hooks
-  builtin:graphite                   builtin  5 hooks
+  builtin:graphite                   builtin  1 hooks
   builtin:performance                builtin  1 hooks
   builtin:python                     builtin  3 hooks
   builtin:steering                   builtin  3 hooks
