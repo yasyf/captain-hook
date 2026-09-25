@@ -17,7 +17,7 @@ def stat_stamp(value: os.stat_result) -> StatStamp:
     return value.st_dev, value.st_ino, value.st_mode, value.st_mtime_ns, value.st_ctime_ns, value.st_size
 
 
-def directorystat_stamp(path: Path, *, root: bool) -> DirectoryStamp:
+def directory_stamp(path: Path, *, root: bool) -> DirectoryStamp:
     entry = path.lstat()
     target = path.stat() if root and stat.S_ISLNK(entry.st_mode) else None
     if not stat.S_ISDIR((target or entry).st_mode):
@@ -89,9 +89,9 @@ class DirectoryTreeCache:
                 manifest: dict[Path, DirectoryListing] = {}
                 output: list[HookEntry] = []
                 try:
-                    self._walk(path, path, directorystat_stamp(path, root=True), previous, manifest, output)
+                    self._walk(path, path, directory_stamp(path, root=True), previous, manifest, output)
                     for directory, listing in manifest.items():
-                        if directorystat_stamp(directory, root=directory == path) != listing.stamp:
+                        if directory_stamp(directory, root=directory == path) != listing.stamp:
                             raise tree_changed(directory)
                     result = tuple(sorted(output))
                     with self._available:
@@ -121,7 +121,7 @@ class DirectoryTreeCache:
         if listing is None or listing.stamp != stamp:
             with os.scandir(path) as entries:
                 names = tuple(sorted(entry.name for entry in entries if entry.name != "__pycache__"))
-            if directorystat_stamp(path, root=path == base) != stamp:
+            if directory_stamp(path, root=path == base) != stamp:
                 raise tree_changed(path)
             listing = DirectoryListing(stamp, names)
         manifest[path] = listing
