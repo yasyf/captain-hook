@@ -123,10 +123,11 @@ def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
     )
     backend = kwargs["backend"]
     assert isinstance(backend, OpenAiEndpointBackend)
-    assert (backend.base_url, backend.model, backend.api_key) == (
+    assert (backend.base_url, backend.model, backend.api_key, backend.reasoning_effort) == (
         "https://api.cerebras.ai/v1",
         "qwen-3.8-27b",
         "test-key",
+        "none",
     )
     assert kwargs["timeout"] == 6
     assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}

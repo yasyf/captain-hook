@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A slow plain-English rewrite no longer hides the reply.** Claude Code
+  cancels a `MessageDisplay` hook after 10 seconds whatever `hooks.json` asks
+  for, and then shows only the last chunk's original text. The rewrite waited
+  up to 20 seconds for Cerebras after up to 2 seconds of chunk assembly, so a
+  long reply lost everything but its last chunk. The rewrite now gives up
+  after 6 seconds and shows the whole original reply, and `hooks.json`
+  registers `MessageDisplay` with the 10-second timeout Claude Code enforces.
+- **The plain-English rewrite answers in about half a second.** Cerebras'
+  `qwen-3.8-27b` reasons by default, and on a 2,300-character reply it spent
+  a median 6,300 reasoning tokens for about 520 output tokens. That made a
+  rewrite take 4.4s at p50, and 3 of 20 hit the 6-second cap and showed the
+  original. The rewrite now sends `reasoning_effort: "none"` through spawnllm
+  0.14.0's `OpenAiEndpointBackend`, which brings the same 20 rewrites to
+  0.52s at p50 and 0.98s at p95 with none falling back.
+
 ## [12.56.0] - 2026-09-24
 
 ### Added
@@ -63,13 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `additionalContext` envelope a warn rendered failed schema validation. A warn,
   context, or allow message now prints as plain text, and a block renders
   `{"decision": "block"}`, which cancels the compaction.
-- **A slow plain-English rewrite no longer hides the reply.** Claude Code
-  cancels a `MessageDisplay` hook after 10 seconds whatever `hooks.json` asks
-  for, and then shows only the last chunk's original text. The rewrite waited
-  up to 20 seconds for Cerebras after up to 2 seconds of chunk assembly, so a
-  long reply lost everything but its last chunk. The rewrite now gives up
-  after 6 seconds and shows the whole original reply, and `hooks.json`
-  registers `MessageDisplay` with the 10-second timeout Claude Code enforces.
 
 ### Removed
 

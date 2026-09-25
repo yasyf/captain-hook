@@ -73,7 +73,9 @@ def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
             contextvars.copy_context().run,
             evt.ctx.call_llm,
             rewrite_prompt(evt, text),
-            backend=OpenAiEndpointBackend("https://api.cerebras.ai/v1", "qwen-3.8-27b", api_key=api_key),
+            backend=OpenAiEndpointBackend(
+                "https://api.cerebras.ai/v1", "qwen-3.8-27b", api_key=api_key, reasoning_effort="none"
+            ),
             timeout=max(1, int(budget)),
         )
         try:
