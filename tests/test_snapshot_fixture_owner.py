@@ -46,6 +46,7 @@ def test_fixture_owner_keeps_pinned_generation_and_never_launches_helper(tmp_pat
 
 def test_fixture_configured_classifier_stays_in_caller_scope(tmp_path, monkeypatch):
     from captain_hook.app import _state
+    from captain_hook.daemon.registry import Fingerprint
     from captain_hook.util import reqenv
 
     source = tmp_path / "fixture.jsonl"
@@ -53,7 +54,21 @@ def test_fixture_configured_classifier_stays_in_caller_scope(tmp_path, monkeypat
         source, raw_text("user", "ignore me"), raw_text("assistant", "answer"), raw_text("user", "include me")
     )
     monkeypatch.setattr(_state, "classifier", lambda event: event.text.startswith(reqenv.getenv("HOOKS_PREFIX", "")))
+    monkeypatch.setattr(_state, "registry_fingerprint", "pinned-registry")
+
+    def unexpected_fingerprint(*args, **kwargs):
+        raise AssertionError("configured classifier must reuse its loaded registry fingerprint")
+
+    monkeypatch.setattr(Fingerprint, "compute", unexpected_fingerprint)
     fixture = FixtureOwner()
+    policies = []
+    original_classify = fixture.client.classify
+
+    def classified(session, classifier, policy):
+        policies.append(policy)
+        return original_classify(session, classifier, policy)
+
+    monkeypatch.setattr(fixture.client, "classify", classified)
     scope = reqenv.RequestOverrides(
         {"HOOKS_PREFIX": "include", "CLAUDE_PROJECT_DIR": str(tmp_path)}, str(tmp_path), 0, "fixture"
     )
@@ -67,6 +82,7 @@ def test_fixture_configured_classifier_stays_in_caller_scope(tmp_path, monkeypat
         assert first.prompts("first", 10) == ["include me"]
         assert second.prompts("first", 10) == ["ignore me"]
         assert first.classifier != second.classifier
+        assert policies == [{"id": "captain-configured", "version": "pinned-registry"}] * 2
         assert fixture.client.call("stats")["data"]["counters"]["cold_parses"] == 1
         first.release()
         second.release()

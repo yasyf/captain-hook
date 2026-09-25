@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import app
+from captain_hook.daemon.tree import DirectoryTreeCache
 from captain_hook.packs import manager, plugins
 from captain_hook.util.caching import LRUDict, StampedCache
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from captain_hook.cli import CliState, ToolReg
 
 BUILD_RETRIES = 3
@@ -30,6 +28,7 @@ RosterStamp = tuple[tuple[Path, RosterEntry], ...]
 
 MARKER_WALKS: StampedCache[Path, MarkerStamp, tuple[str, ...]] = StampedCache(MAX_WALK_ROOTS)
 PLUGIN_WALKS: StampedCache[Path, RosterStamp, tuple[PluginTree, ...] | str] = StampedCache(MAX_WALK_ROOTS)
+HOOK_TREES = DirectoryTreeCache(MAX_WALK_ROOTS)
 
 
 def _stat_entry(path: Path) -> StatEntry | None:
@@ -40,20 +39,8 @@ def _stat_entry(path: Path) -> StatEntry | None:
     return (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
-def _iter_tree(root: Path, base: Path) -> Iterator[HookEntry]:
-    with os.scandir(root) as it:
-        for entry in it:
-            if entry.name == "__pycache__":
-                continue
-            if entry.is_dir(follow_symlinks=False):
-                yield from _iter_tree(Path(entry.path), base)
-            elif entry.is_file(follow_symlinks=False) and not entry.name.endswith((".pyc", ".pyo")):
-                st = entry.stat(follow_symlinks=False)
-                yield (os.path.relpath(entry.path, base), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
-
-
-def _hooks_tree(hooks: str) -> tuple[HookEntry, ...]:
-    return tuple(sorted(_iter_tree(root, root))) if (root := Path(hooks)).is_dir() else ()
+def _hooks_tree(hooks: str, *, fresh: bool = False) -> tuple[HookEntry, ...]:
+    return HOOK_TREES.entries(root, fresh=fresh) if (root := Path(hooks)).is_dir() else ()
 
 
 def _language_markers(root: Path, *, fresh: bool) -> tuple[str, ...]:
@@ -61,7 +48,7 @@ def _language_markers(root: Path, *, fresh: bool) -> tuple[str, ...]:
     return MARKER_WALKS.get(root, stamp, MARKER_TTL, lambda: tuple(sorted(manager.detect_languages(root))), fresh=fresh)
 
 
-def _plugin_trees(root: Path) -> tuple[PluginTree, ...] | str:
+def _plugin_trees(root: Path, *, fresh: bool = False) -> tuple[PluginTree, ...] | str:
     try:
         roster = plugins.enabled_plugins(root)
     except plugins.PluginListError as exc:
@@ -70,7 +57,7 @@ def _plugin_trees(root: Path) -> tuple[PluginTree, ...] | str:
     for plugin in roster:
         pack_root = plugins.plugin_pack_root(plugin)
         try:
-            trees.append((plugin.id, plugin.root, _hooks_tree(str(pack_root))))
+            trees.append((plugin.id, plugin.root, _hooks_tree(str(pack_root), fresh=fresh)))
         except OSError:
             continue
     return tuple(trees)
@@ -89,7 +76,7 @@ def _roster_stamp(root: Path) -> RosterStamp:
 
 
 def _plugin_inputs(root: Path, *, fresh: bool) -> tuple[PluginTree, ...] | str:
-    return PLUGIN_WALKS.get(root, _roster_stamp(root), PLUGIN_TTL, lambda: _plugin_trees(root), fresh=fresh)
+    return PLUGIN_WALKS.get(root, _roster_stamp(root), PLUGIN_TTL, lambda: _plugin_trees(root, fresh=fresh), fresh=fresh)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +88,7 @@ class Fingerprint:
         root = cli_state.root
         inputs = (
             _language_markers(root, fresh=fresh),
-            _hooks_tree(cli_state.hooks_dir),
+            _hooks_tree(cli_state.hooks_dir, fresh=fresh),
             _stat_entry(root / ".gitignore"),
             _plugin_inputs(root, fresh=fresh),
         )
@@ -163,7 +150,7 @@ class Registry:
         from captain_hook.cli import PLUGIN_ROSTER_SOURCE, pack_tool_specs
         from captain_hook.daemon.context import capture_output
 
-        state = app.State()
+        state = app.State(registry_fingerprint=fingerprint.digest)
         # Capture discovery's output on BOTH streams (stderr notices, stdout import-time prints); the
         # server replays it per request so warm mirrors cold's per-invocation print.
         with capture_output() as captured, app.use_state(state):

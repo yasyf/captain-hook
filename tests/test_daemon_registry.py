@@ -35,6 +35,7 @@ def isolate_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
 ) -> Iterator[None]:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
+    registry.HOOK_TREES.cache_clear()
     yield
     cli.register_pack_tools([])  # drop any tools this test registered into the process-global registry
 
@@ -59,6 +60,56 @@ def fp(cli_state: CliState) -> Fingerprint:
 def test_unchanged_tree_twice_is_equal(project: CliState) -> None:
     assert fp(project) == fp(project)
     assert fp(project).digest == fp(project).digest
+
+
+def test_warm_registry_avoids_hook_directory_enumeration(
+    project: CliState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hooks = Path(project.hooks)
+    (hooks / "nested").mkdir()
+    (hooks / "nested" / "data.txt").write_text("one")
+    reg = Registry(project)
+    snapshot = reg.get()
+    assert snapshot.state.registry_fingerprint == snapshot.fingerprint.digest
+    scans: list[Path] = []
+    original = os.scandir
+
+    def counted(path):
+        if Path(path).is_relative_to(hooks):
+            scans.append(Path(path))
+        return original(path)
+
+    monkeypatch.setattr(os, "scandir", counted)
+    for _ in range(10):
+        assert reg.get() is snapshot
+    assert scans == []
+    (hooks / "nested" / "data.txt").write_text("changed")
+    assert fp(project) != snapshot.fingerprint
+    assert scans == []
+    (hooks / "nested" / "data.txt").unlink()
+    assert fp(project) != snapshot.fingerprint
+    assert scans == [hooks / "nested"]
+
+
+def test_fresh_fingerprints_enumerate_local_and_plugin_hooks(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    expected = fp(project)
+    roots = {Path(project.hooks), plugin_root / manager.PLUGIN_PACK_DIRNAME}
+    scans: list[Path] = []
+    original = os.scandir
+
+    def counted(path):
+        if Path(path) in roots:
+            scans.append(Path(path))
+        return original(path)
+
+    monkeypatch.setattr(os, "scandir", counted)
+    assert Fingerprint.compute(project, fresh=True) == expected
+    assert set(scans) == roots
 
 
 def test_edit_hook_content_changes_fingerprint(project: CliState) -> None:
@@ -294,10 +345,10 @@ def test_plugin_tree_skips_a_plugin_whose_hooks_dir_vanishes(
     plant_roster([("acme/good", good_root), ("acme/bad", bad_root)])
     real = registry._hooks_tree
 
-    def flaky_tree(hooks: str) -> tuple[registry.HookEntry, ...]:
+    def flaky_tree(hooks: str, *, fresh: bool = False) -> tuple[registry.HookEntry, ...]:
         if str(bad_root) in hooks:
             raise FileNotFoundError(hooks)
-        return real(hooks)
+        return real(hooks, fresh=fresh)
 
     monkeypatch.setattr(registry, "_hooks_tree", flaky_tree)
     assert [pid for pid, *_ in registry._plugin_trees(project.root)] == ["acme/good"]  # raising plugin skipped

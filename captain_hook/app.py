@@ -108,6 +108,7 @@ class State:
     gitignore_patterns: list[str] = field(default_factory=list)
     settings: HooksSettings | None = None
     classifier: UserClassifier | None = None
+    registry_fingerprint: str | None = None
     load_errors: list[LoadError] = field(default_factory=list)
 
 
