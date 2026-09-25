@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The graphite pack's messages route stack writes through ccx vcs.**
+  Commit and branch nudges name `ccx vcs ship` and `ccx vcs stack new`;
+  rebase, merge, and pull nudges name `ccx vcs stack submit`, which fetches
+  trunk and replays every lane. Hand-run `gt restack` and `gt sync` can drag
+  a stack onto a stale local trunk. Ship replays `needs_restack` itself, so
+  the old rebase message was wrong to say it refuses a stack in that state.
+
 ## [12.56.2] - 2026-09-24
 
 ### Fixed
