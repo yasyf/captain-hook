@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The graphite pack asks ccx which lane a repo rides.** A `gt repo init`
+  marker is written once and stays forever, but submitting also needs
+  Graphite's grant on the remote. Without it `gt submit` and every ccx stack
+  verb decline, raw git is the only route left, and the pack was still
+  steering toward gt and blocking the force-push that was the correct
+  operation. With ccx on PATH the pack now reads `ccx vcs lane --json` and
+  stands down wherever ccx reports a lane other than `gt`, cached for five
+  minutes per repository and keyed on the common git dir, so a linked
+  worktree reads the same verdict as its main checkout. Off PATH there is no
+  answer to read and the marker still stands.
+
+### Changed
+
+- **Force pushes are advised, not blocked.** The stack-write guard's other
+  arms each have a ccx verb that does the same job, so they still block. A
+  force push does not: `ccx vcs stack submit` replays a branch from its
+  recorded base rather than overwriting the remote, which is not what a
+  deliberately rewritten branch needs. That arm now warns, names the route
+  and its limits, and lets the push through. A line carrying both a blocking
+  and an advisory shape still blocks.
+
 ## [12.57.1] - 2026-09-25
 
 ### Added

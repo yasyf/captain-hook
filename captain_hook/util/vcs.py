@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
+import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -63,14 +65,51 @@ def gt_disabled(common: Path) -> bool:
     return probe.stdout.strip() in NOGT_TRUE
 
 
+@ttl_cache(300.0)
+def gt_declined(common: Path) -> bool:
+    """Whether ccx routes this repository off the gt lane despite a live Graphite marker.
+
+    ``gt repo init`` writes the marker once and leaves it there, but submitting also needs
+    Graphite's server-side grant on the remote; without it ``gt submit`` and every ccx stack
+    verb decline, and the only route left is raw git. ``ccx vcs lane`` names the lane ccx
+    actually rides, so it answers what the marker cannot. No ccx on PATH means no answer,
+    and the marker stands.
+    """
+    if shutil.which("ccx") is None:
+        return False
+    try:
+        probe = subprocess.run(
+            ["ccx", "vcs", "lane", "--json"],
+            cwd=common.parent,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if probe.returncode != 0:
+        return False
+    try:
+        lane = json.loads(probe.stdout).get("lane")
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return lane is not None and lane != "gt"
+
+
+def rides_gt_lane(common: Path) -> bool:
+    return not gt_disabled(common) and not gt_declined(common)
+
+
 def graphite_lane(directory: Path) -> bool:
     common = graphite_common_dir(directory)
-    return common is not None and not gt_disabled(common)
+    return common is not None and rides_gt_lane(common)
 
 
 def graphite_lane_of_git_dir(git: Path) -> bool:
     common = common_git_dir(git)
-    return (common / GRAPHITE_MARKER).is_file() and not gt_disabled(common)
+    return (common / GRAPHITE_MARKER).is_file() and rides_gt_lane(common)
 
 
 def is_repo_root(resolved: Path) -> bool:

@@ -28,13 +28,18 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo.
   Every hook checks for `.git/.graphite_repo_config` across worktrees and honors `ccx.nogt`.
   That git-config key opts a repo out of the gt lane, so a stale marker cannot activate the pack.
+  Neither can a marker on a repo Graphite has no access to: with ccx on PATH the pack reads
+  `ccx vcs lane --json` and stands down wherever ccx reports a lane other than `gt`, five-minute
+  cached per repository so a linked worktree and its main checkout read one verdict.
   The pack bans jj writes but allows read-only `jj` commands (`log`, `status`, `diff`,
   `bookmark list`, …) when *every* `jj` call on the line is a read. It steers raw
   `git commit`/`git push`/branch writes to `ccx vcs ship`/`ccx vcs stack new`. Its pre-submit review
   reminder quiets once a cc-review pass has run. Rebase, merge, and pull nudges name
   `ccx vcs stack rebase` (ccx 0.65.0 or later) or `ccx vcs stack submit`. When ccx is on PATH, it
-  blocks agent-run `gt submit`, `gt restack`, `gt sync`, `gt create`, `gt modify`, `git rebase`, and
-  force pushes, naming the ccx command to run instead. The conflict steps a ccx refusal prints
+  blocks agent-run `gt submit`, `gt restack`, `gt sync`, `gt create`, `gt modify`, and `git rebase`,
+  naming the ccx command to run instead. A force push warns rather than blocks: `ccx vcs stack submit`
+  replays a branch from its recorded base instead of overwriting the remote, so it is not the route
+  for a branch rewritten on purpose. The conflict steps a ccx refusal prints
   (`gt restack --only --branch <b>`, `gt continue`, `gt abort`) stay open, as do rebase controls
   outside a ccx conflict workspace. Inside one, it blocks raw rebase controls and names
   `ccx vcs stack continue` / `ccx vcs stack abort` (ccx 0.65.0 or later). With ccx on PATH, a
