@@ -6,14 +6,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The graphite pack nudges landing checks toward ccx.** With ccx on PATH,
+  `gh pr view --json` in a repo Graphite owns warns when it requests `state`,
+  `mergedAt`, `mergeable`, `mergeStateStatus`, or `mergeCommit`. Graphite's
+  merge queue closes what it merges, so a landed PR reads `CLOSED` with a
+  null `mergedAt`. The warning names `ccx vcs pr status <n>` (ccx 0.64.1 or
+  later) and `ccx vcs status`, stays quiet after either runs this session,
+  and never blocks the query.
+- **Rebase controls in ccx conflict workspaces route through ccx.** The
+  stack-write guard blocks raw rebase controls, including `--continue`,
+  `--abort`, `--skip`, and `--quit`, when the command's working directory
+  contains both a `worktrees` component and a `conflict-<branch>` component.
+  It names `ccx vcs stack continue` and `ccx vcs stack abort` (ccx 0.65.0 or
+  later); rebase controls outside those workspaces stay open.
+- **The graphite pack blocks raw stack writes when ccx is on PATH.**
+  In a repo Graphite owns, the guard blocks agent-run `gt submit` (`s`,
+  `ss`), `gt restack`, `gt sync`, `gt create` (`c`), `gt modify` (`m`),
+  `git rebase`, and force pushes (including `+refspec`). Each block names
+  the matching `ccx vcs ship`, `ccx vcs stack new`, `ccx vcs stack restack`,
+  `ccx vcs stack rebase`, or `ccx vcs stack submit` command. The conflict steps
+  `gt restack --only --branch <b>`, `gt continue`, and `gt abort` stay open,
+  as do rebase controls outside ccx conflict workspaces and a rebase onto
+  `<remote>/<current-branch>` for ship's recovery. `gt track`, `gt log`,
+  `--help`, and non-force pushes stay open. The guard is inert without ccx;
+  ccx's child gt/git processes do not pass through agent Bash hooks.
+
 ### Changed
 
+- **Rebase messages name `ccx vcs stack rebase`.** The raw-rebase block
+  names ccx 0.65.0 or later, notes that older releases alias the command to
+  `ccx vcs stack restack`, and points to `--parent <b>=<p>` to move a branch.
+  The rebase, merge, and pull nudge names `ccx vcs stack rebase` or
+  `ccx vcs stack submit`.
 - **The graphite pack's messages route stack writes through ccx vcs.**
   Commit and branch nudges name `ccx vcs ship` and `ccx vcs stack new`;
-  rebase, merge, and pull nudges name `ccx vcs stack submit`, which fetches
-  trunk and replays every lane. Hand-run `gt restack` and `gt sync` can drag
-  a stack onto a stale local trunk. Ship replays `needs_restack` itself, so
+  rebase, merge, and pull nudges name `ccx vcs stack rebase` or
+  `ccx vcs stack submit`, which fetches trunk and replays every lane.
+  Hand-run `gt restack` and `gt sync` can drag a stack onto a stale local
+  trunk. Ship replays `needs_restack` itself, so
   the old rebase message was wrong to say it refuses a stack in that state.
+
+### Fixed
+
+- **`PushesTagRef` handles push operands with no static value.** A command
+  substitution no longer crashes the condition.
 
 ## [12.56.2] - 2026-09-24
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -155,7 +157,7 @@ class PushesTagRef(CustomCommandLineCondition):
             call.name == "git"
             and call.targets
             and call.targets.targets[0].value == "push"
-            and any(t.value.startswith("refs/tags") for t in call.targets.targets[1:])
+            and any((t.value or "").startswith("refs/tags") for t in call.targets.targets[1:])
             for call in evt.cmd.calls()
         )
 
@@ -165,3 +167,68 @@ class ReviewPassRan(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return any(is_review_skill(skill) for window in evt.ctx.transcript.deep_inputs() for skill in window.skills)
+
+
+class CcxInstalled(CustomCondition):
+    """Matches when ``ccx`` is on PATH, so its stack verbs are there to route raw gt and git writes to."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return shutil.which("ccx") is not None
+
+
+def git_probe(call: Call, session_cwd: Path | None, *args: str) -> str | None:
+    """Run a read-only ``git`` query against the repository ``call`` targets; ``None`` when it fails."""
+    cwd, git_dir = git_location(call, session_cwd)
+    if cwd is None:
+        return None
+    location = ["--git-dir", str(git_dir)] if git_dir is not None else []
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(cwd), *location, *args],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return probe.stdout.strip() if probe.returncode == 0 else None
+
+
+def rebases_onto_own_upstream(call: Call, session_cwd: Path | None) -> bool:
+    """Whether a ``git rebase`` replays the branch onto its own remote-tracking ref.
+
+    That is the manual recovery ``ccx vcs ship`` prints when the remote branch moved under it
+    (``git rebase --autostash origin/<branch>``); it rewrites nothing of the stack's shape.
+    """
+    operands = call.targets
+    if not operands.complete or any(flag.split("=", 1)[0] == "--onto" for flag in call.flags):
+        return False
+    upstream = [target.value for target in operands.targets[1:]]
+    if len(upstream) != 1 or upstream[0] is None:
+        return False
+    branch = git_probe(call, session_cwd, "symbolic-ref", "--short", "-q", "HEAD")
+    ref = git_probe(call, session_cwd, "rev-parse", "--symbolic-full-name", upstream[0])
+    return bool(branch and ref and ref.startswith("refs/remotes/") and ref.endswith(f"/{branch}"))
+
+
+def short_force(flag: str) -> bool:
+    """Whether a bundled short-flag token such as ``-uf`` carries ``-f`` before any ``-o`` value."""
+    for letter in flag[1:]:
+        if letter == "o":
+            return False
+        if letter == "f":
+            return True
+    return False
+
+
+def force_pushes(call: Call) -> bool:
+    """Whether a ``git push`` overwrites remote history: a force flag or a ``+``-prefixed refspec."""
+    for flag in call.flags:
+        name = flag.split("=", 1)[0]
+        if name in {"--force", "--force-with-lease", "--force-if-includes"}:
+            return True
+        if name.startswith("-") and not name.startswith("--") and short_force(name):
+            return True
+    return any((target.value or "").startswith("+") for target in call.targets.targets[1:])
