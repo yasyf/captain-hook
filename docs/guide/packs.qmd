@@ -10,8 +10,9 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 
 `capt-hook` ships seven builtin packs. Five are always active in every repo:
 
-- `general` — language-agnostic guards: git/jj command safety, doc and prompt nudges, task and
-  plan discipline, model-routing nudges, a code-review gate, a docs-freshness gate, a detour
+- `general` — language-agnostic guards: git/jj command safety, a `pkill`/`killall` block, doc and
+  prompt nudges, task and plan discipline, model-routing nudges, a code-review gate, a
+  docs-freshness gate, a detour
   check-in nudge, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
   comment that was already over budget only warns), `rm` safety, and a plain-English reply rewrite.
   The rewrite sends each assistant reply through Cerebras (`qwen-3.8-27b`) and does nothing until
