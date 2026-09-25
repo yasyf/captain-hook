@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from captain_hook.conditions import matches_conditions
 from captain_hook.context import HookContext
-from captain_hook.dispatch import execute_hook
+from captain_hook.dispatch import execute_hook, surfacing_handler_errors
 from captain_hook.events import (
     BaseHookEvent,
     SessionEndEvent,
@@ -39,6 +39,7 @@ from captain_hook.testing.session_cache import SessionCache
 from captain_hook.testing.types import Allow, Ask, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.transcripts import lift_session, load_transcript
 from captain_hook.types import Event, HookResult, Tool
+from captain_hook.util import reqenv
 
 STUB_FIELD_VALUES: dict[str, Any] = {
     "block": True,
@@ -106,12 +107,16 @@ def home_fixture_dir() -> Path:
     return root
 
 
-def seeded_session_dir(seen: dict[str, list[str]]) -> Path:
+def seeded_session_dir(seen: dict[str, list[str]] | None, state: list[BaseModel] | None) -> Path:
     from captain_hook.state import SeenKeys
 
     session_dir = fixture_file_dir() / f"session-{next(FIXTURE_FILE_COUNTER)}"
     session_dir.mkdir()
-    SessionStore(session_dir)[SeenKeys].set(SeenKeys(seen={scope: list(keys) for scope, keys in seen.items()}))
+    store = SessionStore(session_dir)
+    if seen is not None:
+        store[SeenKeys].set(SeenKeys(seen={scope: list(keys) for scope, keys in seen.items()}))
+    for model in state or ():
+        store[type(model)].set(model)
     return session_dir
 
 
@@ -490,8 +495,11 @@ def input_to_event(
         "transcript_path": transcript_path,
         "permission_mode": inp.permission_mode,
         "cwd": inp.cwd,
-        "session_dir": seeded_session_dir(inp.seen) if inp.seen is not None else None,
+        "session_dir": seeded_session_dir(inp.seen, inp.state)
+        if inp.seen is not None or inp.state is not None
+        else None,
     }
+    file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
     match ev:
         case Event.SubagentStop:
             evt = mock_subagent_stop_event(
@@ -511,7 +519,6 @@ def input_to_event(
         case Event.SessionEnd:
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
-            file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
             # {file} is an opt-in substitution: only fires when a FileFixture materialized a real
             # path AND the command spells the literal token, so no other brace in a command is touched.
             command = (
@@ -538,10 +545,14 @@ def input_to_event(
                 tool_input=inp.tool_input,
                 **ctx_kw,
             )
-            if isinstance(inp.file, FileFixture) and inp.file.home:
-                # Scoped here: `file` only binds in this branch, so a home fixture on a
-                # non-tool event stays inert instead of raising.
-                evt.__dict__["_home_dir"] = str(Path(file).parent)
+    if isinstance(inp.file, FileFixture) and inp.file.home:
+        evt.__dict__["_home_dir"] = str(Path(file).parent)
+    evt._raw |= (
+        ({"transcript_path": str(transcript_path)} if transcript_path else {})
+        | ({"session_id": inp.session_id} if inp.session_id else {})
+        | ({"agent_id": inp.agent_id} if inp.agent_id else {})
+        | ({"agent_type": inp.agent_type} if inp.agent_type else {})
+    )
 
     if inp.tasks is not None:
         from captain_hook.tasks import Task, Tasks
@@ -605,25 +616,31 @@ def transcript_event_payloads(
             yield base
 
 
+def system_message_matches(result: HookResult | None, pattern: str | None) -> bool:
+    return pattern is None or bool(result and result.system_message and re.search(pattern, result.system_message))
+
+
 def matches_expected(result: HookResult | None, expected: Block | Warn | Allow | Rewrite | Ask) -> bool:
     match expected:
         case Ask():
             return result is None
-        case Allow(explicit=True):
-            return result is not None and result.action == "allow"
-        case Allow():
+        case Allow(explicit=False, system_message=None):
             return result is None or result.action == "allow"
-        case Block(pattern=pat):
+        case Allow(system_message=sm):
+            return result is not None and result.action == "allow" and system_message_matches(result, sm)
+        case Block(pattern=pat, system_message=sm):
             return (
                 result is not None
                 and result.action == "block"
                 and (not pat or bool(result.message and re.search(pat, result.message)))
+                and system_message_matches(result, sm)
             )
-        case Warn(pattern=pat):
+        case Warn(pattern=pat, system_message=sm):
             return (
                 result is not None
                 and result.action == "warn"
                 and (not pat or bool(result.message and re.search(pat, result.message)))
+                and system_message_matches(result, sm)
             )
         case Rewrite(pattern=pat, fields=fields):
             if result is None or result.action != "rewrite":
@@ -643,22 +660,31 @@ def assert_result(
     match expected:
         case Ask():
             assert result is None, f"{prefix}Expected Ask (no result), got {result}"
-        case Allow(explicit=True):
-            assert result is not None and result.action == "allow", f"{prefix}Expected explicit Allow, got {result}"
-        case Allow():
+        case Allow(explicit=False, system_message=None):
             assert result is None or result.action == "allow", f"{prefix}Expected Allow, got {result}"
-        case Block(pattern=pat):
+        case Allow(system_message=sm):
+            assert result is not None and result.action == "allow", f"{prefix}Expected explicit Allow, got {result}"
+            assert system_message_matches(result, sm), (
+                f"{prefix}system_message {result.system_message!r} doesn't match '{sm}'"
+            )
+        case Block(pattern=pat, system_message=sm):
             assert result is not None and result.action == "block", f"{prefix}Expected Block, got {result}"
             if pat:
                 assert result.message and re.search(pat, result.message), (
                     f"{prefix}Block message {result.message!r} doesn't match '{pat}'"
                 )
-        case Warn(pattern=pat):
+            assert system_message_matches(result, sm), (
+                f"{prefix}system_message {result.system_message!r} doesn't match '{sm}'"
+            )
+        case Warn(pattern=pat, system_message=sm):
             assert result is not None and result.action == "warn", f"{prefix}Expected Warn, got {result}"
             if pat:
                 assert result.message and re.search(pat, result.message), (
                     f"{prefix}Warn message {result.message!r} doesn't match '{pat}'"
                 )
+            assert system_message_matches(result, sm), (
+                f"{prefix}system_message {result.system_message!r} doesn't match '{sm}'"
+            )
         case Rewrite(pattern=pat, fields=fields):
             assert result is not None and result.action == "rewrite", f"{prefix}Expected Rewrite, got {result}"
             ui = result.updated_input or {}
@@ -722,12 +748,27 @@ def home_env(home: str) -> Iterator[None]:
             os.environ["HOME"] = saved
 
 
+@contextmanager
+def hermetic_request(
+    env: dict[str, str] | None = None, cwd: str | None = None, session_id: str | None = None
+) -> Iterator[None]:
+    pinned = {key: os.environ[key] for key in ("CAPTAIN_HOOK_STATE_DIR", "XDG_CACHE_HOME")}
+    overrides = reqenv.RequestOverrides(
+        env=pinned | (env or {}),
+        cwd=cwd or os.getcwd(),
+        client_ppid=os.getpid(),
+        session_id=session_id or "fixture",
+    )
+    with reqenv.use_request(overrides):
+        yield
+
+
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
     from captain_hook.app import _state, is_planning_agent_skip
 
     results: list[tuple[str, str, bool, str]] = []
 
-    with isolated_state_root() as state_root, pinned_caches():
+    with isolated_state_root() as state_root, pinned_caches(), surfacing_handler_errors():
         (scratch_home := state_root / "home").mkdir()
         for entry in _state.hooks:
             if not entry.spec.tests:
@@ -740,25 +781,27 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                         # named tool, else pins the first named tool (families infer_tool can't
                         # shape, e.g. WebFetch/WebSearch). No Tool condition => pure inference.
                         spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
-                        evt = input_to_event(
-                            next(iter(entry.spec.events)),
-                            key,
-                            (inferred if (inferred := infer_tool(key)) in spec_tools else spec_tools[0])
-                            if spec_tools
-                            else None,
-                        )
-                        with (
-                            home_env(evt.__dict__.get("_home_dir") or str(scratch_home)),
-                            stubbed_commands(key.commands),
-                        ):
-                            hook_result = (
-                                execute_hook(entry, evt)
-                                if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
-                                else None
+                        with hermetic_request(key.env, key.cwd, key.session_id):
+                            evt = input_to_event(
+                                next(iter(entry.spec.events)),
+                                key,
+                                (inferred if (inferred := infer_tool(key)) in spec_tools else spec_tools[0])
+                                if spec_tools
+                                else None,
                             )
+                            with (
+                                home_env(evt.__dict__.get("_home_dir") or str(scratch_home)),
+                                stubbed_commands(key.commands),
+                            ):
+                                hook_result = (
+                                    execute_hook(entry, evt)
+                                    if matches_conditions(entry.spec, evt)
+                                    and not is_planning_agent_skip(entry.spec, evt)
+                                    else None
+                                )
                         assert_result(hook_result, expected, entry.name)
                     elif jsonl := SessionCache.for_root().load(key):
-                        with home_env(str(scratch_home)):
+                        with hermetic_request(), home_env(str(scratch_home)):
                             replays = list(replay_session(entry, jsonl))
                         if not any(matches_expected(r, expected) for r in replays):
                             assert_result(replays[-1] if replays else None, expected, entry.name)

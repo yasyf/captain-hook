@@ -32,21 +32,27 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
 | `tool` | Override tool name | `Input(tool="Write", file="x.py", content="...")` |
 | `prompt` | UserPromptSubmit text | `Input(prompt="Fix the bug")` |
 | `agent_type` | Subagent type | `Input(agent_type="cleanup")` |
-| `agent_id` | Subagent/teammate id; presence makes `evt.is_subagent` and `FromSubagent()` true | `Input(command="ls", agent_id="tm1")` |
+| `agent_id` | Subagent/teammate id, set on every event; presence makes `evt.is_subagent` and `FromSubagent()` true | `Input(command="ls", agent_id="tm1")` |
 | `permission_mode` | e.g. plan mode | `Input(permission_mode="plan")` |
 | `skip_permissions` | Pre-seeds `evt.skip_permissions` / `SkipPermissions()`; `None` leaves the real process-tree walk in place | `Input(command="ls", skip_permissions=True)` |
-| `transcript` | Session history | `Input(transcript=[T.user("ship it"), T.assistant(T.tool("Bash", command="uv run pytest"))])` |
+| `transcript` | Session history; a `Path` also lands in the payload as `evt.transcript_path`, on every event | `Input(transcript=[T.user("ship it"), T.assistant(T.tool("Bash", command="uv run pytest"))])` |
+| `session_id` | The payload's `session_id` (`evt.session_id`), unset by default | `Input(session_id="0123456789abcdef")` |
 | `seen` | Keys `evt.ctx.s.once`/`unseen` already saw this session, per scope (`""` for the unscoped call); backed by a real temp session dir, so "the repeat is silent" is one `Input` | `Input(command="git push", seen={"push": ["origin"]})` |
+| `env` | The request environment, exactly: every per-request key (`CLAUDE_*`, `ORCA_*`, `CAPT_HOOK_*`, …) resolves through `reqenv.getenv`/`env_map()` from this mapping alone, never the runner's env; empty by default | `Input(env={"ORCA_TERMINAL_HANDLE": "term-7"})` |
+| `state` | Session state models to seed, each saved under its own class in the same real temp session dir, so `Model.load(evt)` and `evt.ctx.s` read it | `Input(state=[ReviewState(intent="ship")])` |
 | `commands` | `subprocess.run` stubs by argv prefix: matching argv returns the text as stdout with exit 0 (the `llm=` convention for shell-outs); unmatched argv runs for real | `Input(commands={"gh pr view": '{"isDraft": true}'})` |
 
 ## Expected outcomes
 
-All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`.
+All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`. A handler that
+raises fails its test as an error whatever the expectation, so a crash never passes as `Allow()`.
 
 - `Block(pattern=None)` — the hook must block; optional regex searched in the block message.
 - `Warn(pattern=None)` — the hook must warn; optional regex searched in the warning.
 - `Allow()` — the hook must allow (return `None` or action `"allow"`);
   `Allow(explicit=True)` requires an actual allow result, so `None` fails.
+- `system_message=` on `Block`, `Warn`, or `Allow` — a regex searched in the result's
+  `system_message`; on `Allow` it also requires an actual allow result.
 - `Ask()` — the hook must return no result (`None`); for `PermissionRequest` hooks that
   means the dialog shows.
 

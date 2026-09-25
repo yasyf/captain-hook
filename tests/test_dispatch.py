@@ -32,7 +32,7 @@ from captain_hook.dispatch import (
     format_output,
     run_declarative,
 )
-from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent
+from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent, PreCompactEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.session import SessionStore
 from captain_hook.types import Action, CustomCondition, Event, HookResult, HookSpec, RegisteredHook
@@ -250,6 +250,24 @@ class TestFormatOutput:
     def test_allow_returns_none(self, event: Event) -> None:
         output = format_output(event, HookResult(action=Action.allow))
         assert output is None
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            pytest.param(HookResult(action=Action.warn, message="Keep the plan path."), id="warn"),
+            pytest.param(HookResult(action=Action.warn, message="Keep the plan path.", approve=False), id="context"),
+            pytest.param(HookResult(action=Action.allow, message="Keep the plan path."), id="allow"),
+        ],
+    )
+    def test_pre_compact_renders_plain_text(self, result: HookResult) -> None:
+        assert format_output(Event.PreCompact, result) == "Keep the plan path."
+
+    def test_pre_compact_block_uses_decision_format(self) -> None:
+        output = format_output(Event.PreCompact, HookResult(action=Action.block, message="not now"))
+        assert output == {"decision": "block", "reason": "not now"}
+
+    def test_pre_compact_allow_without_message_returns_none(self) -> None:
+        assert format_output(Event.PreCompact, HookResult(action=Action.allow)) is None
 
     def test_stop_warn_returns_block_format(self) -> None:
         result = HookResult(action=Action.warn, message="warning stop")
@@ -1030,6 +1048,35 @@ class TestDispatch:
         register_hook(Event.Stop, message="warn stop")
         result = dispatch(Event.Stop, make_stop_event())
         assert result is None or "decision" in result
+
+    def test_stop_allow_emits_only_the_system_message(self) -> None:
+        @on(Event.Stop)
+        def notifier(evt: Any) -> HookResult:
+            return evt.allow(system_message="Compacting now.")
+
+        assert dispatch(Event.Stop, make_stop_event()) == {"systemMessage": "Compacting now."}
+
+    def test_system_message_rides_on_the_envelope_and_joins_in_order(self) -> None:
+        @on(Event.PreToolUse)
+        def first(evt: Any) -> HookResult:
+            return evt.context("advice", system_message="one")
+
+        @on(Event.PreToolUse)
+        def second(evt: Any) -> HookResult:
+            return evt.block("no", system_message="two")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["systemMessage"] == "one\n\ntwo"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_pre_compact_drops_the_system_message(self) -> None:
+        @on(Event.PreCompact)
+        def reminder(evt: Any) -> HookResult:
+            return evt.context("Re-read the plan.", system_message="shown")
+
+        event = PreCompactEvent(_raw={"trigger": "auto"}, ctx=make_ctx())
+        assert dispatch(Event.PreCompact, event) == "Re-read the plan."
 
     def test_permission_request_dispatch_emits_decision_envelope(self) -> None:
 

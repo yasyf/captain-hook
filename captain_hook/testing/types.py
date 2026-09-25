@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "command": (str,),
     "content": (str,),
@@ -20,6 +22,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "source": (str,),
     "permission_mode": (str,),
     "cwd": (str,),
+    "session_id": (str,),
     "offset": (int,),
     "limit": (int,),
     "skip_permissions": (bool,),
@@ -28,7 +31,9 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "tasks": (list,),
     "background_tasks": (list,),
     "seen": (dict,),
+    "state": (list,),
     "commands": (dict,),
+    "env": (dict,),
 }
 
 
@@ -70,16 +75,24 @@ class FileFixture:
 
 @dataclass(frozen=True, kw_only=True)
 class Block:
-    """Inline test expectation: the hook should block. Optional regex ``pattern`` matches the block message."""
+    """Inline test expectation: the hook should block. Optional regex ``pattern`` matches the block message.
+
+    Optional regex ``system_message`` matches the result's ``system_message``.
+    """
 
     pattern: str | None = None
+    system_message: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class Warn:
-    """Inline test expectation: the hook should warn. Optional regex ``pattern`` matches the warning message."""
+    """Inline test expectation: the hook should warn. Optional regex ``pattern`` matches the warning message.
+
+    Optional regex ``system_message`` matches the result's ``system_message``.
+    """
 
     pattern: str | None = None
+    system_message: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -87,10 +100,12 @@ class Allow:
     """Inline test expectation: the hook should allow (return None or action ``"allow"``).
 
     ``explicit=True`` requires an actual allow result — ``None`` no longer matches, so
-    e.g. a ``PermissionRequest`` hook must have answered the dialog itself.
+    e.g. a ``PermissionRequest`` hook must have answered the dialog itself. A regex
+    ``system_message`` requires an allow result whose ``system_message`` it matches.
     """
 
     explicit: bool = False
+    system_message: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -139,11 +154,11 @@ class Input:
             over the input synthesized from the other fields.
         prompt: An Agent/Task call's prompt, or ``UserPromptSubmit`` text.
         script: A ``Workflow`` tool's script source (synthesizes a Workflow call).
-        agent_type: Subagent type for subagent events (an Agent/Task call's
-            ``subagent_type``).
-        agent_id: Subagent/teammate id — a non-empty value makes ``evt.is_subagent``
-            true (and fills subagent events' ``agent_id``); each id also gets its
-            own ``max_fires`` budget.
+        agent_type: The payload's ``agent_type`` on every event (an Agent/Task call's
+            ``subagent_type`` too).
+        agent_id: Subagent/teammate id, set in the payload on every event — a non-empty
+            value makes ``evt.is_subagent`` true; each id also gets its own ``max_fires``
+            budget.
         model: Model for an Agent/Task call's ``model`` input field.
         output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
         error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.
@@ -152,13 +167,15 @@ class Input:
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
         cwd: The session working directory surfaced as ``evt.cwd``, for hooks
             that resolve relative tool paths.
+        session_id: The payload's ``session_id``, surfaced as ``evt.session_id``.
         skip_permissions: Pre-seeds ``evt.skip_permissions`` (normally the
             process-tree walk for ``--dangerously-skip-permissions``); ``None``
             leaves the real walk in place.
         offset: ``Read`` call offset.
         limit: ``Read`` call limit.
         transcript: Session history for transcript conditions — a path, a
-            ``TranscriptFixture``, or a raw list of transcript-line dicts.
+            ``TranscriptFixture``, or a raw list of transcript-line dicts. A path
+            also lands in the payload as ``evt.transcript_path``, on every event.
         tasks: The native task list read via ``evt.tasks``.
         background_tasks: Background-task mappings for the ``Stop``/``SubagentStop``
             payload, surfaced as ``evt.background_tasks`` — the shape that makes a
@@ -174,6 +191,13 @@ class Input:
             a ``subprocess.run`` whose argv starts with a key returns that text as stdout with
             exit 0, the way ``llm`` stubs the model call, so a hook that shells out to ``gh``
             or ``git`` can reach its fire path. Unmatched argv runs for real.
+        env: The request environment, exactly: every key :func:`captain_hook.util.reqenv.getenv`
+            forwards per request (``CLAUDE_*``, ``ORCA_*``, ``CAPT_HOOK_*``, ...) resolves from this
+            mapping alone, never the runner's own environment, as it does for a real request's env.
+            ``reqenv.env_map()`` hands the same mapping to subprocesses. Defaults to empty.
+        state: Session state models to seed (``state=[ReviewState(intent="x")]``), each written to a
+            real temporary session directory under its own class, so ``ReviewState.load(evt)`` and
+            ``evt.ctx.s`` read it exactly as in production. Shares the directory ``seen`` seeds.
     """
 
     command: str | None = None
@@ -193,6 +217,7 @@ class Input:
     source: str | None = None
     permission_mode: str | None = None
     cwd: str | None = None
+    session_id: str | None = None
     skip_permissions: bool | None = None
     offset: int | None = None
     limit: int | None = None
@@ -202,6 +227,8 @@ class Input:
     llm: dict[str, Any] | None = None
     seen: dict[str, list[str]] | None = None
     commands: dict[str, str] | None = None
+    state: list[BaseModel] | None = None
+    env: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         match self.transcript:
@@ -220,10 +247,13 @@ class Input:
             for task in getattr(self, name) or ():
                 if not isinstance(task, dict):
                     raise TypeError(f"Input field {name!r} must contain dict elements, got {type(task).__name__}")
-        for name in ("tool_input", "llm", "seen", "commands"):
+        for name in ("tool_input", "llm", "seen", "commands", "env"):
             for key in getattr(self, name) or ():
                 if not isinstance(key, str):
                     raise TypeError(f"Input field {name!r} must have str keys, got {type(key).__name__}")
+        for model in self.state or ():
+            if not isinstance(model, BaseModel):
+                raise TypeError(f"Input field 'state' must contain pydantic models, got {type(model).__name__}")
         for scope, keys in (self.seen or {}).items():
             if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
                 raise TypeError(f"Input field 'seen' scope {scope!r} must map to a list of str keys")

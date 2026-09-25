@@ -31,7 +31,7 @@ can block.
 | `Stop` | `StopEvent` | When the agent is about to stop | `stop_hook_active`, `background_tasks`, `session_crons` | **Yes** — force-continue |
 | `SubagentStop` | `SubagentStopEvent` | When a subagent finishes | `agent_type`, `background_tasks`, `session_crons` | **Yes** — force-continue |
 | `SubagentStart` | `SubagentStartEvent` | When a subagent launches | `agent_type` | No — advisory |
-| `PreCompact` | `PreCompactEvent` | Before context compaction | `trigger`, `custom_instructions` | No — advisory |
+| `PreCompact` | `PreCompactEvent` | Before context compaction | `trigger`, `custom_instructions` | **Yes** — cancel the compaction; a warn's message joins its custom instructions |
 | `Notification` | `NotificationEvent` | On a system notification | `message`, `title`, `notification_type` | No — advisory |
 | `SessionEnd` | `SessionEndEvent` | When the session ends | `reason` | No — output ignored |
 | `MessageDisplay` | `MessageDisplayEvent` | For each streamed chunk of an assistant reply | `message_id`, `index`, `final`, `delta` | No — a `rewrite` replaces the chunk's displayed text |
@@ -41,7 +41,8 @@ call outright, and a `PermissionRequest` result answers the pending dialog. `all
 `rewrite` approve it silently, `block` denies it with the message shown to the user, and
 `None` or a warn lets the dialog show normally. `Stop` and `SubagentStop` force the agent to
 keep going. A `MessageDisplay` rewrite replaces what the user sees of one reply chunk, and
-an empty message hides it. Every other event is advisory — a hook injects context but cannot block.
+an empty message hides it. A `PreCompact` block cancels the compaction, and any other message
+is appended to the summarizer's custom instructions. Every other event is advisory — a hook injects context but cannot block.
 
 On `Stop` and `SubagentStop`, `background_tasks` and `session_crons` report the background work
 and scheduled prompts holding the session open — a non-empty tuple means it is paused for that

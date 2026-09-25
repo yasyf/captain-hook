@@ -24,6 +24,7 @@ class TestWhitelist:
             "FACTORY_A",
             "XDG_CACHE_HOME",
             "CEREBRAS_API_KEY",
+            "ORCA_TERMINAL_HANDLE",
         ],
     )
     def test_prefixed_and_exact_keys_are_whitelisted(self, key: str) -> None:

@@ -6,6 +6,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`system_message=` shows a hook's text to the user.** `evt.allow`,
+  `evt.warn`, `evt.context` and `evt.block` take `system_message=`, carried on
+  `HookResult.system_message` and rendered as Claude Code's top-level
+  `systemMessage` beside the event's usual envelope. A `Stop` that allows
+  renders `{"systemMessage": ...}` on its own. Several hooks' messages join in
+  registration order, and `PreCompact`, whose stdout is plain text, drops them.
+- **Inline tests seed session state and assert `system_message`.**
+  `Input(state=[ReviewState(intent="ship")])` saves each model into a real
+  temporary session directory, so `ReviewState.load(evt)` and `evt.ctx.s` read
+  it in the handler, alongside any `seen=` keys. `Allow`, `Warn` and `Block`
+  take a `system_message=` regex, and `Allow(system_message=...)` requires an
+  allow result.
+- **Inline tests reach session-aware `Stop` handlers.** `Input(session_id=...)`
+  sets the payload's `session_id`, and `Input(transcript=<path>)` now also sets
+  `evt.transcript_path` on every event, not only tool events. A
+  `FileFixture`, including `home=True` and its `$HOME` swap, now materializes
+  on every event too.
+- **Inline tests run in a hermetic request environment.** Each test is bound
+  as its own request whose forwarded environment is exactly `Input(env={...})`,
+  empty by default, so `reqenv.getenv` and `reqenv.env_map()` never see the
+  runner's `CLAUDE_*`, `ORCA_*` or other per-request variables. A test run in
+  an Orca terminal can no longer reach that terminal through
+  `ORCA_TERMINAL_HANDLE`.
+- **`Input(agent_id=..., agent_type=...)` reach every event's payload.**
+  `Stop`, `PreCompact`, `SessionEnd` and `UserPromptSubmit` tests dropped them,
+  so a `skip_if=[FromSubagent()]` guard on those events could not be tested.
+
+### Changed
+
+- **Hooks see the `ORCA_*` environment.** The client forwards every `ORCA_`
+  variable with each request, as it does `CLAUDE_*`, so a hook running in an Orca
+  terminal can read `ORCA_TERMINAL_HANDLE` through `reqenv.getenv` and pass it to
+  `orca terminal send --terminal`. Workers no longer inherit the daemon's own
+  `ORCA_*` values.
+- **A crashing handler fails its inline test.** `run_inline_tests` lets a
+  handler's exception propagate instead of reading it as no result, so the
+  test reports an error whatever it expected. Before, a crash satisfied
+  `Allow()` and `Ask()` and hid the bug. Live dispatch still logs the
+  exception, records a fault and carries on.
+- **`RewritingExistingPlan` allows a rewrite once the plan is archived.** A
+  `Write` over a plan already written this session no longer matches when a
+  sibling `<stem>.*.md` holds the plan's current bytes, such as
+  `p.2026-09-24-1530-pre-compact.md` beside `p.md`. The archive keeps what the
+  rewrite replaces.
+
+### Fixed
+
+- **`PreCompact` hooks feed the compaction instead of failing it.** Claude Code
+  has no `hookSpecificOutput` for `PreCompact` and appends each successful
+  hook's raw stdout to the compaction's custom instructions, so the
+  `additionalContext` envelope a warn rendered failed schema validation. A warn,
+  context, or allow message now prints as plain text, and a block renders
+  `{"decision": "block"}`, which cancels the compaction.
+
+### Removed
+
+- **The stray `captain_hook/packs/general/plans.py`.** Nothing loaded it; the
+  plan-rewrite guard lives in the `general` builtin pack.
+
 ## [12.55.0] - 2026-09-24
 
 ### Changed

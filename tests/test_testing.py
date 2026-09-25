@@ -743,10 +743,23 @@ class TestRunInlineTests:
 
         results = run_inline_tests()
         assert len(results) == 1
-        # run_handler swallows the hook's exception and returns None, so the Warn()
-        # expectation fails rather than the run erroring — the swap/restore still ran.
-        assert results[0][1] == "fail"
+        assert results[0][1] == "error"
         assert os.environ.get("HOME") == original_home
+
+    @pytest.mark.parametrize("expected", [Allow(), Ask()], ids=["allow", "ask"])
+    def test_handler_exception_errors_whatever_the_expectation(self, expected):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input
+
+        reset()
+
+        @on(Event.Stop, tests={Input(): expected})
+        def crashing(evt):
+            raise RuntimeError("boom")
+
+        (result,) = run_inline_tests()
+        assert result[1:] == ("error", False, "RuntimeError: boom")
 
 
 class TestStubbedContext:
@@ -1043,6 +1056,182 @@ class TestSeenSeedsTheSessionStore:
 
         with pytest.raises(TypeError, match="list of str"):
             Input(command="x", seen={"push": "origin"})
+
+
+class TestStateSeedsTheSessionStore:
+    def test_seeded_workflow_state_reaches_the_handler(self):
+        from captain_hook.app import on
+        from captain_hook.state import WorkflowState, workflow_state
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+
+        @workflow_state("phase-probe")
+        class PhaseState(WorkflowState):
+            phase: str = "idle"
+
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(): Allow(),
+                Input(state=[PhaseState(phase="compacting")]): Warn(pattern="compacting"),
+            },
+        )
+        def report_phase(evt):
+            state = PhaseState.load(evt)
+            return evt.warn(f"phase {state.phase}") if state.phase != "idle" else None
+
+        results = run_inline_tests()
+        assert len(results) == 2
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_stop_carries_transcript_path_session_id_and_a_home_fixture(self, tmp_path):
+        import os
+
+        from captain_hook.app import on
+        from captain_hook.state import WorkflowState, workflow_state
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import FileFixture, Input, Warn
+
+        @workflow_state("plan-probe")
+        class PlanState(WorkflowState):
+            plan_path: str | None = None
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("")
+        seen: dict[str, object] = {}
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(
+                    file=FileFixture(home=True, name="brook.md", content="# plan\n"),
+                    state=[PlanState(plan_path="~/brook.md")],
+                    transcript=transcript,
+                    session_id="0123456789abcdef",
+                ): Warn(pattern="archived"),
+            },
+        )
+        def archive(evt):
+            plan = Path(os.path.expanduser(PlanState.load(evt).plan_path))
+            (plan.parent / f"brook.{evt.session_id[:8]}.md").write_text(plan.read_text())
+            seen["transcript_path"] = evt.transcript_path
+            return evt.warn("archived")
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert seen["transcript_path"] == transcript
+
+    def test_state_rejects_non_models(self):
+        from captain_hook.testing.types import Input
+
+        with pytest.raises(TypeError, match="pydantic models"):
+            Input(state=[{"phase": "compacting"}])  # type: ignore[list-item]
+
+
+class TestEnvIsHermetic:
+    def test_request_env_comes_only_from_the_input(self, monkeypatch):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+        from captain_hook.util import reqenv
+
+        monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "live-terminal")
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "600000")
+        seen: list[tuple[str | None, str | None, str | None]] = []
+        reset()
+
+        @on(
+            Event.Stop,
+            tests={
+                Input(): Allow(),
+                Input(env={"ORCA_TERMINAL_HANDLE": "term-7"}): Warn(pattern="term-7"),
+            },
+        )
+        def probe(evt):
+            handle = reqenv.getenv("ORCA_TERMINAL_HANDLE")
+            seen.append(
+                (handle, reqenv.env_map().get("ORCA_TERMINAL_HANDLE"), reqenv.getenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
+            )
+            return evt.warn(f"send to {handle}") if handle else None
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert seen == [(None, None, None), ("term-7", "term-7", None)]
+
+
+class TestAgentIdReachesEveryEvent:
+    @pytest.mark.parametrize("event", [Event.Stop, Event.PreCompact, Event.SessionEnd, Event.UserPromptSubmit])
+    def test_subagent_skip_holds_on_non_tool_events(self, event):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Warn
+        from captain_hook.types import FromSubagent
+
+        ran: list[tuple[bool, str | None]] = []
+        reset()
+
+        @on(
+            event,
+            skip_if=[FromSubagent()],
+            tests={Input(): Warn(), Input(agent_id="a1b2c3", agent_type="worker"): Allow()},
+        )
+        def main_only(evt):
+            ran.append((evt.is_subagent, evt._raw.get("agent_type")))
+            return evt.warn("main thread")
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert ran == [(False, None)]
+
+    @pytest.mark.parametrize("event", [Event.Stop, Event.PreCompact, Event.SessionEnd, Event.UserPromptSubmit])
+    def test_agent_fields_land_in_the_payload(self, event):
+        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        evt = input_to_event(event, Input(agent_id="a1b2c3", agent_type="worker"))
+        assert (evt._raw["agent_id"], evt._raw["agent_type"], evt.is_subagent) == ("a1b2c3", "worker", True)
+
+
+class TestSystemMessageExpectation:
+    @pytest.mark.parametrize(
+        ("result", "expected", "matches"),
+        [
+            pytest.param(
+                HookResult(action=Action.allow, system_message="Compacting now"),
+                Allow(system_message="Compacting"),
+                True,
+                id="allow-matches",
+            ),
+            pytest.param(None, Allow(system_message="Compacting"), False, id="allow-needs-a-result"),
+            pytest.param(
+                HookResult(action=Action.allow), Allow(system_message="Compacting"), False, id="allow-needs-the-message"
+            ),
+            pytest.param(
+                HookResult(action=Action.warn, message="w", system_message="shown"),
+                Warn(pattern="w", system_message="shown"),
+                True,
+                id="warn-matches",
+            ),
+            pytest.param(
+                HookResult(action=Action.block, message="b", system_message="other"),
+                Block(system_message="shown"),
+                False,
+                id="block-mismatch",
+            ),
+        ],
+    )
+    def test_system_message_pattern(self, result, expected, matches):
+        from captain_hook.testing.helpers import matches_expected
+
+        assert matches_expected(result, expected) is matches
+        if matches:
+            assert_result(result, expected)
+        else:
+            with pytest.raises(AssertionError):
+                assert_result(result, expected)
 
 
 class TestCommandsStubSubprocess:

@@ -22,7 +22,7 @@ from loguru import logger
 from captain_hook import faults
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.desktop.cli import helper
-from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch, dispatch_async
+from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch, dispatch_async, envelope_text
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 
     from cc_transcript.query import Session
 
+    from captain_hook.dispatch import Envelope
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import RegisteredHook
 
@@ -267,7 +268,7 @@ def dispatch_event(
     *,
     session_dir: Path | None,
     transcript_loader: Callable[[str | Path | None], Session] | None = None,
-) -> tuple[dict[str, Any] | None, Callable[[], None]]:
+) -> tuple[Envelope | None, Callable[[], None]]:
     """Build the event's context, run its synchronous hooks, and return the envelope plus the work that follows it.
 
     The one dispatch codepath shared by the cold CLI and the resident daemon: no printing,
@@ -349,7 +350,7 @@ def run_event(state: CliState, event_name: str) -> None:
     state.discover()
     output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
     if output:
-        print(json.dumps(output), flush=True)
+        print(envelope_text(output), flush=True)
     background()
 
 

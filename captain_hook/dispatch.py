@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from contextvars import copy_context
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,7 +21,7 @@ from captain_hook.util import reqenv
 from captain_hook.util.caching import once
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
     from captain_hook.events import BaseHookEvent
 
@@ -29,6 +31,10 @@ ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
 HOOK_FANOUT_THREADS = 64
 BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
+
+type Envelope = dict[str, Any] | str
+
+_SURFACE_HANDLER_ERRORS: ContextVar[bool] = ContextVar("captain_hook_surface_handler_errors", default=False)
 
 
 @once
@@ -103,6 +109,16 @@ def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
     )
 
 
+@contextmanager
+def surfacing_handler_errors() -> Iterator[None]:
+    """Let a handler's exception propagate out of :func:`run_handler` instead of reading as no result."""
+    token = _SURFACE_HANDLER_ERRORS.set(True)
+    try:
+        yield
+    finally:
+        _SURFACE_HANDLER_ERRORS.reset(token)
+
+
 def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
     from captain_hook import faults
     from captain_hook.transcripts import TranscriptLoadError
@@ -112,6 +128,8 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
     except TranscriptLoadError:
         raise
     except Exception as exc:
+        if _SURFACE_HANDLER_ERRORS.get():
+            raise
         logger.bind(hook=entry.name).exception("hook handler failed")
         faults.record(f"hook {entry.name}", exc, str(evt.cwd) if evt.cwd else None)
         return None
@@ -327,10 +345,17 @@ def format_permission_decision(result: HookResult) -> dict[str, Any] | None:
     return {"hookSpecificOutput": {"hookEventName": Event.PermissionRequest.name, "decision": decision}}
 
 
-def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
-    """Render a ``HookResult`` as the JSON envelope Claude Code expects on stdout for *event*."""
+def format_output(event: Event, result: HookResult) -> Envelope | None:
+    """Render a ``HookResult`` as the stdout Claude Code expects for *event*.
+
+    Every event takes a JSON envelope except ``PreCompact``, whose schema has no
+    ``hookSpecificOutput``: Claude Code appends each successful hook's raw trimmed stdout to the
+    compaction's custom instructions, so a non-block result renders as its plain message.
+    """
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
+    if event is Event.PreCompact:
+        return {"decision": "block", "reason": result.message} if result.action is Action.block else result.message
     if event is Event.PermissionRequest:
         return format_permission_decision(result)
     if event is Event.MessageDisplay:
@@ -381,7 +406,7 @@ def combine(
     entries: Sequence[RegisteredHook],
     futures: Sequence[Future[HookResult | None]],
     margin: float,
-) -> dict[str, Any] | None:
+) -> Envelope | None:
     """Fold the running hooks' results into one envelope in registration order, deny-wins.
 
     The fold drives the waiting: it reaches a hook, decides whether the verdicts so far leave it
@@ -416,6 +441,7 @@ def combine(
     warns: list[str] = []
     deny_advisories: list[str] = []
     warn_approve = False
+    notices: list[str] = []
     for index, entry in enumerate(entries):
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
@@ -425,7 +451,9 @@ def combine(
             logger.bind(hook=entry.name).warning("caller deadline reached; abandoning this hook's verdict")
             reqenv.abandoned().append(entry.name)
             continue
-        match future.result():
+        if (result := future.result()) is not None and result.system_message:
+            notices.append(result.system_message)
+        match result:
             case HookResult(action=Action.block, message=msg):
                 blocked = True
                 if msg:
@@ -442,31 +470,35 @@ def combine(
             case _:
                 pass
 
+    envelope: Envelope | None = None
     if blocked:
         parts = list(blocks)
         if deny_advisories:
             parts.append(ADVISORY_SEPARATOR)
             parts.extend(deny_advisories)
-        return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
-    if (winner := rewrite or approval) is not None:
+        envelope = format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
+    elif (winner := rewrite or approval) is not None:
         if warns:
             winner = (
                 replace(winner, note="\n\n".join(([winner.note] if winner.note else []) + warns))
                 if winner.action is Action.rewrite
                 else replace(winner, message="\n\n".join(warns))
             )
-        return format_output(event, winner)
-    if warns:
-        return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve))
-
-    return None
+        envelope = format_output(event, winner)
+    elif warns:
+        envelope = format_output(
+            event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve)
+        )
+    if not notices or event is Event.PreCompact:
+        return envelope
+    return (envelope or {}) | {"systemMessage": "\n\n".join(notices)}
 
 
 def dispatch(
     event: Event,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
-) -> dict[str, Any] | None:
+) -> Envelope | None:
     """Dispatch an event to all matching hooks at once and combine their results, deny-wins.
 
     The event's hooks are independent, so they all start together on the event's own
@@ -490,6 +522,10 @@ def dispatch(
         return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
     finally:
         fanout.close()
+
+
+def envelope_text(envelope: Envelope) -> str:
+    return envelope if isinstance(envelope, str) else json.dumps(envelope)
 
 
 def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:

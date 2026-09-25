@@ -37,7 +37,7 @@ _ABANDONED: ContextVar[threading.Event | None] = ContextVar("captain_hook_abando
 
 def is_whitelisted(key: str) -> bool:
     return key in {"XDG_CACHE_HOME", "CEREBRAS_API_KEY"} or key.startswith(
-        ("CAPT_HOOK_", "CAPTAIN_HOOK_", "HOOKS_", "CLAUDE_", "FACTORY_")
+        ("CAPT_HOOK_", "CAPTAIN_HOOK_", "HOOKS_", "CLAUDE_", "FACTORY_", "ORCA_")
     )
 
 

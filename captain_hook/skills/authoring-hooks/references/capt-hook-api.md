@@ -214,6 +214,7 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.ctx.t` | the session as a `cc_transcript.query.Session` (turns, tool calls, text) |
 | `evt.block(msg)` / `evt.warn(msg)` / `evt.allow()` | build the `HookResult` to return |
 | `evt.context(msg)` | `evt.warn` minus the `PreToolUse` auto-approve rider — inject `additionalContext` without approving the call |
+| `system_message=` on `evt.allow` / `evt.warn` / `evt.context` / `evt.block` | text shown to the user as Claude Code's top-level `systemMessage`, even on a `Stop` that allows; dropped on `PreCompact` |
 | `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse and PermissionRequest** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` (dropped on `PermissionRequest`) |
 | `evt.rewrite(updated_input, *, note=None)` | **PreToolUse and PermissionRequest** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
 

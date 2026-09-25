@@ -111,6 +111,16 @@ func TestRequestEnvironmentCarriesTheCerebrasKey(t *testing.T) {
 	}
 }
 
+func TestRequestEnvironmentCarriesTheOrcaTerminal(t *testing.T) {
+	t.Parallel()
+	got := requestEnvironment([]string{
+		"ORCA_TERMINAL_HANDLE=term-7", "ORCA_USER_DATA_PATH=/orca", "TERM_PROGRAM=Orca",
+	})
+	if len(got) != 2 || got["ORCA_TERMINAL_HANDLE"] != "term-7" || got["ORCA_USER_DATA_PATH"] != "/orca" {
+		t.Fatalf("request environment = %v", got)
+	}
+}
+
 func TestDurationEnvironmentUsesSeconds(t *testing.T) {
 	t.Setenv("CAPT_HOOK_CLIENT_TIMEOUT", "1.25")
 	if got := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", time.Second); got != 1250*time.Millisecond {

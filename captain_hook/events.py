@@ -469,11 +469,11 @@ class BaseHookEvent:
             case _:
                 return result
 
-    def allow(self) -> HookResult:
+    def allow(self, *, system_message: str | None = None) -> HookResult:
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR.of(Action.allow)
+        return HR(action=Action.allow, system_message=system_message)
 
     @staticmethod
     def _render_part(part: str | tuple[str, object] | object) -> str:
@@ -485,7 +485,7 @@ class BaseHookEvent:
             case _:
                 return json.dumps(part, default=str)
 
-    def warn(self, *parts: str | tuple[str, object] | object) -> HookResult:
+    def warn(self, *parts: str | tuple[str, object] | object, system_message: str | None = None) -> HookResult:
         r"""Emit a warning whose parts are auto-rendered and joined with newlines.
 
         Each part is rendered by form: a plain ``str`` passes through verbatim; a
@@ -496,6 +496,7 @@ class BaseHookEvent:
         Args:
             *parts: Warning fragments, each a ``str``, a ``(label, value)`` tuple, or
                 any JSON-serializable object.
+            system_message: Text shown to the user as Claude Code's ``systemMessage``.
 
         Returns:
             A warn :class:`HookResult` carrying the joined message.
@@ -503,9 +504,11 @@ class BaseHookEvent:
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR.of(Action.warn, "\n".join(self._render_part(p) for p in parts))
+        return replace(
+            HR.of(Action.warn, "\n".join(self._render_part(p) for p in parts)), system_message=system_message
+        )
 
-    def context(self, *parts: str | tuple[str, object] | object) -> HookResult:
+    def context(self, *parts: str | tuple[str, object] | object, system_message: str | None = None) -> HookResult:
         r"""Emit advisory context exactly like :meth:`warn`, but without pre-approving the tool.
 
         Renders and joins *parts* through the same path as :meth:`warn`, then returns a
@@ -513,13 +516,13 @@ class BaseHookEvent:
         ``permissionDecision: allow`` rider a plain warn carries, so the message surfaces as
         pure ``additionalContext`` and Claude Code's own permission flow still decides the tool.
         """
-        return replace(self.warn(*parts), approve=False)
+        return replace(self.warn(*parts, system_message=system_message), approve=False)
 
-    def block(self, message: str) -> HookResult:
+    def block(self, message: str, *, system_message: str | None = None) -> HookResult:
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR.of(Action.block, message)
+        return replace(HR.of(Action.block, message), system_message=system_message)
 
 
 @dataclass

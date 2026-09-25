@@ -231,7 +231,7 @@ func requestEnvironment(environ []string) map[string]string {
 		}
 		if name == "XDG_CACHE_HOME" || name == "CEREBRAS_API_KEY" || strings.HasPrefix(name, "CAPT_HOOK_") ||
 			strings.HasPrefix(name, "CAPTAIN_HOOK_") || strings.HasPrefix(name, "HOOKS_") ||
-			strings.HasPrefix(name, "CLAUDE_") || strings.HasPrefix(name, "FACTORY_") {
+			strings.HasPrefix(name, "CLAUDE_") || strings.HasPrefix(name, "FACTORY_") || strings.HasPrefix(name, "ORCA_") {
 			result[name] = value
 		}
 	}

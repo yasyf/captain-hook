@@ -102,6 +102,18 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     assert reqenv.current() is None
 
 
+def test_dispatch_writes_a_plain_text_envelope_verbatim() -> None:
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=lambda *_, **__: ("Keep the plan path.", lambda: None),
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    response, _ = runtime.dispatch(request(event="PreCompact"))
+
+    assert response.stdout == "discovered out\nKeep the plan path.\n"
+
+
 def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) -> None:
     def dispatch(root: object, event: object, raw: object, **kwargs: object) -> tuple[None, object]:
         reqenv.abandoned().append("straggler")
