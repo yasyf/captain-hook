@@ -14,6 +14,26 @@ from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
 
 
+def test_consumed_text_skips_positive_scoring_but_still_vetoes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import captain_hook.signals as signals
+
+    bundle = Signals([Signal(pattern="positive")], threshold=1, vetoes=[Signal(pattern="veto")])
+    state = PrimitiveState(consumed={"hook": {text_hash("already used")}})
+    calls = []
+
+    def matched(patterns: Any, text: str) -> list[int]:
+        calls.append((patterns, text))
+        return []
+
+    monkeypatch.setattr(signals, "matching_signals", matched)
+    assert state.match_signals(bundle, ["already used", "fresh"], "hook") is None
+    assert calls == [
+        (bundle.vetoes, "already used"),
+        (bundle.vetoes, "fresh"),
+        (bundle.patterns, "fresh"),
+    ]
+
+
 def make_ctx(
     tmp_path: Path | None = None,
     texts: list[str] | None = None,

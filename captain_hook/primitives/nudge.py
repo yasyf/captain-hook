@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Final
 
 from captain_hook.app import on
-from captain_hook.signals import cite_message, resolve_signals, transcript_texts
+from captain_hook.signals import cite_message, matching_texts, resolve_signals, transcript_texts
 from captain_hook.state import (
     ECHO_WINDOW,
     TURN_ECHO_LOOKBACK,
@@ -90,13 +90,12 @@ def nudge(
             tracker = EchoTracker(
                 window=ECHO_WINDOW + (sig.window if isinstance(sig.window, int) else TURN_ECHO_LOOKBACK)
             )
-            candidates = [
-                c
-                for t in transcript_texts(evt, sig.window, sig.origin)
-                if (c := tracker.surviving(t, evt=evt)) is not None
-            ]
+            candidates = tracker.survivors(transcript_texts(evt, sig.window, sig.origin), evt=evt)
+            matches = matching_texts(sig, candidates, consumed=evt.ctx.s.load(PrimitiveState).consumed.get(name, ()))
+            if not matches:
+                return None
             with evt.ctx.s[PrimitiveState].mutate() as ps:
-                if not (triggering := ps.match_signals(sig, candidates, name)):
+                if not (triggering := ps.consume_matches(sig, matches, name)):
                     return None
                 ps.last_fired_at = len(evt.ctx.t)
             tracker.record(message, triggering=triggering, evt=evt)
