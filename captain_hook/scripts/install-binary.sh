@@ -32,6 +32,37 @@ RUNNER_SHA_linux_arm64="bb622f2c119ca9bd6f3c3f94e2658116c27b4e703c30005ea17da521
 # ${0%/*}, not dirname: skips an exec an endpoint-security agent can serialize fleet-wide.
 case "$0" in */*) d=${0%/*} ;; *) d=. ;; esac
 ROOT="$(cd "$d/.." && pwd)"
+
+is_version() {
+  case "$1" in "" | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
+}
+
+version_gt() {
+  va=$1 vb=$2
+  while [ -n "$va$vb" ]; do
+    ca=${va%%.*} cb=${vb%%.*}
+    [ "${ca:-0}" -eq "${cb:-0}" ] || { [ "${ca:-0}" -gt "${cb:-0}" ]; return; }
+    case "$va" in *.*) va=${va#*.} ;; *) va= ;; esac
+    case "$vb" in *.*) vb=${vb#*.} ;; *) vb= ;; esac
+  done
+  return 1
+}
+
+# Sessions keep a replaced plugin's bin/ on PATH; hand off to the newest version
+# dir Claude Code has not marked .orphaned_at. Hops only go up, so they terminate.
+if [ -e "$ROOT/.orphaned_at" ] && is_version "${ROOT##*/}"; then
+  newest=$ROOT
+  for sibling in "${ROOT%/*}"/*/; do
+    sibling=${sibling%/}
+    is_version "${sibling##*/}" || continue
+    [ ! -e "$sibling/.orphaned_at" ] && [ -x "$sibling/bin/hook" ] || continue
+    if version_gt "${sibling##*/}" "${newest##*/}"; then
+      newest=$sibling
+    fi
+  done
+  [ "$newest" = "$ROOT" ] || exec "$newest/bin/hook" "$@"
+fi
+
 DESCRIPTOR="$ROOT/bin/hook.binrun"
 # binrun execs the cached artifact out of ~/.daemonkit/cache/<xx>/<digest>/, so the
 # exec'd binary cannot derive the plugin root from its own path. Export it: a tool
