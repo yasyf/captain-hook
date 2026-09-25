@@ -97,7 +97,7 @@ def nudge(
             with evt.ctx.s[PrimitiveState].mutate() as ps:
                 if not (triggering := ps.consume_matches(sig, matches, name)):
                     return None
-                ps.last_fired_at = len(evt.ctx.t)
+                ps.last_fired_at = evt.ctx.event_count
             tracker.record(message, triggering=triggering, evt=evt)
             cited = cite_message(sig, triggering, message)
         else:

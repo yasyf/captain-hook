@@ -261,14 +261,13 @@ def is_planning_agent_skip(spec: HookSpec, evt: BaseHookEvent) -> bool:
     return bool(evt.agent_type and evt.agent_type in names)
 
 
-def get_matching_hooks(evt: BaseHookEvent, *, async_: bool | None = None) -> list[RegisteredHook]:
+def get_hook_candidates(evt: BaseHookEvent, *, async_: bool | None = None) -> list[RegisteredHook]:
     return [
         h
         for h in _state.hooks
         if evt.event in h.spec.events
         and (async_ is None or h.spec.async_ is async_)
         and not is_planning_agent_skip(h.spec, evt)
-        and matches_conditions(h.spec, evt)
         and (
             not h.spec.respect_gitignore
             or not _state.gitignore_patterns
@@ -276,3 +275,7 @@ def get_matching_hooks(evt: BaseHookEvent, *, async_: bool | None = None) -> lis
             or not is_gitignored(str(evt.file))
         )
     ]
+
+
+def get_matching_hooks(evt: BaseHookEvent, *, async_: bool | None = None) -> list[RegisteredHook]:
+    return [hook for hook in get_hook_candidates(evt, async_=async_) if matches_conditions(hook.spec, evt)]

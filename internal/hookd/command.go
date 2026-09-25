@@ -30,7 +30,7 @@ const (
 // Main executes one capt-hookd client or host command and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|package-install|package-uninstall")
+		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|transcript-client|status|restart-workers|package-install|package-uninstall")
 		return 2
 	}
 	switch args[0] {
@@ -38,6 +38,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return versionCommand(args[1:], stdout, stderr)
 	case "serve":
 		return serveCommand(args[1:], stderr)
+	case "transcript-client":
+		return transcriptClientCommand(args[1:], stdin, stdout, stderr)
 	case "run":
 		return runCommand(args[1:], stdin, stdout, stderr)
 	case "status":

@@ -10,6 +10,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  snapshot-candidate:
+    runs-on: macos-15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+      - name: Verify pinned native candidate before expensive jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/snapshot_candidate.py .snapshot-candidate
+          uv venv .snapshot-gate
+          uv pip install --python .snapshot-gate/bin/python .snapshot-candidate/*.whl
+          .snapshot-gate/bin/python -c 'from cc_transcript import _native; required={"prepare_classifier", "submit_classifier", "register_tool_registry", "publish_projection", "resume_projection", "discard_response"}; missing=required-set(dir(_native.NativeSnapshotStore)); assert not missing, missing'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: captain-tested-snapshot-candidate
+          path: .snapshot-candidate/*.whl
+
   structure-check:
     runs-on: ubuntu-latest
     steps:
@@ -29,6 +52,7 @@ jobs:
           fi
 
   go-test:
+    needs: snapshot-candidate
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -41,6 +65,7 @@ jobs:
         run: go test -race -count=1 ./...
 
   helper-test:
+    needs: snapshot-candidate
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -65,7 +90,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
   test:
-    runs-on: ubuntu-latest
+    needs: snapshot-candidate
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -77,9 +103,15 @@ jobs:
         with:
           go-version: 1.26.5
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: captain-tested-snapshot-candidate
+          path: .snapshot-candidate
+
       - uses: ./.github/actions/python-tests
         with:
           python-version: ${{ matrix.python-version }}
+          snapshot-candidate: .snapshot-candidate
 
       - name: Build + smoke-test wheel in a fresh venv
         run: |
@@ -87,6 +119,7 @@ jobs:
           rm -rf .wheel-smoke
           uv venv --seed .wheel-smoke
           uv pip install --python .wheel-smoke/bin/python dist/*.whl
+          uv pip install --python .wheel-smoke/bin/python --no-deps --reinstall .snapshot-candidate/*.whl
           .wheel-smoke/bin/capt-hook --help
           test -x .wheel-smoke/bin/hook
           test -x .wheel-smoke/bin/hookd
@@ -135,6 +168,9 @@ jobs:
           unzip -l dist/*.whl | grep -q 'capt_hook_client/client.py'
           if unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/langs.py'
+          unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/worker.py'
+          unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/schemas/host-request.schema.json'
+          .wheel-smoke/bin/python -c 'from captain_hook.snapshots.validation import validator; from cc_transcript.snapshots import TranscriptStore; validator("host-request").check_schema(validator("host-request").schema)'
           if unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/skills/.*/SKILL.md'
           unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
@@ -152,6 +188,7 @@ jobs:
           test ! -e "$smoke_proj/.claude/skills"
 
   descriptor:
+    needs: snapshot-candidate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

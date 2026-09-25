@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING, Self, get_args
 
-from cc_transcript.context import ContextWindow, HydratedWindow, hydrate_windows
+from cc_transcript.context import ContextWindow
 from cc_transcript.judge.llm import resolved_model, structured_judge
 from cc_transcript.judge.verdicts import SLUG_PATTERN, JudgeError, canonical_slug, run_verdicts
 from cc_transcript.mining.candidates import DedupKey
@@ -37,7 +37,6 @@ from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE, Category
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
 
-    from cc_transcript.activity import Turn
     from cc_transcript.context import Fidelity
     from cc_transcript.judge.similar import Suggestion
 
@@ -127,36 +126,10 @@ class JudgeReport:
     reopened: int
 
 
-def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: Budget) -> str:
-    return f"=== {label} ===\n" + (HydratedWindow(window=window, turns=turns).render(budget=budget) or "(none)")
-
-
-def render_context(window: ContextWindow, hydrated: HydratedWindow | None) -> tuple[str, Fidelity]:
-    """Renders a row's window for a prompt, at the best fidelity available.
-
-    While the transcript lives, the window hydrates and renders at full fidelity —
-    the trigger turn under the generous :data:`TRIGGER_BUDGET`, the surrounding
-    turns under the moderate :data:`CONTEXT_BUDGET`. Once it expires (or any ref
-    was compacted away), the persisted previews render instead, led by the
-    built-in summary-fidelity label.
-
-    Returns:
-        The rendered context and the fidelity it was rendered at.
-    """
-    if hydrated is None:
+def render_context(window: ContextWindow, rendered: str | None) -> tuple[str, Fidelity]:
+    if rendered is None:
         return replace(window, fidelity="summary").render_preview(budget=CONTEXT_BUDGET), "summary"
-    split = len(window.before)
-    end = split + (window.trigger is not None)
-    return (
-        "\n".join(
-            (
-                section(window, "conversation before", hydrated.turns[:split], CONTEXT_BUDGET),
-                section(window, "the turn the feedback arrived in", hydrated.turns[split:end], TRIGGER_BUDGET),
-                section(window, "conversation after", hydrated.turns[end:], CONTEXT_BUDGET),
-            )
-        ),
-        "full",
-    )
+    return rendered, "full"
 
 
 def question_answer_block(row: Mapping[str, object]) -> str:
@@ -209,7 +182,7 @@ def build_fix_prompt(row: Mapping[str, object], context: str) -> str:
 
 
 async def build_prompt(
-    row: Mapping[str, object], *, hydrated: HydratedWindow | None, suggestions: Sequence[Suggestion] = ()
+    row: Mapping[str, object], *, rendered: str | None, suggestions: Sequence[Suggestion] = ()
 ) -> tuple[str, Fidelity]:
     """Builds one row's judge prompt from its prepared context window.
 
@@ -218,7 +191,7 @@ async def build_prompt(
         CREATE otherwise, the latter carrying the suggested slugs) and the
         fidelity its context rendered at.
     """
-    context, fidelity = render_context(ContextWindow.from_json(str(row["context_json"])), hydrated)
+    context, fidelity = render_context(ContextWindow.from_json(str(row["context_json"])), rendered)
     if str(row["source_kind"]) == HOOK_COMPLAINT:
         return build_fix_prompt(row, context), fidelity
     return build_create_prompt(row, context, suggestions), fidelity
@@ -227,7 +200,7 @@ async def build_prompt(
 def prompt_builder(
     fidelities: dict[str, Fidelity],
     store: ReviewStore,
-    hydrated: Mapping[str, HydratedWindow | None],
+    rendered: Mapping[str, str | None | Exception],
     *,
     suggesting: bool,
 ) -> Callable[[Mapping[str, object]], Awaitable[str]]:
@@ -242,11 +215,18 @@ def prompt_builder(
             raise JudgeError(f"slug suggestion retrieval failed: {exc}") from exc
         return [suggestion for suggestion in ranked if SLUG_PATTERN.fullmatch(suggestion.canonical_key)]
 
+    prompts: dict[str, str] = {}
+
     async def build(row: Mapping[str, object]) -> str:
-        prompt, fidelity = await build_prompt(
-            row, hydrated=hydrated[str(row["dedup_key"])], suggestions=await suggestions_for(row)
-        )
-        fidelities[str(row["dedup_key"])] = fidelity
+        key = str(row["dedup_key"])
+        if key in prompts:
+            return prompts[key]
+        context = rendered[key]
+        if isinstance(context, Exception):
+            raise JudgeError(f"context preparation failed: {context}") from context
+        prompt, fidelity = await build_prompt(row, rendered=context, suggestions=await suggestions_for(row))
+        fidelities[key] = fidelity
+        prompts[key] = prompt
         return prompt
 
     return build
@@ -310,33 +290,58 @@ async def judge_pass(
     """
     from cc_transcript.judge.similar import default_embedder
 
-    model = resolved_model(settings.judge_tier)
     pending = await store.judge_backlog(refresh_summary=refresh_summary)
     dispatch = await store.judge_queue(
         refresh_summary=refresh_summary,
-        probe_hydration=False,
         limit=limit if limit is not None else settings.max_judge_calls_per_session,
     )
+    from captain_hook.snapshots.review import RenderedEvidence, render_review_windows, review_roots
+
     windows = await asyncio.to_thread(
-        hydrate_windows, [ContextWindow.from_json(str(row["context_json"])) for row in dispatch]
+        render_review_windows,
+        [ContextWindow.from_json(str(row["context_json"])) for row in dispatch],
+        roots=review_roots(list(await store.file_mtimes())),
+        render={"before": asdict(CONTEXT_BUDGET), "trigger": asdict(TRIGGER_BUDGET), "after": asdict(CONTEXT_BUDGET)},
     )
-    hydrated = {str(row["dedup_key"]): window for row, window in zip(dispatch, windows, strict=True)}
-    dispatch = [row for row in dispatch if not row["refreshing_summary"] or hydrated[str(row["dedup_key"])] is not None]
+    rendered = {
+        str(row["dedup_key"]): window.text if isinstance(window, RenderedEvidence) else window
+        for row, window in zip(dispatch, windows, strict=True)
+    }
+    dispatch = [row for row in dispatch if not row["refreshing_summary"] or rendered[str(row["dedup_key"])] is not None]
+    preparation_failed = sum(isinstance(rendered[str(row["dedup_key"])], Exception) for row in dispatch)
+    dispatch = [row for row in dispatch if not isinstance(rendered[str(row["dedup_key"])], Exception)]
     fidelities: dict[str, Fidelity] = {}
     creates = any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch)
     suggesting = creates and await store.has_verdict_evidence()
     if creates:
         await asyncio.to_thread(default_embedder)
-    judged, failed = await run_verdicts(
-        dispatch,
-        prompt_builder(fidelities, store, hydrated, suggesting=suggesting),
-        structured_judge(ReviewVerdict, tier=settings.judge_tier, timeout=settings.judge_timeout),
-        persist_verdict(store, model=model, fidelities=fidelities),
-        concurrency=settings.judge_concurrency,
-    )
+    build = prompt_builder(fidelities, store, rendered, suggesting=suggesting)
+    prepared_rows: list[dict[str, object]] = []
+    for row in dispatch:
+        try:
+            await build(row)
+        except JudgeError:
+            preparation_failed += 1
+        else:
+            prepared_rows.append(row)
+    if prepared_rows:
+        judged, failed = await run_verdicts(
+            prepared_rows,
+            build,
+            structured_judge(ReviewVerdict, tier=settings.judge_tier, timeout=settings.judge_timeout),
+            persist_verdict(store, model=resolved_model(settings.judge_tier), fidelities=fidelities),
+            concurrency=settings.judge_concurrency,
+        )
+    else:
+        judged = failed = 0
     await store.revive_junk_rejected()
     merged, retired = await store.regroup_create()
     reopened = await store.reopen_recurrent_fixes()
     return JudgeReport(
-        judged=judged, failed=failed, pending=pending - judged, merged=merged, retired=retired, reopened=reopened
+        judged=judged,
+        failed=failed + preparation_failed,
+        pending=pending - judged,
+        merged=merged,
+        retired=retired,
+        reopened=reopened,
     )

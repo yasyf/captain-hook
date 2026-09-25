@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import re
-import threading
 from collections.abc import Sequence
 from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from cc_transcript.tools import TaskCall, WorkflowCall, tool_name_matches
+from cc_transcript.tools import TaskCall, WorkflowCall, expand_tool_names, tool_name_matches
 
+from captain_hook.snapshots.client import RemoteSession
 from captain_hook.types import (
     Agent,
     And,
@@ -42,7 +42,6 @@ from captain_hook.types import (
     WorkflowScript,
 )
 from captain_hook.util import reqenv
-from captain_hook.util.caching import LRUDict
 from captain_hook.util.scratch import is_scratch_path
 
 if TYPE_CHECKING:
@@ -67,8 +66,6 @@ NON_SOURCE_SUFFIXES = (
     ".cfg",
     ".lock",
 )
-ACTIVITY_PROBES: LRUDict[tuple[Path, int, int, int, frozenset[str], int], bool] = LRUDict(32)
-ACTIVITY_PROBE_LOCK = threading.Lock()
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
@@ -77,29 +74,21 @@ def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
     return frozenset(settings.waiting_tools if (settings := evt.ctx.settings) else DEFAULT_WAITING_TOOLS)
 
 
-def probed_waiting(path: Path, waiting_tools: frozenset[str]) -> bool:
-    from cc_transcript.activity_probe import session_activity_probe
-
+def is_waiting(evt: BaseHookEvent) -> bool:
     from captain_hook import cli
 
-    st = path.stat()
-    key = (path, st.st_size, st.st_mtime_ns, st.st_ctime_ns, waiting_tools, cli.tools_generation)
-    with ACTIVITY_PROBE_LOCK:
-        cached = ACTIVITY_PROBES.get(key)
-    if cached is not None:
-        return cached
-    waiting = session_activity_probe(path, waiting_tools=waiting_tools).is_waiting
-    with ACTIVITY_PROBE_LOCK:
-        ACTIVITY_PROBES[key] = waiting
-    return waiting
-
-
-def is_waiting(evt: BaseHookEvent) -> bool:
     if evt.background_tasks or evt.session_crons:
         return True
-    if not (t := evt.ctx.transcript) or t.path is None:
+    if not (transcript := evt.ctx.t) or transcript.path is None:
         return False
-    return probed_waiting(t.path, waiting_tool_names(evt))
+    with cli._registry_lock:
+        generation = str(cli.tools_generation)
+        human_facing = expand_tool_names("AskUserQuestion|ExitPlanMode")
+    return transcript.activity_probe(
+        waiting_tools=waiting_tool_names(evt),
+        tool_registry_generation=generation,
+        human_facing_tools=human_facing,
+    )
 
 
 def workflow_script_source(evt: BaseHookEvent) -> str | None:
@@ -164,6 +153,8 @@ def coerce_tool_input(value: object) -> str | None:
 
 
 def has_read_glob(t: Session, *globs: str, subagents: bool = True) -> bool:
+    if isinstance(t, RemoteSession):
+        return t.query({"kind": "has_read_glob", "values": list(globs), "subagents": subagents})
     inputs = t.deep_inputs() if subagents else (t.predicate_inputs,)
     return any(f.matches(*globs) for window in inputs for f in window.files("Read"))
 
@@ -173,6 +164,8 @@ def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
 
 
 def has_used_skill(t: Session, names: tuple[str, ...], *, subagents: bool = True) -> bool:
+    if isinstance(t, RemoteSession):
+        return t.query({"kind": "has_skill_suffix", "values": list(names), "subagents": subagents})
     inputs = t.deep_inputs() if subagents else (t.predicate_inputs,)
     return any(skill_name_matches(skill, names) for window in inputs for skill in window.skills)
 
@@ -253,6 +246,8 @@ class FromTeammate(CustomCondition):
     """
 
     def check(self, evt: BaseHookEvent) -> bool:
+        if isinstance(evt.ctx.t, RemoteSession):
+            return evt.ctx.t.current_turn.query({"kind": "pending_named_task"})
         return any(
             isinstance(use.call, TaskCall) and bool(use.call.agent_name)
             for use in evt.ctx.t.current_turn.tool_calls.named("Task")
@@ -449,6 +444,14 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case TouchedFile(patterns, subagents):
             return evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
         case RanCommand() as ran if regex := ran.regex:
+            if isinstance(evt.ctx.t, RemoteSession):
+                return evt.ctx.t.query(
+                    {
+                        "kind": "has_command_regex",
+                        "pattern": regex.pattern,
+                        "subagents": ran.subagents,
+                    }
+                )
             from cc_transcript.query import any_inputs
 
             return any_inputs(
@@ -518,6 +521,13 @@ def inputs_ran(inputs: PredicateInputs, argv: tuple[str, ...] | tuple[Regex]) ->
 def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...] | tuple[Regex]], *, subagents: bool) -> bool:
     from cc_transcript.query import any_inputs
 
+    if isinstance(t, RemoteSession):
+        return any(
+            t.query({"kind": "has_command_regex", "pattern": argv[0].pattern, "subagents": subagents})
+            if len(argv) == 1 and isinstance(argv[0], Regex)
+            else t.has_command(*argv, subagents=subagents)
+            for argv in argvs
+        )
     return any_inputs(t, lambda inputs: any(inputs_ran(inputs, argv) for argv in argvs), subagents=subagents)
 
 

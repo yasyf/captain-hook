@@ -18,6 +18,7 @@ review-comment detector in Python for those formats.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 from cc_transcript.mining.formats import ReviewComment
 from cc_transcript.mining.spec import CallableReviewFormat, RegexReviewFormat, ReviewSpec
@@ -29,39 +30,29 @@ CONDUCTOR_WORKSTREAM_HEADER_RE = re.compile(
 )
 
 
-def extract_superset_inline(text: str) -> tuple[ReviewComment, ...]:
-    return tuple(
-        ReviewComment(
+def extract_superset_inline(text: str) -> Iterator[ReviewComment]:
+    for match in SUPERSET_INLINE_RE.finditer(text):
+        yield ReviewComment(
             file=match.group(1),
             line_start=int(match.group(2)) if match.group(2) else None,
             line_end=int(match.group(3)) if match.group(3) else None,
             comment=match.group(4).strip(),
         )
-        for match in SUPERSET_INLINE_RE.finditer(text)
-    )
 
 
-def extract_conductor_workstream(text: str) -> tuple[ReviewComment, ...]:
-    headers = list(CONDUCTOR_WORKSTREAM_HEADER_RE.finditer(text))
-    return tuple(
-        ReviewComment(
-            file=None,
-            line_start=None,
-            line_end=None,
-            comment=" ".join(
-                [f"{header.group('id')} [{header.group('kind')}] {header.group('title').strip()}"]
-                + [
-                    line.group(0).strip()
-                    for line in re.finditer(r"^(?:FIX|Tests): .+$", text[header.end() : end], re.MULTILINE)
-                ]
-            ),
+def extract_conductor_workstream(text: str) -> Iterator[ReviewComment]:
+    headers = CONDUCTOR_WORKSTREAM_HEADER_RE.finditer(text)
+    header = next(headers, None)
+    while header is not None:
+        following = next(headers, None)
+        end = following.start() if following is not None else len(text)
+        parts = [f"{header.group('id')} [{header.group('kind')}] {header.group('title').strip()}"]
+        parts.extend(
+            match.group(0).strip()
+            for match in re.compile(r"^(?:FIX|Tests): .+$", re.MULTILINE).finditer(text, header.end(), end)
         )
-        for header, end in zip(
-            headers,
-            [*(h.start() for h in headers[1:]), len(text)],
-            strict=True,
-        )
-    )
+        yield ReviewComment(file=None, line_start=None, line_end=None, comment=" ".join(parts))
+        header = following
 
 
 def review_spec() -> ReviewSpec:
@@ -88,8 +79,10 @@ def review_spec() -> ReviewSpec:
             ),
         ),
         callable_formats=(
-            CallableReviewFormat("superset-inline", SUPERSET_INLINE_RE, extract_superset_inline),
-            CallableReviewFormat("conductor-workstream", CONDUCTOR_WORKSTREAM_HEADER_RE, extract_conductor_workstream),
+            CallableReviewFormat("superset-inline", SUPERSET_INLINE_RE, extract_superset_inline, bounded=True),
+            CallableReviewFormat(
+                "conductor-workstream", CONDUCTOR_WORKSTREAM_HEADER_RE, extract_conductor_workstream, bounded=True
+            ),
         ),
         structured_formats=(),
         surfaces=frozenset({"typed"}),

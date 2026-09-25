@@ -166,11 +166,12 @@ type workerManager struct {
 	lifetime context.Context
 	end      context.CancelFunc
 
-	mu       sync.Mutex
-	closed   bool
-	entries  map[string]*workerEntry
-	poolSize int
-	wg       sync.WaitGroup
+	mu        sync.Mutex
+	closed    bool
+	entries   map[string]*workerEntry
+	poolSize  int
+	snapshots *snapshotService
+	wg        sync.WaitGroup
 }
 
 func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
@@ -351,6 +352,7 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 	defer m.wg.Done()
 	worker, err := m.start(m.lifetime, entry.key)
 	if worker != nil {
+		worker.setSnapshots(m.snapshots)
 		worker.setOnSettle(func() { m.settleLoad(entry) })
 		worker.setOnAdopt(m.adopt)
 	}

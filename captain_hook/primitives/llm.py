@@ -16,6 +16,7 @@ from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt, render_template
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
+from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
     TOOL_EVENTS,
@@ -135,28 +136,30 @@ def llm_evaluate[M: BaseModel](
     if diff and not (diff_text or "").strip():
         return None
 
-    dispatched = built.context("diff", diff_text)
+    dispatched = evt.ctx.assemble_prompt(
+        built.context("diff", diff_text), (), {}, transcript=transcript,
+        tool_results=tool_results, budget=budget, diff_text=None,
+    )
     asked = dispatched
     for attempt in count():
         try:
             return evt.ctx.call_llm(
-                asked,
+                Prompt(system_text=asked),
                 specialty=specialty,
                 model=model,
                 agent=agent,
-                transcript=transcript,
-                tool_results=tool_results,
-                budget=budget,
                 response_model=response_model,
             )
         except ValidationError as e:
             if attempt >= retries:
                 raise
-            asked = dispatched.context(
+            asked = str(Prompt(system_text=dispatched).context(
                 "validation_error",
                 f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
-            )
+            ))
             logger.bind(attempt=attempt).opt(exception=True).warning("llm output failed validation; retrying")
+        except EvidenceIncomplete:
+            raise
         except Exception as e:
             if attempt >= retries or is_unsupported_model(e):
                 raise
@@ -233,6 +236,8 @@ def llm_primitive[M: BaseModel](
                 budget=budget,
                 diff=diff,
             )
+        except EvidenceIncomplete:
+            raise
         except Exception:
             logger.bind(hook=name).opt(exception=True).warning("llm primitive failed")
             return None
@@ -495,7 +500,7 @@ def record_prompt_check_failure(
             argv, exit_code, stdout, stderr = None, None, "", ""
 
     failure_path = (
-        resolve_cache_dir() / "failures" / (p.stem if (p := evt.ctx.t.path) else "unknown") / f"{timestamp}.json"
+        resolve_cache_dir() / "failures" / (p.stem if (p := evt.ctx.transcript_path) else "unknown") / f"{timestamp}.json"
     )
     failure_path.parent.mkdir(parents=True, exist_ok=True)
     failure_path.write_text(
@@ -552,6 +557,8 @@ def prompt_check(
             diff=diff,
             response_model=response_model,
         )
+    except EvidenceIncomplete:
+        raise
     except Exception as exc:
         record_prompt_check_failure(evt, prefix, prompt_str, exc)
         return None

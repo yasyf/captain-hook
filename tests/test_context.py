@@ -50,58 +50,76 @@ class TestSessionManagement:
         assert sd.parent.name == "sessions"
         assert list(sd.iterdir()) == []
 
-    def test_cleanup_stale_removes_old_dir_without_transcript(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id: None)
+    @pytest.fixture
+    def discovery_client(self):
+        from captain_hook.snapshots.client import CURRENT_CLIENT
+        from tests.snapshot_discovery_helpers import DiscoveryClient
 
+        client = DiscoveryClient()
+        token = CURRENT_CLIENT.set(client)
+        try:
+            yield client
+        finally:
+            CURRENT_CLIENT.reset(token)
+
+    def test_cleanup_stale_removes_old_dir_without_transcript(self, tmp_path, monkeypatch, discovery_client):
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
         sd = ensure_session(SessionId(SESSION_ID))
         age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
         cleanup_stale()
         assert not sd.exists()
 
-    def test_cleanup_stale_preserves_recent_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cleanup_stale_preserves_recent_dir(self, tmp_path, monkeypatch, discovery_client):
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id: None)
-
         sd = ensure_session(SessionId(SESSION_ID))
         cleanup_stale()
         assert sd.is_dir()
+        assert discovery_client.requests == []
 
-    def test_cleanup_stale_preserves_old_dir_with_living_transcript(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_cleanup_stale_preserves_old_dir_with_living_transcript(self, tmp_path, monkeypatch, discovery_client):
+        from cc_transcript.codex import sessions_root
+        from cc_transcript.discovery import CLAUDE_PROJECTS_DIR
+
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        transcript = tmp_path / f"{SESSION_ID}.jsonl"
-        transcript.touch()
-        seen: list[str] = []
-
-        def fake_find(session_id):
-            seen.append(str(session_id))
-            return transcript
-
-        monkeypatch.setattr("cc_transcript.discovery.resolve", fake_find)
-
         sd = ensure_session(SessionId(SESSION_ID))
         age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
+        discovery_client.results[SESSION_ID] = tmp_path / "sleeping.jsonl"
         cleanup_stale()
         assert sd.is_dir()
-        assert seen == [SESSION_ID]
+        assert discovery_client.requests[0]["roots"] == [str(CLAUDE_PROJECTS_DIR), str(sessions_root())]
+        assert discovery_client.released == [SESSION_ID]
 
-    def test_cleanup_stale_excludes_current_session(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The caller's own session is live even if stale + transcript-less; exclude keeps it.
+    def test_cleanup_stale_excludes_current_session(self, tmp_path, monkeypatch, discovery_client):
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id: None)
-
         current = ensure_session(SessionId(SESSION_ID))
         other = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
         age_dir(current, seconds=STALE_AGE_SECONDS + 60)
         age_dir(other, seconds=STALE_AGE_SECONDS + 60)
-
         cleanup_stale(exclude=SessionId(SESSION_ID))
-        assert current.is_dir()  # excluded session survives
-        assert not other.exists()  # every other stale, transcript-less session is still reaped
+        assert current.is_dir()
+        assert not other.exists()
+        assert discovery_client.requests[0]["session_ids"] == [other.name]
+
+    def test_cleanup_stale_keeps_refreshed_directory(self, tmp_path, monkeypatch, discovery_client):
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+        sd = ensure_session(SessionId(SESSION_ID))
+        age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
+        discovery_client.after_page = lambda: os.utime(sd, None)
+        cleanup_stale()
+        assert sd.is_dir()
+
+    def test_cleanup_stale_does_not_delete_before_all_batches_complete(self, tmp_path, monkeypatch, discovery_client):
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+        dirs = [ensure_session(SessionId(f"session-{i}")) for i in range(257)]
+        for sd in dirs:
+            age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
+        discovery_client.after_page = lambda: discovery_client.results.update({sd.name: "incomplete" for sd in dirs})
+        with pytest.raises(EvidenceIncomplete):
+            cleanup_stale()
+        assert all(sd.is_dir() for sd in dirs)
+        assert [len(request["session_ids"]) for request in discovery_client.requests] == [256, 1]
 
     def test_cleanup_stale_has_production_call_site(self) -> None:
         import re
@@ -119,13 +137,12 @@ class TestSessionManagement:
         assert sites, "cleanup_stale must be called from production code, not only tests"
 
     def test_dispatch_event_reaps_stale_on_session_start_after_the_reply(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, discovery_client
     ) -> None:
         from captain_hook.cli import dispatch_event
         from captain_hook.types import Event
 
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id, *, root=None: None)
         monkeypatch.setattr("captain_hook.cli.dispatch_update", lambda: None)
 
         current = ensure_session(SessionId(SESSION_ID))
@@ -151,7 +168,6 @@ class TestSessionManagement:
         from captain_hook.types import Event
 
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id, *, root=None: None)
 
         foreign = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
         age_dir(foreign, seconds=STALE_AGE_SECONDS + 60)
@@ -479,7 +495,7 @@ class TestCallLlm:
         assert "<task>" in prompt
         assert "<transcript>" in prompt  # transcript is wrapped (this fixture has no path → bare tag)
 
-    def test_transcript_block_carries_path(self) -> None:
+    def test_transcript_block_does_not_advertise_live_path(self) -> None:
         from pathlib import Path
 
         from captain_hook.testing.helpers import fixture_session
@@ -490,7 +506,8 @@ class TestCallLlm:
             settings=None,
         )
         block = with_path.transcript_block()
-        assert block.startswith('<transcript path="/p/sess.jsonl">')
+        assert block.startswith("<transcript>\n")
+        assert "/p/sess.jsonl" not in block
         assert block.endswith("</transcript>")
 
         no_path = HookContext(

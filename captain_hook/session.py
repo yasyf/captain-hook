@@ -38,16 +38,32 @@ def cleanup_stale(exclude: SessionId | None = None) -> None:
     ``exclude`` skips the current session unconditionally — the caller's own dir is live
     even if a clock skew or a transcript-discovery miss would otherwise mark it stale.
     """
-    from cc_transcript.discovery import resolve
+    from cc_transcript.codex import sessions_root
+    from cc_transcript.discovery import CLAUDE_PROJECTS_DIR
+
+    from captain_hook.snapshots.client import client_scope
+    from captain_hook.transcripts import resolved_transcript_paths
 
     sessions = state_root() / "hooks" / "sessions"
     if not sessions.exists():
         return
     cutoff = time.time() - STALE_AGE_SECONDS
-    for sd in sessions.iterdir():
-        if sd.name == exclude:
+    stale = [(sd, sd.stat()) for sd in sessions.iterdir() if sd.name != exclude and sd.is_dir()]
+    stale = [(sd, initial) for sd, initial in stale if initial.st_mtime < cutoff]
+    if not stale:
+        return
+    with client_scope() as client:
+        resolved = resolved_transcript_paths(
+            client, [SessionId(sd.name) for sd, _ in stale], roots=[CLAUDE_PROJECTS_DIR, sessions_root()]
+        )
+    for sd, initial in stale:
+        if resolved[SessionId(sd.name)] is not None or sd.name == exclude:
             continue
-        if sd.is_dir() and sd.stat().st_mtime < cutoff and resolve(SessionId(sd.name)) is None:
+        try:
+            current = sd.stat()
+        except FileNotFoundError:
+            continue
+        if (current.st_dev, current.st_ino) == (initial.st_dev, initial.st_ino) and current.st_mtime < cutoff:
             shutil.rmtree(sd, ignore_errors=True)
 
 

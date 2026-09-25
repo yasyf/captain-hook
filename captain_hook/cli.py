@@ -10,7 +10,6 @@ import sys
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -299,7 +298,15 @@ def dispatch_event(
     evt = event.event_class(_raw=raw, ctx=ctx)
     within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)
     envelope = None if within_margin else dispatch(event, evt, session_dir=session_dir)
-    return envelope, partial(after_reply, event, evt, raw, session_dir)
+
+    def background() -> None:
+        transcript = lazy_transcript(
+            resolved_path, loader=transcript_loader, attach=lambda: registered_paths(session_dir)
+        )
+        fresh = event.event_class(_raw=raw, ctx=ctx.fork(transcript))
+        after_reply(event, fresh, raw, session_dir)
+
+    return envelope, background
 
 
 def after_reply(event: Event, evt: BaseHookEvent, raw: dict[str, Any], session_dir: Path | None) -> None:
@@ -347,11 +354,15 @@ def run_event(state: CliState, event_name: str) -> None:
     setup_logging(session_id)
 
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
-    state.discover()
-    output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
-    if output:
-        print(envelope_text(output), flush=True)
-    background()
+    from captain_hook.snapshots.client import client_scope
+
+    tools = pack_tool_specs(state.discover())
+    with client_scope() as client:
+        client.bind_tool_registry(tools)
+        output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
+        if output:
+            print(envelope_text(output), flush=True)
+        background()
 
 
 def init_project(root: Path, *, review: bool = True) -> None:

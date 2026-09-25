@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from captain_hook.snapshots.validation import checked, native_numbers, parse_exact
+
 if TYPE_CHECKING:
     from typing import BinaryIO
 
@@ -14,12 +16,17 @@ MAX_EVENT_INPUT = 32 * 1024 * 1024
 MAX_EVENT_ENVELOPE = 1 * 1024 * 1024
 MAX_HOST_PAYLOAD = 2 * MAX_EVENT_INPUT + MAX_EVENT_ENVELOPE
 MAX_FRAME = MAX_HOST_PAYLOAD + 4 * 1024
+MAX_SNAPSHOT_FRAME = 1024 * 1024
 
 OP_HELLO = "hello"
 OP_EVENT = "event"
 OP_RESULT = "result"
 OP_ERROR = "error"
 OP_ADOPT = "adopt"
+OP_SNAPSHOT_REQUEST = "snapshot_request"
+OP_SNAPSHOT_RESULT = "snapshot_result"
+OP_SNAPSHOT_CANCEL = "snapshot_cancel"
+SNAPSHOT_FRAME_FIELDS = frozenset({"snapshot", "snapshot_context", "snapshot_config", "parent_id"})
 
 HELLO_KEYS = frozenset({"protocol", "op", "build"})
 EVENT_FRAME_KEYS = frozenset({"protocol", "op", "id", "request"})
@@ -83,7 +90,7 @@ class EventResponse:
         }
 
 
-def read_message(stream: BinaryIO) -> dict[str, Any] | None:
+def read_message(stream: BinaryIO, *, max_frame: int = MAX_FRAME) -> dict[str, Any] | None:
     first = stream.read(1)
     if first == b"":
         return None
@@ -92,22 +99,26 @@ def read_message(stream: BinaryIO) -> dict[str, Any] | None:
     except ProtocolError as exc:
         raise ProtocolError("truncated frame header") from exc
     length = struct.unpack(">I", header)[0]
-    if length == 0 or length > MAX_FRAME:
+    if length == 0 or length > max_frame:
         raise ProtocolError(f"invalid frame length: {length}")
     payload = _read_exact(stream, length)
     try:
-        message = cast(object, json.loads(payload))
+        message: dict[str, Any] = parse_exact(payload)
     except (UnicodeDecodeError, ValueError) as exc:
         raise ProtocolError(f"malformed frame JSON: {exc}") from exc
     if type(message) is not dict:
         raise ProtocolError(f"invalid message shape: {message!r}")
-    return cast(dict[str, Any], message)
+    if message.get("op") in {OP_SNAPSHOT_REQUEST, OP_SNAPSHOT_RESULT, OP_SNAPSHOT_CANCEL, OP_ERROR}:
+        if length > MAX_SNAPSHOT_FRAME:
+            raise ProtocolError("snapshot frame exceeds frame bound")
+        return message
+    return native_numbers(message)
 
 
-def write_message(stream: BinaryIO, message: dict[str, object]) -> None:
+def write_message(stream: BinaryIO, message: dict[str, object], *, max_frame: int = MAX_FRAME) -> None:
     payload = json.dumps(message, sort_keys=True, separators=(",", ":")).encode()
-    if len(payload) > MAX_FRAME:
-        raise ProtocolError(f"frame exceeds {MAX_FRAME} bytes")
+    if len(payload) > max_frame:
+        raise ProtocolError(f"frame exceeds {max_frame} bytes")
     _write_all(stream, struct.pack(">I", len(payload)))
     _write_all(stream, payload)
     stream.flush()
@@ -188,6 +199,66 @@ def error_response(request_id: int, error: str) -> dict[str, object]:
 
 def adopt_message(pid: int, lifetime_ms: int) -> dict[str, object]:
     return {"protocol": PROTOCOL, "op": OP_ADOPT, "adopt": {"pid": pid, "lifetime_ms": lifetime_ms}}
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotReply:
+    id: int
+    parent_id: int
+    snapshot: dict[str, Any] | None
+    error: str | None
+
+
+def decode_snapshot_reply(message: dict[str, Any]) -> SnapshotReply:
+    op = message.get("op")
+    keys = {"protocol", "op", "id", "snapshot" if op == OP_SNAPSHOT_RESULT else "error"}
+    if "parent_id" in message:
+        keys.add("parent_id")
+    parent_id = message.get("parent_id", 0)
+    if (
+        set(message) != keys
+        or type(message.get("protocol")) is not int
+        or message["protocol"] != PROTOCOL
+        or op not in {OP_SNAPSHOT_RESULT, OP_ERROR}
+        or type(message.get("id")) is not int
+        or message["id"] <= 0
+        or type(parent_id) is not int
+        or parent_id < 0
+        or (op == OP_SNAPSHOT_RESULT and type(message.get("snapshot")) is not dict)
+        or (op == OP_ERROR and type(message.get("error")) is not str)
+    ):
+        raise ProtocolError("invalid snapshot reply")
+    snapshot = message.get("snapshot")
+    if snapshot is not None:
+        from jsonschema import ValidationError
+
+        try:
+            snapshot = checked("host-response", snapshot)
+        except (ValueError, ValidationError) as exc:
+            raise ProtocolError(f"invalid snapshot response: {exc}") from exc
+        message = message | {"snapshot": snapshot}
+    if len(json.dumps(message, separators=(",", ":")).encode()) > MAX_SNAPSHOT_FRAME:
+        raise ProtocolError("snapshot reply exceeds frame bound")
+    return SnapshotReply(message["id"], parent_id, snapshot, message.get("error"))
+
+
+def snapshot_request_message(request_id: int, parent_id: int, snapshot: dict[str, object]) -> dict[str, object]:
+    return {
+        "protocol": PROTOCOL,
+        "op": OP_SNAPSHOT_REQUEST,
+        "id": request_id,
+        **({"parent_id": parent_id} if parent_id else {}),
+        "snapshot": snapshot,
+    }
+
+
+def snapshot_cancel_message(request_id: int, parent_id: int) -> dict[str, object]:
+    return {
+        "protocol": PROTOCOL,
+        "op": OP_SNAPSHOT_CANCEL,
+        "id": request_id,
+        **({"parent_id": parent_id} if parent_id else {}),
+    }
 
 
 def _read_exact(stream: BinaryIO, length: int) -> bytes:

@@ -1043,9 +1043,9 @@ class TestPerLaneVersions:
         monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", lambda value: probes.append(value) or True)
         assert [row["dedup_key"] for row in await store.judge_queue(refresh_summary=True, limit=2)] == ["k0", "k1"]
         assert loaded == ["k0", "k1"]
-        assert probes == ["{}", "{}"]
+        assert probes == []
 
-    async def test_summary_probe_budget_rotates_past_unavailable_transcripts(
+    async def test_summary_preparation_budget_rotates_without_local_hydration(
         self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         candidate_id = await create_candidate(store)
@@ -1059,8 +1059,8 @@ class TestPerLaneVersions:
         monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", lambda value: probes.append(value) or False)
         for expected in (["c0", "c1"], ["c2", "c3"], ["c4", "c5"], ["c0", "c1"]):
             probes.clear()
-            assert await store.judge_queue(refresh_summary=True, limit=2) == []
-            assert probes == expected
+            assert [row["context_json"] for row in await store.judge_queue(refresh_summary=True, limit=2)] == expected
+            assert probes == []
 
     async def test_unjudged_fix_is_not_starved_by_create_summary_refresh(
         self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
@@ -1092,7 +1092,7 @@ class TestPerLaneVersions:
         await seed(store, candidate_id, "keep", session="s1", occurred="2026-06-01T10:00:00+00:00")
         assert [row["dedup_key"] for row in await store.judge_queue(limit=1)] == ["keep"]
 
-    async def test_judge_queue_probes_hydration_by_default(
+    async def test_judge_queue_never_probes_local_hydration(
         self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         candidate_id = await create_candidate(store)
@@ -1105,8 +1105,8 @@ class TestPerLaneVersions:
             return False
 
         monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", failed_hydration)
-        assert await store.judge_queue(refresh_summary=True) == []
-        assert probes == ["{}"]
+        assert [row["dedup_key"] for row in await store.judge_queue(refresh_summary=True)] == ["ka"]
+        assert probes == []
 
     async def test_judge_health_recency_is_lane_exact(self, store: ReviewStore, tmp_path: Path) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))

@@ -481,28 +481,28 @@ class TestIncrementalScan:
         report = await scan_transcript(store, tmp_path / "gone.jsonl", settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=0, inserted=0)
 
-    async def test_batch_reuses_one_decision_ledger(
+    async def test_signal_free_batch_skips_decision_ledger(
         self,
         store: ReviewStore,
         settings: ReviewSettings,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import captain_hook.review.scan as review_scan
+        import captain_hook.decisions as review_decisions
 
         root = tmp_path / "project"
         write_transcript(root / "a.jsonl", [assistant_text("done")])
         write_transcript(root / "b.jsonl", [assistant_text("done")])
-        open_decision_log = review_scan.open_decision_log
+        open_decision_log = review_decisions.open_decision_log
         opens: list[Path] = []
 
         async def track_open(path: Path) -> Any:
             opens.append(path)
             return await open_decision_log(path)
 
-        monkeypatch.setattr(review_scan, "open_decision_log", track_open)
+        monkeypatch.setattr(review_decisions, "open_decision_log", track_open)
         assert await scan(store, settings=settings, transcripts=[root]) == ScanReport(scanned=2, inserted=0)
-        assert len(opens) == 1
+        assert opens == []
 
     async def test_signal_free_transcript_is_not_read_twice(
         self,
@@ -513,10 +513,15 @@ class TestIncrementalScan:
     ) -> None:
         path = write_transcript(tmp_path / "s.jsonl", [assistant_text("done")])
 
-        def forbidden_read(_path: Path) -> bytes:
-            raise AssertionError("the parsed transcript must not be read again without signals")
+        reads = []
+        original = type(path).read_bytes
 
-        monkeypatch.setattr(type(path), "read_bytes", forbidden_read)
+        def read_once(source: Path) -> bytes:
+            reads.append(source)
+            assert reads == [path]
+            return original(source)
+
+        monkeypatch.setattr(type(path), "read_bytes", read_once)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
 
 
@@ -629,7 +634,18 @@ def test_candidate_confidence_gates_before_transcript_capture(
         raise AssertionError("rejected signals must not parse the transcript again")
 
     monkeypatch.setattr("captain_hook.review.scan.to_candidate", forbid_capture)
-    assert list(candidates_from(b"", events, [signal], settings=settings)) == []
+    assert (
+        list(
+            candidates_from(
+                events,
+                [signal],
+                capture=forbid_capture,
+                min_confidence=settings.min_confidence,
+                min_confidence_fix=settings.min_confidence_fix,
+            )
+        )
+        == []
+    )
 
 
 def test_candidates_capture_one_batch(monkeypatch: pytest.MonkeyPatch, settings: ReviewSettings) -> None:
@@ -641,11 +657,26 @@ def test_candidates_capture_one_batch(monkeypatch: pytest.MonkeyPatch, settings:
     signals = list(detect(events))
     batches: list[list[EventRef]] = []
 
-    def capture(raw: bytes, anchors: list[EventRef]) -> list[ContextWindow]:
+    def capture(anchors: list[EventRef]) -> list[ContextWindow]:
         batches.append(anchors)
         return capture_windows(raw, anchors)
 
-    monkeypatch.setattr("captain_hook.review.scan.capture_windows", capture)
-    kept = list(candidates_from(raw, events, signals, settings=settings))
+    kept = list(
+        candidates_from(
+            events,
+            signals,
+            capture=capture,
+            min_confidence=settings.min_confidence,
+            min_confidence_fix=settings.min_confidence_fix,
+        )
+    )
     assert len(kept) >= 2
     assert batches == [[candidate.ref for _, candidate in kept]]
+
+
+@pytest.fixture(autouse=True)
+def snapshot_review_owner(monkeypatch: pytest.MonkeyPatch):
+    from tests.snapshot_review_helpers import owner_fixture
+
+    with owner_fixture(monkeypatch) as owner:
+        yield owner

@@ -1,7 +1,7 @@
 ---
 name: scanning-sessions
-description: The headless session-reviewer brain — turns a watched repo's PR-eligible candidates into pull requests, both kinds. Invoked as /captain-hook:scanning-sessions --transcript <path> inside the target repo by capt-hook's detached SessionEnd reviewer pipeline. Enumerates judge-accepted, threshold-eligible candidates via uvx --isolated capt-hook review, re-verifies every cited quote verbatim against its transcript, screens each create candidate against the hooks already active in the repo, then drafts a new hook, broadens an existing one (EXTEND), or amends the attributed misfiring hook (FIX) by delegating to the authoring-hooks skill — routing follows the change shape, so a new hook lands repo-local and an edit lands in the hook's home repo. Proves it with uvx --isolated capt-hook test, opens exactly one PR with the verbatim evidence, and records the PR on the candidate. Use when a prompt starts with /captain-hook:scanning-sessions, or to review eligible capt-hook candidates and open hook PRs.
-argument-hint: "--transcript <path to the ended session's transcript>"
+description: The headless session-reviewer brain — turns a watched repo's PR-eligible candidates into pull requests, both kinds. Invoked as /captain-hook:scanning-sessions inside the target repo by capt-hook's detached SessionEnd reviewer pipeline. Enumerates judge-accepted, threshold-eligible candidates via uvx --isolated capt-hook review, re-verifies every cited quote verbatim against its transcript, screens each create candidate against the hooks already active in the repo, then drafts a new hook, broadens an existing one (EXTEND), or amends the attributed misfiring hook (FIX) by delegating to the authoring-hooks skill — routing follows the change shape, so a new hook lands repo-local and an edit lands in the hook's home repo. Proves it with uvx --isolated capt-hook test, opens exactly one PR with the verbatim evidence, and records the PR on the candidate. Use when a prompt starts with /captain-hook:scanning-sessions, or to review eligible capt-hook candidates and open hook PRs.
+argument-hint: ""
 allowed-tools: Read, Grep, Glob, Bash, Skill
 ---
 
@@ -124,20 +124,18 @@ earliest observation's verbatim correction), and the observation count.
 
 ### 2. Re-verify the quotes
 
-For each eligible candidate, take the verbatim correction text from `review show` and
-confirm it appears, verbatim, in a session transcript before acting:
+For each eligible candidate, verify its recorded quotes through the shared transcript owner:
 
 ```bash
-rg -F "<the exact correction text>" <the --transcript path> ~/.claude/projects/<munged-cwd>/*.jsonl
+uvx --isolated capt-hook review evidence <ID>
 ```
 
-(`<munged-cwd>` is the repo's absolute path with `/` replaced by `-`.) Transcripts are
-JSONL with newlines escaped, so verify a multi-line correction line by line. A candidate
-whose correction cannot be found verbatim in any transcript does **not** get a PR —
-skip it; it stays `watching` and the next session's scan re-evaluates it. Record the
-skip and its reason for the final report. For verified candidates, note which transcript
-each quote was found in: the JSONL filename stem is the session id and the matching
-line's `timestamp` is the date — the PR body's Evidence section cites both.
+Use only evidence entries with `verified=true`. The command returns bounded context,
+its snapshot reference, session id, event id and observation date. Cite that provenance
+in the PR's Evidence section. A missing reference, incomplete preparation or quote
+outside the rendered budget does not establish that the quote never existed; skip
+that candidate and record the reason. Leave it `watching` for a later pass. Do not
+read or search raw transcript files to supplement this result.
 
 For **fix** candidates the quote is Claude's own complaint (an assistant turn), and
 two extra checks gate the draft:

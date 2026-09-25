@@ -1,0 +1,1286 @@
+{
+  "$defs": {
+    "Acquired": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "kind": {
+          "const": "acquired",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "description"
+      ],
+      "title": "Acquired",
+      "type": "object"
+    },
+    "Captured": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "captured",
+          "title": "Kind",
+          "type": "string"
+        },
+        "windows_json": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Windows Json",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "windows_json"
+      ],
+      "title": "Captured",
+      "type": "object"
+    },
+    "Classifier": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "title": "Classifier",
+      "type": "object"
+    },
+    "CompleteResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "const": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "cursor": {
+          "title": "Cursor",
+          "type": "null"
+        },
+        "data": {
+          "discriminator": {
+            "mapping": {
+              "acquired": "#/$defs/Acquired",
+              "activity_probe": "#/$defs/WaitingResult",
+              "captured": "#/$defs/Captured",
+              "discovered": "#/$defs/Discovered",
+              "hydrated": "#/$defs/Hydrated",
+              "loading": "#/$defs/Loading",
+              "records": "#/$defs/RecordsResult",
+              "released": "#/$defs/Released",
+              "renewed": "#/$defs/Renewed",
+              "resolved": "#/$defs/Resolved",
+              "scalar": "#/$defs/ScalarResult",
+              "stats": "#/$defs/StatsResult",
+              "strings": "#/$defs/StringsResult"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Acquired"
+            },
+            {
+              "$ref": "#/$defs/Loading"
+            },
+            {
+              "$ref": "#/$defs/Resolved"
+            },
+            {
+              "$ref": "#/$defs/Discovered"
+            },
+            {
+              "$ref": "#/$defs/Released"
+            },
+            {
+              "$ref": "#/$defs/Renewed"
+            },
+            {
+              "$ref": "#/$defs/Captured"
+            },
+            {
+              "$ref": "#/$defs/Hydrated"
+            },
+            {
+              "$ref": "#/$defs/ScalarResult"
+            },
+            {
+              "$ref": "#/$defs/StringsResult"
+            },
+            {
+              "$ref": "#/$defs/RecordsResult"
+            },
+            {
+              "$ref": "#/$defs/WaitingResult"
+            },
+            {
+              "$ref": "#/$defs/StatsResult"
+            }
+          ],
+          "title": "Data"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "null"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "status": {
+          "const": "ok",
+          "title": "Status",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "status",
+        "complete",
+        "data",
+        "cursor",
+        "reason",
+        "usage"
+      ],
+      "title": "CompleteResponse",
+      "type": "object"
+    },
+    "Description": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Canonical Path",
+          "type": "string"
+        },
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "committed_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Committed Bytes",
+          "type": "integer"
+        },
+        "ctime_ns": {
+          "pattern": "^[0-9]+$",
+          "title": "Ctime Ns",
+          "type": "string"
+        },
+        "device": {
+          "pattern": "^[0-9]+$",
+          "title": "Device",
+          "type": "string"
+        },
+        "event_count": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Event Count",
+          "type": "integer"
+        },
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "inode": {
+          "pattern": "^[0-9]+$",
+          "title": "Inode",
+          "type": "string"
+        },
+        "mtime_ns": {
+          "pattern": "^[0-9]+$",
+          "title": "Mtime Ns",
+          "type": "string"
+        },
+        "parser_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Parser Version",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "claude",
+            "codex"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provisional_tail": {
+          "title": "Provisional Tail",
+          "type": "boolean"
+        },
+        "source_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "turn_count": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Turn Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "handle",
+        "canonical_path",
+        "source_id",
+        "device",
+        "inode",
+        "mtime_ns",
+        "ctime_ns",
+        "provider",
+        "parser_version",
+        "source_bytes",
+        "committed_bytes",
+        "event_count",
+        "turn_count",
+        "classifier",
+        "provisional_tail"
+      ],
+      "title": "Description",
+      "type": "object"
+    },
+    "Discovered": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Checkpoint"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/DiscoveryEntry"
+          },
+          "maxItems": 256,
+          "title": "Entries",
+          "type": "array"
+        },
+        "kind": {
+          "const": "discovered",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "entries",
+        "checkpoint"
+      ],
+      "title": "Discovered",
+      "type": "object"
+    },
+    "DiscoveryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "mtime_ns": {
+          "pattern": "^[0-9]+$",
+          "title": "Mtime Ns",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Revision",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "present",
+            "removed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "revision",
+        "state",
+        "size",
+        "mtime_ns"
+      ],
+      "title": "DiscoveryEntry",
+      "type": "object"
+    },
+    "FailedResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "const": false,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "cursor": {
+          "title": "Cursor",
+          "type": "null"
+        },
+        "data": {
+          "title": "Data",
+          "type": "null"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 1048576,
+          "title": "Reason",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "missing",
+            "changed",
+            "source_limit",
+            "entry_limit",
+            "retained_limit",
+            "lease_limit",
+            "output_limit",
+            "deadline",
+            "cancelled",
+            "missing_ref",
+            "parse_error",
+            "permission_denied",
+            "stale_handle",
+            "stale_cursor",
+            "invalid_request"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "status",
+        "complete",
+        "data",
+        "cursor",
+        "reason",
+        "usage"
+      ],
+      "title": "FailedResponse",
+      "type": "object"
+    },
+    "Gauges": {
+      "additionalProperties": false,
+      "properties": {
+        "active_leases": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Active Leases",
+          "type": "integer"
+        },
+        "live_generations": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Live Generations",
+          "type": "integer"
+        },
+        "pending_input_capacity_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Pending Input Capacity Bytes",
+          "type": "integer"
+        },
+        "pending_loads": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Pending Loads",
+          "type": "integer"
+        },
+        "retained_entry_capacity_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Retained Entry Capacity Bytes",
+          "type": "integer"
+        },
+        "retained_index_capacity_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Retained Index Capacity Bytes",
+          "type": "integer"
+        },
+        "retained_projection_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Retained Projection Bytes",
+          "type": "integer"
+        },
+        "retained_total_accounted_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Retained Total Accounted Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "retained_entry_capacity_bytes",
+        "retained_index_capacity_bytes",
+        "retained_projection_bytes",
+        "pending_input_capacity_bytes",
+        "retained_total_accounted_bytes",
+        "active_leases",
+        "pending_loads",
+        "live_generations"
+      ],
+      "title": "Gauges",
+      "type": "object"
+    },
+    "Handle": {
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Generation",
+          "type": "string"
+        },
+        "lease_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_epoch",
+        "snapshot_id",
+        "generation",
+        "lease_id"
+      ],
+      "title": "Handle",
+      "type": "object"
+    },
+    "Hydrated": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "hydrated",
+          "title": "Kind",
+          "type": "string"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/HydratedItem"
+          },
+          "maxItems": 256,
+          "title": "Windows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "windows"
+      ],
+      "title": "Hydrated",
+      "type": "object"
+    },
+    "HydratedItem": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "enum": [
+            "full",
+            "missing_ref"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "input_index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Input Index",
+          "type": "integer"
+        },
+        "rendered": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rendered"
+        }
+      },
+      "required": [
+        "input_index",
+        "availability",
+        "rendered"
+      ],
+      "title": "HydratedItem",
+      "type": "object"
+    },
+    "IncompleteResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "const": false,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cursor"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "acquired": "#/$defs/Acquired",
+                  "activity_probe": "#/$defs/WaitingResult",
+                  "captured": "#/$defs/Captured",
+                  "discovered": "#/$defs/Discovered",
+                  "hydrated": "#/$defs/Hydrated",
+                  "loading": "#/$defs/Loading",
+                  "records": "#/$defs/RecordsResult",
+                  "released": "#/$defs/Released",
+                  "renewed": "#/$defs/Renewed",
+                  "resolved": "#/$defs/Resolved",
+                  "scalar": "#/$defs/ScalarResult",
+                  "stats": "#/$defs/StatsResult",
+                  "strings": "#/$defs/StringsResult"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/Acquired"
+                },
+                {
+                  "$ref": "#/$defs/Loading"
+                },
+                {
+                  "$ref": "#/$defs/Resolved"
+                },
+                {
+                  "$ref": "#/$defs/Discovered"
+                },
+                {
+                  "$ref": "#/$defs/Released"
+                },
+                {
+                  "$ref": "#/$defs/Renewed"
+                },
+                {
+                  "$ref": "#/$defs/Captured"
+                },
+                {
+                  "$ref": "#/$defs/Hydrated"
+                },
+                {
+                  "$ref": "#/$defs/ScalarResult"
+                },
+                {
+                  "$ref": "#/$defs/StringsResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordsResult"
+                },
+                {
+                  "$ref": "#/$defs/WaitingResult"
+                },
+                {
+                  "$ref": "#/$defs/StatsResult"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Data"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 1048576,
+          "title": "Reason",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "status": {
+          "const": "incomplete",
+          "title": "Status",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "status",
+        "complete",
+        "data",
+        "cursor",
+        "reason",
+        "usage"
+      ],
+      "title": "IncompleteResponse",
+      "type": "object"
+    },
+    "Loading": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "loading",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reservation": {
+          "$ref": "#/$defs/Reservation"
+        }
+      },
+      "required": [
+        "kind",
+        "reservation"
+      ],
+      "title": "Loading",
+      "type": "object"
+    },
+    "RecordsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "records",
+          "title": "Kind",
+          "type": "string"
+        },
+        "record_schema": {
+          "enum": [
+            "cc-transcript.turn/1",
+            "cc-transcript.event/1",
+            "cc-transcript.tool-use/1",
+            "cc-transcript.file-ref/1",
+            "cc-transcript.predicate-inputs/1",
+            "cc-transcript.sidechain/1",
+            "cc-transcript.mining-signal/1"
+          ],
+          "title": "Record Schema",
+          "type": "string"
+        },
+        "records_json": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Records Json",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "record_schema",
+        "records_json"
+      ],
+      "title": "RecordsResult",
+      "type": "object"
+    },
+    "Released": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "released",
+          "title": "Kind",
+          "type": "string"
+        },
+        "released": {
+          "title": "Released",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "released"
+      ],
+      "title": "Released",
+      "type": "object"
+    },
+    "RemainingWork": {
+      "additionalProperties": false,
+      "properties": {
+        "max_discovery_entries": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Discovery Entries",
+          "type": "integer"
+        },
+        "max_events": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Events",
+          "type": "integer"
+        },
+        "max_items": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Items",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "max_read_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Read Bytes",
+          "type": "integer"
+        },
+        "max_sources": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Sources",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_read_bytes",
+        "max_events",
+        "max_items",
+        "max_output_bytes",
+        "max_discovery_entries",
+        "max_sources"
+      ],
+      "title": "RemainingWork",
+      "type": "object"
+    },
+    "Renewed": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Expires Unix Ms",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "renewed",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "expires_unix_ms"
+      ],
+      "title": "Renewed",
+      "type": "object"
+    },
+    "Reservation": {
+      "additionalProperties": false,
+      "properties": {
+        "absolute_deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Absolute Deadline Unix Ms",
+          "type": "integer"
+        },
+        "created_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Created Unix Ms",
+          "type": "integer"
+        },
+        "expires_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Expires Unix Ms",
+          "type": "integer"
+        },
+        "load_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Load Id",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "remaining_work": {
+          "$ref": "#/$defs/RemainingWork"
+        },
+        "reservation_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Reservation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_epoch",
+        "reservation_id",
+        "load_id",
+        "created_unix_ms",
+        "expires_unix_ms",
+        "absolute_deadline_unix_ms",
+        "remaining_work"
+      ],
+      "title": "Reservation",
+      "type": "object"
+    },
+    "Resolution": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Description"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "missing",
+            "incomplete"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "status",
+        "description"
+      ],
+      "title": "Resolution",
+      "type": "object"
+    },
+    "Resolved": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "resolved",
+          "title": "Kind",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/Resolution"
+          },
+          "maxItems": 256,
+          "title": "Sessions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "sessions"
+      ],
+      "title": "Resolved",
+      "type": "object"
+    },
+    "ScalarResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "scalar",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "ScalarResult",
+      "type": "object"
+    },
+    "StatsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "counters": {
+          "$ref": "#/$defs/Usage"
+        },
+        "gauges": {
+          "$ref": "#/$defs/Gauges"
+        },
+        "kind": {
+          "const": "stats",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "counters",
+        "gauges"
+      ],
+      "title": "StatsResult",
+      "type": "object"
+    },
+    "StringsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "strings",
+          "title": "Kind",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values"
+      ],
+      "title": "StringsResult",
+      "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "activity_lifts": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Activity Lifts",
+          "type": "integer"
+        },
+        "append_parses": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Append Parses",
+          "type": "integer"
+        },
+        "bytes_decoded": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Bytes Decoded",
+          "type": "integer"
+        },
+        "cache_hits": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Cache Hits",
+          "type": "integer"
+        },
+        "cold_parses": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Cold Parses",
+          "type": "integer"
+        },
+        "discovery_entries_examined": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Discovery Entries Examined",
+          "type": "integer"
+        },
+        "events_parsed": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Events Parsed",
+          "type": "integer"
+        },
+        "generations_invalidated": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Generations Invalidated",
+          "type": "integer"
+        },
+        "generations_published": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Generations Published",
+          "type": "integer"
+        },
+        "inflight_joins": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Inflight Joins",
+          "type": "integer"
+        },
+        "nonincremental_lowering_calls": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Nonincremental Lowering Calls",
+          "type": "integer"
+        },
+        "nonincremental_lowering_source_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Nonincremental Lowering Source Bytes",
+          "type": "integer"
+        },
+        "output_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "requests_cancelled": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Requests Cancelled",
+          "type": "integer"
+        },
+        "requests_failed": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Requests Failed",
+          "type": "integer"
+        },
+        "source_bytes_read": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Bytes Read",
+          "type": "integer"
+        },
+        "source_opens": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Opens",
+          "type": "integer"
+        },
+        "transport_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Transport Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_opens",
+        "source_bytes_read",
+        "bytes_decoded",
+        "events_parsed",
+        "cold_parses",
+        "append_parses",
+        "activity_lifts",
+        "cache_hits",
+        "inflight_joins",
+        "generations_published",
+        "generations_invalidated",
+        "requests_cancelled",
+        "requests_failed",
+        "output_bytes",
+        "transport_bytes",
+        "nonincremental_lowering_calls",
+        "nonincremental_lowering_source_bytes",
+        "discovery_entries_examined"
+      ],
+      "title": "Usage",
+      "type": "object"
+    },
+    "WaitingResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "activity_probe",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 1048576,
+          "title": "Reason",
+          "type": "string"
+        },
+        "tool_registry_generation": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Tool Registry Generation",
+          "type": "string"
+        },
+        "waiting": {
+          "title": "Waiting",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "waiting",
+        "reason",
+        "tool_registry_generation"
+      ],
+      "title": "WaitingResult",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "discriminator": {
+    "mapping": {
+      "cancelled": "#/$defs/FailedResponse",
+      "changed": "#/$defs/FailedResponse",
+      "deadline": "#/$defs/FailedResponse",
+      "entry_limit": "#/$defs/FailedResponse",
+      "incomplete": "#/$defs/IncompleteResponse",
+      "invalid_request": "#/$defs/FailedResponse",
+      "lease_limit": "#/$defs/FailedResponse",
+      "missing": "#/$defs/FailedResponse",
+      "missing_ref": "#/$defs/FailedResponse",
+      "ok": "#/$defs/CompleteResponse",
+      "output_limit": "#/$defs/FailedResponse",
+      "parse_error": "#/$defs/FailedResponse",
+      "permission_denied": "#/$defs/FailedResponse",
+      "retained_limit": "#/$defs/FailedResponse",
+      "source_limit": "#/$defs/FailedResponse",
+      "stale_cursor": "#/$defs/FailedResponse",
+      "stale_handle": "#/$defs/FailedResponse"
+    },
+    "propertyName": "status"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CompleteResponse"
+    },
+    {
+      "$ref": "#/$defs/IncompleteResponse"
+    },
+    {
+      "$ref": "#/$defs/FailedResponse"
+    }
+  ]
+}

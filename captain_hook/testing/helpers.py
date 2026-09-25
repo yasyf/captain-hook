@@ -35,7 +35,9 @@ from captain_hook.events import (
 )
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
+from captain_hook.snapshots.client import RemoteSession
 from captain_hook.testing.session_cache import SessionCache
+from captain_hook.testing.snapshots import fixture_transcript
 from captain_hook.testing.types import Allow, Ask, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.transcripts import lift_session, load_transcript
 from captain_hook.types import Event, HookResult, Tool
@@ -172,29 +174,30 @@ def fixture_session(messages: list[dict[str, Any]], *, path: Path | None = None)
     )
 
 
-def disk_fixture_session(messages: list[dict[str, Any]]) -> Session:
-    """Like :func:`fixture_session`, but backed by a real ``.jsonl`` file on disk.
-
-    ``session.path`` points at that file, so a consumer that re-parses the transcript from
-    disk — chiefly the disk-only ``session_activity_probe`` behind ``Waiting()`` — sees the
-    same events an in-memory lift would.
-    """
+def disk_fixture_session(messages: list[dict[str, Any]]) -> RemoteSession:
+    """Write a temporary transcript and read it through an isolated native evidence owner."""
     path = fixture_file_dir() / f"fixture-{next(FIXTURE_FILE_COUNTER)}.jsonl"
     path.write_bytes(
         b"\n".join(json.dumps(fixture_line(index, message)).encode() for index, message in enumerate(messages))
     )
-    return load_transcript(path)
+    return fixture_transcript(path)
 
 
 def build_context(
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
     project_root: Path | None = None,
 ) -> HookContext:
     return HookContext(
         session=SessionStore(session_dir),
-        transcript=transcript if transcript is not None else load_transcript(transcript_path),
+        transcript=(
+            transcript
+            if transcript is not None
+            else fixture_transcript(transcript_path)
+            if transcript_path is not None
+            else load_transcript(None)
+        ),
         settings=None,
         project_root=project_root,
     )
@@ -281,7 +284,7 @@ def mock_tool_event(
     tool_input: dict[str, Any] | None = None,
     permission_mode: str | None = None,
     cwd: str | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
     project_root: Path | None = None,
@@ -312,7 +315,7 @@ def mock_stop_event(
     permission_mode: str | None = None,
     cwd: str | None = None,
     background_tasks: list[dict[str, Any]] | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> StopEvent:
@@ -330,7 +333,7 @@ def mock_session_end_event(
     *,
     permission_mode: str | None = None,
     cwd: str | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SessionEndEvent:
@@ -348,7 +351,7 @@ def mock_session_start_event(
     agent_id: str | None = None,
     permission_mode: str | None = None,
     cwd: str | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SessionStartEvent:
@@ -370,7 +373,7 @@ def mock_subagent_stop_event(
     permission_mode: str | None = None,
     cwd: str | None = None,
     background_tasks: list[dict[str, Any]] | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStopEvent:
@@ -394,7 +397,7 @@ def mock_subagent_start_event(
     agent_id: str = "",
     permission_mode: str | None = None,
     cwd: str | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStartEvent:
@@ -411,7 +414,7 @@ def mock_user_prompt_event(
     *,
     permission_mode: str | None = None,
     cwd: str | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> UserPromptSubmitEvent:
@@ -432,7 +435,7 @@ def mock_event(
     content: str | None = None,
     old: str | None = None,
     prompt: str | None = None,
-    transcript: Session | None = None,
+    transcript: Session | RemoteSession | None = None,
     transcript_path: str | Path | None = None,
     stop_hook_active: bool = False,
     session_dir: Path | None = None,
@@ -573,7 +576,7 @@ def input_to_event(
 
 
 def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
-    transcript = load_transcript(jsonl)
+    transcript = fixture_transcript(jsonl)
     ctx = StubbedContext(session=SessionStore(None), transcript=transcript, settings=None)
     transcript_path = str(jsonl)
 
@@ -584,7 +587,7 @@ def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
 
 def transcript_event_payloads(
     ev_type: Event,
-    transcript: Session,
+    transcript: Session | RemoteSession,
     transcript_path: str,
 ) -> Iterator[dict[str, Any]]:
     base = {"transcript_path": transcript_path}

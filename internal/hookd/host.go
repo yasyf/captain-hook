@@ -17,6 +17,7 @@ import (
 const maxHostFrame daemonkit.Bytes = (wireproto.MaxHostPayload*4+2)/3 + 4<<10
 
 const (
+	opTranscript     = "transcript"
 	opEvent          = "captain.event.v1"
 	opStatus         = "captain.status.v1"
 	opRestartWorkers = "captain.restart-workers.v1"

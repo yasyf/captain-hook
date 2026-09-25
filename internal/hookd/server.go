@@ -41,18 +41,25 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	_, err = daemonkit.Serve(ctx, s.daemon, func(hostCtx daemonkit.Ctx) (daemonkit.Product, error) {
 		manager := newWorkerManager(hostCtx, logFile)
+		snapshotService, err := newSnapshotService(manager)
+		if err != nil {
+			return nil, err
+		}
+		manager.snapshots = snapshotService
 		manager.startSweeper(workerSweepInterval)
 		return &hostProduct{
-			manager: manager,
-			hub:     newNotificationHub(),
+			manager:   manager,
+			snapshots: snapshotService,
+			hub:       newNotificationHub(),
 		}, nil
 	})
 	return err
 }
 
 type hostProduct struct {
-	manager *workerManager
-	hub     *notificationHub
+	manager   *workerManager
+	hub       *notificationHub
+	snapshots *snapshotService
 }
 
 // Handle owns dispatch for every captain-hook op. Admission to the business
@@ -60,6 +67,8 @@ type hostProduct struct {
 // any op here.
 func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemonkit.Reply, error) {
 	switch req.Op {
+	case opTranscript:
+		return p.transcript(ctx, req)
 	case opEvent:
 		var event wireproto.EventRequest
 		if err := decodeStrict(req.Body, &event); err != nil {
@@ -138,6 +147,9 @@ func (p *hostProduct) Close(budget daemonkit.Budget) error {
 	ctx, cancel := budget.Context(context.Background())
 	defer cancel()
 	_, err := p.manager.Close(ctx)
+	if p.snapshots != nil {
+		return errors.Join(err, p.snapshots.Close(ctx))
+	}
 	return err
 }
 

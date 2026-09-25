@@ -43,7 +43,14 @@ def is_prose(text: str) -> bool:
 
 
 def rewrite_prompt(evt: MessageDisplayEvent, text: str) -> Prompt:
-    question = next((turn.prompt for turn in reversed(evt.ctx.transcript.turns) if turn.prompt), None)
+    from captain_hook.snapshots.client import RemoteSession
+
+    transcript = evt.ctx.transcript
+    question = (
+        next(iter(transcript.prompts(selection="last", count=1)), None)
+        if isinstance(transcript, RemoteSession)
+        else next((turn.prompt for turn in reversed(transcript.turns) if turn.prompt), None)
+    )
     context = (
         [
             f'For context, the user asked the assistant: "{question[:800]}". Use this only to understand '

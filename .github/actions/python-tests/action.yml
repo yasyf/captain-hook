@@ -6,6 +6,11 @@ inputs:
     description: Python version passed to setup-uv.
     required: true
 
+  snapshot-candidate:
+    description: Directory containing the exact tested native PR wheel.
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
@@ -40,13 +45,28 @@ runs:
       shell: bash
       run: uv sync --extra dev
 
+    - name: Install exact snapshot candidate
+      if: inputs.snapshot-candidate != ''
+      shell: bash
+      env:
+        SNAPSHOT_CANDIDATE: ${{ inputs.snapshot-candidate }}
+      run: |
+        uv pip install --python .venv/bin/python --no-deps --reinstall "$SNAPSHOT_CANDIDATE"/*.whl
+        .venv/bin/python -c 'import importlib.metadata; from cc_transcript.snapshots import TranscriptStore; assert callable(TranscriptStore.prepare_classifier); assert callable(TranscriptStore.register_tool_registry); print("Testing native candidate", importlib.metadata.version("cc-transcript"))'
+
+    - name: Check generated snapshot schemas
+      shell: bash
+      run: |
+        uv run --no-sync python -m captain_hook.snapshots.schema internal/snapshots/schema --check
+        uv run --no-sync python -m captain_hook.snapshots.schema captain_hook/snapshots/schemas --check
+
     - name: Provision NLP assets
       if: steps.nlp-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-      run: uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
+      run: uv run --no-sync python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 
     - name: Test
       shell: bash
-      run: uv run pytest
+      run: uv run --no-sync pytest

@@ -3,13 +3,15 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
+from captain_hook.snapshots.client import RemoteSession
 from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_project_dir
 
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
 
     from captain_hook.settings import HooksSettings
     from captain_hook.signals.nlp import Clause
+    from captain_hook.transcripts import LazyTranscript
     from captain_hook.turn import Turn
 
 
@@ -76,6 +79,16 @@ def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int
             return events
 
 
+@dataclass(frozen=True)
+class HookEvidence:
+    source_ref: str | None
+    source_path: Path | None
+    event_count: int
+    current_turn_event_count: int
+    signal_texts: tuple[tuple[tuple[int | Literal["turn"], str], tuple[str, ...]], ...]
+    prompt: str
+
+
 @dataclass
 class HookContext:
     """Runtime context injected into every hook event.
@@ -84,14 +97,56 @@ class HookContext:
     """
 
     session: SessionStore
-    transcript: Session
+    transcript: Session | RemoteSession | LazyTranscript
     settings: HooksSettings | None
     project_root: Path | None = None
+    signal_evidence: dict[tuple[int | Literal["turn"], str], tuple[str, ...]] = field(default_factory=dict, init=False)
+    prepared_evidence: HookEvidence | None = field(default=None, init=False)
+
+    def fork(self, transcript: Session | RemoteSession | LazyTranscript) -> HookContext:
+        context = copy(self)
+        context.transcript = transcript
+        context.signal_evidence = {}
+        context.prepared_evidence = None
+        for name in ("event_count", "current_turn_event_count", "transcript_path", "transcript_ref", "turn", "prior"):
+            context.__dict__.pop(name, None)
+        return context
+
+    @cached_property
+    def event_count(self) -> int:
+        return len(self.transcript)
+
+    @cached_property
+    def current_turn_event_count(self) -> int:
+        return len(self.turn)
+
+    @cached_property
+    def transcript_path(self) -> Path | None:
+        return self.t.path
+
+    @cached_property
+    def transcript_ref(self) -> str | None:
+        return self.t.evidence_ref if isinstance(self.t, RemoteSession) else None
+
+    def release_preparation(self, prompt: str) -> None:
+        from captain_hook.transcripts import release_transcript
+
+        self.prepared_evidence = HookEvidence(
+            source_ref=self.transcript_ref,
+            source_path=self.transcript_path,
+            event_count=self.event_count,
+            current_turn_event_count=self.current_turn_event_count,
+            signal_texts=tuple(self.signal_evidence.items()),
+            prompt=prompt,
+        )
+        release_transcript(self.transcript)
 
     @property
-    def t(self) -> Session:
+    def t(self) -> Session | RemoteSession:
         """Alias for ``transcript``."""
-        return self.transcript
+        from captain_hook.transcripts import LazyTranscript
+
+        return self.transcript.resolve() if isinstance(self.transcript, LazyTranscript) else self.transcript
 
     @property
     def s(self) -> SessionStore:
@@ -114,16 +169,19 @@ class HookContext:
         return self.conf
 
     @cached_property
-    def turn(self) -> Turn:
+    def turn(self) -> Turn | RemoteSession:
         """The one-turn view of the current turn (cached), with prompt matching via ``matches``."""
         from captain_hook.turn import Turn
 
-        return Turn((current := self.transcript.current_turn).turns, current.path)
+        current = self.t.current_turn
+        if isinstance(current, RemoteSession):
+            return current
+        return Turn(current.turns, current.path)
 
     @cached_property
-    def prior(self) -> Session:
+    def prior(self) -> Session | RemoteSession:
         """The session window before the current turn's last exchange (cached)."""
-        return self.transcript.prior()
+        return self.t.prior()
 
     def nlp(self, text: str, *patterns: str | Clause) -> bool:
         """Whether ``text`` matches any pattern — the escape hatch for matching arbitrary prose.
@@ -151,7 +209,9 @@ class HookContext:
         """
         from cc_transcript.render import Budget, render_turn
 
-        src = self.transcript if window is None else self.transcript.recent_messages(window)
+        src = self.t if window is None else self.t.recent_messages(window)
+        if isinstance(src, RemoteSession):
+            return src.render(budget=budget or Budget(), tool_results=tool_results)
         return "\n\n".join(
             rendered
             for turn in src.turns
@@ -161,20 +221,9 @@ class HookContext:
     def transcript_block(
         self, *, window: int | None = RECENT_WINDOW, tool_results: bool = False, budget: Budget | None = None
     ) -> str:
-        """The rendered transcript wrapped in a ``<transcript>`` tag carrying its source path.
-
-        Defaults to a recent-message window rather than the whole session. The render clips long
-        turns and tool calls under :class:`Budget`, so an agent-mode LLM uses the path to read
-        the untruncated content (e.g. a full ``ExitPlanMode`` plan) or earlier history.
-
-        Args:
-            window: Render only the span covering the most recent ``window`` messages; ``None`` is the whole session.
-            tool_results: Render each tool result after its call, as ``result:`` or ``failed:``.
-            budget: Character budgets for prose, tool calls and answer previews; ``None`` is cc-transcript's default.
-        """
         rendered = self.transcript_text(window=window, tool_results=tool_results, budget=budget)
-        if (path := self.transcript.path) is not None:
-            return f'<transcript path="{path}">\n{rendered}\n</transcript>'
+        if isinstance(self.t, RemoteSession):
+            return f'<transcript evidence="{self.t.evidence_ref}">\n{rendered}\n</transcript>'
         return f"<transcript>\n{rendered}\n</transcript>"
 
     def call_cli(
@@ -340,6 +389,7 @@ class HookContext:
         prompt = self.assemble_prompt(
             template, args, kwargs, transcript=transcript, tool_results=tool_results, budget=budget, diff_text=diff_text
         )
+        self.release_preparation(prompt)
         cwd = resolve_project_dir()
         timeout = reqenv.clamp_timeout(timeout)
         try:

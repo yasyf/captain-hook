@@ -31,6 +31,7 @@ requires-python = ">=3.13"
 dependencies = [
     "cc-transcript[judge]==14.25.0",
     "pydantic>=2.0",
+    "jsonschema>=4.26",
     "pydantic-settings>=2.0",
     "ast-grep-py>=0.44,<0.45",
     "funcy>=2.0",

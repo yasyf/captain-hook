@@ -8,6 +8,7 @@ from cc_transcript.models import AssistantEvent, ThinkingBlock, ToolUseBlock, Us
 from cc_transcript.tools import TaskCreateCall, TaskUpdateCall, parse_tool_call
 
 from captain_hook.signals.nlp import NlpSignal
+from captain_hook.snapshots.client import EvidenceIncomplete, RemoteSession
 from captain_hook.types import Event, Signal, Signals
 
 if TYPE_CHECKING:
@@ -134,6 +135,21 @@ def transcript_texts(
     transcript, so scoring it would let one agent's words trip this agent's gate.
     """
 
+    key = (window, origin)
+    if (prepared := evt.ctx.prepared_evidence) is not None:
+        for saved_key, texts in prepared.signal_texts:
+            if saved_key == key:
+                return list(texts)
+        raise EvidenceIncomplete("stale_handle", "signal evidence was not prepared before model execution")
+    if key in evt.ctx.signal_evidence:
+        return list(evt.ctx.signal_evidence[key])
+    if isinstance(evt.ctx.t, RemoteSession):
+        texts = evt.ctx.t.signal_texts(window=window, origin=origin)
+        if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
+            texts = [evt.user_prompt, *texts]
+        evt.ctx.signal_evidence[key] = tuple(texts)
+        return texts
+
     def eligible(event: object) -> bool:
         return (
             isinstance(event, UserEvent | AssistantEvent)
@@ -156,7 +172,8 @@ def transcript_texts(
                 texts = texts_of(event) + texts
         texts = texts[-window:] if window else []
     if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
-        return [evt.user_prompt, *texts]
+        texts = [evt.user_prompt, *texts]
+    evt.ctx.signal_evidence[key] = tuple(texts)
     return texts
 
 

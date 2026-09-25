@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "max_entry_bytes": {
+      "default": 67108864,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Entry Bytes",
+      "type": "integer"
+    },
+    "max_events_per_step": {
+      "default": 4096,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Events Per Step",
+      "type": "integer"
+    },
+    "max_items_per_page": {
+      "default": 256,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Items Per Page",
+      "type": "integer"
+    },
+    "max_lease_ms": {
+      "default": 30000,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Lease Ms",
+      "type": "integer"
+    },
+    "max_leases": {
+      "default": 256,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Leases",
+      "type": "integer"
+    },
+    "max_pending_loads": {
+      "default": 4,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Pending Loads",
+      "type": "integer"
+    },
+    "max_preparation_ms": {
+      "default": 120000,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Preparation Ms",
+      "type": "integer"
+    },
+    "max_projection_bytes": {
+      "default": 16777216,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Projection Bytes",
+      "type": "integer"
+    },
+    "max_read_bytes_per_step": {
+      "default": 8388608,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Read Bytes Per Step",
+      "type": "integer"
+    },
+    "max_retained_bytes": {
+      "default": 1073741824,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Retained Bytes",
+      "type": "integer"
+    },
+    "max_source_bytes": {
+      "default": 536870912,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Source Bytes",
+      "type": "integer"
+    },
+    "reserved_hook_accounted_bytes": {
+      "default": 536870912,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Reserved Hook Accounted Bytes",
+      "type": "integer"
+    },
+    "reserved_hook_leases": {
+      "default": 32,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Reserved Hook Leases",
+      "type": "integer"
+    },
+    "reserved_hook_loads": {
+      "default": 1,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Reserved Hook Loads",
+      "type": "integer"
+    }
+  },
+  "title": "StoreConfig",
+  "type": "object"
+}

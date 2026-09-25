@@ -1,0 +1,1756 @@
+{
+  "$defs": {
+    "Acquire": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "acquire",
+          "title": "Operation",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "path",
+        "classifier"
+      ],
+      "title": "Acquire",
+      "type": "object"
+    },
+    "ActivityProbe": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "human_facing_tools": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Human Facing Tools",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "activity_probe",
+          "title": "Operation",
+          "type": "string"
+        },
+        "policy_version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "tool_registry_generation": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Tool Registry Generation",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/View"
+        },
+        "waiting_tools": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Waiting Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "waiting_tools",
+        "human_facing_tools",
+        "tool_registry_generation",
+        "policy_version"
+      ],
+      "title": "ActivityProbe",
+      "type": "object"
+    },
+    "AssistantText": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "assistant_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_per_message": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Max Per Message",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "count",
+        "max_per_message"
+      ],
+      "title": "AssistantText",
+      "type": "object"
+    },
+    "Capture": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "After",
+          "type": "integer"
+        },
+        "anchors": {
+          "items": {
+            "$ref": "#/$defs/EventRef"
+          },
+          "maxItems": 256,
+          "title": "Anchors",
+          "type": "array"
+        },
+        "before": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Before",
+          "type": "integer"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "capture",
+          "title": "Operation",
+          "type": "string"
+        },
+        "preview_chars": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Preview Chars",
+          "type": "integer"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/View"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "anchors",
+        "before",
+        "after",
+        "preview_chars"
+      ],
+      "title": "Capture",
+      "type": "object"
+    },
+    "Classifier": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "title": "Classifier",
+      "type": "object"
+    },
+    "CurrentTurn": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "current_turn",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "CurrentTurn",
+      "type": "object"
+    },
+    "Describe": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "describe",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "operation",
+        "handle"
+      ],
+      "title": "Describe",
+      "type": "object"
+    },
+    "Discover": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Checkpoint"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "discover",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "roots",
+        "checkpoint"
+      ],
+      "title": "Discover",
+      "type": "object"
+    },
+    "ErrorPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_error",
+            "has_edit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "subagents"
+      ],
+      "title": "ErrorPredicate",
+      "type": "object"
+    },
+    "EventRange": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "event_range",
+          "title": "Kind",
+          "type": "string"
+        },
+        "start": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "stop": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Stop",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "start",
+        "stop"
+      ],
+      "title": "EventRange",
+      "type": "object"
+    },
+    "EventRef": {
+      "additionalProperties": false,
+      "properties": {
+        "event_uuid": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Event Uuid",
+          "type": "string"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "tool_use_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tool Use Id"
+        }
+      },
+      "required": [
+        "session_id",
+        "event_uuid",
+        "tool_use_id"
+      ],
+      "title": "EventRef",
+      "type": "object"
+    },
+    "Handle": {
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Generation",
+          "type": "string"
+        },
+        "lease_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_epoch",
+        "snapshot_id",
+        "generation",
+        "lease_id"
+      ],
+      "title": "Handle",
+      "type": "object"
+    },
+    "Hydrate": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "handles": {
+          "items": {
+            "$ref": "#/$defs/SessionHandle"
+          },
+          "maxItems": 256,
+          "title": "Handles",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "hydrate",
+          "title": "Operation",
+          "type": "string"
+        },
+        "render": {
+          "$ref": "#/$defs/HydrationBudget"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "windows_json": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Windows Json",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "handles",
+        "windows_json",
+        "render"
+      ],
+      "title": "Hydrate",
+      "type": "object"
+    },
+    "HydrationBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/RenderBudget"
+        },
+        "before": {
+          "$ref": "#/$defs/RenderBudget"
+        },
+        "trigger": {
+          "$ref": "#/$defs/RenderBudget"
+        }
+      },
+      "required": [
+        "before",
+        "trigger",
+        "after"
+      ],
+      "title": "HydrationBudget",
+      "type": "object"
+    },
+    "InputRegex": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "flags": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Flags",
+          "type": "integer"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "pattern",
+        "flags"
+      ],
+      "title": "InputRegex",
+      "type": "object"
+    },
+    "Limits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_discovery_entries": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Max Discovery Entries",
+          "type": "integer"
+        },
+        "max_events": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Max Events",
+          "type": "integer"
+        },
+        "max_items": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Items",
+          "type": "integer"
+        },
+        "max_output_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 16777216,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "max_read_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 536870912,
+          "title": "Max Read Bytes",
+          "type": "integer"
+        },
+        "max_sources": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Max Sources",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_read_bytes",
+        "max_events",
+        "max_items",
+        "max_output_bytes",
+        "max_discovery_entries",
+        "max_sources"
+      ],
+      "title": "Limits",
+      "type": "object"
+    },
+    "ListPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_command",
+            "has_edit_to",
+            "has_skill",
+            "has_skill_suffix",
+            "has_pending_tool",
+            "has_read_glob"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values",
+        "subagents"
+      ],
+      "title": "ListPredicate",
+      "type": "object"
+    },
+    "MessageCount": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "message_count",
+          "title": "Kind",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant",
+            "any"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "role"
+      ],
+      "title": "MessageCount",
+      "type": "object"
+    },
+    "Mine": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "mine",
+          "title": "Operation",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/View"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "policy"
+      ],
+      "title": "Mine",
+      "type": "object"
+    },
+    "NamedCount": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "unresolved_tools",
+          "title": "Kind",
+          "type": "string"
+        },
+        "names": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Names",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "names"
+      ],
+      "title": "NamedCount",
+      "type": "object"
+    },
+    "OverridePredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "invalidated_by": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Invalidated By",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_override",
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "token": {
+          "maxLength": 1048576,
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "token",
+        "invalidated_by",
+        "subagents"
+      ],
+      "title": "OverridePredicate",
+      "type": "object"
+    },
+    "Page": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "turns",
+            "events",
+            "tool_calls",
+            "files_touched",
+            "edited_files",
+            "deep_predicate_inputs",
+            "sidechain_membership"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "enum": [
+            "forward",
+            "reverse"
+          ],
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "order"
+      ],
+      "title": "Page",
+      "type": "object"
+    },
+    "PendingNamedTask": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "pending_named_task",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "PendingNamedTask",
+      "type": "object"
+    },
+    "Prior": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "prior",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "Prior",
+      "type": "object"
+    },
+    "Prompts": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "prompts",
+          "title": "Kind",
+          "type": "string"
+        },
+        "selection": {
+          "enum": [
+            "first",
+            "last",
+            "current"
+          ],
+          "title": "Selection",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "selection",
+        "count"
+      ],
+      "title": "Prompts",
+      "type": "object"
+    },
+    "QueryRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "query",
+          "title": "Operation",
+          "type": "string"
+        },
+        "query": {
+          "discriminator": {
+            "mapping": {
+              "assistant_text": "#/$defs/AssistantText",
+              "deep_predicate_inputs": "#/$defs/Page",
+              "edited_files": "#/$defs/Page",
+              "event_count": "#/$defs/Scalar",
+              "events": "#/$defs/Page",
+              "failures": "#/$defs/Scalar",
+              "files_touched": "#/$defs/Page",
+              "first_prompt": "#/$defs/Scalar",
+              "has_command": "#/$defs/ListPredicate",
+              "has_command_regex": "#/$defs/ToolPredicate",
+              "has_edit": "#/$defs/ErrorPredicate",
+              "has_edit_to": "#/$defs/ListPredicate",
+              "has_error": "#/$defs/ErrorPredicate",
+              "has_override": "#/$defs/OverridePredicate",
+              "has_pending_tool": "#/$defs/ListPredicate",
+              "has_read": "#/$defs/ToolPredicate",
+              "has_read_glob": "#/$defs/ListPredicate",
+              "has_skill": "#/$defs/ListPredicate",
+              "has_skill_suffix": "#/$defs/ListPredicate",
+              "has_tool": "#/$defs/ToolPredicate",
+              "message_count": "#/$defs/MessageCount",
+              "pending_named_task": "#/$defs/PendingNamedTask",
+              "prompts": "#/$defs/Prompts",
+              "render": "#/$defs/Render",
+              "sidechain_membership": "#/$defs/Page",
+              "signal_texts": "#/$defs/SignalTexts",
+              "tool_calls": "#/$defs/Page",
+              "tool_count": "#/$defs/ToolCount",
+              "turn_count": "#/$defs/Scalar",
+              "turns": "#/$defs/Page",
+              "unresolved_tools": "#/$defs/NamedCount",
+              "user_text": "#/$defs/Scalar",
+              "workflow_text": "#/$defs/WorkflowText"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ToolPredicate"
+            },
+            {
+              "$ref": "#/$defs/ListPredicate"
+            },
+            {
+              "$ref": "#/$defs/OverridePredicate"
+            },
+            {
+              "$ref": "#/$defs/PendingNamedTask"
+            },
+            {
+              "$ref": "#/$defs/ErrorPredicate"
+            },
+            {
+              "$ref": "#/$defs/WorkflowText"
+            },
+            {
+              "$ref": "#/$defs/ToolCount"
+            },
+            {
+              "$ref": "#/$defs/MessageCount"
+            },
+            {
+              "$ref": "#/$defs/NamedCount"
+            },
+            {
+              "$ref": "#/$defs/Scalar"
+            },
+            {
+              "$ref": "#/$defs/Page"
+            },
+            {
+              "$ref": "#/$defs/Prompts"
+            },
+            {
+              "$ref": "#/$defs/AssistantText"
+            },
+            {
+              "$ref": "#/$defs/SignalTexts"
+            },
+            {
+              "$ref": "#/$defs/Render"
+            }
+          ],
+          "title": "Query"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/View"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "query"
+      ],
+      "title": "QueryRequest",
+      "type": "object"
+    },
+    "Recent": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "recent_events",
+            "recent_messages"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "count"
+      ],
+      "title": "Recent",
+      "type": "object"
+    },
+    "Release": {
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "lease",
+              "reservation"
+            ]
+          }
+        }
+      },
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "lease",
+            "reservation",
+            "cursor"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "operation": {
+          "const": "release",
+          "title": "Operation",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Epoch"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "token": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "operation",
+        "kind",
+        "token"
+      ],
+      "then": {
+        "properties": {
+          "owner_epoch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_epoch"
+        ]
+      },
+      "title": "Release",
+      "type": "object"
+    },
+    "Render": {
+      "additionalProperties": false,
+      "properties": {
+        "budget": {
+          "$ref": "#/$defs/RenderBudget"
+        },
+        "kind": {
+          "const": "render",
+          "title": "Kind",
+          "type": "string"
+        },
+        "tool_results": {
+          "title": "Tool Results",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "budget",
+        "tool_results"
+      ],
+      "title": "Render",
+      "type": "object"
+    },
+    "RenderBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "tool_chars": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Tool Chars",
+          "type": "integer"
+        },
+        "turn_chars": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Turn Chars",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "turn_chars",
+        "tool_chars"
+      ],
+      "title": "RenderBudget",
+      "type": "object"
+    },
+    "Renew": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "renew",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "operation",
+        "handle"
+      ],
+      "title": "Renew",
+      "type": "object"
+    },
+    "Resolve": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "resolve",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "session_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Session Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "session_ids",
+        "roots",
+        "classifier"
+      ],
+      "title": "Resolve",
+      "type": "object"
+    },
+    "Resume": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Cursor",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "resume",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "operation",
+        "cursor"
+      ],
+      "title": "Resume",
+      "type": "object"
+    },
+    "Retain": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "retain",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "operation",
+        "handle"
+      ],
+      "title": "Retain",
+      "type": "object"
+    },
+    "Scalar": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "user_text",
+            "first_prompt",
+            "event_count",
+            "turn_count",
+            "failures"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "Scalar",
+      "type": "object"
+    },
+    "SessionHandle": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "handle"
+      ],
+      "title": "SessionHandle",
+      "type": "object"
+    },
+    "SignalTexts": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "signal_texts",
+          "title": "Kind",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "assistant",
+            "any"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "const": "current_turn",
+              "type": "string"
+            }
+          ],
+          "title": "Window"
+        }
+      },
+      "required": [
+        "kind",
+        "window",
+        "origin"
+      ],
+      "title": "SignalTexts",
+      "type": "object"
+    },
+    "Stats": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "stats",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "operation"
+      ],
+      "title": "Stats",
+      "type": "object"
+    },
+    "ToolBoundary": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "File"
+        },
+        "kind": {
+          "enum": [
+            "after_last_tool",
+            "before_last_tool"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "file"
+      ],
+      "title": "ToolBoundary",
+      "type": "object"
+    },
+    "ToolCount": {
+      "additionalProperties": false,
+      "properties": {
+        "errors": {
+          "enum": [
+            "exclude",
+            "include",
+            "only"
+          ],
+          "title": "Errors",
+          "type": "string"
+        },
+        "input_regex": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputRegex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "tool_count",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "input_regex",
+        "errors"
+      ],
+      "title": "ToolCount",
+      "type": "object"
+    },
+    "ToolPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_tool",
+            "has_read",
+            "has_command_regex"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "pattern",
+        "subagents"
+      ],
+      "title": "ToolPredicate",
+      "type": "object"
+    },
+    "View": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Attachments",
+          "type": "array"
+        },
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "selectors": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "after_last_tool": "#/$defs/ToolBoundary",
+                "before_last_tool": "#/$defs/ToolBoundary",
+                "current_turn": "#/$defs/CurrentTurn",
+                "event_range": "#/$defs/EventRange",
+                "prior": "#/$defs/Prior",
+                "recent_events": "#/$defs/Recent",
+                "recent_messages": "#/$defs/Recent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CurrentTurn"
+              },
+              {
+                "$ref": "#/$defs/Prior"
+              },
+              {
+                "$ref": "#/$defs/Recent"
+              },
+              {
+                "$ref": "#/$defs/ToolBoundary"
+              },
+              {
+                "$ref": "#/$defs/EventRange"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "title": "Selectors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "handle",
+        "classifier",
+        "selectors",
+        "attachments"
+      ],
+      "title": "View",
+      "type": "object"
+    },
+    "WorkflowText": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "workflow_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "contains",
+            "regex"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "mode",
+        "pattern"
+      ],
+      "title": "WorkflowText",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "discriminator": {
+    "mapping": {
+      "acquire": "#/$defs/Acquire",
+      "activity_probe": "#/$defs/ActivityProbe",
+      "capture": "#/$defs/Capture",
+      "describe": "#/$defs/Describe",
+      "discover": "#/$defs/Discover",
+      "hydrate": "#/$defs/Hydrate",
+      "mine": "#/$defs/Mine",
+      "query": "#/$defs/QueryRequest",
+      "release": "#/$defs/Release",
+      "renew": "#/$defs/Renew",
+      "resolve": "#/$defs/Resolve",
+      "resume": "#/$defs/Resume",
+      "retain": "#/$defs/Retain",
+      "stats": "#/$defs/Stats"
+    },
+    "propertyName": "operation"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Acquire"
+    },
+    {
+      "$ref": "#/$defs/Resolve"
+    },
+    {
+      "$ref": "#/$defs/Discover"
+    },
+    {
+      "$ref": "#/$defs/Resume"
+    },
+    {
+      "$ref": "#/$defs/Release"
+    },
+    {
+      "$ref": "#/$defs/Retain"
+    },
+    {
+      "$ref": "#/$defs/Renew"
+    },
+    {
+      "$ref": "#/$defs/Describe"
+    },
+    {
+      "$ref": "#/$defs/Mine"
+    },
+    {
+      "$ref": "#/$defs/Capture"
+    },
+    {
+      "$ref": "#/$defs/Hydrate"
+    },
+    {
+      "$ref": "#/$defs/QueryRequest"
+    },
+    {
+      "$ref": "#/$defs/ActivityProbe"
+    },
+    {
+      "$ref": "#/$defs/Stats"
+    }
+  ]
+}
