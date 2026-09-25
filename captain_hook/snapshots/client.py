@@ -15,6 +15,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from cc_transcript.activity import ToolUse
     from cc_transcript.ids import ToolUseId
@@ -24,6 +26,7 @@ CORE_SCHEMA = "cc-transcript.snapshot/1"
 HOST_SCHEMA = "captain.transcript/1"
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
+CLEANUP_SECONDS = 5
 DEFAULT_LIMITS = {
     "max_read_bytes": 512 * 1024 * 1024,
     "max_events": 1_000_000,
@@ -193,34 +196,43 @@ class SnapshotClient:
         ]
 
     def call(self, operation: str, *, domain: bool = False, **arguments: object) -> dict[str, Any]:
-        with self._guard:
-            self._counter += 1
-            request_id = f"{self._prefix}-{self._counter}"
-        request: dict[str, object] = {
-            "schema": HOST_SCHEMA if domain else CORE_SCHEMA,
-            "id": request_id,
-            "operation": operation,
-            **arguments,
-        }
-        if operation not in {"resume", "release", "retain", "renew", "describe", "stats", "submit_classifier"}:
-            request["deadline_unix_ms"] = int((time.time() + self._preparation_seconds) * 1000)
-            request["limits"] = DEFAULT_LIMITS.copy()
-        exchange = self._cleanup_exchange if operation == "release" else self._exchange
         from jsonschema import ValidationError
 
         from captain_hook.snapshots.validation import checked
 
-        try:
-            response = exchange({"schema": HOST_SCHEMA, "request": request, "tool_registry": self.tool_registry()})
-            response = checked("host-response", response)
-        except (OSError, ValueError, ValidationError) as exc:
-            raise SnapshotProtocolError(str(exc)) from exc
-        if response.get("schema") != HOST_SCHEMA or not isinstance(response.get("response"), dict):
-            raise SnapshotProtocolError("snapshot response has invalid transport envelope")
-        result = response["response"]
-        if result.get("schema") != CORE_SCHEMA or result.get("id") != request_id:
-            raise SnapshotProtocolError("snapshot response schema or id mismatch")
-        return result
+        cleanup_deadline = time.monotonic() + CLEANUP_SECONDS if operation == "release" else None
+        retry_delay = 0.01
+        while True:
+            with self._guard:
+                self._counter += 1
+                request_id = f"{self._prefix}-{self._counter}"
+            request: dict[str, object] = {
+                "schema": HOST_SCHEMA if domain else CORE_SCHEMA,
+                "id": request_id,
+                "operation": operation,
+                **arguments,
+            }
+            if operation not in {"resume", "release", "retain", "renew", "describe", "stats", "submit_classifier"}:
+                request["deadline_unix_ms"] = int((time.time() + self._preparation_seconds) * 1000)
+                request["limits"] = DEFAULT_LIMITS.copy()
+            exchange = self._cleanup_exchange if operation == "release" else self._exchange
+            try:
+                response = exchange({"schema": HOST_SCHEMA, "request": request, "tool_registry": self.tool_registry()})
+                response = checked("host-response", response)
+            except (OSError, ValueError, ValidationError) as exc:
+                raise SnapshotProtocolError(str(exc)) from exc
+            if response.get("schema") != HOST_SCHEMA or not isinstance(response.get("response"), dict):
+                raise SnapshotProtocolError("snapshot response has invalid transport envelope")
+            result = response["response"]
+            if result.get("schema") != CORE_SCHEMA or result.get("id") != request_id:
+                raise SnapshotProtocolError("snapshot response schema or id mismatch")
+            if cleanup_deadline is None or result.get("status") != "retained_limit":
+                return result
+            remaining = cleanup_deadline - time.monotonic()
+            if remaining <= 0:
+                return result
+            time.sleep(min(retry_delay, remaining))
+            retry_delay = min(retry_delay * 2, 0.1)
 
     def pages(self, operation: str, *, domain: bool = False, **arguments: object) -> Iterator[dict[str, Any]]:
         result = self.call(operation, domain=domain, **arguments)
@@ -350,6 +362,12 @@ class Lease:
             result = self.client.call(
                 "release", owner_epoch=self.handle["owner_epoch"], kind="lease", token=self.handle["lease_id"]
             )
+            if result.get("status") == "retained_limit":
+                logger.bind(status="retained_limit", reason=result.get("reason")).warning(
+                    "snapshot lease cleanup deferred"
+                )
+                self.client._leases.discard(self)
+                return
             if result.get("status") not in {"ok", "stale_handle"}:
                 raise EvidenceIncomplete(str(result.get("status")), str(result.get("reason")))
             self.released = True

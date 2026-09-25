@@ -1,11 +1,12 @@
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from captain_hook.snapshots.client import CORE_SCHEMA, HOST_SCHEMA, Lease, RemoteSession, SnapshotClient
-from captain_hook.snapshots.worker import empty_usage
+from captain_hook.snapshots.worker import empty_usage, failure
 
 
 def response(request, data, *, cursor=None):
@@ -67,6 +68,75 @@ def test_abandoned_page_releases_cursor_through_cleanup_exchange():
     assert cleanup[0]["operation"] == "release"
     assert cleanup[0]["kind"] == "cursor"
     assert "owner_epoch" not in cleanup[0]
+
+
+def test_exitstack_lease_cleanup_retries_retained_limit():
+    requests = []
+
+    def cleanup(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if len(requests) == 1:
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+        return response(request, {"kind": "released", "released": True})
+
+    client = SnapshotClient(lambda _: pytest.fail("foreground exchange used"), cleanup_exchange=cleanup)
+    client.bind_tool_registry({})
+    lease = Lease(client, description())
+    with ExitStack() as stack:
+        stack.callback(lease.release)
+
+    assert lease.released
+    assert len(requests) == 2
+    assert requests[0]["id"] != requests[1]["id"]
+    assert all(request["operation"] == "release" for request in requests)
+
+
+def test_exhausted_release_capacity_preserves_original_error(monkeypatch):
+    from captain_hook.snapshots import client as snapshot_client
+
+    monkeypatch.setattr(snapshot_client, "CLEANUP_SECONDS", 0)
+    requests = []
+
+    def cleanup(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if len(requests) == 1:
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+        return response(request, {"kind": "released", "released": True})
+
+    client = SnapshotClient(lambda _: pytest.fail("foreground exchange used"), cleanup_exchange=cleanup)
+    client.bind_tool_registry({})
+    lease = Lease(client, description())
+    with pytest.raises(ValueError, match="original failure"):
+        with ExitStack() as stack:
+            stack.callback(lease.release)
+            raise ValueError("original failure")
+    assert not lease.released
+    client.close()
+    assert len(requests) == 1
+    lease.release()
+    assert lease.released
+    assert len(requests) == 2
+
+
+def test_release_does_not_retry_other_failures():
+    from captain_hook.snapshots.client import EvidenceIncomplete
+
+    requests = []
+
+    def cleanup(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        return {"schema": HOST_SCHEMA, "response": failure(request["id"], "invalid_request", "bad token")}
+
+    client = SnapshotClient(lambda _: pytest.fail("foreground exchange used"), cleanup_exchange=cleanup)
+    client.bind_tool_registry({})
+    lease = Lease(client, description())
+    with pytest.raises(EvidenceIncomplete, match="bad token"):
+        lease.release()
+    assert len(requests) == 1
+    assert not lease.released
 
 
 def test_configured_classifier_runs_in_callers_context_for_each_preparation(monkeypatch):

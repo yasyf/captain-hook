@@ -176,7 +176,7 @@ class WorkerService:
                 write_message(self._output, message, max_frame=max_frame)
 
     def snapshot_exchange(self, parent_id: int, request: dict[str, Any], *, cleanup: bool = False) -> dict[str, Any]:
-        from captain_hook.snapshots.client import EvidenceIncomplete, SnapshotProtocolError
+        from captain_hook.snapshots.client import CLEANUP_SECONDS, EvidenceIncomplete, SnapshotProtocolError
         from captain_hook.util import reqenv
 
         nested: dict[str, Any] | None = request.get("request")
@@ -186,7 +186,7 @@ class WorkerService:
             reqenv.checkpoint()
         deadline = nested.get("deadline_unix_ms") if isinstance(nested, dict) else None
         expires = (
-            time.time() + 5
+            time.time() + CLEANUP_SECONDS
             if cleanup
             else min(time.time() + 120, deadline / 1000)
             if type(deadline) is int
