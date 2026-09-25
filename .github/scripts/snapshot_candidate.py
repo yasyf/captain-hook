@@ -20,7 +20,15 @@ REQUIRED = {
         "register_tool_registry",
         "discard_response",
     },
-    "TranscriptSnapshot": {"activity", "capture", "hydrate", "mine_json", "classifier_facts"},
+    "TranscriptSnapshot": {
+        "activity",
+        "capture",
+        "hydrate",
+        "mine_json",
+        "classifier_facts",
+        "source_facts",
+        "prose_rows",
+    },
 }
 
 

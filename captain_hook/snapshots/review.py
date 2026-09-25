@@ -228,26 +228,27 @@ def decode_candidate(raw: str) -> tuple[FeedbackCandidate, tuple[str, ...]]:
 async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_log: Any) -> dict[str, Any]:
     from cc_transcript.mining import mine_snapshot
 
-    from captain_hook.review.fix import iter_hook_complaint_signals, turn_marker
+    from captain_hook.review.fix import iter_hook_complaint_signals, prose_marker
     from captain_hook.review.routing import PackIndex
     from captain_hook.review.scan import (
         COLLAPSE_DETECTORS,
+        REVIEWER_MARKER,
         REVIEWER_MINING_SPEC,
         Detector,
-        is_reviewer_session,
+        resolve_repo_key,
         survives,
         to_candidate,
-        transcript_cwd,
-        transcript_repo,
     )
     from captain_hook.util import reqenv
 
     if request["policy"] != REVIEW_POLICY:
         raise ValueError("unknown review policy")
-    events = snapshot.events
-    cwd = transcript_cwd(events)
-    repo = request.get("repo_key") or transcript_repo(events)
-    disposition = "reviewer_session" if is_reviewer_session(events) else "no_repo" if repo is None else "eligible"
+    facts = snapshot.source_facts(first_user_contains=REVIEWER_MARKER)
+    cwd = Path(facts["cwds"][0]) if facts["cwds"] else None
+    repo = request.get("repo_key") or next(
+        (key for path in facts["cwds"] if (key := resolve_repo_key(path)) is not None), None
+    )
+    disposition = "reviewer_session" if facts["first_user_contains"] else "no_repo" if repo is None else "eligible"
     result: dict[str, Any] = {
         "kind": "review",
         "canonical_path": snapshot.description["canonical_path"],
@@ -261,6 +262,7 @@ async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_
         return result
     budget = ProjectionBudget(maximum=request["limits"]["max_output_bytes"], snapshot=snapshot)
     budget.add(result)
+    events = snapshot.events
     signals: list[MiningSignal] = []
     signal_chars = 0
 
@@ -268,14 +270,17 @@ async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_
         nonlocal signal_chars
         snapshot.checkpoint()
         floor = request["min_confidence_fix" if signal.kind == "hook_complaint" else "min_confidence"]
-        if not survives(events, signal) or signal.signal.confidence < floor:
+        if signal.signal.confidence < floor or not survives(events, signal):
             return
         signal_chars += len(signal.text)
         if signal_chars > budget.remaining or len(signals) >= request["limits"]["max_items"]:
             budget.exceeded()
         signals.append(signal)
 
-    if any(turn_marker(event) is not None for event in events):
+    if any(
+        prose_marker(row["role"], row["text"], is_sidechain=row["is_sidechain"], is_meta=row["is_meta"]) is not None
+        for row in snapshot.prose_rows()
+    ):
         with reqenv.use_request(
             reqenv.RequestOverrides(
                 env={"CLAUDE_CONFIG_DIR": request["claude_config_dir"]},

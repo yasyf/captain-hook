@@ -28,6 +28,40 @@ class FixtureSnapshot:
         }
         self.activities = {}
 
+    def source_facts(self, *, first_user_contains):
+        from cc_transcript.models import UserEvent
+
+        return {
+            "cwds": list(
+                dict.fromkeys(
+                    meta.cwd
+                    for event in self.events
+                    if (meta := event_meta(event)) is not None and meta.cwd is not None
+                )
+            ),
+            "first_user_contains": next(
+                (
+                    bool(first_user_contains) and first_user_contains in event.text
+                    for event in self.events
+                    if isinstance(event, UserEvent)
+                ),
+                False,
+            ),
+        }
+
+    def prose_rows(self):
+        from cc_transcript.models import AssistantEvent, UserEvent
+
+        for index, event in enumerate(self.events):
+            if isinstance(event, (UserEvent, AssistantEvent)) and event.text.strip():
+                yield {
+                    "event_index": index,
+                    "role": "user" if isinstance(event, UserEvent) else "assistant",
+                    "text": event.text,
+                    "is_sidechain": event.meta.is_sidechain,
+                    "is_meta": event.meta.is_meta,
+                }
+
     def activity(self, classifier, **kwargs):
         session_id = next(meta.session_id for event in self.events if (meta := event_meta(event)) is not None)
         if session_id not in self.activities:

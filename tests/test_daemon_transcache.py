@@ -16,7 +16,7 @@ from cc_transcript.query import Session
 
 from captain_hook.app import State, use_state
 from captain_hook.daemon import transcache
-from captain_hook.transcripts import lift_classified, load_transcript
+from captain_hook.transcripts import lift_classified, lift_session
 from captain_hook.util import reqenv
 from captain_hook.util.reqenv import RequestOverrides
 
@@ -51,6 +51,10 @@ def split_lines(raw: bytes) -> list[bytes]:
 def write(path: Path, chunk: bytes) -> Path:
     path.write_bytes(chunk)
     return path
+
+
+def cold_session(path: Path) -> Session:
+    return lift_session(parse_events_from_bytes(path.read_bytes()), path=path)
 
 
 class TestEventsFor:
@@ -186,7 +190,7 @@ class TestLoad:
     def test_load_matches_cold_session_events(self, tmp_path: Path) -> None:
         target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
         assert isinstance(transcache.load(target), Session)
-        assert len(list(transcache.load(target).events)) == len(list(load_transcript(target).events))
+        assert len(list(transcache.load(target).events)) == len(list(cold_session(target).events))
 
     def test_unchanged_transcript_shares_the_lifted_session(self, tmp_path: Path) -> None:
         target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
@@ -197,13 +201,13 @@ class TestLoad:
         with reqenv.use_request(request("/Users/someone/conductor/workspaces/repo/lane")):
             conductor = transcache.load(target)
             assert transcache.load(target) is conductor
-            assert conductor.turns == load_transcript(target).turns
+            assert conductor.turns == cold_session(target).turns
         with reqenv.use_request(request(str(tmp_path))):
             native = transcache.load(target)
-            assert native.turns == load_transcript(target).turns
+            assert native.turns == cold_session(target).turns
         with use_state(State(classifier=lambda event: False)):
             silent = transcache.load(target)
-            assert silent.turns == load_transcript(target).turns
+            assert silent.turns == cold_session(target).turns
         assert len({id(conductor), id(native), id(silent)}) == 3
         (entry,) = transcache._CACHE.values()
         assert len(entry.lifted) == 3
@@ -213,7 +217,7 @@ class TestLoad:
         with use_state(State(classifier=PromptClassifier())):
             session = transcache.load(target)
             assert transcache.load(target) is session
-            assert session.turns == load_transcript(target).turns
+            assert session.turns == cold_session(target).turns
 
     def test_growth_lifts_a_fresh_session(self, tmp_path: Path, lines: list[bytes]) -> None:
         target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
@@ -221,7 +225,7 @@ class TestLoad:
         write(target, b"".join(lines))
         after = transcache.load(target)
         assert after is not before
-        assert after.turns == load_transcript(target).turns
+        assert after.turns == cold_session(target).turns
         assert len(after) > len(before)
 
     def test_concurrent_loads_share_one_lift(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,7 +339,7 @@ class TestIncrementalLift:
         target = tmp_path / "t.jsonl"
         for raw in cuts(split_lines(TOOL_HEAVY.read_bytes()), step):
             write(target, raw)
-            assert transcache.load(target) == load_transcript(target)
+            assert transcache.load(target) == cold_session(target)
             assert transcache._lift(transcache._entry_for(target), no_prompts, target) == lift_classified(
                 parse_events_from_bytes(raw), no_prompts, path=target
             )
@@ -348,7 +352,7 @@ class TestIncrementalLift:
         cursor = cursor_of(target, native_user_classifier)
         for end in range(10, len(lines) + 1):
             write(target, b"".join(lines[:end]))
-            assert transcache.load(target) == load_transcript(target)
+            assert transcache.load(target) == cold_session(target)
             assert cursor_of(target, native_user_classifier) is cursor
         assert all(use.result is not None for use in transcache.load(target).tool_calls)
 
@@ -358,7 +362,7 @@ class TestIncrementalLift:
         target = write(tmp_path / "t.jsonl", head + lines[12][:-1])
         assert [use.result for use in transcache.load(target).tool_calls][-1] is not None
         write(target, head + lines[12][:-1] + b"x\n" + b"".join(lines[13:]))
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
 
     def test_growth_feeds_each_cursor_exactly_the_events_after_its_last_feed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -386,7 +390,7 @@ class TestIncrementalLift:
         overfed.extend(entry.events[-1:])
         write(target, b"".join(lines))
         assert id(native_user_classifier) not in transcache._entry_for(target).lifts
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
 
     def test_a_session_id_learned_by_growth_starts_a_fresh_cursor(self, tmp_path: Path) -> None:
         lines = split_lines(TOOL_HEAVY.read_bytes())
@@ -394,7 +398,7 @@ class TestIncrementalLift:
         transcache.load(target)
         stem_cursor = cursor_of(target, native_user_classifier)
         write(target, b"".join(lines))
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
         assert cursor_of(target, native_user_classifier) is not stem_cursor
 
     def test_full_reparse_starts_fresh_cursors(self, tmp_path: Path) -> None:
@@ -403,7 +407,7 @@ class TestIncrementalLift:
         transcache.load(target)
         cursor = cursor_of(target, native_user_classifier)
         write(target, b"".join(lines[:20]))
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
         assert cursor_of(target, native_user_classifier) is not cursor
 
     def test_each_classifier_extends_its_own_cursor(self, tmp_path: Path) -> None:
@@ -491,7 +495,7 @@ class TestTailRead:
 
         monkeypatch.setattr(Path, "open", rewrite_then_open)
         assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
         assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
 
     @pytest.mark.parametrize("longer", [False, True])
@@ -514,7 +518,7 @@ class TestTailRead:
 
         monkeypatch.setattr(Path, "open", rewrite_then_open)
         assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
 
     def test_a_full_reparse_torn_by_a_rewrite_is_not_cached(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -548,7 +552,7 @@ class TestTailRead:
         assert target not in transcache._CACHE
         monkeypatch.setattr(Path, "open", opened)
         assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
-        assert transcache.load(target) == load_transcript(target)
+        assert transcache.load(target) == cold_session(target)
 
 
 class TestCursorOwnership:

@@ -225,12 +225,20 @@ def classify_user_marker(text: str) -> Marker | None:
     return Marker("strong", "user_reported", defect.group(0))
 
 
+def prose_marker(role: Literal["user", "assistant"], text: str, *, is_sidechain: bool, is_meta: bool) -> Marker | None:
+    if is_sidechain or not text.strip():
+        return None
+    if role == "assistant":
+        return classify_marker(text)
+    return None if is_meta else classify_user_marker(text)
+
+
 def turn_marker(event: TranscriptEvent) -> Marker | None:
     match event:
-        case AssistantEvent(meta=meta, text=text) if not meta.is_sidechain and text.strip():
-            return classify_marker(text)
-        case UserEvent(meta=meta, text=text) if not (meta.is_sidechain or meta.is_meta) and text.strip():
-            return classify_user_marker(text)
+        case AssistantEvent(meta=meta, text=text):
+            return prose_marker("assistant", text, is_sidechain=meta.is_sidechain, is_meta=meta.is_meta)
+        case UserEvent(meta=meta, text=text):
+            return prose_marker("user", text, is_sidechain=meta.is_sidechain, is_meta=meta.is_meta)
         case _:
             return None
 
@@ -334,10 +342,7 @@ def binding_hook_names(text: str) -> set[str]:
 async def named_hook_target(
     text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
 ) -> Decision | None:
-    names = {
-        name_slug(match.group(1))
-        for match in NAMED_HOOK_RE.finditer(text)
-    }
+    names = {name_slug(match.group(1)) for match in NAMED_HOOK_RE.finditer(text)}
     if not names:
         return None
     return await decision_named(names, decisions, session_id, near_ts_ms)

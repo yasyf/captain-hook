@@ -28,6 +28,7 @@ jobs:
           uv venv .snapshot-gate
           uv pip install --python .snapshot-gate/bin/python .snapshot-candidate/*.whl
           .snapshot-gate/bin/python -c 'from cc_transcript import _native; required={"prepare_classifier", "submit_classifier", "register_tool_registry", "publish_projection", "resume_projection", "discard_response"}; missing=required-set(dir(_native.NativeSnapshotStore)); assert not missing, missing'
+          .snapshot-gate/bin/python -c 'from cc_transcript import _native; required={"source_facts", "prose_page"}; missing=required-set(dir(_native.NativeSnapshotScope)); assert not missing, missing'
       - uses: actions/upload-artifact@v7
         with:
           name: captain-tested-snapshot-candidate

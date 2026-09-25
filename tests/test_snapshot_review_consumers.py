@@ -235,8 +235,6 @@ async def test_prompt_is_frozen_after_first_preparation(monkeypatch):
 
 
 async def test_owner_mining_captures_same_borrowed_snapshot(monkeypatch, tmp_path):
-    from captain_hook.review import scan as scan_module
-
     entries = correction_entries(session="sess-1")
     raw = "".join(json.dumps(entry) + "\n" for entry in entries).encode()
     events = parse(entries)
@@ -248,18 +246,19 @@ async def test_owner_mining_captures_same_borrowed_snapshot(monkeypatch, tmp_pat
 
     snapshot = SimpleNamespace(
         events=events,
+        source_facts=lambda **kwargs: {"cwds": [], "first_user_contains": False},
+        prose_rows=lambda: iter(()),
         capture=capture,
         description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123"},
         checkpoint=lambda: None,
         consume=lambda **kwargs: None,
         mine_json=lambda spec, formats: _native.mine_events(events, spec, [entry[:3] for entry in formats]),
     )
-    monkeypatch.setattr(scan_module, "transcript_repo", lambda _: REPO)
-    monkeypatch.setattr(scan_module, "transcript_cwd", lambda _: None)
     result = await ReviewPolicy().prepare_review(
         snapshot,
         {
             "policy": REVIEW_POLICY,
+            "repo_key": REPO,
             "min_confidence": 0.5,
             "min_confidence_fix": 0.5,
             "decision_log_path": str(tmp_path / "decisions.db"),
@@ -272,6 +271,34 @@ async def test_owner_mining_captures_same_borrowed_snapshot(monkeypatch, tmp_pat
     candidates = [decode_candidate(raw)[0] for raw in result["candidates_json"]]
     assert any(candidate.text == CORRECTION for candidate in candidates)
     assert all(candidate.ref in captures[0] for candidate in candidates)
+
+
+async def test_below_confidence_signal_never_materializes_an_event(monkeypatch, tmp_path):
+    class NoEvents:
+        def __getitem__(self, index):
+            raise AssertionError("rejected evidence must not materialize events")
+
+    signal = SimpleNamespace(kind="correction", signal=SimpleNamespace(confidence=0.1))
+    monkeypatch.setattr("cc_transcript.mining.mine_snapshot", lambda *_: iter([signal]))
+    snapshot = SimpleNamespace(
+        events=NoEvents(),
+        source_facts=lambda **kwargs: {"cwds": [], "first_user_contains": False},
+        prose_rows=lambda: iter(()),
+        description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123"},
+        checkpoint=lambda: None,
+        consume=lambda **kwargs: None,
+    )
+    result = await ReviewPolicy().prepare_review(
+        snapshot,
+        {
+            "policy": REVIEW_POLICY,
+            "repo_key": REPO,
+            "min_confidence": 0.5,
+            "min_confidence_fix": 0.5,
+            "limits": {"max_output_bytes": 1048576, "max_items": 256},
+        },
+    )
+    assert result["candidates_json"] == []
 
 
 def test_source_preparation_releases_lease_on_incomplete(settings):

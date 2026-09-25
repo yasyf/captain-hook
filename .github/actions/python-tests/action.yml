@@ -58,7 +58,9 @@ runs:
       shell: bash
       env:
         CAPTAIN_TEST_SNAPSHOT_PYTHON: ${{ github.workspace }}/.venv/bin/python
-      run: go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
+      run: |
+        go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
+        uv run --no-sync pytest tests/test_snapshot_fixture_owner.py -q
 
     - name: Check generated snapshot schemas
       shell: bash
