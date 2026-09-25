@@ -10,32 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  snapshot-candidate:
-    runs-on: macos-15
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.2.0
-        with:
-          python-version: "3.13"
-      - name: Verify pinned native candidate before expensive jobs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/snapshot_candidate.py .snapshot-candidate
-          uv venv .snapshot-gate
-          uv pip install --python .snapshot-gate/bin/python .snapshot-candidate/*.whl
-          .snapshot-gate/bin/python -c 'from cc_transcript import _native; required={"prepare_classifier", "submit_classifier", "register_tool_registry", "publish_projection", "resume_projection", "discard_response"}; missing=required-set(dir(_native.NativeSnapshotStore)); assert not missing, missing'
-          .snapshot-gate/bin/python -c 'from cc_transcript import _native; required={"source_facts", "prose_page"}; missing=required-set(dir(_native.NativeSnapshotScope)); assert not missing, missing'
-      - uses: actions/upload-artifact@v7
-        with:
-          name: captain-tested-snapshot-candidate
-          path: .snapshot-candidate/*.whl
-          include-hidden-files: true
-          if-no-files-found: error
-
   structure-check:
     runs-on: ubuntu-latest
     steps:
@@ -55,7 +29,6 @@ jobs:
           fi
 
   go-test:
-    needs: snapshot-candidate
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -68,7 +41,6 @@ jobs:
         run: go test -race -count=1 ./...
 
   helper-test:
-    needs: snapshot-candidate
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -93,12 +65,12 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
   test:
-    needs: snapshot-candidate
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.13"]
+        os: [ubuntu-latest, macos-15]
     steps:
       - uses: actions/checkout@v7
 
@@ -106,15 +78,9 @@ jobs:
         with:
           go-version: 1.26.5
 
-      - uses: actions/download-artifact@v8
-        with:
-          name: captain-tested-snapshot-candidate
-          path: .snapshot-candidate
-
       - uses: ./.github/actions/python-tests
         with:
           python-version: ${{ matrix.python-version }}
-          snapshot-candidate: .snapshot-candidate
 
       - name: Build + smoke-test wheel in a fresh venv
         run: |
@@ -122,7 +88,6 @@ jobs:
           rm -rf .wheel-smoke
           uv venv --seed .wheel-smoke
           uv pip install --python .wheel-smoke/bin/python dist/*.whl
-          uv pip install --python .wheel-smoke/bin/python --no-deps --reinstall .snapshot-candidate/*.whl
           .wheel-smoke/bin/capt-hook --help
           test -x .wheel-smoke/bin/hook
           test -x .wheel-smoke/bin/hookd
@@ -191,7 +156,6 @@ jobs:
           test ! -e "$smoke_proj/.claude/skills"
 
   descriptor:
-    needs: snapshot-candidate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -6,11 +6,6 @@ inputs:
     description: Python version passed to setup-uv.
     required: true
 
-  snapshot-candidate:
-    description: Directory containing the exact tested native PR wheel.
-    required: false
-    default: ""
-
 runs:
   using: composite
   steps:
@@ -43,24 +38,18 @@ runs:
 
     - name: Sync development environment
       shell: bash
-      run: uv sync --extra dev
-
-    - name: Install exact snapshot candidate
-      if: inputs.snapshot-candidate != ''
-      shell: bash
-      env:
-        SNAPSHOT_CANDIDATE: ${{ inputs.snapshot-candidate }}
-      run: |
-        uv pip install --python .venv/bin/python --no-deps --reinstall "$SNAPSHOT_CANDIDATE"/*.whl
-        .venv/bin/python -c 'import importlib.metadata; from cc_transcript.snapshots import TranscriptStore; assert callable(TranscriptStore.prepare_classifier); assert callable(TranscriptStore.register_tool_registry); print("Testing native candidate", importlib.metadata.version("cc-transcript"))'
+      run: uv sync --locked --extra dev
 
     - name: Test shared evidence through the real Python owner pipe
+      if: runner.os == 'macOS'
       shell: bash
       env:
         CAPTAIN_TEST_SNAPSHOT_PYTHON: ${{ github.workspace }}/.venv/bin/python
-      run: |
-        go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
-        uv run --no-sync pytest tests/test_snapshot_fixture_owner.py -q
+      run: go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
+
+    - name: Test shared evidence fixtures
+      shell: bash
+      run: uv run --no-sync pytest tests/test_snapshot_fixture_owner.py -q
 
     - name: Check generated snapshot schemas
       shell: bash
