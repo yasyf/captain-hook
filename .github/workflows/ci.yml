@@ -200,9 +200,4 @@ jobs:
           go-version: 1.26.5
 
       - name: Parse-validate the binrun descriptor
-        # GOSUMDB/GOPROXY: the binrun module is public but not yet indexed by the
-        # checksum DB; fetch it directly instead of through sum.golang.org.
-        env:
-          GOSUMDB: "off"
-          GOPROXY: direct
         run: go run github.com/yasyf/binrun/cmd/binrun@v0.6.0 -- parse captain_hook/bin/hook.binrun
