@@ -287,11 +287,20 @@ def dispatch_event(
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
         else raw.get("transcript_path")
     )
+    attachment_paths: tuple[Path, ...] | None = None
+    attachment_lock = threading.Lock()
+
+    def attachments() -> tuple[Path, ...]:
+        nonlocal attachment_paths
+
+        with attachment_lock:
+            if attachment_paths is None:
+                attachment_paths = registered_paths(session_dir)
+            return attachment_paths
+
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=lazy_transcript(
-            resolved_path, loader=transcript_loader, attach=lambda: registered_paths(session_dir)
-        ),
+        transcript=lazy_transcript(resolved_path, loader=transcript_loader, attach=attachments),
         settings=_state.settings,
         project_root=root,
     )
@@ -300,9 +309,7 @@ def dispatch_event(
     envelope = None if within_margin else dispatch(event, evt, session_dir=session_dir)
 
     def background() -> None:
-        transcript = lazy_transcript(
-            resolved_path, loader=transcript_loader, attach=lambda: registered_paths(session_dir)
-        )
+        transcript = lazy_transcript(resolved_path, loader=transcript_loader, attach=attachments)
         fresh = event.event_class(_raw=raw, ctx=ctx.fork(transcript))
         after_reply(event, fresh, raw, session_dir)
 
