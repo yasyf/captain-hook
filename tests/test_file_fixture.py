@@ -51,11 +51,11 @@ def test_home_fixture_without_name_raises() -> None:
         FileFixture(home=True)
 
 
-def test_home_fixture_on_non_tool_event_is_inert() -> None:
+def test_home_fixture_on_non_tool_event_materializes_and_swaps_home() -> None:
     evt = input_to_event(
         Event.UserPromptSubmit, Input(prompt="hi", file=FileFixture(home=True, name="secret", content="x"))
     )
-    assert "_home_dir" not in evt.__dict__
+    assert (Path(evt.__dict__["_home_dir"]) / "secret").read_text() == "x"
 
 
 def test_home_fixture_materializes_under_its_own_directory() -> None:
