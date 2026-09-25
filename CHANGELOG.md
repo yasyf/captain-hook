@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.56.2] - 2026-09-24
+
 ### Fixed
 
 - **A slow plain-English rewrite no longer hides the reply.** Claude Code
