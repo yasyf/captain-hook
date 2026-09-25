@@ -16,6 +16,8 @@ from captain_hook.worker.protocol import (
     EventResponse,
     ProtocolError,
     adopt_message,
+    background_begin_message,
+    background_end_message,
     decode_event,
     decode_hello,
     decode_snapshot_reply,
@@ -67,6 +69,7 @@ class WorkerService:
         self._write_guard = threading.Lock()
         self._guard = threading.Condition()
         self._outstanding = 0
+        self._background_outstanding = 0
         self._failure: BaseException | None = None
         self._snapshot_guard = threading.Lock()
         self._snapshot_next_id = 0
@@ -84,7 +87,7 @@ class WorkerService:
             self._close_snapshots()
             self._drain()
             self._executor.shutdown()
-            self._background.shutdown(wait=False, cancel_futures=True)
+            self._background.shutdown(wait=True)
         if self._failure is not None:
             raise self._failure
 
@@ -120,9 +123,42 @@ class WorkerService:
             CURRENT_CLIENT.reset(token)
             BACKGROUND_SNAPSHOT_CLIENT.reset(background_token)
         elapsed_ms = (time.perf_counter() - start) * 1000
-        self._write(result_response(request.id, replace(response, elapsed_ms=elapsed_ms)))
-        if background is not None:
-            self._background.submit(background)
+        result = result_response(request.id, replace(response, elapsed_ms=elapsed_ms))
+        if background is None:
+            self._write(result)
+            return
+        self._write(background_begin_message(request.id))
+        with self._guard:
+            self._background_outstanding += 1
+        try:
+            self._write(result)
+            future = self._background.submit(background)
+        except BaseException:
+            self._end_background(request.id)
+            raise
+        future.add_done_callback(lambda completed: self._background_done(request.id, completed))
+
+    def _background_done(self, request_id: int, future: Future[None]) -> None:
+        try:
+            if (exc := future.exception()) is not None:
+                with self._guard:
+                    if self._failure is None:
+                        self._failure = exc
+        finally:
+            try:
+                self._end_background(request_id)
+            except BaseException as exc:
+                with self._guard:
+                    if self._failure is None:
+                        self._failure = exc
+
+    def _end_background(self, request_id: int) -> None:
+        try:
+            self._write(background_end_message(request_id))
+        finally:
+            with self._guard:
+                self._background_outstanding -= 1
+                self._guard.notify_all()
 
     def _done(self, future: Future[None]) -> None:
         with self._guard:
@@ -221,4 +257,4 @@ class WorkerService:
 
     def _drain(self) -> None:
         with self._guard:
-            self._guard.wait_for(lambda: self._outstanding == 0)
+            self._guard.wait_for(lambda: self._outstanding == 0 and self._background_outstanding == 0)

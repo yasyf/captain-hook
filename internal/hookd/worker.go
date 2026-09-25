@@ -45,14 +45,58 @@ type workerClient struct {
 	snapshotEvents    map[uint64]snapshotEvent
 	reverseSnapshots  map[uint64]reverseSnapshot
 
-	onSettle func()
-	onAdopt  func(wireproto.AdoptRequest)
+	background   map[uint64]struct{}
+	onBackground func(int)
+	onSettle     func()
+	onAdopt      func(wireproto.AdoptRequest)
 }
 
 func (w *workerClient) setOnSettle(fn func()) {
 	w.mu.Lock()
 	w.onSettle = fn
 	w.mu.Unlock()
+}
+
+func (w *workerClient) setOnBackground(fn func(int)) {
+	w.mu.Lock()
+	w.onBackground = fn
+	w.mu.Unlock()
+}
+
+func (w *workerClient) backgroundFrame(frame wireproto.Frame) error {
+	if frame.ID == 0 || frame.Build != "" || frame.Request != nil || frame.Response != nil || frame.Error != "" || frame.Adopt != nil {
+		return errors.New("captain: invalid background ticket frame")
+	}
+	w.mu.Lock()
+	_, exists := w.background[frame.ID]
+	_, pending := w.pending[frame.ID]
+	_, abandoned := w.abandoned[frame.ID]
+	if frame.Op == wireproto.OpBackgroundBegin {
+		if exists || !(pending || abandoned) {
+			w.mu.Unlock()
+			return errors.New("captain: background ticket requires an unfinished foreground request")
+		}
+		if w.background == nil {
+			w.background = make(map[uint64]struct{})
+		}
+		w.background[frame.ID] = struct{}{}
+	} else {
+		if !exists || pending || abandoned {
+			w.mu.Unlock()
+			return errors.New("captain: unknown background ticket")
+		}
+		delete(w.background, frame.ID)
+	}
+	changed := w.onBackground
+	w.mu.Unlock()
+	if changed != nil {
+		delta := -1
+		if frame.Op == wireproto.OpBackgroundBegin {
+			delta = 1
+		}
+		changed(delta)
+	}
+	return nil
 }
 
 func (w *workerClient) setOnAdopt(fn func(wireproto.AdoptRequest)) {
@@ -208,6 +252,13 @@ func (w *workerClient) readLoop() {
 		if len(frame.Snapshot)+len(frame.SnapshotContext)+len(frame.SnapshotConfig) != 0 || frame.ParentID != 0 {
 			w.fail(errors.New("captain: snapshot fields on event response"))
 			return
+		}
+		if frame.Op == wireproto.OpBackgroundBegin || frame.Op == wireproto.OpBackgroundEnd {
+			if err := w.backgroundFrame(frame); err != nil {
+				w.fail(err)
+				return
+			}
+			continue
 		}
 		if frame.Op == wireproto.OpAdopt {
 			if err := w.adopt(frame); err != nil {

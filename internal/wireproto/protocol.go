@@ -48,6 +48,8 @@ const (
 	OpResult          = "result"
 	OpError           = "error"
 	OpAdopt           = "adopt"
+	OpBackgroundBegin = "background_begin"
+	OpBackgroundEnd   = "background_end"
 	OpSnapshotRequest = "snapshot_request"
 	OpSnapshotResult  = "snapshot_result"
 	OpSnapshotCancel  = "snapshot_cancel"

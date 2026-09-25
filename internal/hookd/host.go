@@ -57,12 +57,14 @@ type restartWorkersRequest struct {
 }
 
 type workerStatus struct {
-	Key    string `json:"key"`
-	Shard  int    `json:"shard"`
-	Root   string `json:"root"`
-	Build  string `json:"build"`
-	Python string `json:"python"`
-	PID    int    `json:"pid"`
+	Key             string `json:"key"`
+	Shard           int    `json:"shard"`
+	Root            string `json:"root"`
+	Build           string `json:"build"`
+	Python          string `json:"python"`
+	PID             int    `json:"pid"`
+	PendingRequests int    `json:"pending_requests"`
+	Background      int    `json:"background"`
 }
 
 func decodeStrict(payload []byte, target any) error {
