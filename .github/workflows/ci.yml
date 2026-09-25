@@ -32,6 +32,8 @@ jobs:
         with:
           name: captain-tested-snapshot-candidate
           path: .snapshot-candidate/*.whl
+          include-hidden-files: true
+          if-no-files-found: error
 
   structure-check:
     runs-on: ubuntu-latest
