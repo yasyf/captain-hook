@@ -27,6 +27,8 @@ from captain_hook.worker.protocol import (
     SNAPSHOT_FRAME_FIELDS,
     MAX_HOST_PAYLOAD,
     OP_ADOPT,
+    OP_BACKGROUND_BEGIN,
+    OP_BACKGROUND_END,
     OP_ERROR,
     OP_EVENT,
     OP_HELLO,
@@ -63,7 +65,8 @@ def python_descriptor() -> dict[str, object]:
             "worker_frame": MAX_FRAME,
             "snapshot_frame": MAX_SNAPSHOT_FRAME,
         },
-        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR, "adopt": OP_ADOPT, "snapshot_request": OP_SNAPSHOT_REQUEST,
+        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR, "adopt": OP_ADOPT, "background_begin": OP_BACKGROUND_BEGIN, "background_end": OP_BACKGROUND_END,
+                "snapshot_request": OP_SNAPSHOT_REQUEST,
                 "snapshot_result": OP_SNAPSHOT_RESULT, "snapshot_cancel": OP_SNAPSHOT_CANCEL},
         "fields": {
             "worker_frame": sorted(

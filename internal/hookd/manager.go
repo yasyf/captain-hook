@@ -55,6 +55,7 @@ func workersPerRoot() int {
 }
 
 var errWorkerManagerClosed = errors.New("captain: worker manager is closed")
+var errWorkerAdmissionPaused = errors.New("captain: worker admission is paused for restart")
 
 var workerEnvExact = map[string]struct{}{
 	"XDG_CACHE_HOME": {}, "CAPTAIN_HOOK_STATE_DIR": {}, "CAPTAIN_HOOK_LOG_DIR": {},
@@ -76,8 +77,9 @@ type workerEntry struct {
 	inflight  int
 	ephemeral bool
 
-	load    int
-	service time.Duration
+	background int
+	load       int
+	service    time.Duration
 }
 
 func (e *workerEntry) started() bool {
@@ -90,7 +92,7 @@ func (e *workerEntry) started() bool {
 }
 
 func (e *workerEntry) idle() bool {
-	return e.started() && e.inflight == 0 && e.load == 0
+	return e.started() && e.inflight == 0 && e.load == 0 && e.background == 0
 }
 
 func (e *workerEntry) observe(concurrency int, elapsed time.Duration) {
@@ -166,12 +168,15 @@ type workerManager struct {
 	lifetime context.Context
 	end      context.CancelFunc
 
-	mu        sync.Mutex
-	closed    bool
-	entries   map[string]*workerEntry
-	poolSize  int
-	snapshots *snapshotService
-	wg        sync.WaitGroup
+	mu           sync.Mutex
+	closed       bool
+	restarting   bool
+	restartError error
+	changed      chan struct{}
+	entries      map[string]*workerEntry
+	poolSize     int
+	snapshots    *snapshotService
+	wg           sync.WaitGroup
 }
 
 func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
@@ -179,7 +184,7 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 	m := &workerManager{
 		owner: owner, logWriter: logWriter,
 		entries: make(map[string]*workerEntry), poolSize: workersPerRoot(),
-		now: time.Now, lifetime: lifetime, end: end,
+		now: time.Now, lifetime: lifetime, end: end, changed: make(chan struct{}),
 	}
 	m.start = m.startWorker
 	m.adoptProcess = func(ctx context.Context, pid int) (detachedProcess, error) {
@@ -259,6 +264,10 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 	if m.closed {
 		m.mu.Unlock()
 		return nil, admission{}, errWorkerManagerClosed
+	}
+	if m.restarting || m.restartError != nil {
+		m.mu.Unlock()
+		return nil, admission{}, errWorkerAdmissionPaused
 	}
 	var evicted *workerClient
 	view := m.poolLocked(key.id)
@@ -355,6 +364,7 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 		worker.setSnapshots(m.snapshots)
 		worker.setOnSettle(func() { m.settleLoad(entry) })
 		worker.setOnAdopt(m.adopt)
+		worker.setOnBackground(func(delta int) { m.backgroundChanged(entry, delta) })
 	}
 	m.mu.Lock()
 	stranded := err == nil && m.closed
@@ -375,15 +385,12 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 	m.release(entry)
 }
 
-// release drops the caller's hold on entry. The last hold to drop retires an
-// ephemeral entry — a scratch root never revisited — at once rather than at the
-// sweep, and settles an entry the cache has already let go of (restart, Close,
-// a dead child), so a worker still in use at that moment never leaks.
 func (m *workerManager) release(entry *workerEntry) {
 	m.mu.Lock()
 	entry.inflight--
+	m.notifyChangedLocked()
 	cached := m.entries[entry.key.member()] == entry
-	retire := entry.inflight == 0 && (entry.ephemeral || !cached)
+	retire := entry.idle() && (entry.ephemeral || !cached)
 	if retire && cached {
 		delete(m.entries, entry.key.member())
 	}
@@ -397,6 +404,20 @@ func (m *workerManager) release(entry *workerEntry) {
 func (m *workerManager) settleLoad(entry *workerEntry) {
 	m.mu.Lock()
 	entry.load--
+	m.notifyChangedLocked()
+	m.mu.Unlock()
+}
+
+func (m *workerManager) notifyChangedLocked() {
+	close(m.changed)
+	m.changed = make(chan struct{})
+}
+
+func (m *workerManager) backgroundChanged(entry *workerEntry, delta int) {
+	m.mu.Lock()
+	entry.background += delta
+	entry.lastUsed = m.now()
+	m.notifyChangedLocked()
 	m.mu.Unlock()
 }
 
@@ -429,6 +450,9 @@ func (m *workerManager) evictIdleLocked() *workerEntry {
 func (m *workerManager) sweep(now time.Time) []*workerClient {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.restarting || m.restartError != nil {
+		return nil
+	}
 	var retired []*workerClient
 	for id, entry := range m.entries {
 		if !entry.idle() {
@@ -658,6 +682,7 @@ func (m *workerManager) forget(worker *workerClient) {
 	for id, entry := range m.entries {
 		if entry.worker == worker {
 			delete(m.entries, id)
+			m.notifyChangedLocked()
 		}
 	}
 	m.mu.Unlock()
@@ -674,6 +699,7 @@ func (m *workerManager) status() []workerStatus {
 		result = append(result, workerStatus{
 			Key: entry.key.id, Shard: entry.key.shard, Root: entry.key.root, Build: Build,
 			Python: entry.worker.python, PID: entry.worker.child.PID(),
+			PendingRequests: entry.load, Background: entry.background,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -686,18 +712,77 @@ func (m *workerManager) status() []workerStatus {
 }
 
 func (m *workerManager) restart(ctx context.Context) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("captain: worker restart requires a deadline")
+	}
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errWorkerManagerClosed
+	}
+	if m.restarting {
+		m.mu.Unlock()
+		return errWorkerAdmissionPaused
+	}
+	m.restarting = true
+	m.notifyChangedLocked()
+	defer func() {
+		m.mu.Lock()
+		m.restarting = false
+		m.notifyChangedLocked()
+		m.mu.Unlock()
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		if m.closed {
+			m.mu.Unlock()
+			return errWorkerManagerClosed
+		}
+		busy := false
+		for _, entry := range m.entries {
+			busy = busy || !entry.idle()
+		}
+		if !busy {
+			break
+		}
+		changed := m.changed
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-changed:
+		}
+		m.mu.Lock()
+	}
 	workers := make([]*workerClient, 0, len(m.entries))
 	for _, entry := range m.entries {
 		if entry.worker != nil {
 			workers = append(workers, entry.worker)
 		}
 	}
-	m.entries = make(map[string]*workerEntry)
+	cohort := make(map[string]*workerEntry, len(m.entries))
+	for id, entry := range m.entries {
+		cohort[id] = entry
+	}
 	m.mu.Unlock()
 	stopCtx, cancel := context.WithTimeout(ctx, workerSettlementTimeout)
 	defer cancel()
-	return m.stopAll(stopCtx, workers)
+	stopErr := m.stopAll(stopCtx, workers)
+	settled := make(map[*workerClient]bool, len(workers))
+	for _, worker := range workers {
+		settled[worker] = worker.settled()
+	}
+	m.mu.Lock()
+	m.restartError = stopErr
+	for id, entry := range cohort {
+		if (entry.worker == nil || settled[entry.worker]) && m.entries[id] == entry {
+			delete(m.entries, id)
+		}
+	}
+	m.mu.Unlock()
+	return stopErr
 }
 
 func (m *workerManager) Close(ctx context.Context) (bool, error) {
@@ -705,6 +790,7 @@ func (m *workerManager) Close(ctx context.Context) (bool, error) {
 	if !m.closed {
 		m.closed = true
 		m.end()
+		m.notifyChangedLocked()
 	}
 	workers := make([]*workerClient, 0, len(m.entries))
 	for _, entry := range m.entries {

@@ -23,6 +23,8 @@ OP_EVENT = "event"
 OP_RESULT = "result"
 OP_ERROR = "error"
 OP_ADOPT = "adopt"
+OP_BACKGROUND_BEGIN = "background_begin"
+OP_BACKGROUND_END = "background_end"
 OP_SNAPSHOT_REQUEST = "snapshot_request"
 OP_SNAPSHOT_RESULT = "snapshot_result"
 OP_SNAPSHOT_CANCEL = "snapshot_cancel"
@@ -195,6 +197,14 @@ def result_response(request_id: int, response: EventResponse) -> dict[str, objec
 
 def error_response(request_id: int, error: str) -> dict[str, object]:
     return {"protocol": PROTOCOL, "op": OP_ERROR, "id": request_id, "error": error}
+
+
+def background_begin_message(request_id: int) -> dict[str, object]:
+    return {"protocol": PROTOCOL, "op": OP_BACKGROUND_BEGIN, "id": request_id}
+
+
+def background_end_message(request_id: int) -> dict[str, object]:
+    return {"protocol": PROTOCOL, "op": OP_BACKGROUND_END, "id": request_id}
 
 
 def adopt_message(pid: int, lifetime_ms: int) -> dict[str, object]:

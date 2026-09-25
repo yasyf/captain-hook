@@ -47,6 +47,8 @@ func describeProtocol() protocolDescriptor {
 			"snapshot_request": OpSnapshotRequest,
 			"snapshot_result":  OpSnapshotResult,
 			"snapshot_cancel":  OpSnapshotCancel,
+			"background_begin": OpBackgroundBegin,
+			"background_end":   OpBackgroundEnd,
 		},
 		Fields: map[string][]string{
 			"worker_frame":   wireFields(Frame{}),

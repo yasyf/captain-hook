@@ -113,6 +113,7 @@ def test_reverse_foreground_and_explicit_background_use_separate_admission(trans
     assert foreground["op"] == "snapshot_request"
     assert foreground["parent_id"] == 41
     write_message(outgoing, snapshot_reply(foreground))
+    assert read_message(incoming) == {"protocol": 1, "op": "background_begin", "id": 41}
     assert read_message(incoming)["op"] == "result"
     background = read_message(incoming)
     assert background["op"] == "snapshot_request"
@@ -120,6 +121,7 @@ def test_reverse_foreground_and_explicit_background_use_separate_admission(trans
     assert background["id"] > foreground["id"]
     write_message(outgoing, snapshot_reply(background))
     assert background_done.wait(timeout=3)
+    assert read_message(incoming) == {"protocol": 1, "op": "background_end", "id": 41}
     assert len(observed) == 2
     assert service._snapshot_pending == {}
 

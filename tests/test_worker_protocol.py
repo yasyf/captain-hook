@@ -201,8 +201,12 @@ def test_background_work_runs_after_the_reply_is_written() -> None:
     ).run()
 
     assert ran.is_set()
-    assert output_stream.events[-1] == "background"
-    assert "reply" in output_stream.events[:-1]
+    index = output_stream.events.index("background")
+    assert "reply" in output_stream.events[:index]
+    assert "reply" in output_stream.events[index + 1 :]
+    assert [message["op"] for message in responses(output_stream.getvalue())] == [
+        "background_begin", "result", "background_end",
+    ]
 
 
 def test_slow_background_work_does_not_hold_the_reply() -> None:
@@ -210,10 +214,9 @@ def test_slow_background_work_does_not_hold_the_reply() -> None:
     replied = threading.Event()
 
     class Output(io.BytesIO):
-        def write(self, data: Buffer, /) -> int:
-            written = super().write(data)
-            replied.set()
-            return written
+        def flush(self) -> None:
+            if any(message["op"] == "result" for message in responses(self.getvalue())):
+                replied.set()
 
     output_stream = Output()
 
@@ -227,7 +230,9 @@ def test_slow_background_work_does_not_hold_the_reply() -> None:
     runner = threading.Thread(target=service.run)
     runner.start()
     assert replied.wait(timeout=5)
-    assert responses(output_stream.getvalue())[0]["id"] == 1
+    assert [(message["op"], message["id"]) for message in responses(output_stream.getvalue())] == [
+        ("background_begin", 1), ("result", 1),
+    ]
     release.set()
     runner.join(timeout=5)
     assert not runner.is_alive()
