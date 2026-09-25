@@ -255,6 +255,57 @@ def test_saturated_owner_returns_bounded_failure_without_submitting():
             executor.shutdown()
 
 
+def test_saturated_release_keeps_hook_ingress_and_cancellation_live():
+    started = threading.Event()
+    proceed = threading.Event()
+    tokens = {}
+
+    class Token:
+        def __init__(self):
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    def call(body, ctx, token, registry):
+        tokens[body["id"]] = token
+        started.set()
+        proceed.wait(timeout=2)
+        return failure(body["id"], "cancelled" if token.cancelled else "missing", "fixture")
+
+    output = io.BytesIO()
+    owner = SimpleNamespace(
+        token_type=Token,
+        call=call,
+        close=lambda: None,
+        record_transport=lambda count: None,
+        discard=lambda response, ctx: None,
+    )
+    service = OwnerService(io.BytesIO(), output, owner)
+    slots = OWNER_ADMISSION["release"][1]
+    for _ in range(slots):
+        assert service.slots["release"].acquire(blocking=False)
+    try:
+        service.submit(request(1, "release", owner_epoch="owner", kind="lease", token="lease"))
+        service.submit(request(2))
+        assert started.wait(timeout=2)
+        service.submit({"protocol": 1, "op": "snapshot_cancel", "id": 2})
+        assert tokens["request-2"].cancelled
+        proceed.set()
+        wait_idle(service)
+        output.seek(0)
+        assert [read_frame(output)["snapshot"]["response"]["status"] for _ in range(2)] == [
+            "retained_limit",
+            "cancelled",
+        ]
+    finally:
+        proceed.set()
+        for _ in range(slots):
+            service.slots["release"].release()
+        for executor in service.executors.values():
+            executor.shutdown()
+
+
 def test_owner_queues_burst_without_starting_unbounded_work():
     started = 0
     guard = threading.Lock()
@@ -289,9 +340,9 @@ def test_owner_queues_burst_without_starting_unbounded_work():
         release.set()
         wait_idle(service)
         output.seek(0)
-        assert [read_frame(output)["snapshot"]["response"]["status"] for _ in range(workers + 1)] == [
-            "missing"
-        ] * (workers + 1)
+        assert [read_frame(output)["snapshot"]["response"]["status"] for _ in range(workers + 1)] == ["missing"] * (
+            workers + 1
+        )
     finally:
         release.set()
         for executor in service.executors.values():
