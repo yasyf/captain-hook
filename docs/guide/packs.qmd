@@ -29,8 +29,9 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   git-config key a repository sets to opt out of the gt lane — ccx declines the lane there, so a
   stale marker must not steer you toward gt): a jj ban that carves out read-only `jj`
   (`log`, `status`, `diff`, `bookmark list`, …, and only when *every* `jj` call on the line is a
-  read), steers from raw `git commit`/`git push`/branch writes to `gt create`/`gt modify`, a
-  pre-submit review reminder that quiets once a cc-review pass has run, and restack nudges.
+  read), steers from raw `git commit`/`git push`/branch writes to `ccx vcs ship`/`ccx vcs stack new`, a
+  pre-submit review reminder that quiets once a cc-review pass has run, and rebase/merge/pull nudges
+  toward `ccx vcs stack submit`.
 
 Two more activate by language, detected from the repo's build manifests:
 
