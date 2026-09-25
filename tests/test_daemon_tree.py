@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.daemon.tree import DirectoryTreeCache
+from captain_hook.daemon.tree import TREE_READ_ATTEMPTS, DirectoryTreeCache, TreeChanged
 
 
 @pytest.fixture
@@ -177,6 +177,7 @@ def test_stat_failure_propagates_and_discards_the_manifest(
 def test_mutation_during_listing_cannot_publish_absence(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cache = DirectoryTreeCache()
     original = os.scandir
+    changes = []
 
     class ChangedListing:
         def __enter__(self):
@@ -185,14 +186,39 @@ def test_mutation_during_listing_cannot_publish_absence(tree: Path, monkeypatch:
 
         def __exit__(self, *args):
             self.entries.__exit__(*args)
-            (tree / "arrived.py").write_text("new")
+            if not changes:
+                (tree / "arrived.py").write_text("new")
+                changes.append("arrived.py")
 
     with monkeypatch.context() as patch:
         patch.setattr(os, "scandir", lambda path: ChangedListing() if Path(path) == tree else original(path))
-        with pytest.raises(OSError) as caught:
+        assert "arrived.py" in names(cache, tree)
+    assert "arrived.py" in names(cache, tree)
+
+
+def test_repeated_structural_mutation_exhausts_bounded_retries(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = DirectoryTreeCache()
+    original = os.scandir
+    changes = []
+
+    class ChangedListing:
+        def __enter__(self):
+            self.entries = original(tree)
+            return self.entries.__enter__()
+
+        def __exit__(self, *args):
+            self.entries.__exit__(*args)
+            name = f"arrived-{len(changes)}.py"
+            (tree / name).write_text("new")
+            changes.append(name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "scandir", lambda path: ChangedListing() if Path(path) == tree else original(path))
+        with pytest.raises(TreeChanged) as caught:
             cache.entries(tree)
         assert caught.value.errno == errno.EAGAIN
-    assert "arrived.py" in names(cache, tree)
+    assert len(changes) == TREE_READ_ATTEMPTS
+    assert set(changes) <= set(names(cache, tree))
 
 
 def test_singleflight_keeps_other_roots_available(tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

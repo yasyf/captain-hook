@@ -8,6 +8,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+TREE_READ_ATTEMPTS = 3
+
 type HookEntry = tuple[str, int, int, int]
 type StatStamp = tuple[int, int, int, int, int, int]
 type DirectoryStamp = tuple[StatStamp, StatStamp | None]
@@ -25,8 +27,9 @@ def directory_stamp(path: Path, *, root: bool) -> DirectoryStamp:
     return stat_stamp(entry), stat_stamp(target) if target is not None else None
 
 
-def tree_changed(path: Path) -> OSError:
-    return OSError(errno.EAGAIN, "hook tree changed during fingerprint", str(path))
+class TreeChanged(OSError):
+    def __init__(self, path: Path) -> None:
+        super().__init__(errno.EAGAIN, "hook tree changed during fingerprint", str(path))
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +82,14 @@ class DirectoryTreeCache:
             self._available.notify_all()
 
     def entries(self, root: Path, *, fresh: bool = False) -> tuple[HookEntry, ...]:
+        for _ in range(TREE_READ_ATTEMPTS - 1):
+            try:
+                return self._entries(root, fresh=fresh)
+            except TreeChanged:
+                continue
+        return self._entries(root, fresh=fresh)
+
+    def _entries(self, root: Path, *, fresh: bool) -> tuple[HookEntry, ...]:
         path = root.absolute()
         held = self._acquire(path)
         try:
@@ -92,11 +103,11 @@ class DirectoryTreeCache:
                     self._walk(path, path, directory_stamp(path, root=True), previous, manifest, output)
                     for directory, listing in manifest.items():
                         if directory_stamp(directory, root=directory == path) != listing.stamp:
-                            raise tree_changed(directory)
+                            raise TreeChanged(directory)
                     result = tuple(sorted(output))
                     with self._available:
                         if held.epoch != epoch:
-                            raise tree_changed(path)
+                            raise OSError(errno.EAGAIN, "hook tree cache invalidated during fingerprint", str(path))
                         held.manifest = manifest
                         held.manifest_epoch = epoch
                     return result
@@ -122,7 +133,7 @@ class DirectoryTreeCache:
             with os.scandir(path) as entries:
                 names = tuple(sorted(entry.name for entry in entries if entry.name != "__pycache__"))
             if directory_stamp(path, root=path == base) != stamp:
-                raise tree_changed(path)
+                raise TreeChanged(path)
             listing = DirectoryListing(stamp, names)
         manifest[path] = listing
         for name in listing.names:
