@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.57.0] - 2026-09-25
+
 ### Added
 
 - **The graphite pack nudges landing checks toward ccx.** With ccx on PATH,
