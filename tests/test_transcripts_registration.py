@@ -439,3 +439,42 @@ def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path):
     finally:
         CURRENT_CLIENT.reset(token)
         fixture.close()
+
+
+def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, discovery_client, monkeypatch):
+    from cc_transcript.query import Session
+
+    from captain_hook.transcripts import release_transcript
+
+    register_transcript("s-both", thread_id="first")
+    register_transcript("s-both", thread_id="second")
+    discovery_client.results = {
+        "first": tmp_path / "first.jsonl",
+        "second": tmp_path / "second.jsonl",
+    }
+    seen = []
+
+    def observe(_event, evt, session_dir):
+        seen.append(evt.ctx.t.attachments)
+        release_transcript(evt.ctx.transcript)
+        return None
+
+    monkeypatch.setattr("captain_hook.cli.dispatch", observe)
+    monkeypatch.setattr(
+        "captain_hook.cli.after_reply", lambda event, evt, raw, session_dir: observe(event, evt, session_dir)
+    )
+    session_dir = ensure_session(SessionId("s-both"))
+    for _ in range(2):
+        _, background = dispatch_event(
+            tmp_path,
+            Event.Stop,
+            {"session_id": "s-both", "transcript_path": str(tmp_path / "main.jsonl")},
+            session_dir=session_dir,
+            transcript_loader=lambda _: Session(()),
+        )
+        background()
+
+    expected = (tmp_path / "first.jsonl", tmp_path / "second.jsonl")
+    assert seen == [expected] * 4
+    assert len(discovery_client.requests) == 2
+    assert discovery_client.released == ["second", "first"] * 2
