@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.56.0] - 2026-09-24
+
 ### Added
 
 - **`system_message=` shows a hook's text to the user.** `evt.allow`,
