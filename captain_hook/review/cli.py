@@ -274,6 +274,68 @@ def show(candidate_id: int) -> None:
             click.echo(correction_block(correction))
 
 
+@review.command()
+@click.argument("candidate_id", type=int)
+@click.option("--limit", type=click.IntRange(1, 40), default=10)
+def evidence(candidate_id: int, limit: int) -> None:
+    """Verify recorded quotes against bounded, pinned transcript evidence."""
+    import asyncio
+    import json
+    from dataclasses import asdict
+
+    from cc_transcript.context import ContextWindow
+
+    from captain_hook.review.judge import CONTEXT_BUDGET, TRIGGER_BUDGET
+    from captain_hook.snapshots.review import RenderedEvidence, render_review_windows, review_roots
+
+    async def body(store: ReviewStore) -> dict[str, object]:
+        await store.candidate(candidate_id)
+        rows = await store.db.sql(
+            "SELECT e.text, e.context_json, e.occurred_at FROM candidate_observations o "
+            "JOIN feedback_events e ON e.dedup_key = o.dedup_key "
+            "WHERE o.candidate_id = ? ORDER BY o.id LIMIT ?",
+            (candidate_id, limit + 1),
+        )
+        selected = rows[:limit]
+        windows = [ContextWindow.from_json(str(row["context_json"])) for row in selected]
+        rendered = await asyncio.to_thread(
+            render_review_windows,
+            windows,
+            roots=review_roots(list(await store.file_mtimes())),
+            render={
+                "before": asdict(CONTEXT_BUDGET),
+                "trigger": asdict(TRIGGER_BUDGET),
+                "after": asdict(CONTEXT_BUDGET),
+            },
+        )
+        return {
+            "candidate_id": candidate_id,
+            "complete": len(rows) <= limit and not any(isinstance(item, Exception) for item in rendered),
+            "evidence": [
+                {
+                    "session_id": window.anchor.session_id,
+                    "event_uuid": window.anchor.event_uuid,
+                    "occurred_at": row["occurred_at"],
+                    "quote": row["text"],
+                    "verified": isinstance(item, RenderedEvidence) and str(row["text"]) in item.text,
+                    "reference": item.reference if isinstance(item, RenderedEvidence) else None,
+                    "context": item.text if isinstance(item, RenderedEvidence) else None,
+                    "availability": "full"
+                    if isinstance(item, RenderedEvidence)
+                    else "incomplete"
+                    if isinstance(item, Exception)
+                    else "missing_ref",
+                }
+                for row, window, item in zip(selected, windows, rendered, strict=True)
+            ],
+        }
+
+    try:
+        click.echo(json.dumps(run_store(body), ensure_ascii=False))
+    except LookupError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @review.command(name="threshold-check")
 @click.argument("candidate_id", type=int, required=False)
 @click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")

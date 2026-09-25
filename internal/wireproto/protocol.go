@@ -43,11 +43,14 @@ const (
 // OpHello, OpEvent, OpResult, OpError, and OpAdopt name the frames the host
 // and a Python worker exchange.
 const (
-	OpHello  = "hello"
-	OpEvent  = "event"
-	OpResult = "result"
-	OpError  = "error"
-	OpAdopt  = "adopt"
+	OpHello           = "hello"
+	OpEvent           = "event"
+	OpResult          = "result"
+	OpError           = "error"
+	OpAdopt           = "adopt"
+	OpSnapshotRequest = "snapshot_request"
+	OpSnapshotResult  = "snapshot_result"
+	OpSnapshotCancel  = "snapshot_cancel"
 )
 
 // EventRequest is one exact hook dispatch admitted by the Go host.
@@ -87,14 +90,18 @@ type AdoptRequest struct {
 
 // Frame is one length-prefixed message on the worker pipe.
 type Frame struct {
-	Protocol int            `json:"protocol"`
-	Op       string         `json:"op"`
-	ID       uint64         `json:"id,omitempty"`
-	Build    string         `json:"build,omitempty"`
-	Request  *EventRequest  `json:"request,omitempty"`
-	Response *EventResponse `json:"response,omitempty"`
-	Error    string         `json:"error,omitempty"`
-	Adopt    *AdoptRequest  `json:"adopt,omitempty"`
+	Protocol        int             `json:"protocol"`
+	Op              string          `json:"op"`
+	ID              uint64          `json:"id,omitempty"`
+	Build           string          `json:"build,omitempty"`
+	Request         *EventRequest   `json:"request,omitempty"`
+	Response        *EventResponse  `json:"response,omitempty"`
+	Error           string          `json:"error,omitempty"`
+	Adopt           *AdoptRequest   `json:"adopt,omitempty"`
+	Snapshot        json.RawMessage `json:"snapshot,omitempty"`
+	SnapshotContext json.RawMessage `json:"snapshot_context,omitempty"`
+	SnapshotConfig  json.RawMessage `json:"snapshot_config,omitempty"`
+	ParentID        uint64          `json:"parent_id,omitempty"`
 }
 
 // Validate refuses a request the worker cannot dispatch exactly.
@@ -183,13 +190,17 @@ func MarshalEventRequest(request EventRequest) ([]byte, error) {
 }
 
 func EncodeFrame(writer io.Writer, frame Frame) error {
+	return EncodeFrameLimit(writer, frame, MaxWorkerFrame)
+}
+
+func EncodeFrameLimit(writer io.Writer, frame Frame, limit int) error {
 	payload, err := Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("captain: encode worker frame: %w", err)
 	}
-	if len(payload) > MaxWorkerFrame {
+	if len(payload) > limit {
 		return fmt.Errorf(
-			"%w: worker frame is %d bytes; limit is %d", ErrPayloadTooLarge, len(payload), MaxWorkerFrame,
+			"%w: worker frame is %d bytes; limit is %d", ErrPayloadTooLarge, len(payload), limit,
 		)
 	}
 	var header [4]byte
@@ -218,12 +229,16 @@ func writeAll(writer io.Writer, payload []byte) error {
 }
 
 func DecodeFrame(reader io.Reader) (Frame, error) {
+	return DecodeFrameLimit(reader, MaxWorkerFrame)
+}
+
+func DecodeFrameLimit(reader io.Reader, limit int) (Frame, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return Frame{}, fmt.Errorf("captain: read worker frame header: %w", err)
 	}
 	size := binary.BigEndian.Uint32(header[:])
-	if size == 0 || size > MaxWorkerFrame {
+	if size == 0 || uint64(size) > uint64(limit) {
 		return Frame{}, fmt.Errorf("captain: invalid worker frame size %d", size)
 	}
 	payload := make([]byte, size)

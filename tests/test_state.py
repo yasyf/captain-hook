@@ -211,93 +211,35 @@ class TestFireCounting:
         assert state.fire_count == 1
 
     def test_record_fire_increments_last_fired_at(self, tmp_path: Path) -> None:
-
-        transcript = MagicMock()
-        transcript.__len__ = lambda self: 10
         store = SessionStore(tmp_path)
-        ctx = MagicMock()
-        ctx.s = store
-        ctx.t = transcript
-
-        evt = MagicMock()
-        evt.ctx = ctx
-
+        evt = mock_edit_event(MagicMock(s=store, event_count=10, current_turn_event_count=5))
         record_fire(evt)
         ps = store[PrimitiveState].get()
         assert ps is not None
         assert ps.last_fired_at == 10
 
     def test_fired_this_turn_true_after_fire(self, tmp_path: Path) -> None:
-
-        transcript = MagicMock()
-        transcript.__len__ = lambda self: 15
         store = SessionStore(tmp_path)
-        turn = MagicMock()
-        turn.__len__ = lambda self: 5
-        ctx = MagicMock()
-        ctx.s = store
-        ctx.t = transcript
-        ctx.turn = turn
-
-        evt = MagicMock()
-        evt.ctx = ctx
-
+        evt = mock_edit_event(MagicMock(s=store, event_count=15, current_turn_event_count=5))
         record_fire(evt)
         assert fired_this_turn(evt) is True
 
     def test_fired_this_turn_false_fresh(self, tmp_path: Path) -> None:
-
         store = SessionStore(tmp_path)
-        turn = MagicMock()
-        turn.__len__ = lambda self: 5
-        ctx = MagicMock()
-        ctx.s = store
-        ctx.turn = turn
-
-        evt = MagicMock()
-        evt.ctx = ctx
-
+        evt = mock_edit_event(MagicMock(s=store, event_count=15, current_turn_event_count=5))
         assert fired_this_turn(evt) is False
 
     def test_fired_this_turn_false_prior_turn(self, tmp_path: Path) -> None:
-
-        transcript = MagicMock()
-        transcript.__len__ = lambda self: 5
         store = SessionStore(tmp_path)
-        turn_old = MagicMock()
-        turn_old.__len__ = lambda self: 5
-        ctx = MagicMock()
-        ctx.s = store
-        ctx.t = transcript
-        ctx.turn = turn_old
-
-        evt = MagicMock()
-        evt.ctx = ctx
-
+        ctx = MagicMock(s=store, event_count=5, current_turn_event_count=5)
+        evt = mock_edit_event(ctx)
         record_fire(evt)
-
-        transcript.__len__ = lambda self: 15
-        turn_new = MagicMock()
-        turn_new.__len__ = lambda self: 5
-        ctx.turn = turn_new
-
+        ctx.event_count = 15
         assert fired_this_turn(evt) is False
 
     def test_gate_double_fire_prevention(self, tmp_path: Path) -> None:
-
-        transcript = MagicMock()
-        transcript.__len__ = lambda self: 15
         store = SessionStore(tmp_path)
-        turn = MagicMock()
-        turn.__len__ = lambda self: 5
-        ctx = MagicMock()
-        ctx.s = store
-        ctx.t = transcript
-        ctx.turn = turn
-
-        evt = MagicMock()
-        evt.ctx = ctx
-
+        evt = mock_edit_event(MagicMock(s=store, event_count=15, current_turn_event_count=5))
         assert fired_this_turn(evt) is False
         record_fire(evt)
         assert fired_this_turn(evt) is True

@@ -13,15 +13,18 @@ from loguru import logger
 
 from captain_hook import app
 from captain_hook.cli import EVENT_NAMES, dispatch_event
-from captain_hook.daemon import decision_writer, transcache
+from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import envelope_text
 from captain_hook.session import ensure_session
+from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
 from captain_hook.state import RESOURCES
+from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest, EventResponse
+from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,7 +58,7 @@ class ProductRuntime:
         *,
         registry_factory: Callable[[CliState], RegistryLike] = Registry,
         dispatcher: Callable[..., tuple[Envelope | None, Background]] = dispatch_event,
-        transcript_loader: Callable[..., Any] = transcache.load,
+        transcript_loader: Callable[..., Any] = load_transcript,
         install_writer: bool = True,
         nlp_warmer: Callable[[], None] = RESOURCES.warm,
     ) -> None:
@@ -141,6 +144,10 @@ class ProductRuntime:
     ) -> Background:
         session_dir = ensure_session(_session(session_id)) if session_id else None
         snapshot = self._registry(request.root).get()
+        if (foreground := CURRENT_CLIENT.get()) is not None:
+            foreground.bind_tool_registry(snapshot.tools)
+        if (background_client := BACKGROUND_SNAPSHOT_CLIENT.get()) is not None:
+            background_client.bind_tool_registry(snapshot.tools)
         buffers.stdout.write(snapshot.discovery_stdout)
         buffers.stderr.write(snapshot.discovery_stderr)
         with app.use_state(snapshot.state):
@@ -187,11 +194,18 @@ class ProductRuntime:
 
 
 def _run_detached(background: Background) -> None:
-    with capture_output():
-        try:
-            background()
-        except Exception:
-            logger.exception("post-reply dispatch failed")
+    token = CURRENT_CLIENT.set(BACKGROUND_SNAPSHOT_CLIENT.get())
+    try:
+        with capture_output():
+            try:
+                background()
+            except EvidenceIncomplete as exc:
+                logger.bind(status=exc.status, reason=exc.reason).error("post-reply evidence incomplete")
+                raise
+            except Exception:
+                logger.exception("post-reply dispatch failed")
+    finally:
+        CURRENT_CLIENT.reset(token)
 
 
 def _warm_nlp(warmer: Callable[[], None]) -> None:

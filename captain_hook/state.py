@@ -307,11 +307,11 @@ def hook_name(prefix: str, label: str | None, message: str) -> str:
 
 def record_fire(evt: BaseHookEvent) -> None:
     with evt.ctx.s[PrimitiveState].mutate() as ps:
-        ps.last_fired_at = len(evt.ctx.t)
+        ps.last_fired_at = evt.ctx.event_count
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
-    return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > len(evt.ctx.t) - len(evt.ctx.turn)
+    return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > evt.ctx.event_count - evt.ctx.current_turn_event_count
 
 
 from captain_hook.session import SessionStore  # noqa: E402
@@ -333,7 +333,7 @@ class EchoTracker:
         ps = evt.ctx.s[PrimitiveState].get()
         if ps is None:
             return texts
-        check_echo = ps.echo_lemmas and len(evt.ctx.t) < ps.echo_window_end
+        check_echo = ps.echo_lemmas and evt.ctx.event_count < ps.echo_window_end
         return [
             remainder
             for text in texts
@@ -343,7 +343,7 @@ class EchoTracker:
     def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
         with evt.ctx.s[PrimitiveState].mutate() as ps:
             ps.echo_lemmas = PrimitiveState.content_lemmas(" ".join(triggering)) | PrimitiveState.content_lemmas(text)
-            ps.echo_window_end = len(evt.ctx.t) + self.window
+            ps.echo_window_end = evt.ctx.event_count + self.window
             ps.seed_echo_verbatim(text)
 
 

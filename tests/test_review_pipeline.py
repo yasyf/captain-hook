@@ -739,7 +739,7 @@ class TestJudgePass:
             judged=2, failed=0, pending=0, merged=2, retired=0, reopened=0
         )
         assert len(calls) == 2
-        assert loads == [SessionId("s1")]
+        assert loads == []
         assert await verdict_fidelities(store) == ["full", "full"]
 
     @requires_llm_backend
@@ -943,7 +943,7 @@ class TestJudgePass:
         events = parse(entries)
         window = capture_window(raw, EventRef(SessionId("sess-1"), events[-1].meta.uuid))
         row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": CORRECTION}
-        prompt, fidelity = await build_prompt(row, hydrated=None)
+        prompt, fidelity = await build_prompt(row, rendered=None)
         assert fidelity == "summary"
         assert "[source: transcript_message]" in prompt
         assert "add the parser" in prompt
@@ -1111,7 +1111,7 @@ class TestFidelity:
         assert (first.judged, first.pending) == (0, 2)
         second = await judge_pass(store, settings=settings, refresh_summary=True, limit=1)
         assert (second.judged, second.pending) == (1, 1)
-        assert loads == [SessionId("s1"), SessionId("s2")]
+        assert loads == []
         assert len(calls) == 3
 
     async def test_refresh_summary_rejudges_once_the_window_hydrates_again(
@@ -1160,7 +1160,9 @@ class TestBrain:
 
     def test_brain_prompt_carries_skill_and_reviewer_marker(self) -> None:
         prompt = brain_prompt(Path("/tmp/t.jsonl"))
-        assert prompt.startswith("/captain-hook:scanning-sessions --transcript /tmp/t.jsonl")
+        assert prompt.startswith("/captain-hook:scanning-sessions\n")
+        assert "review evidence <id>" in prompt
+        assert "/tmp/t.jsonl" not in prompt
         assert REVIEWER_MARKER in prompt
 
     def test_spawn_brain_runs_in_repo_with_marker_env_and_prompt_on_stdin(
@@ -2030,3 +2032,11 @@ async def test_failed_global_judge_phase_releases_its_lock(
         await review_session(transcript, cwd=str(git_repo), settings=settings, sweep=True)
     with judge_lock(settings) as claimed:
         assert claimed
+
+
+@pytest.fixture(autouse=True)
+def snapshot_review_owner(monkeypatch: pytest.MonkeyPatch):
+    from tests.snapshot_review_helpers import owner_fixture
+
+    with owner_fixture(monkeypatch) as owner:
+        yield owner

@@ -29,13 +29,11 @@ so two sessions' complaints about one hook collapse to one candidate.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
-from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cc_transcript.activity import SessionActivity
 from cc_transcript.builders import (
     build_spec,
     drop_compacted,
@@ -47,8 +45,6 @@ from cc_transcript.builders import (
     drop_sidechain,
     keep_only,
 )
-from cc_transcript.context import capture_windows
-from cc_transcript.discovery import find_in
 from cc_transcript.filterspec import (
     RESUME_PHRASE_SET,
     TRIVIAL_ACK_SET,
@@ -65,24 +61,20 @@ from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.signals import mine
 from cc_transcript.mining.spec import ALL_DETECTORS, MiningSpec
 from cc_transcript.models import UserEvent
-from cc_transcript.parser import stat_mtime, stream
 from cc_transcript.synthetic import synthetic_user_event
 
-from captain_hook.decisions import decisions_db_path, open_decision_log
-from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
+from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.formats import review_spec
 from captain_hook.review.repo import RepoKey, resolve_repo_key
-from captain_hook.review.routing import PackIndex
 from captain_hook.review.store import CandidateKind
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
     from typing import Any
 
     from cc_transcript.context import ContextWindow
-    from cc_transcript.decisions import DecisionLog
     from cc_transcript.mining.signals import MiningSignal
-    from cc_transcript.models import Transcript, TranscriptEvent
+    from cc_transcript.models import TranscriptEvent
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
@@ -339,18 +331,22 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
 
 
 def candidates_from(
-    raw: bytes, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
+    events: Sequence[TranscriptEvent],
+    signals: Iterable[MiningSignal],
+    *,
+    capture: Callable[[Sequence[EventRef]], Sequence[ContextWindow]],
+    min_confidence: float,
+    min_confidence_fix: float,
 ) -> Iterator[tuple[MiningSignal, FeedbackCandidate]]:
     kept = [
         sig
         for sig in signals
         if survives(events, sig)
-        and sig.signal.confidence
-        >= (settings.min_confidence_fix if sig.kind == HOOK_COMPLAINT else settings.min_confidence)
+        and sig.signal.confidence >= (min_confidence_fix if sig.kind == HOOK_COMPLAINT else min_confidence)
     ]
     if not kept:
         return
-    windows = capture_windows(raw, [EventRef(sig.session_id, sig.event_uuid) for sig in kept])
+    windows = capture([EventRef(sig.session_id, sig.event_uuid) for sig in kept])
     for sig, window in zip(kept, windows, strict=True):
         yield sig, to_candidate(window, sig)
 
@@ -379,32 +375,6 @@ def transcript_cwd(events: Sequence[TranscriptEvent]) -> Path | None:
     )
 
 
-async def record_corrections(
-    events: Sequence[TranscriptEvent], kept: Sequence[tuple[MiningSignal, FeedbackCandidate]], *, repo: Path | None
-) -> None:
-    """Grounds each user-correction candidate in the shared code-correction ledger.
-
-    For every kept user-correction signal (the FIX-mode ``hook_complaint`` is a
-    local hook misfire, not a code correction, so it is skipped), harvests the
-    edit the feedback faults around its anchor and appends one row to the family
-    ledger. Idempotent per anchor: a no-op when cc-pushback already wrote it, so
-    captain-hook only fills the ledger for sessions nobody else processed.
-    """
-    from cc_transcript.corrections import CorrectionLog
-    from cc_transcript.extract import extract_correction, usable_backend
-
-    corrections = [(sig, candidate) for sig, candidate in kept if sig.kind != HOOK_COMPLAINT]
-    if not corrections:
-        return
-    activity = SessionActivity.from_events(corrections[0][0].session_id, events)
-    backend = usable_backend()
-    async with await CorrectionLog.open() as log:
-        for sig, candidate in corrections:
-            await extract_correction(
-                log, activity, candidate.ref, source="captain-hook", feedback=sig.text, repo=repo, backend=backend
-            )
-
-
 def collapse_cross_detector(
     kept: Sequence[tuple[MiningSignal, FeedbackCandidate]],
 ) -> list[tuple[MiningSignal, FeedbackCandidate]]:
@@ -422,121 +392,149 @@ def collapse_cross_detector(
 
 async def ingest(
     store: ReviewStore,
-    parsed: Transcript,
+    prepared: Mapping[str, Any],
     *,
-    settings: ReviewSettings,
-    repo_key: RepoKey | None,
-    decisions: DecisionLog,
+    corrections: Sequence[Mapping[str, Any]],
+    repo_key: RepoKey | None = None,
 ) -> ScanReport:
-    repo_key = repo_key or transcript_repo(parsed.events)
-    if repo_key is None or is_reviewer_session(parsed.events):
-        await store.record_file_scan(str(parsed.path), parsed.mtime, [])
-        return ScanReport(scanned=1, inserted=0)
-    complaints = [
-        sig
-        async for sig in iter_hook_complaint_signals(
-            parsed.events, decisions=decisions, index=PackIndex.load(transcript_cwd(parsed.events))
-        )
-    ]
-    signals = list(chain(complaints, detect(parsed.events)))
-    kept = (
-        collapse_cross_detector(
-            list(candidates_from(parsed.path.read_bytes(), parsed.events, signals, settings=settings))
-        )
-        if signals
-        else []
-    )
-    inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
-    for sig, candidate in kept:
-        async with store.db.transaction():
+    from cc_transcript.mining.store import event_row, now
+
+    from captain_hook.snapshots.review import decode_candidate, record_correction_drafts
+
+    repo_key = repo_key or prepared["repo_key"]
+    kept = [decode_candidate(raw) for raw in prepared["candidates_json"]]
+    async with store.db.transaction():
+        ingested_at = now()
+        inserted = len(await store.db.insert_candidates([event_row(candidate, ingested_at) for candidate, _ in kept]))
+        await store.db.record_file(prepared["canonical_path"], int(prepared["mtime_ns"]) / 1_000_000_000)
+        for candidate, rule in kept:
+            if repo_key is None:
+                raise ValueError("prepared candidates require a repository identity")
+            evidence = candidate.payload or {}
             candidate_id = (
                 await store.ensure_candidate(
-                    RepoKey(target_repo) if (target_repo := sig.evidence["target_repo"]) else repo_key,
+                    RepoKey(target_repo) if (target_repo := evidence["target_repo"]) else repo_key,
                     kind=CandidateKind.FIX,
-                    rule=dedup_key(*rule_parts(sig)),
-                    source_kind=sig.kind,
-                    target_source_file=str(sig.evidence["target_source_file"]),
-                    target_hook_name=str(sig.evidence["target_hook_name"]),
-                    misfire_class=str(sig.evidence["misfire_class"]),
+                    rule=dedup_key(*rule),
+                    source_kind=candidate.source_kind,
+                    target_source_file=str(evidence["target_source_file"]),
+                    target_hook_name=str(evidence["target_hook_name"]),
+                    misfire_class=str(evidence["misfire_class"]),
                     origin_repo_key=repo_key if target_repo else None,
-                    pack_name=sig.evidence["pack_name"],
+                    pack_name=evidence["pack_name"],
                 )
-                if sig.kind == HOOK_COMPLAINT
+                if candidate.source_kind == HOOK_COMPLAINT
                 else await store.ensure_candidate(
-                    repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
+                    repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule), source_kind=candidate.source_kind
                 )
             )
             await store.record_observation(
-                candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
+                candidate_id,
+                dedup_key=candidate.dedup_key,
+                session_id=candidate.ref.session_id,
+                occurred_at=candidate.occurred_at,
             )
-    await record_corrections(parsed.events, kept, repo=transcript_cwd(parsed.events))
+    await record_correction_drafts(corrections)
     return ScanReport(scanned=1, inserted=inserted)
+
+
+def prepare_source(
+    client: Any, path: Path, settings: ReviewSettings, repo_key: RepoKey | None = None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from captain_hook.decisions import decisions_db_path
+    from captain_hook.snapshots.review import REVIEW_POLICY, ProjectionBudget, decode_candidate
+    from captain_hook.util.paths import resolve_claude_config_dir
+
+    session = client.acquire(path)
+    budget = ProjectionBudget()
+    try:
+        prepared: dict[str, Any] | None = None
+        candidates: list[str] = []
+        for page in client.pages(
+            "prepare_review",
+            domain=True,
+            view=session.view(),
+            policy=REVIEW_POLICY,
+            min_confidence=settings.min_confidence,
+            min_confidence_fix=settings.min_confidence_fix,
+            repo_key=repo_key,
+            decision_log_path=str(decision_path.absolute())
+            if (decision_path := decisions_db_path()) is not None
+            else None,
+            claude_config_dir=str(resolve_claude_config_dir().absolute()),
+        ):
+            if prepared is None:
+                prepared = dict(page)
+            budget.add(page)
+            candidates.extend(page["candidates_json"])
+        if prepared is None:
+            raise ValueError("review preparation completed without metadata")
+        prepared["candidates_json"] = candidates
+        eligible = [
+            candidate for raw in candidates if (candidate := decode_candidate(raw)[0]).source_kind != HOOK_COMPLAINT
+        ]
+        corrections: list[dict[str, Any]] = []
+        for offset in range(0, len(eligible), 256):
+            batch = eligible[offset : offset + 256]
+            for page in client.pages(
+                "prepare_corrections",
+                domain=True,
+                view=session.view(),
+                policy=REVIEW_POLICY,
+                anchors=[asdict(candidate.ref) for candidate in batch],
+                feedback=[candidate.text for candidate in batch],
+                repo=prepared["cwd"],
+            ):
+                budget.add(page)
+                corrections.extend(page["corrections"])
+        return prepared, corrections
+    finally:
+        session.release()
 
 
 async def scan_transcript(
     store: ReviewStore, path: Path, *, settings: ReviewSettings, repo_key: RepoKey | None = None
 ) -> ScanReport:
-    """Scans one transcript for user corrections and hook-misfire complaints, incrementally.
-
-    The transcript is parsed only when new or modified since the last recorded
-    scan; a transcript that fails to parse — for example one Claude Code is
-    still appending to — is left unrecorded, so the next scan retries it. The
-    reviewer's own headless sessions (first user message carrying
-    :data:`REVIEWER_MARKER`) and transcripts whose ``cwd`` is not a git repo are
-    recorded with no candidates.
-
-    Args:
-        store: The store to read mtimes from and write events and candidates to.
-        path: The transcript file to scan — for example the exact path the
-            SessionEnd hook received on stdin.
-        settings: The reviewer settings supplying the ``min_confidence`` floor.
-        repo_key: The repo the session belongs to; resolved from the
-            transcript's ``cwd`` metadata when omitted.
-
-    Returns:
-        The :class:`ScanReport` for this pass.
-    """
-    known = await store.file_mtimes()
-    mtime = stat_mtime(path)
-    if mtime is None or ((prev := known.get(str(path))) is not None and prev >= mtime):
-        return ScanReport(scanned=0, inserted=0)
-    async with await open_decision_log(decisions_db_path()) as decisions:
-        for parsed in stream([path]):
-            return await ingest(store, parsed, settings=settings, repo_key=repo_key, decisions=decisions)
-    return ScanReport(scanned=0, inserted=0)
+    return await scan(store, settings=settings, transcripts=[path], repo_key=repo_key)
 
 
-async def scan(store: ReviewStore, *, settings: ReviewSettings, transcripts: Sequence[Path]) -> ScanReport:
-    """Scans explicit transcript files and directories for corrections and misfire complaints, incrementally.
+async def scan(
+    store: ReviewStore, *, settings: ReviewSettings, transcripts: Sequence[Path], repo_key: RepoKey | None = None
+) -> ScanReport:
+    import asyncio
 
-    ``cc_transcript`` hardcodes its projects directory, so every entry point
-    here takes explicit paths instead: directories are searched recursively for
-    ``*.jsonl`` transcripts, files are scanned directly, and each transcript is
-    parsed only when new or modified since the last recorded scan. The repo each
-    transcript belongs to is resolved from its ``cwd`` metadata.
+    from captain_hook.snapshots.review import review_client
 
-    Args:
-        store: The store to read mtimes from and write events and candidates to.
-        settings: The reviewer settings supplying the ``min_confidence`` floor.
-        transcripts: Transcript files and/or directories to scan.
+    roots = sorted({str(path.absolute()) for path in transcripts})
+    if not roots:
+        return ScanReport(0, 0)
+    checkpoint_key = f"snapshot_discovery:{dedup_key(*roots)}"
+    checkpoint = await store.meta(checkpoint_key)
+    scanned = inserted = 0
+    next_checkpoint = None
+    from captain_hook.snapshots.client import EvidenceIncomplete
 
-    Returns:
-        The combined :class:`ScanReport` for this pass.
-    """
-    known = await store.file_mtimes()
-    paths: list[Path] = []
-    for entry in transcripts:
-        if entry.is_dir():
-            paths.extend(path for path, _ in find_in(entry, known_mtimes=known))
-        elif (mtime := stat_mtime(entry)) is not None and ((prev := known.get(str(entry))) is None or prev < mtime):
-            paths.append(entry)
-    if not paths:
-        return ScanReport(scanned=0, inserted=0)
-    scanned = 0
-    inserted = 0
-    async with await open_decision_log(decisions_db_path()) as decisions:
-        for parsed in stream(paths):
-            report = await ingest(store, parsed, settings=settings, repo_key=None, decisions=decisions)
-            scanned += report.scanned
-            inserted += report.inserted
-    return ScanReport(scanned=scanned, inserted=inserted)
+    with review_client() as client:
+        try:
+            pages = await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint)))
+        except EvidenceIncomplete as exc:
+            if exc.status != "stale_cursor":
+                raise
+            pages = await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=None)))
+        for page in pages:
+            next_checkpoint = page["checkpoint"]
+            for entry in page["entries"]:
+                if entry["state"] != "present":
+                    continue
+                path = entry["path"]
+                revision_key = f"snapshot_revision:{dedup_key(path)}"
+                if await store.meta(revision_key) == entry["revision"]:
+                    continue
+                prepared, corrections = await asyncio.to_thread(prepare_source, client, Path(path), settings, repo_key)
+                report = await ingest(store, prepared, corrections=corrections, repo_key=repo_key)
+                await store.set_meta(revision_key, entry["revision"])
+                scanned += report.scanned
+                inserted += report.inserted
+    if next_checkpoint is not None:
+        await store.set_meta(checkpoint_key, next_checkpoint)
+    return ScanReport(scanned, inserted)

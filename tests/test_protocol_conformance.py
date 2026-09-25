@@ -20,6 +20,11 @@ from captain_hook.worker.protocol import (
     MAX_EVENT_ENVELOPE,
     MAX_EVENT_INPUT,
     MAX_FRAME,
+    MAX_SNAPSHOT_FRAME,
+    OP_SNAPSHOT_REQUEST,
+    OP_SNAPSHOT_RESULT,
+    OP_SNAPSHOT_CANCEL,
+    SNAPSHOT_FRAME_FIELDS,
     MAX_HOST_PAYLOAD,
     OP_ADOPT,
     OP_ERROR,
@@ -56,11 +61,14 @@ def python_descriptor() -> dict[str, object]:
             "event_envelope": MAX_EVENT_ENVELOPE,
             "host_payload": MAX_HOST_PAYLOAD,
             "worker_frame": MAX_FRAME,
+            "snapshot_frame": MAX_SNAPSHOT_FRAME,
         },
-        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR, "adopt": OP_ADOPT},
+        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR, "adopt": OP_ADOPT, "snapshot_request": OP_SNAPSHOT_REQUEST,
+                "snapshot_result": OP_SNAPSHOT_RESULT, "snapshot_cancel": OP_SNAPSHOT_CANCEL},
         "fields": {
             "worker_frame": sorted(
                 HELLO_KEYS
+                | SNAPSHOT_FRAME_FIELDS
                 | EVENT_FRAME_KEYS
                 | set(result_response(1, EventResponse()))
                 | set(error_response(1, "boom"))

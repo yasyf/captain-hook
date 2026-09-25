@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 from cc_transcript.models import AssistantEvent, UserEvent
 from pydantic import BaseModel
 
+from captain_hook.snapshots.client import RemoteSession
 from captain_hook.types import Action, Event, HookResult, InlineTests, TCondition, Waiting
 
 if TYPE_CHECKING:
@@ -24,7 +25,10 @@ def session_text(t: Session) -> str:
 
 
 def text_matches(pattern: str) -> Callable[[Session], bool]:
-    return lambda t: bool(re.search(pattern, session_text(t)))
+    return lambda t: (
+        t.query({"kind": "workflow_text", "mode": "regex", "pattern": pattern})
+        if isinstance(t, RemoteSession) else bool(re.search(pattern, session_text(t)))
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -64,7 +68,12 @@ class Workflow:
         return self.on_start(evt) if self.on_start else None
 
     def guard(self, evt: BaseHookEvent) -> HookResult | None:
-        if self.marker not in session_text(evt.ctx.t):
+        transcript = evt.ctx.t
+        complete = (
+            transcript.query({"kind": "workflow_text", "mode": "contains", "pattern": self.marker})
+            if isinstance(transcript, RemoteSession) else self.marker in session_text(transcript)
+        )
+        if not complete:
             resume = next(
                 (s for s in self.steps if not s.check(evt.ctx.t)),
                 self.steps[-1],

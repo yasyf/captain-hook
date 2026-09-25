@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "RestrictedAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "effective_uid": {
+          "pattern": "^[0-9]+$",
+          "title": "Effective Uid",
+          "type": "string"
+        },
+        "kind": {
+          "const": "restricted_roots",
+          "title": "Kind",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Roots",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "effective_uid",
+        "roots"
+      ],
+      "title": "RestrictedAuthority",
+      "type": "object"
+    },
+    "UserAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "effective_uid": {
+          "pattern": "^[0-9]+$",
+          "title": "Effective Uid",
+          "type": "string"
+        },
+        "kind": {
+          "const": "user",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "effective_uid"
+      ],
+      "title": "UserAuthority",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "admission": {
+      "enum": [
+        "hook",
+        "review"
+      ],
+      "title": "Admission",
+      "type": "string"
+    },
+    "authority": {
+      "discriminator": {
+        "mapping": {
+          "restricted_roots": "#/$defs/RestrictedAuthority",
+          "user": "#/$defs/UserAuthority"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UserAuthority"
+        },
+        {
+          "$ref": "#/$defs/RestrictedAuthority"
+        }
+      ],
+      "title": "Authority"
+    },
+    "claimant": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Claimant",
+      "type": "string"
+    },
+    "registry_generation": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Registry Generation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "claimant",
+    "admission",
+    "authority",
+    "registry_generation"
+  ],
+  "title": "CallContext",
+  "type": "object"
+}

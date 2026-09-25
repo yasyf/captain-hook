@@ -7,14 +7,17 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from copy import copy
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from captain_hook.app import get_matching_hooks
+from captain_hook.app import get_hook_candidates
+from captain_hook.conditions import matches_conditions
 from captain_hook.session import SessionStore
+from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -125,7 +128,7 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
 
     try:
         return entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
-    except TranscriptLoadError:
+    except (TranscriptLoadError, EvidenceIncomplete):
         raise
     except Exception as exc:
         if _SURFACE_HANDLER_ERRORS.get():
@@ -146,6 +149,19 @@ def record_fire(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult) -
 
 
 def execute_hook(
+    entry: RegisteredHook,
+    evt: BaseHookEvent,
+    session_dir: Path | None = None,
+) -> HookResult | None:
+    from captain_hook.transcripts import release_transcript
+
+    try:
+        return _execute_hook(entry, evt, session_dir)
+    finally:
+        release_transcript(evt.ctx.transcript)
+
+
+def _execute_hook(
     entry: RegisteredHook,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
@@ -258,7 +274,7 @@ def run_group(
     group: Sequence[int],
     entries: Sequence[RegisteredHook],
     futures: Sequence[Future[HookResult | None]],
-    evt: BaseHookEvent,
+    events: Sequence[BaseHookEvent],
     session_dir: Path | None,
     margin: float,
     blocked: FirstBlock,
@@ -276,7 +292,7 @@ def run_group(
                 if not future.set_running_or_notify_cancel():
                     continue
                 try:
-                    future.set_result(run_scheduled(index, entries[index], evt, session_dir, margin, blocked))
+                    future.set_result(run_scheduled(index, entries[index], events[index], session_dir, margin, blocked))
                 except BaseException as exc:
                     future.set_exception(exc)
                     for later in group[position + 1 :]:
@@ -289,7 +305,7 @@ def run_group(
 def start_hooks(
     entries: Sequence[RegisteredHook],
     groups: Sequence[Sequence[int]],
-    evt: BaseHookEvent,
+    events: Sequence[BaseHookEvent],
     session_dir: Path | None,
     margin: float,
     fanout: Fanout,
@@ -299,7 +315,11 @@ def start_hooks(
     A group the budget has not admitted by the time the caller's deadline is inside *margin* never
     starts: its hooks are cancelled, which :func:`combine` reads as hooks that were never called.
     """
+    from captain_hook.transcripts import release_transcript
+
     futures: list[Future[HookResult | None]] = [Future() for _ in entries]
+    for future, evt in zip(futures, events, strict=True):
+        future.add_done_callback(lambda _, transcript=evt.ctx.transcript: release_transcript(transcript))
     blocked = FirstBlock()
     for group in groups:
         if not fanout.admit(collect_budget(margin)):
@@ -309,10 +329,22 @@ def start_hooks(
             for index in group:
                 futures[index].cancel()
             continue
-        fanout.pool.submit(
-            copy_context().run, run_group, group, entries, futures, evt, session_dir, margin, blocked, fanout
+        submitted = fanout.pool.submit(
+            copy_context().run, run_group, group, entries, futures, events, session_dir, margin, blocked, fanout
+        )
+        submitted.add_done_callback(
+            lambda future, group=tuple(group): cancel_unstarted_group(future, group, futures, fanout)
         )
     return futures
+
+
+def cancel_unstarted_group(
+    submitted: Future[None], group: Sequence[int], futures: Sequence[Future[HookResult | None]], fanout: Fanout,
+) -> None:
+    if submitted.cancelled():
+        for index in group:
+            futures[index].cancel()
+        fanout.settle()
 
 
 def collect_budget(margin: float) -> float | None:
@@ -494,6 +526,42 @@ def combine(
     return (envelope or {}) | {"systemMessage": "\n\n".join(notices)}
 
 
+def prepare_hook_events(
+    evt: BaseHookEvent, *, async_: bool,
+) -> tuple[list[RegisteredHook], list[BaseHookEvent]]:
+    from captain_hook.transcripts import fork_transcript, release_transcript
+
+    entries = get_hook_candidates(evt, async_=async_)
+    forks = []
+    try:
+        for entry in entries:
+            transcript = fork_transcript(evt.ctx.transcript)
+            fork = copy(evt)
+            fork.ctx = evt.ctx.fork(transcript)
+            fork.__dict__.pop("cmd", None)
+            forks.append(fork)
+    except BaseException:
+        for fork in forks:
+            release_transcript(fork.ctx.transcript)
+        raise
+    finally:
+        release_transcript(evt.ctx.transcript)
+    matching = []
+    events = []
+    try:
+        for entry, fork in zip(entries, forks, strict=True):
+            if matches_conditions(entry.spec, fork):
+                matching.append(entry)
+                events.append(fork)
+            else:
+                release_transcript(fork.ctx.transcript)
+    except BaseException:
+        for fork in forks:
+            release_transcript(fork.ctx.transcript)
+        raise
+    return matching, events
+
+
 def dispatch(
     event: Event,
     evt: BaseHookEvent,
@@ -513,12 +581,13 @@ def dispatch(
     running — abandoned, or doomed by an earlier block — unwinds at its next
     :func:`captain_hook.util.reqenv.checkpoint`, and whatever never started is cancelled.
     """
-    if not (matching := get_matching_hooks(evt, async_=False)):
+    matching, events = prepare_hook_events(evt, async_=False)
+    if not matching:
         return None
     groups = hook_groups(matching)
     fanout = Fanout(len(groups))
     try:
-        futures = start_hooks(matching, groups, evt, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, fanout)
+        futures = start_hooks(matching, groups, events, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, fanout)
         return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
     finally:
         fanout.close()
@@ -537,10 +606,10 @@ def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:
     :func:`background_pool`, not the one the synchronous fan-out shares: async hooks are the long
     ones, and a session's worth of them would otherwise hold every thread a blocking gate needs.
     """
-    entries = get_matching_hooks(evt, async_=True)
+    entries, events = prepare_hook_events(evt, async_=True)
     pool = background_pool()
     futures = [
-        pool.submit(copy_context().run, run_background_group, group, entries, evt, session_dir)
+        pool.submit(copy_context().run, run_background_group, group, entries, events, session_dir)
         for group in hook_groups(entries)
     ]
     for future in futures:
@@ -550,9 +619,15 @@ def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:
 def run_background_group(
     group: Sequence[int],
     entries: Sequence[RegisteredHook],
-    evt: BaseHookEvent,
+    events: Sequence[BaseHookEvent],
     session_dir: Path | None,
 ) -> None:
-    for index in group:
-        with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
-            execute_hook(entries[index], evt, session_dir)
+    from captain_hook.transcripts import release_transcript
+
+    try:
+        for index in group:
+            with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
+                execute_hook(entries[index], events[index], session_dir)
+    finally:
+        for index in group:
+            release_transcript(events[index].ctx.transcript)

@@ -12,7 +12,6 @@ enough confidence count toward the thresholds.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections import Counter
 from dataclasses import dataclass
@@ -424,7 +423,6 @@ class ReviewStore:
         prompt_version: int,
         limit: int | None = None,
         refresh_summary: bool = False,
-        probe_hydration: bool = True,
     ) -> list[dict[str, object]]:
         """Returns events lacking a verdict for ``(role, prompt_version)``, unjudged first."""
         return await self.db.unjudged(
@@ -432,7 +430,7 @@ class ReviewStore:
             prompt_version=prompt_version,
             limit=limit,
             refresh_summary=refresh_summary,
-            probe_hydration=probe_hydration,
+            probe_hydration=False,
         )
 
     async def judged(self, *, role: str, prompt_version: int) -> list[dict[str, object]]:
@@ -1396,11 +1394,7 @@ ORDER BY repo
         )
         return [str(row["repo"]) for row in rows]
 
-    async def judge_queue(
-        self, *, refresh_summary: bool = False, probe_hydration: bool = True, limit: int | None = None
-    ) -> list[dict[str, object]]:
-        from cc_transcript.judge.verdicts import hydratable
-
+    async def judge_queue(self, *, refresh_summary: bool = False, limit: int | None = None) -> list[dict[str, object]]:
         if limit is not None and limit < 0:
             raise ValueError("judge queue limit must be nonnegative")
         if limit == 0:
@@ -1436,13 +1430,7 @@ ORDER BY repo
             rows_by_id = {row["id"]: row for row in rows}
             for ref in page:
                 row = rows_by_id[ref["id"]] | {"refreshing_summary": ref["verdict_id"] is not None}
-                if (
-                    not refresh_summary
-                    or not probe_hydration
-                    or ref["verdict_id"] is None
-                    or await asyncio.to_thread(hydratable, str(row["context_json"]))
-                ):
-                    kept.append(row)
+                kept.append(row)
         if limit is not None and (summaries := [ref for ref in refs if ref["verdict_id"] is not None]):
             await self.set_meta(cursor_key, str(summaries[-1]["id"]))
         return kept

@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "SpanEditDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "delete": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Delete"
+        },
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content",
+        "delete"
+      ],
+      "title": "SpanEditDefinition",
+      "type": "object"
+    },
+    "ToolDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "behaves_like": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Behaves Like",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "span_edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpanEditDefinition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "behaves_like",
+        "span_edit"
+      ],
+      "title": "ToolDefinition",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "items": {
+    "$ref": "#/$defs/ToolDefinition"
+  },
+  "maxItems": 256,
+  "type": "array"
+}

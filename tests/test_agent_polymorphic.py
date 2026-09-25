@@ -8,7 +8,7 @@ import pytest
 
 from captain_hook.conditions import check_condition
 from captain_hook.events import BaseHookEvent, PreToolUseEvent, SubagentStopEvent
-from captain_hook.transcripts import load_transcript
+from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.types import Agent, Or, Tool
 from tests.helpers import (
     build_ctx,
@@ -74,16 +74,20 @@ class TestTurnSubagentAccessor:
         sub_jsonl = subagents_dir / "agent-tu_test_runner_1.jsonl"
         sub_jsonl.write_text("\n".join(json.dumps(m) for m in sub_msgs) + "\n")
 
-        ctx = build_ctx(transcript=load_transcript(session_file))
-        evt = make_event(PreToolUseEvent, raw={"tool_name": "Bash", "tool_input": {"command": "echo"}}, ctx=ctx)
+        owner = FixtureOwner()
+        try:
+            ctx = build_ctx(transcript=owner.load(session_file))
+            evt = make_event(PreToolUseEvent, raw={"tool_name": "Bash", "tool_input": {"command": "echo"}}, ctx=ctx)
 
-        subagents = evt.ctx.turn.subagents.with_type("test-runner")
-        assert len(subagents) == 1
-        subagent = subagents[0]
-        assert subagent.id == "tu_test_runner_1"
-        assert subagent.type == "test-runner"
-        assert subagent.tool_calls.failed().count() == 3
-        assert subagent.failed is True
+            subagents = evt.ctx.turn.subagents.with_type("test-runner")
+            assert len(subagents) == 1
+            subagent = subagents[0]
+            assert subagent.id == "tu_test_runner_1"
+            assert subagent.type == "test-runner"
+            assert subagent.tool_calls.failed().count() == 3
+            assert subagent.failed is True
+        finally:
+            owner.close()
 
 
 class TestOrCombinator:

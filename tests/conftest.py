@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -12,13 +13,11 @@ from loguru import logger
 
 from captain_hook import decisions, heartbeat
 from captain_hook.app import reset
-from captain_hook.conditions import ACTIVITY_PROBES
 from captain_hook.context import UNSUPPORTED_MODELS
 from captain_hook.daemon.registry import MARKER_WALKS, PLUGIN_WALKS
 from captain_hook.durable import DurableStore
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
-from captain_hook.transcripts import ROLLOUT_INDEXES
 from captain_hook.util.http import github_token
 from captain_hook.util.model_cache import model_sha256, model_version
 from captain_hook.util.proc import _cold_skip_permissions
@@ -28,6 +27,22 @@ if TYPE_CHECKING:
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
+
+
+@pytest.fixture(autouse=True)
+def deny_installed_processes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CAPT_HOOK_TEST_NO_LIVE", "1")
+    start = subprocess.Popen
+    installed = Path.home() / "Applications" / "Captain Hook.app"
+
+    def checked_start(args: Any, *positional: Any, **keywords: Any) -> Any:
+        command = args[0] if isinstance(args, list | tuple) else args
+        if isinstance(command, str | bytes | Path) and Path(os.fsdecode(command)).is_absolute():
+            if Path(os.fsdecode(command)).is_relative_to(installed):
+                raise AssertionError("tests must not start an installed Captain Hook helper")
+        return start(args, *positional, **keywords)
+
+    monkeypatch.setattr(subprocess, "Popen", checked_start)
 
 
 @pytest.fixture(autouse=True)
@@ -65,8 +80,6 @@ def clear_global_caches():
         _cold_skip_permissions,
         MARKER_WALKS,
         PLUGIN_WALKS,
-        ACTIVITY_PROBES,
-        ROLLOUT_INDEXES,
     )
     for cached in caches:
         cached.cache_clear()

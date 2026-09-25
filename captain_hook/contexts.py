@@ -339,7 +339,21 @@ class UserMessages:
     required: bool = True
 
     def content(self, evt: BaseHookEvent) -> str | None:
-        if not (prompts := [turn.prompt for turn in evt.ctx.transcript.turns if turn.prompt]):
+        from captain_hook.snapshots.client import RemoteSession
+
+        transcript = evt.ctx.transcript
+        if isinstance(transcript, RemoteSession):
+            first = transcript.prompts(selection="first", count=1)
+            if not first:
+                return None
+            tail = transcript.prompts(selection="last", count=self.last + 1)
+            recent = tail[1:]
+            return "\n\n".join(
+                [f"[first]\n{clip(first[0], self.per_message)}"]
+                + [f"[recent -{len(recent) - i}]\n{clip(prompt, self.per_message)}"
+                   for i, prompt in enumerate(recent)]
+            )
+        if not (prompts := [turn.prompt for turn in transcript.turns if turn.prompt]):
             return None
         recent = range(max(len(prompts) - self.last, 0), len(prompts))
         return "\n\n".join(

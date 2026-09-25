@@ -383,9 +383,11 @@ def brain_prompt(transcript: Path) -> str:
     from captain_hook.review.scan import REVIEWER_MARKER
 
     return (
-        f"/captain-hook:scanning-sessions --transcript {transcript}\n\n"
+        "/captain-hook:scanning-sessions\n\n"
         f"[{REVIEWER_MARKER}] Review this repo's eligible candidates and open at most one pull request per"
-        " candidate. Work in one continuous run: do not stop to summarize after drafting — you are done only"
+        " candidate. Verify quotes with `capt-hook review evidence <id>` and cite its snapshot reference; "
+        "use only verified evidence. Work in one continuous run: do not stop to summarize after drafting"
+        " — you are done only"
         " when every eligible candidate has a PR recorded via `review update <id> pr_open --pr-url <url>` or"
         " is explicitly skipped with a reason."
     )

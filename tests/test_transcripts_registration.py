@@ -250,163 +250,127 @@ class TestMcpServerLiveness:
         assert session.proc.poll() is None
 
 
+@pytest.fixture
+def discovery_client(monkeypatch):
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from tests.snapshot_discovery_helpers import DiscoveryClient
+
+    client = DiscoveryClient()
+    token = CURRENT_CLIENT.set(client)
+    monkeypatch.setattr("cc_transcript.codex.discover", lambda *args: pytest.fail("local discovery"))
+    try:
+        yield client
+    finally:
+        CURRENT_CLIENT.reset(token)
+
+
 class TestRegisteredPaths:
-    def test_resolves_thread_id_against_codex_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from cc_transcript import codex
-
-        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ab"
-        rollout = write_apply_patch_rollout(
-            tmp_path / "codex" / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
+    def test_preserves_registration_order_and_owner_canonical_paths(self, tmp_path, discovery_client):
+        register_transcript("s-order", thread_id="b")
+        register_transcript("s-order", path=str(tmp_path / "alias.jsonl"))
+        register_transcript("s-order", thread_id="missing")
+        register_transcript("s-order", thread_id="a")
+        discovery_client.results = {"a": tmp_path / "a.jsonl", "b": tmp_path / "b.jsonl"}
+        discovery_client.paths[str(tmp_path / "alias.jsonl")] = tmp_path / "canonical.jsonl"
+        assert registered_paths(ensure_session(SessionId("s-order"))) == (
+            tmp_path / "b.jsonl",
+            tmp_path / "canonical.jsonl",
+            tmp_path / "a.jsonl",
         )
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
+        assert set(discovery_client.released) == {"a", "b", str(tmp_path / "alias.jsonl")}
 
-        register_transcript("s-res", provider="codex", thread_id=thread_id)
-        (resolved,) = registered_paths(ensure_session(SessionId("s-res")))
-        assert resolved.samefile(rollout)
+    def test_batches_ids_and_consumes_paginated_resolutions(self, tmp_path, discovery_client):
+        ids = [f"session-{i}" for i in range(257)]
+        for session_id in ids:
+            register_transcript("s-many", thread_id=session_id)
+        discovery_client.results = {session_id: tmp_path / f"{session_id}.jsonl" for session_id in ids}
+        discovery_client.page_size = 17
+        assert registered_paths(ensure_session(SessionId("s-many"))) == tuple(discovery_client.results.values())
+        assert [len(request["session_ids"]) for request in discovery_client.requests] == [256, 1]
+        assert set(discovery_client.released) == set(ids)
 
-    def test_unchanged_tree_reuses_the_index_without_rescanning(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from cc_transcript import codex
+    def test_owner_is_consulted_again_after_a_prior_missing_result(self, tmp_path, discovery_client):
+        register_transcript("s-new", thread_id="late")
+        directory = ensure_session(SessionId("s-new"))
+        assert registered_paths(directory) == ()
+        discovery_client.results["late"] = tmp_path / "late.jsonl"
+        assert registered_paths(directory) == (tmp_path / "late.jsonl",)
+        assert len(discovery_client.requests) == 2
 
-        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ac"
-        rollout = write_apply_patch_rollout(
-            tmp_path / "codex" / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
-        )
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
-        register_transcript("s-memo", provider="codex", thread_id=thread_id)
-        session_dir = ensure_session(SessionId("s-memo"))
-        (first,) = registered_paths(session_dir)
-
-        with rollout.open("a") as appended:
-            appended.write("{}\n")
-        monkeypatch.setattr(codex, "discover", lambda *args: pytest.fail("rescanned an unchanged tree"))
-        monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
-        (second,) = registered_paths(session_dir)
-        assert second == first
-        assert second.samefile(rollout)
-
-    def test_many_thread_ids_resolve_in_one_scan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from cc_transcript import codex
-
-        root = tmp_path / "codex"
-        thread_ids = [f"019f6800-3b4c-7d5e-9f60-00000000010{n}" for n in range(3)]
-        rollouts = [
-            write_apply_patch_rollout(root / "2026" / "07" / "16" / f"rollout-2026-07-16T16-4{n}-00-{t}.jsonl", t)
-            for n, t in enumerate(thread_ids)
-        ]
-        newest = write_apply_patch_rollout(
-            root / "2026" / "07" / "17" / f"rollout-2026-07-17T08-00-00-{thread_ids[0]}.jsonl", thread_ids[0]
-        )
-        (root / "2026" / "07" / "18").mkdir(parents=True)
-        (root / "2026" / "07" / "18" / f"rollout-2026-07-18T08-00-00-{thread_ids[1]}.jsonl.zst").write_bytes(b"")
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
-        for thread_id in [*thread_ids, "019f6800-0000-0000-0000-000000000199"]:
-            register_transcript("s-batch", provider="codex", thread_id=thread_id)
-        expected = tuple(codex.find_transcript(SessionId(t)) for t in thread_ids)
-        assert expected == (newest, rollouts[1], rollouts[2])
-
-        scans: list[object] = []
-        discover = codex.discover
-        monkeypatch.setattr(codex, "discover", lambda *args: scans.append(args) or discover(*args))
-        monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
-        assert registered_paths(ensure_session(SessionId("s-batch"))) == expected
-        assert len(scans) == 1
-
-    @pytest.mark.parametrize(
-        "later",
-        [
-            pytest.param("2026/07/16/rollout-2026-07-16T18-00-00-{id}.jsonl", id="same_directory"),
-            pytest.param("2026/07/17/rollout-2026-07-17T09-00-00-{id}.jsonl", id="new_directory"),
-            pytest.param("2026/07/15/rollout-2026-07-17T09-00-00-{id}.jsonl", id="existing_other_directory"),
-        ],
-    )
-    def test_newer_duplicate_after_warming_wins(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, later: str
-    ) -> None:
-        from cc_transcript import codex
-
-        root = tmp_path / "codex"
-        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ae"
-        (root / "2026" / "07" / "15").mkdir(parents=True)
-        write_apply_patch_rollout(
-            root / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
-        )
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
-        register_transcript("s-dup", provider="codex", thread_id=thread_id)
-        session_dir = ensure_session(SessionId("s-dup"))
-        assert registered_paths(session_dir) == (codex.find_transcript(SessionId(thread_id)),)
-
-        write_apply_patch_rollout(root / later.format(id=thread_id), thread_id)
-        (newest,) = registered_paths(session_dir)
-        assert newest == codex.find_transcript(SessionId(thread_id))
-        assert newest.name == Path(later.format(id=thread_id)).name
-
-    def test_rollout_written_after_warming_is_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from cc_transcript import codex
-
-        root = tmp_path / "codex"
-        early, late = "019f6800-3b4c-7d5e-9f60-0000000000af", "019f6800-3b4c-7d5e-9f60-0000000000b0"
-        day = root / "2026" / "07" / "16"
-        write_apply_patch_rollout(day / f"rollout-2026-07-16T16-44-00-{early}.jsonl", early)
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
-        register_transcript("s-late", provider="codex", thread_id=early)
-        register_transcript("s-late", provider="codex", thread_id=late)
-        session_dir = ensure_session(SessionId("s-late"))
-        assert len(registered_paths(session_dir)) == 1
-
-        write_apply_patch_rollout(day / f"rollout-2026-07-16T16-50-00-{late}.jsonl", late)
-        assert registered_paths(session_dir) == tuple(codex.find_transcript(SessionId(t)) for t in (early, late))
-
-    def test_pruned_rollout_resolves_afresh(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from cc_transcript import codex
-
-        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ad"
-        day = tmp_path / "codex" / "2026" / "07"
-        first = write_apply_patch_rollout(day / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id)
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
-        register_transcript("s-moved", provider="codex", thread_id=thread_id)
-        session_dir = ensure_session(SessionId("s-moved"))
-        assert registered_paths(session_dir) == (first,)
-
-        first.unlink()
-        assert registered_paths(session_dir) == ()
-        moved = write_apply_patch_rollout(day / "17" / f"rollout-2026-07-17T09-00-00-{thread_id}.jsonl", thread_id)
-        (resolved,) = registered_paths(session_dir)
-        assert resolved.samefile(moved)
-
-    def test_unresolvable_thread_id_is_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from cc_transcript import codex
-
-        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "empty")
-        register_transcript("s-miss", provider="codex", thread_id="019f6800-0000-0000-0000-000000000099")
-        assert registered_paths(ensure_session(SessionId("s-miss"))) == ()
-
-    def test_path_entry_resolves_to_itself(self, tmp_path: Path) -> None:
-        rollout = tmp_path / "ext.jsonl"
-        rollout.write_text("{}\n")
-        register_transcript("s-direct", provider="codex", path=str(rollout))
-        assert registered_paths(ensure_session(SessionId("s-direct"))) == (rollout,)
-
-    def test_relative_path_is_anchored_to_registration_cwd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_relative_path_remains_anchored_to_registration_directory(self, tmp_path, monkeypatch, discovery_client):
         lane = tmp_path / "lane"
         lane.mkdir()
-        (lane / "rollout.jsonl").write_text("{}\n")
         monkeypatch.chdir(lane)
-        register_transcript("s-rel", provider="codex", path="rollout.jsonl")
-
-        (entry,) = read_entries("s-rel")
-        stored = Path(str(entry["path"]))
-        assert stored.is_absolute()
-        assert stored.samefile(lane / "rollout.jsonl")
-
-        # Dispatch runs from the project root, not the registration cwd; the absolute locator still folds in.
+        register_transcript("s-relative", path="rollout.jsonl")
+        target = lane / "rollout.jsonl"
+        discovery_client.paths[str(target)] = target
         monkeypatch.chdir(tmp_path)
-        (resolved,) = registered_paths(ensure_session(SessionId("s-rel")))
-        assert resolved.is_absolute()
-        assert resolved.samefile(lane / "rollout.jsonl")
+        assert registered_paths(ensure_session(SessionId("s-relative"))) == (target,)
+
+    def test_empty_optional_path_does_not_hide_thread_locator(self, tmp_path, discovery_client):
+        register_transcript("s-empty-path", thread_id="thread", path="")
+        discovery_client.results["thread"] = tmp_path / "thread.jsonl"
+        assert registered_paths(ensure_session(SessionId("s-empty-path"))) == (tmp_path / "thread.jsonl",)
+        assert discovery_client.acquired == []
+
+    def test_missing_direct_path_is_skipped(self, tmp_path, discovery_client):
+        register_transcript("s-missing", path=str(tmp_path / "gone.jsonl"))
+        assert registered_paths(ensure_session(SessionId("s-missing"))) == ()
+
+    def test_incomplete_item_releases_all_sibling_handles(self, tmp_path, discovery_client):
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        for session_id in ("incomplete", "healthy"):
+            register_transcript("s-partial", thread_id=session_id)
+        discovery_client.results = {"incomplete": "incomplete", "healthy": tmp_path / "healthy.jsonl"}
+        with pytest.raises(EvidenceIncomplete, match="resolution did not complete"):
+            registered_paths(ensure_session(SessionId("s-partial")))
+        assert discovery_client.released == ["healthy"]
+
+    def test_later_page_failure_releases_earlier_handles(self, tmp_path, discovery_client):
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        register_transcript("s-later-page", thread_id="healthy")
+        discovery_client.results["healthy"] = tmp_path / "healthy.jsonl"
+        discovery_client.failure_after_page = EvidenceIncomplete("deadline", "fixture timeout")
+        with pytest.raises(EvidenceIncomplete, match="deadline"):
+            registered_paths(ensure_session(SessionId("s-later-page")))
+        assert discovery_client.released == ["healthy"]
+
+    def test_incomplete_after_missing_page_is_not_treated_as_missing(self, discovery_client):
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        register_transcript("s-not-missing", thread_id="unknown")
+        discovery_client.failure_after_page = EvidenceIncomplete("incomplete", "unfinished lookup")
+        with pytest.raises(EvidenceIncomplete, match="unfinished lookup"):
+            registered_paths(ensure_session(SessionId("s-not-missing")))
+
+    def test_missing_requested_verdict_is_not_absence(self, discovery_client, monkeypatch):
+        from captain_hook.snapshots.client import SnapshotProtocolError
+
+        register_transcript("s-omitted", thread_id="unknown")
+        monkeypatch.setattr(discovery_client, "pages", lambda *args, **kwargs: iter([{"sessions": []}]))
+        with pytest.raises(SnapshotProtocolError, match="omitted"):
+            registered_paths(ensure_session(SessionId("s-omitted")))
+
+    def test_cleanup_attempts_every_lease_when_release_fails(self, tmp_path, discovery_client, monkeypatch):
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        for session_id in ("a", "b"):
+            register_transcript("s-release", thread_id=session_id)
+            discovery_client.results[session_id] = tmp_path / f"{session_id}.jsonl"
+        release = discovery_client.call
+
+        def fail_one(operation, **arguments):
+            result = release(operation, **arguments)
+            if arguments["token"] == "b":
+                raise EvidenceIncomplete("deadline", "release fixture")
+            return result
+
+        monkeypatch.setattr(discovery_client, "call", fail_one)
+        with pytest.raises(EvidenceIncomplete, match="release fixture"):
+            registered_paths(ensure_session(SessionId("s-release")))
+        assert discovery_client.released == ["b", "a"]
 
 
 class TestLocatorValidation:
@@ -418,67 +382,60 @@ class TestLocatorValidation:
 
 
 class TestUnsafePathsSkipped:
-    def test_fifo_path_is_skipped_without_hanging(self, tmp_path: Path) -> None:
-        fifo = tmp_path / "rollout.fifo"
-        os.mkfifo(fifo)
-        register_transcript("s-fifo", provider="codex", path=str(fifo))
-        assert registered_paths(ensure_session(SessionId("s-fifo"))) == ()
+    @pytest.mark.parametrize("status", ["source_limit", "parse_error", "invalid_request", "retained_limit"])
+    def test_direct_path_errors_are_not_silently_omitted(self, tmp_path, discovery_client, status):
+        from captain_hook.snapshots.client import EvidenceIncomplete
 
-    def test_directory_path_is_skipped(self, tmp_path: Path) -> None:
-        target = tmp_path / "adir"
-        target.mkdir()
-        register_transcript("s-dir", provider="codex", path=str(target))
-        assert registered_paths(ensure_session(SessionId("s-dir"))) == ()
-
-    def test_oversized_file_is_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        big = tmp_path / "big.jsonl"
-        big.write_text("{}\n" * 16)
-        monkeypatch.setattr("captain_hook.transcripts.MAX_TRANSCRIPT_BYTES", 4)
-        register_transcript("s-big", provider="codex", path=str(big))
-        assert registered_paths(ensure_session(SessionId("s-big"))) == ()
-
-    def test_regular_file_within_bound_is_kept(self, tmp_path: Path) -> None:
-        rollout = tmp_path / "ok.jsonl"
-        rollout.write_text("{}\n")
-        register_transcript("s-ok", provider="codex", path=str(rollout))
-        (resolved,) = registered_paths(ensure_session(SessionId("s-ok")))
-        assert resolved.samefile(rollout)
+        path = str(tmp_path / "source.jsonl")
+        register_transcript("s-error", path=path)
+        discovery_client.paths[path] = EvidenceIncomplete(status, "fixture")
+        with pytest.raises(EvidenceIncomplete) as raised:
+            registered_paths(ensure_session(SessionId("s-error")))
+        assert raised.value.status == status
 
 
-def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path: Path) -> None:
-    # A codex rollout registered against the session is folded into the deep view at dispatch, so a
-    # deep-predicated gate sees its apply_patch edits while the bare (main-window) gate does not.
+def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path):
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.testing.helpers import fixture_line
+    from captain_hook.testing.snapshots import FixtureOwner
+
     rollout = write_apply_patch_rollout(tmp_path / "rollout.jsonl", "thread-e2e")
     register_transcript("s-e2e", provider="codex", path=str(rollout))
-
     main = tmp_path / "main.jsonl"
     main.write_text(
-        "\n".join(
-            json.dumps(m)
-            for m in (
-                raw_text("user", "look at the code"),
-                raw_assistant(raw_text_block("reading"), raw_tool_use("Read", {"file_path": "src/main.py"}, "tu1")),
+        "".join(
+            json.dumps(fixture_line(index, message)) + "\n"
+            for index, message in enumerate(
+                (
+                    raw_text("user", "look at the code"),
+                    raw_assistant(raw_text_block("reading"), raw_tool_use("Read", {"file_path": "src/main.py"}, "tu1")),
+                )
             )
         )
-        + "\n"
     )
-
     fired: list[str] = []
 
     @on(Event.Stop)
-    def deep_gate(evt: object) -> None:
-        if evt.ctx.t.deep.tool_calls.named("Edit|Write").files():  # type: ignore[attr-defined]
+    def deep_gate(evt):
+        if evt.ctx.t.has_edit_to("*", subagents=True):
             fired.append("deep")
 
     @on(Event.Stop)
-    def bare_gate(evt: object) -> None:
-        if evt.ctx.t.tool_calls.named("Edit|Write").files():  # type: ignore[attr-defined]
+    def bare_gate(evt):
+        if evt.ctx.t.has_edit_to("*", subagents=False):
             fired.append("bare")
 
-    dispatch_event(
-        tmp_path,
-        Event.Stop,
-        {"session_id": "s-e2e", "transcript_path": str(main)},
-        session_dir=ensure_session(SessionId("s-e2e")),
-    )
-    assert fired == ["deep"]
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    try:
+        dispatch_event(
+            tmp_path,
+            Event.Stop,
+            {"session_id": "s-e2e", "transcript_path": str(main)},
+            session_dir=ensure_session(SessionId("s-e2e")),
+        )
+        assert fired == ["deep"]
+        assert fixture.client.call("stats")["data"]["counters"]["cold_parses"] == 2
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()

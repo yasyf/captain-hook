@@ -73,6 +73,8 @@ def send(
     timeout: float = BRIDGE_TIMEOUT,
 ) -> dict[str, object]:
     """Invoke the signed bridge for one typed operation and validate its terminal result."""
+    if reqenv.getenv("CAPT_HOOK_TEST_NO_LIVE") == "1" and not reqenv.getenv("CAPT_HOOK_HELPER_CLIENT"):
+        raise OSError("tests must supply an isolated helper client")
     argv = [str(bridge_path()), operation]
     try:
         completed = subprocess.run(

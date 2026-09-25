@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yasyf/captain-hook/internal/snapshots"
 	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
@@ -38,6 +39,11 @@ type workerClient struct {
 	stopMu  sync.Mutex
 	stopped bool
 	stopErr error
+
+	snapshots         *snapshotService
+	snapshotNamespace uint64
+	snapshotEvents    map[uint64]snapshotEvent
+	reverseSnapshots  map[uint64]reverseSnapshot
 
 	onSettle func()
 	onAdopt  func(wireproto.AdoptRequest)
@@ -103,13 +109,13 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 		return nil, err
 	}
 	if response.Op != wireproto.OpHello || response.ID != 0 || response.Build != build || response.Request != nil ||
-		response.Response != nil || response.Error != "" {
+		response.Response != nil || response.Error != "" || response.Adopt != nil || response.ParentID != 0 || len(response.Snapshot)+len(response.SnapshotContext)+len(response.SnapshotConfig) != 0 {
 		return nil, errors.New("captain: Python worker rejected the exact build handshake")
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
-	w := &workerClient{conn: conn, build: build, slots: make(chan struct{}, workerSlots), pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
+	w := &workerClient{snapshotNamespace: workerNamespace.Add(1), snapshotEvents: make(map[uint64]snapshotEvent), reverseSnapshots: make(map[uint64]reverseSnapshot), conn: conn, build: build, slots: make(chan struct{}, workerSlots), pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
 	go w.readLoop()
 	return w, nil
 }
@@ -139,7 +145,10 @@ func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest)
 	id := w.nextID
 	result := make(chan workerResult, 1)
 	w.pending[id] = result
+	eventCtx, eventCancel := context.WithCancel(ctx)
+	w.snapshotEvents[id] = snapshotEvent{ctx: eventCtx, cancel: eventCancel}
 	w.mu.Unlock()
+	defer w.finishSnapshotEvent(id)
 
 	if err := w.write(ctx, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpEvent, ID: id, Request: &request}); err != nil {
 		w.removePending(id)
@@ -176,6 +185,9 @@ func (w *workerClient) write(ctx context.Context, frame wireproto.Frame) error {
 		}
 		defer w.conn.SetWriteDeadline(time.Time{}) //nolint:errcheck
 	}
+	if frame.Op == wireproto.OpSnapshotResult || frame.Op == wireproto.OpSnapshotRequest || frame.Op == wireproto.OpSnapshotCancel || frame.ParentID != 0 {
+		return wireproto.EncodeFrameLimit(w.conn, frame, snapshots.MaxFrameBytes)
+	}
 	return wireproto.EncodeFrame(w.conn, frame)
 }
 
@@ -184,6 +196,17 @@ func (w *workerClient) readLoop() {
 		frame, err := wireproto.DecodeFrame(w.conn)
 		if err != nil {
 			w.fail(err)
+			return
+		}
+		if frame.Op == wireproto.OpSnapshotRequest || frame.Op == wireproto.OpSnapshotCancel {
+			if err := w.snapshotFrame(frame); err != nil {
+				w.fail(err)
+				return
+			}
+			continue
+		}
+		if len(frame.Snapshot)+len(frame.SnapshotContext)+len(frame.SnapshotConfig) != 0 || frame.ParentID != 0 {
+			w.fail(errors.New("captain: snapshot fields on event response"))
 			return
 		}
 		if frame.Op == wireproto.OpAdopt {
@@ -270,6 +293,13 @@ func (w *workerClient) fail(err error) {
 		return
 	}
 	w.closed = true
+	for _, event := range w.snapshotEvents {
+		event.cancel()
+	}
+	w.snapshotEvents = make(map[uint64]snapshotEvent)
+	for _, pending := range w.reverseSnapshots {
+		pending.cancel()
+	}
 	w.err = err
 	pending, abandoned := w.pending, len(w.abandoned)
 	w.pending = make(map[uint64]chan workerResult)

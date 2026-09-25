@@ -65,11 +65,12 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.13"]
+        os: [ubuntu-latest, macos-15]
     steps:
       - uses: actions/checkout@v7
 
@@ -135,6 +136,9 @@ jobs:
           unzip -l dist/*.whl | grep -q 'capt_hook_client/client.py'
           if unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/langs.py'
+          unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/worker.py'
+          unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/schemas/host-request.schema.json'
+          .wheel-smoke/bin/python -c 'from captain_hook.snapshots.validation import validator; from cc_transcript.snapshots import TranscriptStore; validator("host-request").check_schema(validator("host-request").schema)'
           if unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/skills/.*/SKILL.md'
           unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
@@ -161,9 +165,4 @@ jobs:
           go-version: 1.26.5
 
       - name: Parse-validate the binrun descriptor
-        # GOSUMDB/GOPROXY: the binrun module is public but not yet indexed by the
-        # checksum DB; fetch it directly instead of through sum.golang.org.
-        env:
-          GOSUMDB: "off"
-          GOPROXY: direct
         run: go run github.com/yasyf/binrun/cmd/binrun@v0.6.0 -- parse captain_hook/bin/hook.binrun

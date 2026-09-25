@@ -40,6 +40,7 @@ from tests.review_helpers import (
     assistant_text,
     assistant_tool_use,
     envelope,
+    native_review_owner,
     tool_result,
     user_text,
     write_transcript,
@@ -887,6 +888,7 @@ class TestDetector:
         assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
 
+@pytest.mark.usefixtures(native_review_owner.__name__)
 class TestStrictFixPartition:
     def hedged_entries(self) -> list[dict[str, Any]]:
         return [
@@ -918,6 +920,7 @@ class TestStrictFixPartition:
         assert await rows(store, "SELECT * FROM candidates") == []
 
 
+@pytest.mark.usefixtures(native_review_owner.__name__)
 class TestFixGroupingAndStore:
     async def test_end_to_end_fixture_scan_creates_fix_candidate_with_target(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog
@@ -987,6 +990,7 @@ class TestFixGroupingAndStore:
         assert await store.eligible(int(candidate["id"]), settings=settings)
 
 
+@pytest.mark.usefixtures(native_review_owner.__name__)
 class TestPackTargetRouting:
     async def test_builtin_pack_complaint_routes_to_captain_hook_with_origin_provenance(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
@@ -1080,7 +1084,7 @@ class TestFixJudge:
                 }
             ),
         }
-        prompt, fidelity = await build_prompt(row, hydrated=None)
+        prompt, fidelity = await build_prompt(row, rendered=None)
         assert fidelity == "summary"
         assert SUMMARY_LABEL in prompt
         assert "misfire_confirmed" in prompt
@@ -1099,7 +1103,7 @@ class TestFixJudge:
             preview_chars=200,
         )
         row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": "never do X"}
-        prompt, fidelity = await build_prompt(row, hydrated=None)
+        prompt, fidelity = await build_prompt(row, rendered=None)
         assert fidelity == "summary"
         assert "DURABLE correction worth encoding as an" in prompt
 

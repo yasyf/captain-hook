@@ -209,15 +209,32 @@ def run_cli(
     root_dir: str | None = None,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "captain_hook"]
+        [
+            sys.executable,
+            "-c",
+            """
+import runpy
+from captain_hook.snapshots.client import CURRENT_CLIENT
+from captain_hook.testing.snapshots import FixtureOwner
+fixture = FixtureOwner()
+token = CURRENT_CLIENT.set(fixture.client)
+try:
+    runpy.run_module("captain_hook", run_name="__main__", alter_sys=True)
+finally:
+    CURRENT_CLIENT.reset(token)
+    fixture.close()
+""",
+        ]
         + (["--hooks", hooks_dir] if hooks_dir else [])
         + (["--root", root_dir] if root_dir else [])
         + list(args),
         input=stdin_data,
         capture_output=True,
         text=True,
+        timeout=timeout,
         cwd=cwd or str(PKG_DIR),
         env={**os.environ, **env} if env else None,
     )

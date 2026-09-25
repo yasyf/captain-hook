@@ -5,7 +5,7 @@ import io
 import os
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ class Snapshot:
     state: app.State
     discovery_stdout: str = "discovered out\n"
     discovery_stderr: str = "discovered err\n"
+    tools: dict = field(default_factory=dict)
 
 
 class FakeRegistry:

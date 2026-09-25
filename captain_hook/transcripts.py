@@ -3,31 +3,31 @@ from __future__ import annotations
 import dataclasses
 import re
 import threading
+from contextlib import ExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, overload
 
 from cc_transcript.filterspec import event_meta
 from cc_transcript.ids import SessionId
-from lazy_object_proxy import Proxy
 
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.state import RegisteredTranscript, RegisteredTranscripts
 from captain_hook.util import reqenv
-from captain_hook.util.caching import LRUDict
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from typing import Any
 
     from cc_transcript.activity import UserClassifier
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
+    from captain_hook.snapshots.client import RemoteSession, SnapshotClient
+
 # A session id becomes a filesystem path component via ``ensure_session``; external callers (CLI, MCP)
 # must not smuggle path separators or traversal past that trust boundary.
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
-
-MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -64,14 +64,54 @@ def transcript_session_id(events: Sequence[TranscriptEvent], *, path: Path | Non
     )
 
 
-def load_transcript(path: str | Path | None) -> Session:
-    """Parse and lift the transcript at ``path``; a missing path yields an empty ``Session``."""
-    from cc_transcript.parser import parse_events_from_bytes
+@overload
+def load_transcript(path: str | Path) -> RemoteSession: ...
+
+
+@overload
+def load_transcript(path: None) -> Session: ...
+
+
+def load_transcript(path: str | Path | None) -> Session | RemoteSession:
     from cc_transcript.query import Session
 
-    if not path or not (path := Path(path)).exists():
+    from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
+
+    if not path:
         return Session(())
-    return lift_session(parse_events_from_bytes(path.read_bytes()), path=path)
+    if (client := CURRENT_CLIENT.get()) is None:
+        raise EvidenceIncomplete("invalid_request", "transcript loading requires an admitted snapshot client")
+    from captain_hook.app import _state
+
+    session = client.acquire(path)
+    try:
+        if _state.classifier is not None:
+            from captain_hook.cli import CliState
+            from captain_hook.daemon.registry import Fingerprint
+
+            project_dir = resolve_project_dir()
+            policy = {
+                "id": "captain-configured",
+                "version": Fingerprint.compute(
+                    CliState(root=Path(project_dir) if project_dir else reqenv.cwd())
+                ).digest,
+            }
+            return client.classify(session, _state.classifier, policy)
+        data = list(
+            client.pages(
+                "prepare_hook_view",
+                domain=True,
+                view=session.view(),
+                cwd=resolve_project_dir(),
+                droid=reqenv.getenv("FACTORY_PROJECT_DIR") is not None,
+            )
+        )
+        if len(data) != 1 or data[0]["kind"] != "classifier":
+            raise EvidenceIncomplete("invalid_request", "hook classifier preparation returned invalid evidence")
+        return session.with_classifier(data[0]["classifier"])
+    except BaseException:
+        session.release()
+        raise
 
 
 def lane_transcript_path(transcript_path: str | Path, agent_id: str) -> Path:
@@ -95,40 +135,132 @@ class TranscriptLoadError(Exception):
     """
 
 
+class TranscriptPins:
+    def __init__(self, load: Callable[[], Session | RemoteSession]) -> None:
+        self.load = load
+        self.guard = threading.Lock()
+        self.pending = 1
+        self.source: Session | RemoteSession | None = None
+
+    def branch(self) -> LazyTranscript:
+        with self.guard:
+            if self.pending == 0:
+                raise TranscriptLoadError("transcript preparation group is closed")
+            self.pending += 1
+        return LazyTranscript(self, seed=False)
+
+    def borrow(self, *, seed: bool) -> Session | RemoteSession:
+        from captain_hook.snapshots.client import RemoteSession
+
+        with self.guard:
+            if self.source is None:
+                self.source = self.load()
+            return self.source.retain() if isinstance(self.source, RemoteSession) and not seed else self.source
+
+    def settle(self) -> None:
+        from captain_hook.snapshots.client import RemoteSession
+
+        with self.guard:
+            self.pending -= 1
+            source = self.source if self.pending == 0 else None
+        if isinstance(source, RemoteSession):
+            source.release()
+
+
+class LazyTranscript:
+    def __init__(self, pins: TranscriptPins, *, seed: bool) -> None:
+        self.pins = pins
+        self.seed = seed
+        self.guard = threading.Lock()
+        self.session: Session | RemoteSession | None = None
+        self.released = False
+
+    def resolve(self) -> Session | RemoteSession:
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        with self.guard:
+            if self.released:
+                raise EvidenceIncomplete("stale_handle", "transcript preparation branch is closed")
+            if self.session is None:
+                self.session = self.pins.borrow(seed=self.seed)
+            return self.session
+
+    def fork(self) -> LazyTranscript:
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        with self.guard:
+            if self.released:
+                raise EvidenceIncomplete("stale_handle", "transcript preparation branch is closed")
+            return self.pins.branch()
+
+    def release(self) -> None:
+        from captain_hook.snapshots.client import RemoteSession
+
+        with self.guard:
+            if self.released:
+                return
+            self.released = True
+            session = self.session if not self.seed else None
+        try:
+            if isinstance(session, RemoteSession):
+                session.release()
+        finally:
+            self.pins.settle()
+
+    @property
+    def __class__(self) -> type:
+        return type(self.resolve())
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.resolve(), name)
+
+    def __len__(self) -> int:
+        return len(self.resolve())
+
+    def __bool__(self) -> bool:
+        return bool(self.resolve())
+
+
+def fork_transcript(transcript: Session | RemoteSession | LazyTranscript) -> Session | RemoteSession | LazyTranscript:
+    from captain_hook.snapshots.client import RemoteSession
+
+    if type(transcript) is LazyTranscript:
+        return transcript.fork()
+    return transcript.retain() if isinstance(transcript, RemoteSession) else transcript
+
+
+def release_transcript(transcript: Session | RemoteSession | LazyTranscript) -> None:
+    from captain_hook.snapshots.client import RemoteSession
+
+    if type(transcript) is LazyTranscript:
+        transcript.release()
+    elif isinstance(transcript, RemoteSession):
+        transcript.release()
+
+
 def lazy_transcript(
     path: str | Path | None,
     *,
-    loader: Callable[[str | Path | None], Session] | None = None,
+    loader: Callable[[str | Path | None], Session | RemoteSession] | None = None,
     attach: Callable[[], Sequence[Path]] | None = None,
-) -> Session:
-    """A ``Session`` proxy that defers parsing until an attribute is first touched.
-
-    Events whose hooks never read the transcript never pay the parse. ``loader`` overrides the
-    default :func:`load_transcript` — the resident daemon plugs in a cache-backed parse. ``attach``
-    resolves external transcripts (e.g. registered codex rollouts) to fold into the session's deep
-    view; it runs once, after the loader returns, on the one codepath the cold CLI and the daemon share.
-    """
+) -> LazyTranscript:
     resolve = loader or load_transcript
-    guard = threading.Lock()
-    memo: list[Session] = []
 
-    def load() -> Session:
-        # An event's hooks run concurrently and share this proxy, whose first touch is unsynchronized:
-        # memoize under a lock so a race parses once and settles the proxy on one Session, not two.
-        with guard:
-            if memo:
-                return memo[0]
-            reqenv.checkpoint()
-            try:
-                session = resolve(path)
-            except Exception as e:
-                raise TranscriptLoadError(path) from e
-            if attach and (extra := tuple(attach())):
-                session = dataclasses.replace(session, attachments=(*session.attachments, *extra))
-            memo.append(session)
-            return session
+    def load() -> Session | RemoteSession:
+        from captain_hook.snapshots.client import EvidenceIncomplete
 
-    return cast("Session", Proxy(load))
+        reqenv.checkpoint()
+        try:
+            session = resolve(path)
+        except EvidenceIncomplete:
+            raise
+        except Exception as exc:
+            raise TranscriptLoadError(path) from exc
+        if attach and (extra := tuple(attach())):
+            session = dataclasses.replace(session, attachments=(*session.attachments, *extra))
+        return session
+
+    return LazyTranscript(TranscriptPins(load), seed=True)
 
 
 def register_transcript(
@@ -172,93 +304,73 @@ def register_transcript(
     return entry
 
 
-def readable_transcript(path: Path) -> bool:
-    # A special file (FIFO/device) hangs and an oversized blob OOMs the deep view's whole-file parse.
-    return path.is_file() and path.stat().st_size <= MAX_TRANSCRIPT_BYTES
+def resolved_transcript_paths(
+    client: SnapshotClient, session_ids: Sequence[SessionId], *, roots: Sequence[Path]
+) -> dict[SessionId, Path | None]:
+    from captain_hook.snapshots.client import NATIVE_CLASSIFIER, EvidenceIncomplete, Lease, SnapshotProtocolError
 
-
-ROLLOUT_INDEXES: LRUDict[Path, RolloutIndex] = LRUDict(4)
-ROLLOUT_INDEXES_LOCK = threading.Lock()
-
-
-def directory_mtime(path: Path) -> int | None:
-    try:
-        return path.lstat().st_mtime_ns
-    except FileNotFoundError:
-        return None
-
-
-def rollout_tree_stamp(root: Path) -> dict[Path, int | None]:
-    try:
-        stamp: dict[Path, int | None] = {root: root.stat().st_mtime_ns}
-    except FileNotFoundError:
-        return {root: None}
-    for parent, dirnames, _ in root.walk():
-        stamp.update((parent / name, directory_mtime(parent / name)) for name in dirnames)
-    return stamp
-
-
-def rollout_tree_unchanged(stamp: dict[Path, int | None], root: Path) -> bool:
-    try:
-        root_mtime: int | None = root.stat().st_mtime_ns
-    except FileNotFoundError:
-        root_mtime = None
-    return stamp[root] == root_mtime and all(
-        directory_mtime(path) == mtime for path, mtime in stamp.items() if path != root
-    )
-
-
-@dataclasses.dataclass(slots=True)
-class RolloutIndex:
-    stamp: dict[Path, int | None]
-    newest: dict[SessionId, Path]
-    resolved: dict[SessionId, Path]
-
-    @classmethod
-    def build(cls, root: Path) -> RolloutIndex:
-        from cc_transcript.codex import discover
-
-        stamp = rollout_tree_stamp(root)
-        newest: dict[SessionId, Path] = {}
-        for rollout in discover(root):
-            if not rollout.compressed:
-                newest.setdefault(SessionId(rollout.session_id), rollout.path)
-        return cls(stamp, newest, {})
-
-    def lookup(self, thread_id: SessionId) -> Path | None:
-        if (path := self.resolved.get(thread_id)) is None and (found := self.newest.get(thread_id)) is not None:
-            path = self.resolved[thread_id] = found.resolve()
-        return path
-
-
-def rollout_index() -> RolloutIndex:
-    from cc_transcript.codex import sessions_root
-
-    root = sessions_root()
-    with ROLLOUT_INDEXES_LOCK:
-        index = ROLLOUT_INDEXES.get(root)
-    if index is None or not rollout_tree_unchanged(index.stamp, root):
-        index = RolloutIndex.build(root)
-        with ROLLOUT_INDEXES_LOCK:
-            ROLLOUT_INDEXES[root] = index
-    return index
+    found: dict[SessionId, Path | None] = {}
+    unique = list(dict.fromkeys(session_ids))
+    for offset in range(0, len(unique), 256):
+        batch = unique[offset : offset + 256]
+        with ExitStack() as cleanup:
+            results: list[dict[str, Any]] = []
+            for page in client.pages(
+                "resolve", session_ids=batch, roots=[str(root) for root in roots], classifier=NATIVE_CLASSIFIER
+            ):
+                for item in page["sessions"]:
+                    if item["description"] is not None:
+                        cleanup.callback(Lease(client, item["description"]).release)
+                results.extend(page["sessions"])
+            resolved: dict[SessionId, Path | None] = {}
+            for item in results:
+                session_id = SessionId(item["session_id"])
+                if session_id not in batch or session_id in resolved:
+                    raise SnapshotProtocolError("resolve returned an unexpected or duplicate session")
+                description = item["description"]
+                if item["status"] == "missing" and description is None:
+                    resolved[session_id] = None
+                elif item["status"] == "ok" and description is not None:
+                    resolved[session_id] = Path(description["canonical_path"])
+                elif item["status"] == "incomplete":
+                    raise EvidenceIncomplete("incomplete", "transcript resolution did not complete")
+                else:
+                    raise SnapshotProtocolError("resolve returned inconsistent session availability")
+            if set(resolved) != set(batch):
+                raise SnapshotProtocolError("resolve omitted a requested session")
+            found.update(resolved)
+    return found
 
 
 def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
-    """The on-disk paths of every transcript registered against ``session_dir``, unsafe entries skipped.
+    from cc_transcript.codex import sessions_root
 
-    A path entry resolves to its stored absolute path; a thread-id entry resolves lazily via
-    :func:`rollout_index`, which rescans the codex sessions tree only when a directory in it changed.
-    A pruned or unresolvable id, and any locator that no longer points at a bounded regular file (a
-    special file or oversized blob would hang or OOM the deep view's whole-file parse), drops out
-    silently.
-    """
+    from captain_hook.snapshots.client import EvidenceIncomplete, client_scope
+
     entries = SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
-    rollouts = rollout_index() if any(entry.thread_id for entry in entries) else None
-    return tuple(
-        resolved
-        for entry in entries
-        if (resolved := Path(entry.path) if entry.path else rollouts and rollouts.lookup(SessionId(entry.thread_id)))
-        is not None
-        and readable_transcript(resolved)
-    )
+    if not entries:
+        return ()
+    with client_scope() as client:
+        resolved = resolved_transcript_paths(
+            client,
+            [SessionId(entry.thread_id) for entry in entries if entry.thread_id],
+            roots=[sessions_root()],
+        )
+        paths: list[Path] = []
+        for entry in entries:
+            if entry.path:
+                try:
+                    session = client.acquire(entry.path)
+                except EvidenceIncomplete as exc:
+                    if exc.status != "missing":
+                        raise
+                    continue
+                try:
+                    paths.append(session.path)
+                finally:
+                    session.release()
+            else:
+                assert entry.thread_id is not None
+                if (path := resolved[SessionId(entry.thread_id)]) is not None:
+                    paths.append(path)
+    return tuple(paths)
