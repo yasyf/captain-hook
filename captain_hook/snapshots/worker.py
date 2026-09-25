@@ -36,6 +36,13 @@ class Pending:
     future: Future[dict[str, Any]]
 
 
+OWNER_ADMISSION = {
+    "hook": (8, 64),
+    "review": (2, 16),
+    "release": (4, 32),
+}
+
+
 def read_frame(stream: BinaryIO, record_bytes: Callable[[int], None] | None = None) -> dict[str, Any] | None:
     first = stream.read(1)
     if not first:
@@ -267,15 +274,10 @@ class OwnerService:
         self.write_guard = threading.Lock()
         self.pending: dict[int, Pending] = {}
         self.executors = {
-            "hook": ThreadPoolExecutor(max_workers=4, thread_name_prefix="capt-evidence-hook"),
-            "review": ThreadPoolExecutor(max_workers=1, thread_name_prefix="capt-evidence-review"),
-            "release": ThreadPoolExecutor(max_workers=4, thread_name_prefix="capt-evidence-release"),
+            lane: ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"capt-evidence-{lane}")
+            for lane, (workers, _) in OWNER_ADMISSION.items()
         }
-        self.slots = {
-            "hook": threading.BoundedSemaphore(4),
-            "review": threading.BoundedSemaphore(1),
-            "release": threading.BoundedSemaphore(4),
-        }
+        self.slots = {lane: threading.BoundedSemaphore(slots) for lane, (_, slots) in OWNER_ADMISSION.items()}
         self.failed: BaseException | None = None
 
     def write(self, message: dict[str, Any]) -> None:

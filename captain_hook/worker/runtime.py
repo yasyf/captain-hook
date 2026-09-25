@@ -121,6 +121,12 @@ class ProductRuntime:
                 background = self._dispatch(request, event, raw, session_id, buffers)
             except SystemExit as exc:
                 return self._response(buffers, exit_code=_exit_code(exc.code)), None
+            except EvidenceIncomplete as exc:
+                if exc.status not in {"retained_limit", "lease_limit"}:
+                    buffers.stderr.write(traceback.format_exc())
+                    return self._response(buffers, status="error", exit_code=1), None
+                logger.bind(status=exc.status, reason=exc.reason).warning("snapshot admission saturated")
+                return EventResponse(), None
             except Exception:
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
@@ -200,6 +206,9 @@ def _run_detached(background: Background) -> None:
             try:
                 background()
             except EvidenceIncomplete as exc:
+                if exc.status in {"retained_limit", "lease_limit"}:
+                    logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot admission saturated")
+                    return
                 logger.bind(status=exc.status, reason=exc.reason).error("post-reply evidence incomplete")
                 raise
             except Exception:
