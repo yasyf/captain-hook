@@ -152,8 +152,9 @@ REBASE = (
     "moves a branch onto another parent"
 )
 CONFLICT = (
-    "This is a ccx conflict workspace: after `git add`, `ccx vcs stack continue` finishes the rebase and "
-    "`ccx vcs stack abort` drops it (ccx 0.65.0 or newer)"
+    "This is a ccx conflict workspace: after `git add`, `ccx vcs stack continue` finishes the stack rebase and "
+    "`ccx vcs stack abort` drops it (ccx 0.65.0 or newer). The raw rebase control runs as written, the "
+    "workaround when `ccx vcs stack continue` itself fails"
 )
 CREATE = (
     '`ccx vcs ship -m "<msg>" --new-branch=<name>` commits onto a new stacked branch, and '
@@ -181,7 +182,6 @@ SUBMIT_VERBS = frozenset({"submit", "s", "ss"})
 SUBMIT_FLAGS = frozenset({"--stack", "-s", "--no-edit", "-n", "--publish", "-p", "--no-interactive", "--restack"})
 DRAFT_FLAGS = frozenset({"--draft", "-d"})
 REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
-REBASE_RESUMES = {"--continue": "continue", "--abort": "abort"}
 LEASE_FLAGS = frozenset({"--force-with-lease", "--force-if-includes"})
 LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
 
@@ -202,6 +202,7 @@ class Route:
     advice: str
     to: str | None = None
     act: str = "rewrites a Graphite stack by hand"
+    why: str = HAND_RUN
 
 
 def submit_to(call: Call) -> str | None:
@@ -209,12 +210,6 @@ def submit_to(call: Call) -> str | None:
     if len(call.targets) != 1 or not flags <= SUBMIT_FLAGS | DRAFT_FLAGS:
         return None
     return "ccx vcs stack submit --draft" if flags & DRAFT_FLAGS else "ccx vcs stack submit"
-
-
-def resume_to(call: Call) -> str | None:
-    if len(call.flags) != 1 or len(call.targets) != 1 or (verb := REBASE_RESUMES.get(call.flags[0])) is None:
-        return None
-    return f"ccx vcs stack {verb}"
 
 
 def lease_push_to(call: Call, evt: BaseHookEvent) -> str | None:
@@ -253,7 +248,7 @@ def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
         case "git", "rebase" if not REBASE_CONTROL.isdisjoint(call.flags):
             if not in_conflict_workspace(call, evt):
                 return None
-            route = Route(CONFLICT, resume_to(call))
+            route = Route(CONFLICT, act="finishes a ccx stack rebase by hand", why="")
         case "git", "rebase" if not rebases_onto_own_upstream(call, evt.cwd):
             route = Route(REBASE)
         case "git", "push" if force_pushes(call):
@@ -295,7 +290,8 @@ def stack_writes_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
             swaps.append(f"`{call.source.raw}` → `{route.to}`")
             notes.append(f"Rewrote `{call.source.raw}` → `{route.to}`: {route.advice}.")
         else:
-            notes.append(f"`{verb}` {route.act}, and ccx is the default route here. {route.advice}. {HAND_RUN}.")
+            why = f" {route.why}." if route.why else ""
+            notes.append(f"`{verb}` {route.act}, and ccx is the default route here. {route.advice}.{why}")
     if not notes:
         return None
     note = "\n".join([*notes, OVERRIDE])

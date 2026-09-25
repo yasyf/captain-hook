@@ -641,22 +641,35 @@ def conflict_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+@pytest.mark.parametrize("control", ["--continue", "--abort", "--skip"])
 @pytest.mark.parametrize(
-    ("command", "rewritten"),
-    [("git rebase --continue", "ccx vcs stack continue"), ("git rebase --abort", "ccx vcs stack abort")],
+    ("shape", "from_workspace"),
+    [
+        pytest.param("git rebase {control}", True, id="cwd-in-workspace"),
+        pytest.param("git -C {workspace} rebase {control}", False, id="git-C-workspace"),
+        pytest.param("cd {workspace} && git rebase {control}", False, id="cd-then-git"),
+    ],
 )
-def test_conflict_workspace_rewrites_rebase_controls_to_ccx(
-    isolate_modules: None, ccx_installed: None, conflict_workspace: Path, tmp_path: Path, command: str, rewritten: str
+def test_conflict_workspace_runs_a_manual_rebase_control_as_written(
+    isolate_modules: None,
+    ccx_installed: None,
+    conflict_workspace: Path,
+    git_repo: Path,
+    tmp_path: Path,
+    control: str,
+    shape: str,
+    from_workspace: bool,
 ) -> None:
+    """A manual `git rebase --continue` is the workaround when `ccx vcs stack continue` itself is broken, so
+    the pack names the ccx verb and runs the command untouched: never a refusal, never a rewrite."""
     discover_pack("graphite", GRAPHITE_HOOKS)
-    assert rewritten_command(dispatch_command(command, conflict_workspace, tmp_path)) == rewritten
-
-
-def test_conflict_workspace_nudges_the_other_rebase_controls(
-    isolate_modules: None, ccx_installed: None, conflict_workspace: Path, tmp_path: Path
-) -> None:
-    discover_pack("graphite", GRAPHITE_HOOKS)
-    assert_fires(dispatch_command("git rebase --skip", conflict_workspace, tmp_path), "warn", "ccx vcs stack continue")
+    command = shape.format(control=control, workspace=conflict_workspace)
+    result = dispatch_command(command, conflict_workspace if from_workspace else git_repo, tmp_path)
+    assert result is not None
+    output = result["hookSpecificOutput"]
+    assert output.get("permissionDecision") != "deny"
+    assert "updatedInput" not in output
+    assert "ccx vcs stack continue" in output["additionalContext"]
 
 
 @pytest.mark.parametrize("command", ["gh pr view 42 --json state,mergedAt", "gh pr view 42 --json=mergeable"])
