@@ -464,7 +464,9 @@ def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, 
         "captain_hook.cli.after_reply", lambda event, evt, raw, session_dir: observe(event, evt, session_dir)
     )
     session_dir = ensure_session(SessionId("s-both"))
-    for _ in range(2):
+    for index in range(2):
+        if index:
+            discovery_client.results["second"] = tmp_path / "later.jsonl"
         _, background = dispatch_event(
             tmp_path,
             Event.Stop,
@@ -474,7 +476,8 @@ def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, 
         )
         background()
 
-    expected = (tmp_path / "first.jsonl", tmp_path / "second.jsonl")
-    assert seen == [expected] * 4
+    initial = (tmp_path / "first.jsonl", tmp_path / "second.jsonl")
+    updated = (tmp_path / "first.jsonl", tmp_path / "later.jsonl")
+    assert seen == [initial, initial, updated, updated]
     assert len(discovery_client.requests) == 2
     assert discovery_client.released == ["second", "first"] * 2
