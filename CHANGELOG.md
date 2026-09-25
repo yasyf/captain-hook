@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The general pack blocks `pkill` and `killall`.** Both match every process
+  on the machine whose name or command line fits the pattern. `pkill -f never`
+  matched a word in each Orca terminal's shell startup script and killed 15
+  unrelated Claude sessions at once. The block names `kill <pid>` with pids
+  from `$!`, `pgrep -P`, or `lsof` instead.
+
 ## [12.57.0] - 2026-09-25
 
 ### Added

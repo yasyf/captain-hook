@@ -162,6 +162,30 @@ hook(
     },
 )
 
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), Or(Runs("pkill"), Runs("killall"))],
+    message=(
+        "BLOCKED: pkill and killall match every process on the machine whose name or command line "
+        "fits the pattern, including other sessions' terminals, agents, and daemons. `pkill -f never` "
+        "matched the word in every terminal's shell startup script and killed 15 unrelated Claude "
+        "sessions (user 2026-09-24: 'Block pkill -f / killall'). Kill only processes you started, by "
+        "pid: `kill <pid>` with pids from `$!`, `pgrep -P <your-pid>`, or `lsof -t -a -d cwd +D <dir>`, "
+        "after checking each with `ps -o pid,command -p <pid>`."
+    ),
+    block=True,
+    tests={
+        Input(command='pkill -f "never" 2>/dev/null; codex-ask --help'): Block(),
+        Input(command="pkill node"): Block(),
+        Input(command="pkill -9 -f 'vite dev'"): Block(),
+        Input(command="killall claude"): Block(),
+        Input(command="sudo pkill -f server"): Block(),
+        Input(command="kill 12345"): Allow(),
+        Input(command="pgrep -f never"): Allow(),
+        Input(command="echo pkill -f never"): Allow(),
+    },
+)
+
 
 # Requires the codex plugin (/plugin install codex@skills from yasyf/cc-skills).
 # Delete this nudge if you don't use Codex.
