@@ -38,14 +38,15 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   pass has run. Rebase, merge, and pull notes name `ccx vcs stack rebase` (ccx 0.65.0 or later) or
   `ccx vcs stack submit`. When ccx is on PATH, a stack write with a ccx twin is rewritten to it:
   `gt submit`, `gt s`, and `gt ss` become `ccx vcs stack submit` (`-d`/`--draft` carries over as
-  `--draft`), a bare `gt restack` becomes `ccx vcs stack restack`, and inside a ccx conflict
-  workspace `git rebase --continue` / `--abort` become `ccx vcs stack continue` / `abort` (ccx
-  0.65.0 or later). A `git push --force-with-lease` of the checked-out branch to `origin`, with no
+  `--draft`), and a bare `gt restack` becomes `ccx vcs stack restack`. A `git push --force-with-lease` of the checked-out branch to `origin`, with no
   lease value of its own, becomes `ccx vcs push`, which force-pushes under a lease only when the
   branch was rewritten and refuses a remote head the branch never held. The rewrite applies only when the ccx verb covers every flag on the call and no
   wrapper, env prefix, or global option would be dropped. Everything else it routes, from
   `gt sync`, `gt create`, `gt modify`, a scoped `gt restack`, and `git rebase` to a plain
-  `git push --force`, runs as written with a note naming the ccx command. End a command with `# ccx:raw`, or set
+  `git push --force`, runs as written with a note naming the ccx command. A rebase control
+  (`--continue`, `--abort`, `--skip`) inside a ccx conflict workspace runs as written too, with a note
+  naming `ccx vcs stack continue` / `abort` (ccx 0.65.0 or later), since it is the workaround when
+  that verb fails. End a command with `# ccx:raw`, or set
   `CAPT_HOOK_CCX_RAW=1` for the session, to run it as written and silence the note. With ccx
   on PATH, a `gh pr view --json` query for landing fields warns and names `ccx vcs pr status <n>`
   (ccx 0.64.1 or later) or `ccx vcs status`; the warning quiets after either command runs this

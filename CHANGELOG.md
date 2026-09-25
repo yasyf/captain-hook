@@ -24,8 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The graphite pack rewrites or advises; it no longer refuses.** A stack
   write with a ccx twin is rewritten to it: `gt submit`, `gt s`, and `gt ss`
   become `ccx vcs stack submit`, a bare `gt restack` becomes
-  `ccx vcs stack restack`, and `git rebase --continue` / `--abort` inside a
-  ccx conflict workspace become `ccx vcs stack continue` / `abort`. A bare
+  `ccx vcs stack restack`. A bare
   `git push --force-with-lease` of the checked-out branch to `origin` becomes
   `ccx vcs push`, which refuses a remote head the branch never held. The
   rewrite applies only when the ccx verb covers every flag on the call and
@@ -33,7 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   system message names each swap. Every other routed write, from `gt sync`,
   `gt create`, `gt modify`, and `git rebase` to a plain `git push --force`, runs as written
   with a note naming the ccx command. A jj write in a Graphite repository
-  gets a note instead of a refusal.
+  gets a note instead of a refusal. A manual `git rebase --continue`,
+  `--abort`, or `--skip` inside a ccx conflict workspace, run there or through
+  `git -C <workspace>`, runs untouched with a note naming
+  `ccx vcs stack continue`: it is the workaround when that verb itself fails,
+  so it is neither refused nor rewritten.
 - **`# ccx:raw` runs a command as written.** A trailing `# ccx:raw` comment on
   a command, or `CAPT_HOOK_CCX_RAW=1` set for the session, skips every
   graphite-pack rewrite and note, so a deliberate raw `gt` or `git` call is
