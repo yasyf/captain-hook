@@ -256,7 +256,7 @@ class SnapshotClient:
         if not isinstance(description, dict):
             raise SnapshotProtocolError("acquire completed without a snapshot description")
         return RemoteSession(
-            self, Lease(self, description["handle"]), Path(description["canonical_path"]), dict(classifier)
+            self, Lease(self, description), Path(description["canonical_path"]), description["classifier"]
         )
 
     def classify(
@@ -294,7 +294,7 @@ class SnapshotClient:
         if result["status"] != "ok" or data["kind"] != "acquired":
             raise SnapshotProtocolError("classifier completed without a leased description")
         description = data["description"]
-        classified = RemoteSession(self, Lease(self, description["handle"]), session.path, description["classifier"])
+        classified = RemoteSession(self, Lease(self, description), session.path, description["classifier"])
         session.release()
         return classified
 
@@ -310,10 +310,11 @@ class SnapshotClient:
 
 
 class Lease:
-    def __init__(self, client: SnapshotClient, handle: Mapping[str, str]) -> None:
+    def __init__(self, client: SnapshotClient, description: Mapping[str, Any]) -> None:
         self.client = client
         client._leases.add(self)
-        self.handle = dict(handle)
+        self.handle = dict(description["handle"])
+        self.expires_unix_ms = description["lease_expires_unix_ms"]
         self.released = False
         self.guard = threading.Lock()
 
@@ -321,6 +322,11 @@ class Lease:
         with self.guard:
             if self.released:
                 raise EvidenceIncomplete("stale_handle", "preparation lease was already released")
+            if self.expires_unix_ms <= time.time() * 1000 + 1000:
+                result = self.client.call("renew", handle=self.handle)
+                if result["status"] != "ok":
+                    raise EvidenceIncomplete(result["status"], result["reason"])
+                self.expires_unix_ms = result["data"]["expires_unix_ms"]
             return self.handle.copy()
 
     def release(self) -> None:
@@ -379,7 +385,7 @@ class RemoteSession:
         data = list(self.client.pages("retain", handle=self.lease.require()))
         if len(data) != 1 or data[0].get("kind") != "acquired":
             raise SnapshotProtocolError("retain completed without one leased description")
-        return replace(self, lease=Lease(self.client, data[0]["description"]["handle"]))
+        return replace(self, lease=Lease(self.client, data[0]["description"]))
 
     def release(self) -> None:
         self.lease.release()

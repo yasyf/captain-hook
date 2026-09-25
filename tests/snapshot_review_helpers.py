@@ -20,7 +20,12 @@ class FixtureSnapshot:
     def __init__(self, path: Path, handle):
         self.raw = path.read_bytes()
         self.events = parse_events_from_bytes(self.raw)
-        self.description = {"canonical_path": str(path), "mtime_ns": str(path.stat().st_mtime_ns), "handle": handle}
+        self.description = {
+            "canonical_path": str(path),
+            "mtime_ns": str(path.stat().st_mtime_ns),
+            "handle": handle,
+            "lease_expires_unix_ms": 9_000_000_000_000_000,
+        }
         self.activities = {}
 
     def activity(self, classifier, **kwargs):
@@ -29,10 +34,10 @@ class FixtureSnapshot:
             self.activities[session_id] = SessionActivity.from_events(session_id, self.events)
         return self.activities[session_id]
 
-    def mine(self, spec):
-        from cc_transcript.mining.signals import mine
+    def mine_json(self, spec_json, formats):
+        from cc_transcript import _native
 
-        return mine(self.events, spec)
+        return _native.mine_events(self.events, spec_json, [entry[:3] for entry in formats])
 
     def capture(self, anchors):
         return capture_windows(self.raw, anchors)

@@ -162,7 +162,7 @@ class Owner:
     ) -> dict[str, Any]:
         usage: dict[str, int] | None = None
         try:
-            context["registry_generation"] = self.store.register_tool_registry(tool_registry)
+            context["registry_generation"] = self.store.register_tool_registry(tool_registry, context=context)
             if request["schema"] == CORE_SCHEMA:
                 if request["operation"] == "resume":
                     page = self.store.resume_projection(request["cursor"], context=context, cancellation=token)

@@ -27,6 +27,7 @@ def response(request, data, *, cursor=None):
 def description(lease="lease", classifier=None):
     return {
         "handle": {"owner_epoch": "owner", "snapshot_id": "snapshot", "generation": "generation", "lease_id": lease},
+        "lease_expires_unix_ms": 9_000_000_000_000_000,
         "canonical_path": "/tmp/fixture.jsonl",
         "source_id": "source",
         "device": "1",
@@ -112,7 +113,7 @@ def test_configured_classifier_runs_in_callers_context_for_each_preparation(monk
     client = SnapshotClient(exchange)
     for value in ("yes", "no"):
         session = RemoteSession(
-            client, Lease(client, description()["handle"]), Path("/tmp/fixture.jsonl"), {"id": "native", "version": "1"}
+            client, Lease(client, description()), Path("/tmp/fixture.jsonl"), {"id": "native", "version": "1"}
         )
         scope = reqenv.RequestOverrides({"HOOKS_CLASSIFY": value}, "/tmp", 0, "fixture")
         with reqenv.use_request(scope):
@@ -159,7 +160,7 @@ def test_classifier_callback_failure_releases_its_cursor(monkeypatch):
 
     client = SnapshotClient(exchange)
     session = RemoteSession(
-        client, Lease(client, description()["handle"]), Path("/tmp/fixture.jsonl"), {"id": "native", "version": "1"}
+        client, Lease(client, description()), Path("/tmp/fixture.jsonl"), {"id": "native", "version": "1"}
     )
     with pytest.raises(ValueError, match="configured callback failed"):
         client.classify(session, callback, {"id": "configured", "version": "fixture"})
@@ -197,3 +198,22 @@ def test_tool_registry_is_captured_once_and_cannot_change_during_preparation():
     )
     with pytest.raises(EvidenceIncomplete, match="changed during one evidence preparation"):
         client.bind_tool_registry({"mcp_edit": ("Edit", fields)})
+
+
+def test_lease_renews_only_near_its_reported_expiry(monkeypatch):
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+    calls = []
+
+    def exchange(wrapper):
+        req = wrapper["request"]
+        calls.append(req)
+        return response(req, {"kind": "renewed", "expires_unix_ms": 110_000})
+
+    client = SnapshotClient(exchange)
+    details = description() | {"lease_expires_unix_ms": 100_500}
+    lease = Lease(client, details)
+    assert lease.require() == details["handle"]
+    assert lease.require() == details["handle"]
+    assert len(calls) == 1
+    assert calls[0]["operation"] == "renew"
+    assert lease.expires_unix_ms == 110_000

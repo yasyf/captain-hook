@@ -226,6 +226,8 @@ def decode_candidate(raw: str) -> tuple[FeedbackCandidate, tuple[str, ...]]:
 
 
 async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_log: Any) -> dict[str, Any]:
+    from cc_transcript.mining import mine_snapshot
+
     from captain_hook.review.fix import iter_hook_complaint_signals, turn_marker
     from captain_hook.review.routing import PackIndex
     from captain_hook.review.scan import (
@@ -287,7 +289,7 @@ async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_
         decisions = await decision_log(decision_path)
         async for signal in iter_hook_complaint_signals(events, decisions=decisions, index=routing):
             keep(signal)
-    for signal in snapshot.mine(REVIEWER_MINING_SPEC):
+    for signal in mine_snapshot(snapshot, REVIEWER_MINING_SPEC):
         keep(signal)
     shadowed = {
         (signal.session_id, signal.event_uuid, signal.text)
@@ -414,7 +416,7 @@ def render_review_windows(
                     for resolution in page["sessions"]:
                         resolutions.append(resolution)
                         if resolution["description"] is not None:
-                            leases.append(Lease(client, resolution["description"]["handle"]))
+                            leases.append(Lease(client, resolution["description"]))
                 if len(resolutions) != 1 or resolutions[0]["session_id"] != session_id:
                     raise SnapshotProtocolError("resolve did not return the requested session")
                 resolution = resolutions[0]

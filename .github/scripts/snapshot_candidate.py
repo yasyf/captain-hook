@@ -20,7 +20,7 @@ REQUIRED = {
         "register_tool_registry",
         "discard_response",
     },
-    "TranscriptSnapshot": {"activity", "capture", "hydrate", "mine", "classifier_facts"},
+    "TranscriptSnapshot": {"activity", "capture", "hydrate", "mine_json", "classifier_facts"},
 }
 
 
@@ -33,6 +33,8 @@ def main() -> None:
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
     receipt = json.loads(Path(__file__).parents[1].joinpath("snapshot-candidate.json").read_text())
+    if receipt["pending_api_changes"]:
+        raise SystemExit(f"native candidate requires a new tested artifact: {receipt['pending_api_changes']}")
     if receipt["artifact_id"] is None or receipt["artifact_digest"] is None:
         raise SystemExit(f"native candidate artifact is not verified yet; waiting for source run {receipt['run_id']}")
     repository = receipt["repository"]
@@ -74,6 +76,10 @@ def main() -> None:
         wheel_path = args.directory / entries[0].filename
         with archive.open(entries[0]) as source, wheel_path.open("wb") as destination:
             shutil.copyfileobj(source, destination)
+    with wheel_path.open("rb") as source:
+        wheel_digest = hashlib.file_digest(source, "sha256").hexdigest()
+    if wheel_path.name != receipt["wheel_name"] or wheel_digest != receipt["wheel_sha256"]:
+        raise SystemExit("snapshot candidate wheel differs from its pinned receipt")
     with zipfile.ZipFile(wheel_path) as wheel:
         tree = ast.parse(wheel.read("cc_transcript/snapshots.py"))
         classes = {
@@ -90,6 +96,12 @@ def main() -> None:
             raise SystemExit(
                 f"pinned candidate predates required snapshot APIs; update tested artifact receipt: {missing}"
             )
+        store = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TranscriptStore")
+        registration = next(
+            node for node in store.body if isinstance(node, ast.FunctionDef) and node.name == "register_tool_registry"
+        )
+        if "context" not in {argument.arg for argument in registration.args.kwonlyargs}:
+            raise SystemExit("pinned candidate lacks request-scoped tool registry admission")
         for schema in ("request", "response", "context", "config", "tool_registry"):
             json.loads(wheel.read(f"cc_transcript/snapshot_schema/{schema}.schema.json"))
     print(json.dumps(receipt | {"wheel": wheel_path.name}, sort_keys=True))

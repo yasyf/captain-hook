@@ -346,7 +346,8 @@ def test_owner_binds_registry_content_without_changing_authority():
     captured = []
     specs = [{"name": "custom_edit", "behaves_like": "Edit", "span_edit": None}]
 
-    def register(registry):
+    def register(registry, *, context):
+        assert context["admission"] == "hook"
         assert registry == specs
         return "content-fingerprint"
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from cc_transcript import _native
 from cc_transcript.context import ContextWindow, capture_windows
 from cc_transcript.ids import EventRef, EventUuid, SessionId
 from cc_transcript.mining.candidates import dedup_key
@@ -40,6 +41,7 @@ def window(session: str = "session") -> ContextWindow:
 def description(handle):
     return {
         "handle": handle,
+        "lease_expires_unix_ms": 9_000_000_000_000_000,
         "canonical_path": "/fixtures/session.jsonl",
         "source_id": "source",
         "device": "1",
@@ -250,7 +252,7 @@ async def test_owner_mining_captures_same_borrowed_snapshot(monkeypatch, tmp_pat
         description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123"},
         checkpoint=lambda: None,
         consume=lambda **kwargs: None,
-        mine=lambda spec: scan_module.detect(events),
+        mine_json=lambda spec, formats: _native.mine_events(events, spec, [entry[:3] for entry in formats]),
     )
     monkeypatch.setattr(scan_module, "transcript_repo", lambda _: REPO)
     monkeypatch.setattr(scan_module, "transcript_cwd", lambda _: None)

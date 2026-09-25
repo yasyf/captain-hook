@@ -28,6 +28,7 @@ class DiscoveryClient:
                 if isinstance(value, Path):
                     description = {
                         "canonical_path": str(value),
+                        "lease_expires_unix_ms": 9_000_000_000_000_000,
                         "handle": {
                             "owner_epoch": "owner",
                             "snapshot_id": session_id,

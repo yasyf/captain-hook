@@ -320,7 +320,7 @@ def resolved_transcript_paths(
             ):
                 for item in page["sessions"]:
                     if item["description"] is not None:
-                        cleanup.callback(Lease(client, item["description"]["handle"]).release)
+                        cleanup.callback(Lease(client, item["description"]).release)
                 results.extend(page["sessions"])
             resolved: dict[SessionId, Path | None] = {}
             for item in results:

@@ -6,5 +6,11 @@
   "artifact_digest": null,
   "head_sha": "bfdb0b76d7dc77a8823b5832951660ccfbbfde73",
   "merge_sha": "a3e195b7f1d01c33f5118ac41b03592018fcbc12",
-  "tree_sha": "13cd0313f1c77e1695a32c7ea2461b515cae1c99"
+  "tree_sha": "13cd0313f1c77e1695a32c7ea2461b515cae1c99",
+  "wheel_name": null,
+  "wheel_sha256": null,
+  "pending_api_changes": [
+    "request-scoped tool registry admission",
+    "lease expiry and active-borrow lifetime"
+  ]
 }

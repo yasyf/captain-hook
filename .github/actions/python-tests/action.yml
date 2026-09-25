@@ -54,6 +54,12 @@ runs:
         uv pip install --python .venv/bin/python --no-deps --reinstall "$SNAPSHOT_CANDIDATE"/*.whl
         .venv/bin/python -c 'import importlib.metadata; from cc_transcript.snapshots import TranscriptStore; assert callable(TranscriptStore.prepare_classifier); assert callable(TranscriptStore.register_tool_registry); print("Testing native candidate", importlib.metadata.version("cc-transcript"))'
 
+    - name: Test shared evidence through the real Python owner pipe
+      shell: bash
+      env:
+        CAPTAIN_TEST_SNAPSHOT_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      run: go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
+
     - name: Check generated snapshot schemas
       shell: bash
       run: |

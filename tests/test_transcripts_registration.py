@@ -420,7 +420,12 @@ def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path, monkeypatch,
         if Path(path) != main:
             return acquire(path)
         handle = {"owner_epoch": "owner", "snapshot_id": "main", "generation": "1", "lease_id": "main"}
-        return RemoteSession(discovery_client, Lease(discovery_client, handle), main, NATIVE_CLASSIFIER)
+        return RemoteSession(
+            discovery_client,
+            Lease(discovery_client, {"handle": handle, "lease_expires_unix_ms": 9_000_000_000_000_000}),
+            main,
+            NATIVE_CLASSIFIER,
+        )
 
     def pages(operation, **arguments):
         if operation == "prepare_hook_view":

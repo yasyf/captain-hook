@@ -557,6 +557,12 @@
           "title": "Inode",
           "type": "string"
         },
+        "lease_expires_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Lease Expires Unix Ms",
+          "type": "integer"
+        },
         "mtime_ns": {
           "pattern": "^[0-9]+$",
           "title": "Mtime Ns",
@@ -601,6 +607,7 @@
       },
       "required": [
         "handle",
+        "lease_expires_unix_ms",
         "canonical_path",
         "source_id",
         "device",
