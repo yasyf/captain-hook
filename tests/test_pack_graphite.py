@@ -411,6 +411,8 @@ def test_stack_writes_blocked_when_ccx_installed(
         "git rebase --abort",
         "git push origin feat",
         "git push --tags",
+        "git push -ofoo origin feat",
+        "git push -o ci.skip origin feat",
         "ccx vcs stack submit",
         'ccx vcs ship -m "gt submit --force"',
         "echo gt submit",
@@ -444,5 +446,17 @@ def test_rebase_onto_own_upstream_is_ccx_ships_recovery(
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo = real_gt_repo(tmp_path, None)
     subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "feat"], check=True)
+    git = ["git", "-C", str(repo)]
+    subprocess.run(
+        [*git, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"], check=True
+    )
+    subprocess.run([*git, "update-ref", "refs/remotes/origin/feat", "HEAD"], check=True)
+    subprocess.run([*git, "branch", "local/feat"], check=True)
     assert_not_denied(dispatch_command("git rebase --autostash origin/feat", repo, tmp_path))
-    assert_fires(dispatch_command("git rebase origin/dev", repo, tmp_path), "deny", "ccx vcs stack restack")
+    for command in [
+        "git rebase origin/dev",
+        "git rebase local/feat",
+        "git rebase --onto=main origin/feat",
+        "git rebase origin/feat $(printf other)",
+    ]:
+        assert_fires(dispatch_command(command, repo, tmp_path), "deny", "ccx vcs stack restack")
