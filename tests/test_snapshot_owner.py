@@ -10,7 +10,7 @@ from jsonschema import ValidationError
 
 from captain_hook.snapshots.client import CORE_SCHEMA, HOST_SCHEMA, MAX_FRAME_BYTES, SnapshotProtocolError, encode_frame
 from captain_hook.snapshots.validation import checked, validator
-from captain_hook.snapshots.worker import OwnerService, empty_usage, failure, handshake, read_frame
+from captain_hook.snapshots.worker import OWNER_ADMISSION, OwnerService, empty_usage, failure, handshake, read_frame
 
 
 def context(admission="hook"):
@@ -243,7 +243,7 @@ def test_saturated_owner_returns_bounded_failure_without_submitting():
     output = io.BytesIO()
     owner = SimpleNamespace(record_transport=lambda count: None, discard=lambda response, ctx: None)
     service = OwnerService(io.BytesIO(), output, owner)
-    for _ in range(4):
+    for _ in range(OWNER_ADMISSION["hook"][1]):
         assert service.slots["hook"].acquire(blocking=False)
     try:
         service.submit(request())
@@ -251,6 +251,49 @@ def test_saturated_owner_returns_bounded_failure_without_submitting():
         assert read_frame(output)["snapshot"]["response"]["status"] == "retained_limit"
         assert not service.pending
     finally:
+        for executor in service.executors.values():
+            executor.shutdown()
+
+
+def test_owner_queues_burst_without_starting_unbounded_work():
+    started = 0
+    guard = threading.Lock()
+    release = threading.Event()
+
+    def call(body, ctx, token, registry):
+        nonlocal started
+        with guard:
+            started += 1
+        release.wait(timeout=2)
+        return failure(body["id"], "missing", "fixture")
+
+    output = io.BytesIO()
+    owner = SimpleNamespace(
+        token_type=threading.Event,
+        call=call,
+        close=lambda: None,
+        record_transport=lambda count: None,
+        discard=lambda response, ctx: None,
+    )
+    service = OwnerService(io.BytesIO(), output, owner)
+    workers = OWNER_ADMISSION["hook"][0]
+    try:
+        for frame_id in range(1, workers + 2):
+            service.submit(request(frame_id))
+        deadline = time.monotonic() + 2
+        while started < workers and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert started == workers
+        assert len(service.pending) == workers + 1
+        assert output.getvalue() == b""
+        release.set()
+        wait_idle(service)
+        output.seek(0)
+        assert [read_frame(output)["snapshot"]["response"]["status"] for _ in range(workers + 1)] == [
+            "missing"
+        ] * (workers + 1)
+    finally:
+        release.set()
         for executor in service.executors.values():
             executor.shutdown()
 

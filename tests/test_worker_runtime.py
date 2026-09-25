@@ -13,6 +13,7 @@ import pytest
 
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO, bound_buffers
+from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest
 from captain_hook.worker.runtime import ProductRuntime
@@ -219,6 +220,55 @@ def test_dispatch_exception_returns_traceback_error() -> None:
     assert response.status == "error"
     assert response.exit == 1
     assert "ValueError: broken hook" in response.stderr
+
+
+@pytest.mark.parametrize("status", ["retained_limit", "lease_limit"])
+def test_snapshot_capacity_failure_allows_hook_without_traceback(status: str) -> None:
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        raise EvidenceIncomplete(status, "snapshot capacity occupied")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, after = runtime.dispatch(request())
+
+    assert after is None
+    assert response.status == "ok"
+    assert response.exit == 0
+    assert response.stdout == ""
+    assert response.stderr == ""
+
+
+def test_other_incomplete_evidence_remains_visible() -> None:
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        raise EvidenceIncomplete("output_limit", "evidence exceeds output bound")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, after = runtime.dispatch(request())
+
+    assert after is None
+    assert response.status == "error"
+    assert response.exit == 1
+    assert "evidence exceeds output bound" in response.stderr
+
+
+def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
+    def fail() -> None:
+        raise EvidenceIncomplete("retained_limit", "snapshot capacity occupied")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=lambda *_, **__: (None, fail),
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    response, after = runtime.dispatch(request())
+
+    assert response.exit == 0
+    assert after is not None
+    after()
 
 
 def test_hook_writes_are_captured_inside_the_product_response() -> None:
