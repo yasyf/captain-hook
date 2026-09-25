@@ -108,7 +108,7 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
         )
         if len(data) != 1 or data[0]["kind"] != "classifier":
             raise EvidenceIncomplete("invalid_request", "hook classifier preparation returned invalid evidence")
-        return dataclasses.replace(session, classifier=data[0]["classifier"])
+        return session.with_classifier(data[0]["classifier"])
     except BaseException:
         session.release()
         raise

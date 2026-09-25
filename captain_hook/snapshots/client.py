@@ -313,6 +313,7 @@ class Lease:
     def __init__(self, client: SnapshotClient, description: Mapping[str, Any]) -> None:
         self.client = client
         client._leases.add(self)
+        self.description = dict(description)
         self.handle = dict(description["handle"])
         self.expires_unix_ms = description["lease_expires_unix_ms"]
         self.released = False
@@ -386,6 +387,30 @@ class RemoteSession:
         if len(data) != 1 or data[0].get("kind") != "acquired":
             raise SnapshotProtocolError("retain completed without one leased description")
         return replace(self, lease=Lease(self.client, data[0]["description"]))
+
+    def with_classifier(self, classifier: Mapping[str, str]) -> RemoteSession:
+        if classifier == self.classifier:
+            return self
+        self.lease.require()
+        classified = self.client.acquire(self.path, classifier=classifier)
+        try:
+            if any(
+                self.lease.description[field] != classified.lease.description[field]
+                for field in (
+                    "source_id",
+                    "mtime_ns",
+                    "ctime_ns",
+                    "source_bytes",
+                    "committed_bytes",
+                    "provisional_tail",
+                )
+            ):
+                raise EvidenceIncomplete("changed", "transcript changed during classifier selection")
+        except BaseException:
+            classified.release()
+            raise
+        self.release()
+        return replace(classified, selectors=self.selectors, attachments=self.attachments)
 
     def release(self) -> None:
         self.lease.release()

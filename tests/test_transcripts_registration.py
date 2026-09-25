@@ -394,53 +394,25 @@ class TestUnsafePathsSkipped:
         assert raised.value.status == status
 
 
-def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path, monkeypatch, discovery_client):
-    from captain_hook.snapshots.client import NATIVE_CLASSIFIER, Lease, RemoteSession
+def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path):
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.testing.helpers import fixture_line
+    from captain_hook.testing.snapshots import FixtureOwner
 
     rollout = write_apply_patch_rollout(tmp_path / "rollout.jsonl", "thread-e2e")
     register_transcript("s-e2e", provider="codex", path=str(rollout))
-
     main = tmp_path / "main.jsonl"
     main.write_text(
-        "\n".join(
-            json.dumps(m)
-            for m in (
-                raw_text("user", "look at the code"),
-                raw_assistant(raw_text_block("reading"), raw_tool_use("Read", {"file_path": "src/main.py"}, "tu1")),
+        "".join(
+            json.dumps(fixture_line(index, message)) + "\n"
+            for index, message in enumerate(
+                (
+                    raw_text("user", "look at the code"),
+                    raw_assistant(raw_text_block("reading"), raw_tool_use("Read", {"file_path": "src/main.py"}, "tu1")),
+                )
             )
         )
-        + "\n"
     )
-
-    discovery_client.paths[str(rollout)] = rollout
-    acquire = discovery_client.acquire
-    queries = []
-
-    def acquire_source(path):
-        if Path(path) != main:
-            return acquire(path)
-        handle = {"owner_epoch": "owner", "snapshot_id": "main", "generation": "1", "lease_id": "main"}
-        return RemoteSession(
-            discovery_client,
-            Lease(discovery_client, {"handle": handle, "lease_expires_unix_ms": 9_000_000_000_000_000}),
-            main,
-            NATIVE_CLASSIFIER,
-        )
-
-    def pages(operation, **arguments):
-        if operation == "prepare_hook_view":
-            yield {"kind": "classifier", "classifier": NATIVE_CLASSIFIER}
-        else:
-            assert operation == "query"
-            assert arguments["query"]["kind"] == "has_edit_to"
-            queries.append(arguments)
-            yield {
-                "kind": "scalar",
-                "value": bool(arguments["query"]["subagents"] and arguments["view"]["attachments"]),
-            }
-
-    monkeypatch.setattr(discovery_client, "acquire", acquire_source)
-    monkeypatch.setattr(discovery_client, "pages", pages)
     fired: list[str] = []
 
     @on(Event.Stop)
@@ -453,11 +425,17 @@ def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path, monkeypatch,
         if evt.ctx.t.has_edit_to("*", subagents=False):
             fired.append("bare")
 
-    dispatch_event(
-        tmp_path,
-        Event.Stop,
-        {"session_id": "s-e2e", "transcript_path": str(main)},
-        session_dir=ensure_session(SessionId("s-e2e")),
-    )
-    assert fired == ["deep"]
-    assert all(query["view"]["attachments"] == [str(rollout)] for query in queries)
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    try:
+        dispatch_event(
+            tmp_path,
+            Event.Stop,
+            {"session_id": "s-e2e", "transcript_path": str(main)},
+            session_dir=ensure_session(SessionId("s-e2e")),
+        )
+        assert fired == ["deep"]
+        assert fixture.client.call("stats")["data"]["counters"]["cold_parses"] == 2
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
