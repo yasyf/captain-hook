@@ -24,14 +24,21 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
   pre-existing issue, don't chase trivial type noise, don't swap the requested fix for docs.
 - `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs.
-- `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo
-  (every hook checks for `.git/.graphite_repo_config`, worktree-aware, and honours `ccx.nogt`, the
-  git-config key a repository sets to opt out of the gt lane — ccx declines the lane there, so a
-  stale marker must not steer you toward gt): a jj ban that carves out read-only `jj`
-  (`log`, `status`, `diff`, `bookmark list`, …, and only when *every* `jj` call on the line is a
-  read), steers from raw `git commit`/`git push`/branch writes to `ccx vcs ship`/`ccx vcs stack new`, a
-  pre-submit review reminder that quiets once a cc-review pass has run, and rebase/merge/pull nudges
-  toward `ccx vcs stack submit`.
+- `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo.
+  Every hook checks for `.git/.graphite_repo_config` across worktrees and honors `ccx.nogt`.
+  That git-config key opts a repo out of the gt lane, so a stale marker cannot activate the pack.
+  The pack bans jj writes but allows read-only `jj` commands (`log`, `status`, `diff`,
+  `bookmark list`, …) when *every* `jj` call on the line is a read. It steers raw
+  `git commit`/`git push`/branch writes to `ccx vcs ship`/`ccx vcs stack new`. Its pre-submit review
+  reminder quiets once a cc-review pass has run. Rebase, merge, and pull nudges name
+  `ccx vcs stack rebase` (ccx 0.65.0 or later) or `ccx vcs stack submit`. When ccx is on PATH, it
+  blocks agent-run `gt submit`, `gt restack`, `gt sync`, `gt create`, `gt modify`, `git rebase`, and
+  force pushes, naming the ccx command to run instead. The conflict steps a ccx refusal prints
+  (`gt restack --only --branch <b>`, `gt continue`, `gt abort`) stay open, as do rebase controls
+  outside a ccx conflict workspace. Inside one, it blocks raw rebase controls and names
+  `ccx vcs stack continue` / `ccx vcs stack abort` (ccx 0.65.0 or later). With ccx on PATH, a
+  `gh pr view --json` query for landing fields warns and names `ccx vcs pr status <n>` (ccx 0.64.1
+  or later) or `ccx vcs status`; the warning quiets after either command runs this session.
 
 Two more activate by language, detected from the repo's build manifests:
 
@@ -57,7 +64,7 @@ uvx capt-hook pack list
 ```
   builtin:fixes                      builtin  2 hooks
   builtin:general                    builtin  13 hooks
-  builtin:graphite                   builtin  4 hooks
+  builtin:graphite                   builtin  1 hooks
   builtin:performance                builtin  1 hooks
   builtin:python                     builtin  3 hooks
   builtin:steering                   builtin  3 hooks
