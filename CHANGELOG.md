@@ -21,13 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Force pushes are advised, not blocked.** The stack-write guard's other
-  arms each have a ccx verb that does the same job, so they still block. A
-  force push does not: `ccx vcs stack submit` replays a branch from its
-  recorded base rather than overwriting the remote, which is not what a
-  deliberately rewritten branch needs. That arm now warns, names the route
-  and its limits, and lets the push through. A line carrying both a blocking
-  and an advisory shape still blocks.
+- **The graphite pack rewrites or advises; it no longer refuses.** A stack
+  write with a ccx twin is rewritten to it: `gt submit`, `gt s`, and `gt ss`
+  become `ccx vcs stack submit`, a bare `gt restack` becomes
+  `ccx vcs stack restack`, and `git rebase --continue` / `--abort` inside a
+  ccx conflict workspace become `ccx vcs stack continue` / `abort`. The
+  rewrite applies only when the ccx verb covers every flag on the call and
+  no wrapper, env prefix, or global option would be lost; a user-visible
+  system message names each swap. Every other routed write, from `gt sync`,
+  `gt create`, `gt modify`, and `git rebase` to a force push, runs as written
+  with a note naming the ccx command. A jj write in a Graphite repository
+  gets a note instead of a refusal.
+- **`# ccx:raw` runs a command as written.** A trailing `# ccx:raw` comment on
+  a command, or `CAPT_HOOK_CCX_RAW=1` set for the session, skips every
+  graphite-pack rewrite and note, so a deliberate raw `gt` or `git` call is
+  never swapped out from under its author.
+- **The pre-submit review reminder ignores `--help`.** `gt submit --help`
+  no longer reminds you to run a review pass.
 
 ## [12.57.1] - 2026-09-25
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, BaseHookEvent, Event, HookResult, Input, RanCommand, Tool, UserSaid, hook, on
@@ -10,12 +10,14 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     HasFlag,
     JJReads,
     PushesTagRef,
+    RawRequested,
     ReviewPassRan,
     force_pushes,
     git_location,
     graphite_owns,
     rebases_onto_own_upstream,
 )
+from captain_hook.cmd import Targets
 
 if TYPE_CHECKING:
     from captain_hook.cmd import Call
@@ -29,13 +31,13 @@ if TYPE_CHECKING:
 hook(
     Event.PreToolUse,
     only_if=[Tool("Bash"), GraphiteRuns(("jj",))],
-    skip_if=[JJReads()],
+    skip_if=[JJReads(), RawRequested()],
     message=(
-        "BLOCKED: the repository this command targets runs on Graphite (gt), not jj — its stack metadata "
-        "lives in Graphite. Use `ccx vcs ship` to commit and submit, `ccx vcs stack new <name>` to cut a "
-        "stacked branch, and `gt log` or `ccx vcs stack list` to inspect the stack."
+        "The repository this command targets runs on Graphite (gt), not jj: its stack metadata lives in "
+        "Graphite, and a jj write leaves that metadata stale. `ccx vcs ship` commits and submits, "
+        "`ccx vcs stack new <name>` cuts a stacked branch, and `gt log` or `ccx vcs stack list` inspects the "
+        "stack. To run a jj write as written without this note, end it with `# ccx:raw`."
     ),
-    block=True,
     tests={
         Input(command="jj new", cwd="/"): Allow(),
         Input(command="jj commit -m x", cwd="/"): Allow(),
@@ -61,7 +63,7 @@ hook(
             ("git", "checkout", "-B"),
         ),
     ],
-    skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef()],
+    skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef(), RawRequested()],
     message=(
         "Committing, branching, and pushing go through ccx vcs in the repository this command targets. "
         'Use `ccx vcs ship -m "<msg>"` to commit and submit, `ccx vcs stack new <name>` to cut a stacked '
@@ -91,6 +93,7 @@ hook(
         UserSaid(r"<command-name>/?cc-review", scope="session"),
         HasFlag("--dry-run"),
         HasFlag("--no-push"),
+        HasFlag("--help", "-h"),
     ],
     message=(
         "Before submitting: no review pass has run this session — run one first (`/cc-review:start`), the "
@@ -112,7 +115,7 @@ hook(
         Tool("Bash"),
         GraphiteRuns(("git", "rebase"), ("git", "merge"), ("git", "pull")),
     ],
-    skip_if=[HasFlag("--abort", "--continue", "--quit")],
+    skip_if=[HasFlag("--abort", "--continue", "--quit"), RawRequested()],
     message=(
         "Use `ccx vcs stack rebase` (ccx 0.65.0 or newer) to replay the stack, or `ccx vcs stack submit`, "
         "which fetches trunk, replays every lane, and submits. A raw rebase, merge, or pull leaves "
@@ -157,18 +160,26 @@ CREATE = (
 MODIFY = (
     '`ccx vcs ship -m "<msg>"` commits onto this branch, and `ccx vcs ship --amend` folds the change into its commit'
 )
+HAND_RUN = (
+    "A hand-run stack write works from the local trunk, which lags the remote, and leaves the other working "
+    "copies of the stack and Graphite's parent records behind"
+)
+OVERRIDE = (
+    "`# ccx:raw` at the end of a command, or `CAPT_HOOK_CCX_RAW=1` for the session, runs it as written "
+    "and silences this note."
+)
 GT_ROUTES = {
-    "submit": SUBMIT,
-    "s": SUBMIT,
-    "ss": SUBMIT,
-    "restack": RESTACK,
     "sync": RESTACK,
     "create": CREATE,
     "c": CREATE,
     "modify": MODIFY,
     "m": MODIFY,
 }
+SUBMIT_VERBS = frozenset({"submit", "s", "ss"})
+SUBMIT_FLAGS = frozenset({"--stack", "-s", "--no-edit", "-n", "--publish", "-p", "--no-interactive", "--restack"})
+DRAFT_FLAGS = frozenset({"--draft", "-d"})
 REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
+REBASE_RESUMES = {"--continue": "continue", "--abort": "abort"}
 LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
 
 
@@ -179,15 +190,28 @@ def in_conflict_workspace(call: Call, evt: BaseHookEvent) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Route:
-    """The ccx route for a hand-run stack write, and whether missing it is worth refusing over.
+    """The ccx route for a hand-run stack write, and the ccx command that replaces it when one does the same job.
 
-    Every blocking route has a ccx verb that does the same job. A force-push does not: the
-    branch may have been rewritten on purpose, which `ccx vcs stack submit` replays away
-    rather than overwrites, so that arm advises and steps aside.
+    ``to`` is set only where the ccx verb covers every flag the call carries, so the rewrite drops nothing
+    the caller asked for. Every other route, a force-push included, allows the command and names the route.
     """
 
     advice: str
-    blocking: bool = True
+    to: str | None = None
+    act: str = "rewrites a Graphite stack by hand"
+
+
+def submit_to(call: Call) -> str | None:
+    flags = frozenset(call.flags)
+    if len(call.targets) != 1 or not flags <= SUBMIT_FLAGS | DRAFT_FLAGS:
+        return None
+    return "ccx vcs stack submit --draft" if flags & DRAFT_FLAGS else "ccx vcs stack submit"
+
+
+def resume_to(call: Call) -> str | None:
+    if len(call.flags) != 1 or len(call.targets) != 1 or (verb := REBASE_RESUMES.get(call.flags[0])) is None:
+        return None
+    return f"ccx vcs stack {verb}"
 
 
 def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
@@ -197,24 +221,36 @@ def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
     match call.name, argv[1]:
         case "gt", "restack" if "--only" in call.flags:
             return None
+        case "gt", verb if verb in SUBMIT_VERBS:
+            route = Route(SUBMIT, submit_to(call))
+        case "gt", "restack":
+            route = Route(RESTACK, "ccx vcs stack restack" if argv == ("gt", "restack") else None)
         case "gt", verb if verb in GT_ROUTES:
             route = Route(GT_ROUTES[verb])
         case "git", "rebase" if not REBASE_CONTROL.isdisjoint(call.flags):
             if not in_conflict_workspace(call, evt):
                 return None
-            route = Route(CONFLICT)
+            route = Route(CONFLICT, resume_to(call))
         case "git", "rebase" if not rebases_onto_own_upstream(call, evt.cwd):
             route = Route(REBASE)
         case "git", "push" if force_pushes(call):
-            route = Route(FORCE_PUSH, blocking=False)
+            route = Route(FORCE_PUSH, act="overwrites remote history by hand")
         case _:
             return None
     return route if graphite_owns(call, evt.cwd) else None
 
 
+def rewrite(call: Call, route: Route) -> HookResult | None:
+    """Splice ``route.to`` over the call, or ``None`` when a wrapper, env prefix, or global option would be lost."""
+    if route.to is None or call.wrappers or call.source.env or call.leading_options:
+        return None
+    return call.sub(call.name, route.to, args=Targets())
+
+
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled()],
+    skip_if=[RawRequested()],
     tests={
         Input(command="gt submit", cwd="/"): Allow(),
         Input(command="gt restack", cwd="/"): Allow(),
@@ -224,24 +260,25 @@ def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
     },
 )
 def stack_writes_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
-    routed = [(call, route) for call in evt.cmd.calls() if (route := ccx_route(call, evt)) is not None]
-    if not routed:
+    rewritten: HookResult | None = None
+    swaps: list[str] = []
+    notes: list[str] = []
+    for call in evt.cmd.calls():
+        if (route := ccx_route(call, evt)) is None:
+            continue
+        verb = " ".join(call.verb_argv[:2])
+        if (result := rewrite(call, route)) is not None:
+            rewritten = result
+            swaps.append(f"`{call.source.raw}` → `{route.to}`")
+            notes.append(f"Rewrote `{call.source.raw}` → `{route.to}`: {route.advice}.")
+        else:
+            notes.append(f"`{verb}` {route.act}, and ccx is the default route here. {route.advice}. {HAND_RUN}.")
+    if not notes:
         return None
-    call, route = next((pair for pair in routed if pair[1].blocking), routed[0])
-    verb = " ".join(call.verb_argv[:2])
-    if not route.blocking:
-        return evt.warn(
-            f"`{verb}` overwrites remote history by hand, and ccx is installed. {route.advice}. A raw force-push "
-            "works from the local trunk, which lags the remote, and leaves the other working copies of the stack "
-            "and Graphite's parent records behind, so take the ccx route wherever it fits."
-        )
-    return evt.block(
-        f"BLOCKED: `{verb}` rewrites a Graphite stack by hand, and ccx is installed. "
-        f"{route.advice}. A hand-run gt verb works from the local trunk, which lags the remote, and "
-        "leaves the other working copies of the stack and Graphite's parent records behind. "
-        "`gt restack --only --branch <b>`, the conflict step a ccx refusal prints, stays open, as do "
-        "`gt continue`, `gt abort`, and `git rebase --continue`/`--abort` outside a ccx conflict workspace."
-    )
+    note = "\n".join([*notes, OVERRIDE])
+    if rewritten is None:
+        return evt.context(note)
+    return replace(rewritten, note=note, system_message=f"capt-hook rewrote {', '.join(swaps)}")
 
 
 def landing_fields(call: Call) -> frozenset[str]:

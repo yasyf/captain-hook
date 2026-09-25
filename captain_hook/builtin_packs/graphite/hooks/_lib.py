@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
+from captain_hook.util import reqenv
 from captain_hook.util.vcs import graphite_lane, graphite_lane_of_git_dir
 
 if TYPE_CHECKING:
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
 
 REVIEW_SKILL_PREFIX = "cc-review"
+RAW_MARKER = re.compile(r"#\s*ccx:raw\b")
+RAW_ENV = "CAPT_HOOK_CCX_RAW"
 
 JJ_READS = frozenset(
     {
@@ -174,6 +178,14 @@ class CcxInstalled(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return shutil.which("ccx") is not None
+
+
+class RawRequested(CustomCommandLineCondition):
+    """Matches a command that opts out of ccx steering: a ``# ccx:raw`` comment on the line, or
+    ``CAPT_HOOK_CCX_RAW`` set for the session. Either runs the raw command as written."""
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return RAW_MARKER.search(evt.cmd.raw) is not None or bool(reqenv.getenv(RAW_ENV))
 
 
 def git_probe(call: Call, session_cwd: Path | None, *args: str) -> str | None:
