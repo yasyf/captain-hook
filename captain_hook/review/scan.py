@@ -343,10 +343,9 @@ def candidates_from(
     for sig in signals:
         if not survives(events, sig):
             continue
-        candidate = to_candidate(raw, sig)
         floor = settings.min_confidence_fix if sig.kind == HOOK_COMPLAINT else settings.min_confidence
-        if candidate.signal.confidence >= floor:
-            yield sig, candidate
+        if sig.signal.confidence >= floor:
+            yield sig, to_candidate(raw, sig)
 
 
 def is_reviewer_session(events: Sequence[TranscriptEvent]) -> bool:

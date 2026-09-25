@@ -20,6 +20,7 @@ from captain_hook.review.scan import (
     REVIEWER_MARKER,
     STRICT_USER,
     ScanReport,
+    candidates_from,
     collapse_cross_detector,
     detect,
     is_paste_only,
@@ -615,3 +616,17 @@ class TestCrossDetectorCollapseIngest:
         assert candidate["source_kind"] == "plan_review"
         assert candidate["rule"] == dedup_key("plan_review", "plan_reentry", CORRECTION)
         assert len(await rows(store, "SELECT * FROM feedback_events")) == 1
+
+
+@pytest.mark.parametrize("kind", ["transcript_message", "hook_complaint"])
+def test_candidate_confidence_gates_before_transcript_capture(
+    kind: str, monkeypatch: pytest.MonkeyPatch, settings: ReviewSettings
+) -> None:
+    events = parse(correction_entries())
+    signal = replace(next(detect(events)), kind=kind, signal=CandidateSignal(0.1))
+
+    def forbid_capture(*args: object, **kwargs: object) -> None:
+        raise AssertionError("rejected signals must not parse the transcript again")
+
+    monkeypatch.setattr("captain_hook.review.scan.to_candidate", forbid_capture)
+    assert list(candidates_from(b"", events, [signal], settings=settings)) == []

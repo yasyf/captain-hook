@@ -1397,47 +1397,60 @@ ORDER BY repo
         return [str(row["repo"]) for row in rows]
 
     async def judge_queue(
-        self, *, refresh_summary: bool = False, probe_hydration: bool = True
+        self, *, refresh_summary: bool = False, probe_hydration: bool = True, limit: int | None = None
     ) -> list[dict[str, object]]:
-        """Returns the rows one judge pass judges, each under its taxonomy's bound version.
+        from cc_transcript.judge.verdicts import hydratable
 
-        Each lane is selected at its own version, then the two concatenate
-        create-then-fix with each lane's event order preserved. Selection sorts
-        only event ids before the large context rows are loaded, and junk-triaged
-        create events never load their context.
+        if limit is not None and limit < 0:
+            raise ValueError("judge queue limit must be nonnegative")
+        if limit == 0:
+            return []
+        refs = [
+            ref
+            for fix, version in ((False, self.versions.create), (True, self.versions.fix))
+            for ref in await self._judge_refs(fix=fix, prompt_version=version, refresh_summary=refresh_summary)
+        ]
+        cursor_key = f"judge_summary_cursor:{self.versions.create}:{self.versions.fix}"
+        if limit is not None:
+            refs = [ref for ref in refs if judge_worthy(ref)]
+            cursor = int(await self.meta(cursor_key) or "0")
+            fresh = [ref for ref in refs if ref["verdict_id"] is None]
+            summaries = sorted(
+                (ref for ref in refs if ref["verdict_id"] is not None), key=lambda ref: int(str(ref["id"]))
+            )
+            refs = (
+                fresh
+                + [ref for ref in summaries if int(str(ref["id"])) > cursor]
+                + [ref for ref in summaries if int(str(ref["id"])) <= cursor]
+            )[:limit]
+        kept: list[dict[str, object]] = []
+        for offset in range(0, len(refs), QUERY_PAGE_SIZE):
+            page = refs[offset : offset + QUERY_PAGE_SIZE]
+            ids = [ref["id"] for ref in page]
+            placeholders = ", ".join("?" for _ in ids)
+            rows = await self.db.sql(
+                "SELECT e.id, e.dedup_key, e.source_kind, e.occurred_at, e.text, e.payload_json, "
+                f"e.context_json, e.session_id, e.event_uuid FROM feedback_events e WHERE e.id IN ({placeholders})",
+                ids,
+            )
+            rows_by_id = {row["id"]: row for row in rows}
+            for ref in page:
+                row = rows_by_id[ref["id"]]
+                if (
+                    not refresh_summary
+                    or not probe_hydration
+                    or ref["verdict_id"] is None
+                    or await asyncio.to_thread(hydratable, str(row["context_json"]))
+                ):
+                    kept.append(row)
+        if limit is not None and (summaries := [ref for ref in refs if ref["verdict_id"] is not None]):
+            await self.set_meta(cursor_key, str(summaries[-1]["id"]))
+        return kept
 
-        Args:
-            refresh_summary: When True, also re-yields summary-fidelity rows for a
-                full-fidelity re-judge once their windows hydrate again.
-            probe_hydration: The judging path leaves it True so a dead-transcript
-                summary row drops, while the display backlog count passes False to
-                skip the per-row transcript lookup.
-        """
-        create_lane = await self._judge_lane(
-            fix=False,
-            prompt_version=self.versions.create,
-            refresh_summary=refresh_summary,
-            probe_hydration=probe_hydration,
-        )
-        fix_lane = await self._judge_lane(
-            fix=True,
-            prompt_version=self.versions.fix,
-            refresh_summary=refresh_summary,
-            probe_hydration=probe_hydration,
-        )
-        return create_lane + fix_lane
-
-    async def _judge_lane(
-        self,
-        *,
-        fix: bool,
-        prompt_version: int,
-        refresh_summary: bool,
-        probe_hydration: bool,
-    ) -> list[dict[str, object]]:
-        refs = await self.db.sql(
+    async def _judge_refs(self, *, fix: bool, prompt_version: int, refresh_summary: bool) -> list[dict[str, object]]:
+        return await self.db.sql(
             f"""
-SELECT e.id, v.id AS verdict_id
+SELECT e.id, e.payload_json, v.id AS verdict_id
 FROM feedback_events e
 LEFT JOIN {VERDICT_TABLE} v
   ON v.dedup_key = e.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
@@ -1450,39 +1463,15 @@ ORDER BY (v.id IS NOT NULL), e.id
 """,
             (prompt_version, int(fix), HOOK_COMPLAINT, int(refresh_summary), int(fix), TRIAGE_JUNK),
         )
-        ids = [int(row["id"]) for row in refs]
-        rows_by_id: dict[int, dict[str, object]] = {}
-        for start in range(0, len(ids), QUERY_PAGE_SIZE):
-            page = ids[start : start + QUERY_PAGE_SIZE]
-            placeholders = ", ".join("?" for _ in page)
-            rows = await self.db.sql(
-                "SELECT e.id, e.dedup_key, e.source_kind, e.occurred_at, e.text, e.payload_json, "
-                f"e.context_json, e.session_id, e.event_uuid FROM feedback_events e WHERE e.id IN ({placeholders})",
-                page,
+
+    async def judge_backlog(self, *, refresh_summary: bool = True) -> int:
+        total = 0
+        for fix, version in ((False, self.versions.create), (True, self.versions.fix)):
+            total += sum(
+                judge_worthy(row)
+                for row in await self._judge_refs(fix=fix, prompt_version=version, refresh_summary=refresh_summary)
             )
-            rows_by_id.update((int(row["id"]), row) for row in rows)
-        ordered = [rows_by_id[event_id] for event_id in ids]
-        if not refresh_summary or not probe_hydration:
-            return ordered
-        from cc_transcript.judge.verdicts import hydratable
-
-        kept: list[dict[str, object]] = []
-        for ref, row in zip(refs, ordered, strict=True):
-            if ref["verdict_id"] is None or await asyncio.to_thread(hydratable, str(row["context_json"])):
-                kept.append(row)
-        return kept
-
-    async def judge_backlog(self) -> int:
-        """Counts judge-worthy corrections still lacking a verdict at their lane's bound version.
-
-        The dashboard's pending count: every :meth:`judge_queue` row (summary-refresh
-        included) that clears :func:`judge_worthy` — the same noise-floor predicate
-        the judge pass sends rows on, so the count matches what the next pass judges.
-        A display-only read, so ``probe_hydration=False`` skips the per-row transcript
-        rglob a summary-refresh probe would run — the backlog count over-counts a dead
-        transcript by at most one row rather than scanning the projects tree per row.
-        """
-        return sum(judge_worthy(row) for row in await self.judge_queue(refresh_summary=True, probe_hydration=False))
+        return total
 
     async def has_verdict_evidence(self) -> bool:
         """Whether any canonical-key evidence is stored at the create lane's bound version to suggest from.

@@ -115,6 +115,34 @@ class TestEventsFor:
         target = write(tmp_path / "t.jsonl", raw)
         assert transcache._entry_for(target).events == parse_events_from_bytes(raw)
 
+    def test_larger_replacement_reparses_instead_of_splicing_old_events(self, tmp_path: Path) -> None:
+        before = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"before"}\n'
+        after = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"replacement"}\n'
+        target = write(tmp_path / "t.jsonl", before)
+        transcache._entry_for(target)
+        replacement = write(tmp_path / "replacement.jsonl", after)
+        replacement.replace(target)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(after)
+
+    def test_cached_reader_does_not_reinsert_an_entry_replaced_during_lookup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        before = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"before"}\n'
+        after = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"after"}\n'
+        target = write(tmp_path / "t.jsonl", before)
+        stale = transcache._entry_for(target)
+        lookup = transcache._lookup
+
+        def grow_after_lookup(path: Path) -> transcache._Entry:
+            monkeypatch.setattr(transcache, "_lookup", lookup)
+            write(path, before + after)
+            transcache._entry_for(path)
+            return stale
+
+        monkeypatch.setattr(transcache, "_lookup", grow_after_lookup)
+        assert transcache._entry_for(target) is stale
+        assert transcache._CACHE[target].events == parse_events_from_bytes(before + after)
+
     def test_cache_clear_forces_reparse(self, tmp_path: Path) -> None:
         target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
         first = transcache._entry_for(target).events
@@ -216,6 +244,32 @@ class TestLoad:
 
 
 class TestSourceByteBudget:
+    def test_active_lead_and_companions_do_not_reread_their_working_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scale = 4096
+        monkeypatch.setattr(transcache._CACHE, "maxsize", transcache._CACHE.maxsize // scale)
+        line = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"test"}\n'
+        sizes = (116_362_747, 6_397_802, 1_658_903, 10_302_824)
+        paths = [
+            write(tmp_path / f"session-{index}.jsonl", line + b" " * (size // scale - len(line)))
+            for index, size in enumerate(sizes)
+        ]
+        for path in paths:
+            transcache._entry_for(path)
+        opened = Path.open
+        reads: list[Path] = []
+
+        def counted(path: Path, *args: object, **kwargs: object) -> BinaryIO:
+            reads.append(path)
+            return opened(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", counted)
+        for _ in range(3):
+            for path in paths:
+                transcache._entry_for(path)
+        assert reads == []
+
     def test_evicts_least_recent_transcripts_past_the_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

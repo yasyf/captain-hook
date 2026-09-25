@@ -33,7 +33,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE, Category
-from captain_hook.review.store import judge_worthy
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -110,7 +109,8 @@ class JudgeReport:
     Attributes:
         judged: How many rows received a verdict this pass.
         failed: How many rows failed (timeout, parse error) and stay pending.
-        pending: How many judge-worthy rows remain unjudged after this pass.
+        pending: How many judge-worthy rows still need a verdict or summary refresh,
+            including summary windows whose transcripts are currently unavailable.
         merged: How many observations the closing regroup re-parented onto their
             durable slug candidate.
         retired: How many watching create candidates the closing regroup rejected
@@ -303,12 +303,15 @@ async def judge_pass(
     from cc_transcript.judge.similar import default_embedder
 
     model = resolved_model(settings.judge_tier)
-    rows = await store.judge_queue(refresh_summary=refresh_summary)
-    worthy = [row for row in rows if judge_worthy(row)]
-    dispatch = worthy[: limit if limit is not None else settings.max_judge_calls_per_session]
+    pending = await store.judge_backlog(refresh_summary=refresh_summary)
+    dispatch = await store.judge_queue(
+        refresh_summary=refresh_summary,
+        limit=limit if limit is not None else settings.max_judge_calls_per_session,
+    )
     fidelities: dict[str, Fidelity] = {}
-    suggesting = await store.has_verdict_evidence()
-    if suggesting or any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch):
+    creates = any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch)
+    suggesting = creates and await store.has_verdict_evidence()
+    if creates:
         await asyncio.to_thread(default_embedder)
     judged, failed = await run_verdicts(
         dispatch,
@@ -321,5 +324,5 @@ async def judge_pass(
     merged, retired = await store.regroup_create()
     reopened = await store.reopen_recurrent_fixes()
     return JudgeReport(
-        judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired, reopened=reopened
+        judged=judged, failed=failed, pending=pending - judged, merged=merged, retired=retired, reopened=reopened
     )

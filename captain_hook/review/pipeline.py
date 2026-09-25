@@ -31,8 +31,8 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import asdict, dataclass
+from contextlib import AbstractContextManager, ExitStack, contextmanager
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard
@@ -43,7 +43,7 @@ from captain_hook.types import Event
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Generator, Iterator
 
     from spawnllm import TModel
 
@@ -498,6 +498,24 @@ def repo_lock(settings: ReviewSettings, cwd: str, *, wait: bool) -> AbstractCont
 
 
 @contextmanager
+def queued_review_lock(settings: ReviewSettings, cwd: str, transcript: Path) -> Generator[bool]:
+    key = hashlib.sha256(str(transcript.parent.resolve()).encode()).hexdigest()[:16]
+    with ExitStack() as pending, ExitStack() as active:
+        if not pending.enter_context(
+            exclusive_flock(settings.db_path.parent / "locks" / f"pending-{key}.lock", wait=False)
+        ):
+            yield False
+            return
+        claimed = active.enter_context(repo_lock(settings, cwd, wait=True))
+        pending.close()
+        yield claimed
+
+
+def judge_lock(settings: ReviewSettings) -> AbstractContextManager[bool]:
+    return exclusive_flock(settings.db_path.parent / "locks" / "judge.lock", wait=False)
+
+
+@contextmanager
 def brain_lock(settings: ReviewSettings) -> Iterator[bool]:
     """Claims the machine-wide brain lock non-blockingly, yielding whether it was acquired.
 
@@ -554,8 +572,23 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         if not await store.enroll(repo):
             return SpawnReport(repo=repo, sweep=sweep)
         scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
-        triage = await triage_pass(store, settings=settings)
-        verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
+        report = SpawnReport(
+            repo=repo, watching=True, scanned=scan_report.scanned, inserted=scan_report.inserted, sweep=sweep
+        )
+        with judge_lock(settings) as claimed:
+            if claimed:
+                triage = await triage_pass(store, settings=settings)
+                verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
+                report = replace(
+                    report,
+                    triaged=triage.triaged,
+                    triage_junk=triage.junk,
+                    triage_rejected=triage.rejected,
+                    judged=verdicts.judged,
+                    failed=verdicts.failed,
+                )
+            else:
+                logger.bind(repo=repo).info("reviewer judging deferred: another pass holds the global judge lock")
         sync = None if sweep else await sync_open_prs(store, repo, settings=settings)
     eligible: tuple[int, ...] = ()
     brain = False
@@ -585,16 +618,8 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
                         brain_skips = len(set(eligible) & await watching_ids(store, repo))
             else:
                 logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
-    return SpawnReport(
-        repo=repo,
-        watching=True,
-        scanned=scan_report.scanned,
-        inserted=scan_report.inserted,
-        triaged=triage.triaged,
-        triage_junk=triage.junk,
-        triage_rejected=triage.rejected,
-        judged=verdicts.judged,
-        failed=verdicts.failed,
+    return replace(
+        report,
         eligible=eligible,
         brain=brain,
         brain_exit=brain_exit,
@@ -604,7 +629,6 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         synced_merged=sync.accepted if sync else 0,
         synced_closed=sync.rejected if sync else 0,
         synced_kept=(sync.kept + sync.unreachable) if sync else 0,
-        sweep=sweep,
     )
 
 
@@ -627,8 +651,8 @@ async def spawn_session(
     still lands in the spawn log; the catch is ``BaseException`` because
     ``asyncio.CancelledError`` is not an ``Exception``. When settings construction itself
     is the crash, the row lands at the default db path. Passes over one repo serialize on
-    :func:`repo_lock`: a full review waits for the holder, while a sweep that finds the lock
-    held returns at once and records nothing.
+    :func:`repo_lock`: one full review per transcript directory may wait for the holder;
+    later arrivals coalesce into that pending directory scan. A sweep never waits.
 
     Args:
         transcript: The ended session's transcript file.
@@ -649,7 +673,8 @@ async def spawn_session(
     started = datetime.now(UTC)
     try:
         settings = settings or ReviewSettings()
-        with repo_lock(settings, cwd, wait=not sweep) as claimed:
+        lock = repo_lock(settings, cwd, wait=False) if sweep else queued_review_lock(settings, cwd, transcript)
+        with lock as claimed:
             if not claimed:
                 logger.info(f"review spawn skipped: another pass holds the lock for cwd={cwd}")
                 return SpawnReport(repo=None, sweep=sweep)
