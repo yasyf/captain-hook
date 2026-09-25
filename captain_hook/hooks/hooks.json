@@ -73,7 +73,7 @@
     "MessageDisplay": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run MessageDisplay", "timeout": 60 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run MessageDisplay", "timeout": 10 }
         ]
       }
     ],

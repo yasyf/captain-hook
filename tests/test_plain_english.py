@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import importlib.resources
+import json
 import sys
 import threading
 import time
@@ -126,7 +128,7 @@ def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
         "qwen-3.8-27b",
         "test-key",
     )
-    assert kwargs["timeout"] == 20
+    assert kwargs["timeout"] == 6
     assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}
 
 
@@ -252,12 +254,20 @@ def test_rediscovered_hook_modules_share_the_bounded_pool(ctx: CerebrasStub, mon
 def test_rewrite_budget_leaves_margin_before_the_caller_deadline(
     ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(plain_english.reqenv, "seconds_left", lambda: 10.0)
+    monkeypatch.setattr(plain_english.reqenv, "seconds_left", lambda: 8.0)
 
     stream(ctx, PROSE)
 
     ((_, kwargs),) = ctx.calls
-    assert kwargs["timeout"] == 7
+    assert kwargs["timeout"] == 5
+
+
+def test_final_chunk_settles_before_claude_code_cancels_the_hook() -> None:
+    hooks = json.loads((importlib.resources.files("captain_hook") / "hooks" / "hooks.json").read_text())
+    [group] = hooks["hooks"]["MessageDisplay"]
+    [entry] = group["hooks"]
+
+    assert plain_english.ASSEMBLY_DEADLINE_SECONDS + plain_english.REWRITE_TIMEOUT_SECONDS + 1 < entry["timeout"] <= 10
 
 
 @pytest.mark.parametrize(

@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `additionalContext` envelope a warn rendered failed schema validation. A warn,
   context, or allow message now prints as plain text, and a block renders
   `{"decision": "block"}`, which cancels the compaction.
+- **A slow plain-English rewrite no longer hides the reply.** Claude Code
+  cancels a `MessageDisplay` hook after 10 seconds whatever `hooks.json` asks
+  for, and then shows only the last chunk's original text. The rewrite waited
+  up to 20 seconds for Cerebras after up to 2 seconds of chunk assembly, so a
+  long reply lost everything but its last chunk. The rewrite now gives up
+  after 6 seconds and shows the whole original reply, and `hooks.json`
+  registers `MessageDisplay` with the 10-second timeout Claude Code enforces.
 
 ### Removed
 

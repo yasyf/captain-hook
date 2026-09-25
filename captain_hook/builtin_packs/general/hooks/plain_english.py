@@ -14,7 +14,7 @@ from captain_hook.util import reqenv
 if TYPE_CHECKING:
     from captain_hook.events import MessageDisplayEvent
 
-REWRITE_TIMEOUT_SECONDS = 20
+REWRITE_TIMEOUT_SECONDS = 6
 ASSEMBLY_DEADLINE_SECONDS = 2.0
 WRAPPING_FENCE = re.compile(r"```[^\n]*\n((?:(?!```).)*)\n```", re.DOTALL)
 REWRITE_RULES = str(Prompt.load("plain_english_rules"))
