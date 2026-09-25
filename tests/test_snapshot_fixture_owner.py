@@ -72,3 +72,29 @@ def test_fixture_configured_classifier_stays_in_caller_scope(tmp_path, monkeypat
         second.release()
     finally:
         fixture.close()
+
+
+def test_shared_owner_reuses_the_warm_multi_source_working_set(tmp_path):
+    paths = [tmp_path / f"session-{index}.jsonl" for index in range(4)]
+    for index, path in enumerate(paths):
+        write_messages(path, raw_text("user", f"prompt {index}"), raw_text("assistant", "answer" * (index + 1)))
+    fixture = FixtureOwner()
+    try:
+        for path in paths:
+            session = fixture.load(path)
+            assert session.assistant_text()
+            session.release()
+        before = fixture.client.call("stats")["data"]["counters"]
+        assert before["cold_parses"] == len(paths)
+        assert before["source_opens"] == len(paths)
+        for _ in range(3):
+            for path in paths:
+                session = fixture.load(path)
+                assert session.assistant_text()
+                session.release()
+        after = fixture.client.call("stats")["data"]["counters"]
+        assert after["source_opens"] == before["source_opens"] + 3 * len(paths)
+        for name in ("source_bytes_read", "events_parsed", "cold_parses"):
+            assert after[name] == before[name]
+    finally:
+        fixture.close()

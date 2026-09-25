@@ -213,7 +213,21 @@ func TestSnapshotRealPythonOwnerSharesLoadsAcrossClients(t *testing.T) {
 		t.Fatalf("queued review cancellation: %v", err)
 	}
 	counters := stats["data"].(map[string]any)["counters"].(map[string]any)
-	if counters["cold_parses"] != float64(1) || counters["source_opens"] != float64(1) || starts.Load() != 1 {
-		t.Fatalf("shared owner accounting: %v; owner starts=%d", counters, starts.Load())
+	wantCounters := map[string]float64{
+		"cold_parses":           1,
+		"source_opens":          3,
+		"inflight_joins":        2,
+		"generations_published": 1,
+		"events_parsed":         40,
+		"bytes_decoded":         float64(input.Len()),
+		"source_bytes_read":     float64(input.Len() + 2*64),
+	}
+	for name, want := range wantCounters {
+		if counters[name] != want {
+			t.Errorf("shared owner %s=%v, want %v; all counters=%v", name, counters[name], want, counters)
+		}
+	}
+	if starts.Load() != 1 {
+		t.Errorf("owner starts=%d, want 1", starts.Load())
 	}
 }
