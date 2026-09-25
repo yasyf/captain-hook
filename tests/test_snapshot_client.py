@@ -286,3 +286,52 @@ def test_builtin_classifier_keeps_its_existing_matching_lease():
     assert not requests
     session.release()
     assert requests == ["release"]
+
+
+def test_selected_subagents_keep_child_classifiers_and_reuse_owned_leases(tmp_path):
+    from dataclasses import replace
+
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_assistant, raw_text, raw_tool_use
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    directory = tmp_path / "conductor-workspaces"
+    directory.mkdir()
+    source = directory / "session.jsonl"
+    write_messages(
+        source,
+        raw_text("user", "first"),
+        raw_assistant(raw_tool_use("Agent", {"subagent_type": "first", "prompt": "go"}, "first")),
+        raw_text("user", "second"),
+        raw_assistant(raw_tool_use("Agent", {"subagent_type": "second", "prompt": "go"}, "second")),
+    )
+    children = directory / "session" / "subagents"
+    children.mkdir(parents=True)
+    write_messages(children / "agent-first.jsonl", raw_text("user", "first child"))
+    write_messages(children / "agent-second.jsonl", raw_text("user", "second child"))
+    nested = children / "agent-second" / "subagents"
+    nested.mkdir(parents=True)
+    (nested / "agent-invalid.jsonl").write_text("not json\n")
+    attachment = directory / "unrelated.jsonl"
+    attachment.write_text("not json\n")
+    fixture = FixtureOwner()
+    try:
+        session = replace(fixture.load(source), attachments=(attachment,))
+        assert session.classifier == {"id": "captain-conductor", "version": "1"}
+        index = session.current_turn.subagents
+        assert [item.id for item in index] == ["second"]
+        child = index.with_type("second")[0].session
+        assert child.classifier == {"id": "native", "version": "1"}
+        assert child.user_text == "second child"
+        before = fixture.client.call("stats")["data"]["counters"]
+        assert before["cold_parses"] == 2
+        for _ in range(3):
+            assert session.current_turn.subagents is index
+        after = fixture.client.call("stats")["data"]["counters"]
+        assert after["source_opens"] == before["source_opens"]
+        assert len(fixture.client._leases) == 2
+        session.release()
+        assert child.lease.released
+        assert not fixture.client._leases
+    finally:
+        fixture.close()

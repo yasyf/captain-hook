@@ -626,6 +626,38 @@
       "title": "Description",
       "type": "object"
     },
+    "Core_DirectSidechains": {
+      "additionalProperties": false,
+      "properties": {
+        "dispatch_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Dispatch Ids",
+          "type": "array"
+        },
+        "kind": {
+          "const": "direct_sidechains",
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "const": "forward",
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "order",
+        "dispatch_ids"
+      ],
+      "title": "DirectSidechains",
+      "type": "object"
+    },
     "Core_Discover": {
       "additionalProperties": false,
       "properties": {
@@ -1588,9 +1620,9 @@
           "enum": [
             "turns",
             "events",
-            "tool_calls",
             "files_touched",
             "edited_files",
+            "predicate_inputs",
             "deep_predicate_inputs",
             "sidechain_membership"
           ],
@@ -1703,6 +1735,7 @@
             "mapping": {
               "assistant_text": "#/$defs/Core_AssistantText",
               "deep_predicate_inputs": "#/$defs/Core_Page",
+              "direct_sidechains": "#/$defs/Core_DirectSidechains",
               "edited_files": "#/$defs/Core_Page",
               "event_count": "#/$defs/Core_Scalar",
               "events": "#/$defs/Core_Page",
@@ -1723,11 +1756,12 @@
               "has_tool": "#/$defs/Core_ToolPredicate",
               "message_count": "#/$defs/Core_MessageCount",
               "pending_named_task": "#/$defs/Core_PendingNamedTask",
+              "predicate_inputs": "#/$defs/Core_Page",
               "prompts": "#/$defs/Core_Prompts",
               "render": "#/$defs/Core_Render",
               "sidechain_membership": "#/$defs/Core_Page",
               "signal_texts": "#/$defs/Core_SignalTexts",
-              "tool_calls": "#/$defs/Core_Page",
+              "tool_calls": "#/$defs/Core_ToolCalls",
               "tool_count": "#/$defs/Core_ToolCount",
               "turn_count": "#/$defs/Core_Scalar",
               "turns": "#/$defs/Core_Page",
@@ -1770,6 +1804,12 @@
             },
             {
               "$ref": "#/$defs/Core_Page"
+            },
+            {
+              "$ref": "#/$defs/Core_ToolCalls"
+            },
+            {
+              "$ref": "#/$defs/Core_DirectSidechains"
             },
             {
               "$ref": "#/$defs/Core_Prompts"
@@ -2674,6 +2714,44 @@
       "title": "ToolBoundary",
       "type": "object"
     },
+    "Core_ToolCalls": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "tool_calls",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "order": {
+          "enum": [
+            "forward",
+            "reverse"
+          ],
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "order"
+      ],
+      "title": "ToolCalls",
+      "type": "object"
+    },
     "Core_ToolCount": {
       "additionalProperties": false,
       "properties": {
@@ -2702,10 +2780,17 @@
           "type": "string"
         },
         "name": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
         }
       },
       "required": [

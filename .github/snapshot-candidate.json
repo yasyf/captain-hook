@@ -1,14 +1,14 @@
 {
   "repository": "yasyf/cc-transcript",
-  "run_id": 36136425753,
-  "artifact_id": 10865071820,
-  "artifact_name": "cc-transcript-macos-bb2cdc2c285cc353298a20f255b798e01b8daa5e",
-  "artifact_digest": "sha256:f5af399d6fe675d316029c3ff98a9d5d8f254064787454d1f1d816ac759ba63e",
-  "head_sha": "75dcc4a81846259bae76254f536782b4eddefd22",
-  "merge_sha": "bb2cdc2c285cc353298a20f255b798e01b8daa5e",
-  "tree_sha": "a42c093e8a8c308663ab29b09a626202b1847488",
+  "run_id": 36141581229,
+  "artifact_id": 10867695868,
+  "artifact_name": "cc-transcript-macos-e741410ca218cef62d768893168599578bff06d5",
+  "artifact_digest": "sha256:64bfff9e1adeb9547ef15e30bb13d7788842724601b9ee0cf1fe41552fd82d98",
+  "head_sha": "0345a452086ec90050ed16a1c776ee9e098a31ee",
+  "merge_sha": "e741410ca218cef62d768893168599578bff06d5",
+  "tree_sha": "1ebfa879466d43070737c40c38dfe01e670a877c",
   "wheel_name": "cc_transcript-14.9.0-cp313-abi3-macosx_11_0_arm64.whl",
-  "wheel_sha256": "a84e3060edce6be87ab6964d15e661aca8f7972cd383af82dea628fe6a9623ab",
+  "wheel_sha256": "d44e420b918fa8b32aa3e4b9fdd7fb249e1e2bcc3e29b8329664bd287c4836ef",
   "pending_api_changes": [],
   "install_candidate": false
 }

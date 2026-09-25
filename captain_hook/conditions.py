@@ -518,16 +518,14 @@ def inputs_ran(inputs: PredicateInputs, argv: tuple[str, ...] | tuple[Regex]) ->
             return inputs.has_command(argv)
 
 
-def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...] | tuple[Regex]], *, subagents: bool) -> bool:
+def ran_any_command(
+    t: Session | RemoteSession, argvs: Sequence[tuple[str, ...] | tuple[Regex]], *, subagents: bool
+) -> bool:
     from cc_transcript.query import any_inputs
 
     if isinstance(t, RemoteSession):
-        return any(
-            t.query({"kind": "has_command_regex", "pattern": argv[0].pattern, "subagents": subagents})
-            if len(argv) == 1 and isinstance(argv[0], Regex)
-            else t.has_command(*argv, subagents=subagents)
-            for argv in argvs
-        )
+        windows = t.deep_inputs() if subagents else t.query({"kind": "predicate_inputs", "order": "forward"})
+        return any(inputs_ran(inputs, argv) for inputs in windows for argv in argvs)
     return any_inputs(t, lambda inputs: any(inputs_ran(inputs, argv) for argv in argvs), subagents=subagents)
 
 

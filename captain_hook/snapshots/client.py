@@ -10,12 +10,14 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from cc_transcript.activity import ToolUse
+    from cc_transcript.ids import ToolUseId
     from cc_transcript.render import Budget
 
 CORE_SCHEMA = "cc-transcript.snapshot/1"
@@ -318,6 +320,8 @@ class Lease:
         self.expires_unix_ms = description["lease_expires_unix_ms"]
         self.released = False
         self.guard = threading.Lock()
+        self.subagent_guard = threading.Lock()
+        self.subagent_views: dict[str, RemoteSubagentIndex] = {}
 
     def require(self) -> dict[str, str]:
         with self.guard:
@@ -331,6 +335,15 @@ class Lease:
             return self.handle.copy()
 
     def release(self) -> None:
+        with self.subagent_guard:
+            with ExitStack() as cleanup:
+                cleanup.callback(self._release)
+                for index in self.subagent_views.values():
+                    for item in index:
+                        cleanup.callback(item.session.release)
+            self.subagent_views.clear()
+
+    def _release(self) -> None:
         with self.guard:
             if self.released:
                 return
@@ -521,6 +534,77 @@ class RemoteSession:
         return RemoteToolCalls(self)
 
     @property
+    def subagents(self) -> RemoteSubagentIndex:
+        key = json.dumps(self.selectors, sort_keys=True, separators=(",", ":"))
+        with self.lease.subagent_guard:
+            self.lease.require()
+            if key in self.lease.subagent_views:
+                return self.lease.subagent_views[key]
+            index = self._subagents()
+            if index:
+                self.lease.subagent_views[key] = index
+            return index
+
+    def _subagents(self) -> RemoteSubagentIndex:
+        from cc_transcript.snapshots import SnapshotIncomplete, decode_projection
+        from cc_transcript.tools import TaskCall
+
+        dispatches = tuple(
+            use
+            for use in self.query({"kind": "tool_calls", "order": "forward", "name": "Task"})
+            if isinstance(use.call, TaskCall) and use.call.agent_type and use.ref.tool_use_id is not None
+        )
+        if not dispatches:
+            return RemoteSubagentIndex(())
+        members: list[tuple[Mapping[str, Any], RemoteSession]] = []
+        with ExitStack() as cleanup:
+            dispatch_ids = list(dict.fromkeys(use.ref.tool_use_id for use in dispatches))
+            for offset in range(0, len(dispatch_ids), 256):
+                for data in self.client.pages(
+                    "query",
+                    view=self.view(),
+                    query={
+                        "kind": "direct_sidechains",
+                        "order": "forward",
+                        "dispatch_ids": dispatch_ids[offset : offset + 256],
+                    },
+                ):
+                    if data["kind"] != "records" or data["record_schema"] != "cc-transcript.sidechain/1":
+                        raise SnapshotProtocolError("sidechain query returned an unexpected projection")
+                    try:
+                        records = decode_projection(
+                            data["record_schema"], data["records_json"], tool_registry=self.client.tool_registry()
+                        )
+                    except SnapshotIncomplete as exc:
+                        raise EvidenceIncomplete(exc.status, exc.reason) from exc
+                    for record in records:
+                        description = record["description"]
+                        child = RemoteSession(
+                            self.client,
+                            Lease(self.client, description),
+                            Path(record["path"]),
+                            description["classifier"],
+                        )
+                        cleanup.callback(child.release)
+                        members.append((record, child))
+            children = {
+                record["spawned_by"]: child
+                for record, child in members
+                if record["depth"] == 1 and record["spawned_by"] is not None
+            }
+            items = tuple(
+                RemoteSubagentSession(use.ref.tool_use_id, use.call.agent_type, children[use.ref.tool_use_id], use)
+                for use in dispatches
+                if use.ref.tool_use_id in children
+            )
+            selected = {id(item.session) for item in items}
+            for _, child in members:
+                if id(child) not in selected:
+                    child.release()
+            cleanup.pop_all()
+            return RemoteSubagentIndex(items)
+
+    @property
     def events(self) -> tuple[Any, ...]:
         return tuple(self.query({"kind": "events", "order": "forward"}))
 
@@ -566,9 +650,43 @@ CURRENT_CLIENT: contextvars.ContextVar[SnapshotClient | None] = contextvars.Cont
 
 
 @dataclass(frozen=True)
+class RemoteSubagentSession:
+    id: ToolUseId
+    type: str
+    session: RemoteSession
+    parent: ToolUse
+
+    @property
+    def tool_calls(self) -> RemoteToolCalls:
+        return self.session.tool_calls
+
+    @property
+    def failed(self) -> bool:
+        return bool((result := self.parent.result) and result.is_error) or self.session.count_failures() > 0
+
+
+@dataclass(frozen=True)
+class RemoteSubagentIndex:
+    items: tuple[RemoteSubagentSession, ...]
+
+    def with_type(self, pattern: str) -> tuple[RemoteSubagentSession, ...]:
+        names = set(pattern.split("|"))
+        return tuple(subagent for subagent in self.items if subagent.type in names)
+
+    def __iter__(self) -> Iterator[RemoteSubagentSession]:
+        return iter(self.items)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __bool__(self) -> bool:
+        return bool(self.items)
+
+
+@dataclass(frozen=True)
 class RemoteToolCalls:
     session: RemoteSession
-    name: str = ".*"
+    name: str | None = None
     input_regex: Mapping[str, object] | None = None
     errors: Literal["exclude", "include", "only"] = "exclude"
 
@@ -588,6 +706,9 @@ class RemoteToolCalls:
 
     def count_failures(self) -> int:
         return replace(self, errors="only").count()
+
+    def failed(self) -> RemoteToolCalls:
+        return replace(self, errors="only")
 
     def __len__(self) -> int:
         return self.count()

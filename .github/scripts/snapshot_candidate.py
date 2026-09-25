@@ -112,6 +112,14 @@ def main() -> None:
             raise SystemExit("pinned candidate lacks request-scoped tool registry admission")
         for schema in ("request", "response", "context", "config", "tool_registry"):
             json.loads(wheel.read(f"cc_transcript/snapshot_schema/{schema}.schema.json"))
+        definitions = json.loads(wheel.read("cc_transcript/snapshot_schema/request.schema.json"))["$defs"]
+        if (
+            "predicate_inputs" not in definitions["Page"]["properties"]["kind"]["enum"]
+            or "DirectSidechains" not in definitions
+            or "ToolCalls" not in definitions
+            or {"type": "null"} not in definitions["ToolCount"]["properties"]["name"].get("anyOf", [])
+        ):
+            raise SystemExit("pinned candidate lacks predicate, sidechain, or filtered/unfiltered tool queries")
     print(json.dumps(receipt | {"wheel": wheel_path.name}, sort_keys=True))
 
 
