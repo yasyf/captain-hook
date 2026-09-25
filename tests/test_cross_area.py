@@ -52,6 +52,7 @@ from tests.helpers import (
     make_pre_tool_event,
     make_transcript,
     mock_tool_event,
+    run_cli,
 )
 from tests.helpers import (
     raw_text as msg,
@@ -730,13 +731,9 @@ class TestCLISubprocess:
             }
         )
 
-        result = subprocess.run(
-            ["uv", "run", "python", "-m", "captain_hook", "--hooks", str(hooks_dir), "run", "PreToolUse"],
-            input=stdin_payload,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(tmp_path),
+        result = run_cli(
+            "run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin_payload,
+            timeout=30, cwd=str(tmp_path),
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         output = json.loads(result.stdout)
@@ -762,13 +759,9 @@ class TestCLISubprocess:
             }
         )
 
-        result = subprocess.run(
-            ["uv", "run", "python", "-m", "captain_hook", "--hooks", str(hooks_dir), "run", "PreToolUse"],
-            input=stdin_payload,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(tmp_path),
+        result = run_cli(
+            "run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin_payload,
+            timeout=30, cwd=str(tmp_path),
         )
         assert result.returncode == 0
         assert result.stdout.strip() == ""
@@ -794,13 +787,9 @@ class TestCLISubprocess:
             }
         )
 
-        result = subprocess.run(
-            ["uv", "run", "python", "-m", "captain_hook", "--hooks", str(hooks_dir), "run", "PreToolUse"],
-            input=stdin_payload,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(tmp_path),
+        result = run_cli(
+            "run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin_payload,
+            timeout=30, cwd=str(tmp_path),
         )
         assert result.returncode == 0
         output = json.loads(result.stdout)

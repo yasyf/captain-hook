@@ -23,6 +23,7 @@ from tests.review_helpers import (
     CORRECTION,
     correction_entries,
     install_judge,
+    native_review_owner,
     requires_llm_backend,
     write_transcript,
 )
@@ -79,7 +80,7 @@ async def seed_pack_fix() -> int:
 
 
 @pytest.fixture
-def scanned_repo(tmp_path: Path, git_repo: Path) -> Path:
+def scanned_repo(tmp_path: Path, git_repo: Path, native_review_owner: object) -> Path:
     transcript = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))
     result = invoke("scan", "--transcript", str(transcript), root=git_repo)
     assert result.exit_code == 0, result.output
@@ -166,6 +167,7 @@ class TestInitEnablesReviewer:
         assert "needs a git repo" in result.stdout
 
 
+@pytest.mark.usefixtures(native_review_owner.__name__)
 class TestScanAndTriage:
     def test_scan_is_incremental(self, tmp_path: Path, git_repo: Path) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))

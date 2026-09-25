@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from copy import copy
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,8 +16,8 @@ from loguru import logger
 
 from captain_hook.app import get_hook_candidates
 from captain_hook.conditions import matches_conditions
-from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.session import SessionStore
+from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -535,7 +536,10 @@ def prepare_hook_events(
     try:
         for entry in entries:
             transcript = fork_transcript(evt.ctx.transcript)
-            forks.append(replace(evt, ctx=evt.ctx.fork(transcript)))
+            fork = copy(evt)
+            fork.ctx = evt.ctx.fork(transcript)
+            fork.__dict__.pop("cmd", None)
+            forks.append(fork)
     except BaseException:
         for fork in forks:
             release_transcript(fork.ctx.transcript)

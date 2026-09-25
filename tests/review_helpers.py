@@ -5,6 +5,7 @@ import itertools
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -19,8 +20,7 @@ from captain_hook.review.judge import DURABLE_CATEGORIES, ReviewVerdict
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
+    from collections.abc import Callable, Iterator
 
     from cc_transcript.models import TranscriptEvent
 
@@ -41,6 +41,41 @@ class Verdict:
     summary: str = "user corrected approach"
     rationale: str = "explicit correction"
     canonical_key: str | None = None
+
+
+@pytest.fixture
+def native_review_owner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[object]:
+    from cc_transcript.corrections import CorrectionLog
+
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.testing.snapshots import FixtureOwner
+
+    def forbidden_bridge(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("review tests must use the isolated native snapshot owner")
+
+    async def forbidden_extract(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("review tests must not call a live extraction model")
+
+    open_corrections = CorrectionLog.open
+
+    async def isolated_corrections(cls: type[CorrectionLog], path: Path | None = None) -> CorrectionLog:
+        return await open_corrections(path or tmp_path / "corrections.db")
+
+    monkeypatch.setattr("captain_hook.snapshots.client.Bridge.__init__", forbidden_bridge)
+    monkeypatch.setattr(
+        "captain_hook.snapshots.review.review_roots",
+        lambda paths: sorted({str(Path(path).parent) for path in paths if Path(path).is_absolute()}),
+    )
+    monkeypatch.setattr("cc_transcript.extract.correct.usable_backend", lambda: None)
+    monkeypatch.setattr("spawnllm.extract", forbidden_extract)
+    monkeypatch.setattr(CorrectionLog, "open", classmethod(isolated_corrections))
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    try:
+        yield fixture
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
 
 
 def next_uuid() -> str:

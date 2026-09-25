@@ -1792,7 +1792,11 @@ async def test_empty_judge_pass_skips_embedding_even_with_existing_evidence(
     def forbidden_embedder() -> None:
         raise AssertionError("an empty pass must not load the embedding model")
 
+    def forbidden_snapshot_client():
+        raise AssertionError("an empty pass must not acquire transcript evidence")
+
     monkeypatch.setattr(ReviewStore, "has_verdict_evidence", evidence)
+    monkeypatch.setattr("captain_hook.snapshots.review.review_client", forbidden_snapshot_client)
     monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", forbidden_embedder)
     monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *args, **kwargs: None)
     assert await judge_pass(store, settings=settings) == JudgeReport(

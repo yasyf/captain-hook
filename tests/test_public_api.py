@@ -15,19 +15,25 @@ from __future__ import annotations
 
 import ast
 import importlib
+import json
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 import captain_hook
 from captain_hook import EXPORTS
+from captain_hook.testing.helpers import fixture_session
+from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.testing.types import FileFixture, Input, TranscriptFixture
-from captain_hook.transcripts import lazy_transcript, load_transcript
+from captain_hook.transcripts import lazy_transcript
+
+if TYPE_CHECKING:
+    from cc_transcript.query import Session
 
 ROOT_STUB = Path(captain_hook.__file__).with_suffix(".pyi")
 MODULE_EXPORTS = frozenset({"file", "style", "util"})
@@ -488,10 +494,25 @@ def transcript_path(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.fixture
+def transcript_owner() -> Iterator[FixtureOwner]:
+    owner = FixtureOwner()
+    try:
+        yield owner
+    finally:
+        owner.close()
+
+
+def load_fixture_session(path: str | Path | None) -> Session:
+    assert path is not None
+    path = Path(path)
+    return fixture_session([json.loads(line) for line in path.read_text().splitlines()], path=path)
+
+
 def test_proxy_is_a_session_instance(transcript_path: Path) -> None:
     from cc_transcript.query import Session
 
-    proxy = lazy_transcript(transcript_path)
+    proxy = lazy_transcript(transcript_path, loader=load_fixture_session)
     assert isinstance(proxy, Session)
     assert proxy.__class__ is Session
 
@@ -499,38 +520,40 @@ def test_proxy_is_a_session_instance(transcript_path: Path) -> None:
 @pytest.mark.parametrize("accessor", ACCESSORS, ids=[a[0] for a in ACCESSORS])
 def test_proxy_matches_eager_session(transcript_path: Path, accessor: tuple[str, Callable[[Any], Any]]) -> None:
     _, fn = accessor
-    proxy = lazy_transcript(transcript_path)
-    eager = load_transcript(transcript_path)
+    proxy = lazy_transcript(transcript_path, loader=load_fixture_session)
+    eager = load_fixture_session(transcript_path)
     assert fn(proxy) == fn(eager)
 
 
-def test_parse_is_deferred_until_first_touch(transcript_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from cc_transcript import parser
-
-    calls = {"n": 0}
-    real = parser.parse_events_from_bytes
-
-    def counting(data: bytes) -> Any:
-        calls["n"] += 1
-        return real(data)
-
-    monkeypatch.setattr(parser, "parse_events_from_bytes", counting)
-    proxy = lazy_transcript(transcript_path)
-    assert calls["n"] == 0, "parse ran before the proxy was touched"
+def test_parse_is_deferred_until_first_touch(transcript_path: Path, transcript_owner: FixtureOwner) -> None:
+    proxy = lazy_transcript(transcript_path, loader=transcript_owner.load)
+    before = transcript_owner.client.call("stats")["data"]["counters"]
+    assert before["cold_parses"] == 0
+    assert before["source_opens"] == 0
     assert bool(proxy) is True
-    assert calls["n"] == 1, "first touch did not parse exactly once"
+    first = transcript_owner.client.call("stats")["data"]["counters"]
+    assert first["cold_parses"] == 1
+    assert first["source_opens"] == 1
     assert len(proxy) == 2
-    assert calls["n"] == 1, "a second touch re-parsed the transcript"
+    second = transcript_owner.client.call("stats")["data"]["counters"]
+    assert second["cold_parses"] == 1
+    assert second["source_bytes_read"] == first["source_bytes_read"]
+    proxy.release()
 
 
-def test_an_abandoned_hook_never_starts_the_parse(transcript_path: Path) -> None:
+def test_an_abandoned_hook_never_starts_the_parse(transcript_path: Path, transcript_owner: FixtureOwner) -> None:
     import threading
 
     from captain_hook.util import reqenv
 
-    proxy = lazy_transcript(transcript_path)
+    proxy = lazy_transcript(transcript_path, loader=transcript_owner.load)
     flag = threading.Event()
     flag.set()
     with reqenv.abandonable(flag), pytest.raises(reqenv.Abandoned):
         bool(proxy)
+    untouched = transcript_owner.client.call("stats")["data"]["counters"]
+    assert untouched["cold_parses"] == 0
+    assert untouched["source_opens"] == 0
     assert len(proxy) == 2
+    assert transcript_owner.client.call("stats")["data"]["counters"]["cold_parses"] == 1
+    proxy.release()

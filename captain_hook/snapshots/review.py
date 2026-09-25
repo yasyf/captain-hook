@@ -404,6 +404,8 @@ def render_review_windows(
 ) -> list[RenderedEvidence | None | Exception]:
     from captain_hook.snapshots.client import NATIVE_CLASSIFIER, EvidenceIncomplete, Lease, SnapshotProtocolError
 
+    if not windows:
+        return []
     rendered: list[RenderedEvidence | None | Exception] = [
         SnapshotProtocolError("window was not prepared") for _ in windows
     ]

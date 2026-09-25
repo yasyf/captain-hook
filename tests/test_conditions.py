@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 import re
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, get_args
 
 import pytest
-from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
 from cc_transcript.query import DEEP_LIFTS
 
 from captain_hook import EditedSource, T, cli
@@ -29,7 +28,9 @@ from captain_hook.events import (
     UserPromptSubmitEvent,
 )
 from captain_hook.primitives.commands import block_command, block_command_pattern
-from captain_hook.transcripts import load_transcript
+from captain_hook.snapshots.client import RemoteSession
+from captain_hook.testing.helpers import fixture_line
+from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.types import (
     ALL_EVENTS,
     TOOL_EVENTS,
@@ -69,9 +70,9 @@ from captain_hook.types import (
 from tests.helpers import (
     async_agent_launch,
     build_ctx,
+    disk_fixture_session,
     fixture_session,
     make_event,
-    make_messages_ctx,
     make_transcript,
     make_transcript_ctx,
     notification_text,
@@ -87,6 +88,19 @@ from tests.helpers import (
     waiting_stop_evt,
     workflow_launch,
 )
+
+
+@pytest.fixture
+def snapshot_owner() -> Iterator[FixtureOwner]:
+    owner = FixtureOwner()
+    try:
+        yield owner
+    finally:
+        owner.close()
+
+
+def messages_ctx(messages: list[dict[str, Any]] | None) -> Any:
+    return build_ctx(transcript=fixture_session([]) if messages is None else disk_fixture_session(messages))
 
 
 def make_tool_event(
@@ -1024,7 +1038,7 @@ def skill_evt(skill: str) -> BaseHookEvent:
 
 
 def read_evt(path: str) -> BaseHookEvent:
-    ctx = make_messages_ctx([T.assistant(T.tool("Read", file_path=path))])
+    ctx = messages_ctx([T.assistant(T.tool("Read", file_path=path))])
     return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
@@ -1254,13 +1268,13 @@ class TestWaitingCondition:
     )
     def test_single_tool_matches(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
 
-        ctx = make_messages_ctx([T.assistant(T.tool(tool, **tool_input))])
+        ctx = messages_ctx([T.assistant(T.tool(tool, **tool_input))])
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is expected
 
     def test_only_sync_tools_rejects(self) -> None:
 
-        ctx = make_messages_ctx(
+        ctx = messages_ctx(
             [
                 T.assistant(
                     T.tool("Edit", file_path="a.py", old_string="", new_string=""),
@@ -1274,7 +1288,7 @@ class TestWaitingCondition:
 
     def test_walks_past_trailing_text_message(self) -> None:
 
-        ctx = make_messages_ctx(
+        ctx = messages_ctx(
             [
                 T.assistant(T.tool("Agent", prompt="x", run_in_background=True)),
                 T.assistant("Spawned 4 background agents, waiting for them to report back."),
@@ -1352,13 +1366,13 @@ class TestWaitingCondition:
 
     def test_empty_transcript_rejects(self) -> None:
 
-        ctx = make_messages_ctx([])
+        ctx = messages_ctx([])
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is False
 
     def test_no_transcript_rejects(self) -> None:
 
-        ctx = make_messages_ctx(None)
+        ctx = messages_ctx(None)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is False
 
@@ -1482,60 +1496,73 @@ class TestWaitingCondition:
     def test_stop_payload_layer(self, raw: dict[str, Any], raw_messages: list[dict[str, Any]], expected: bool) -> None:
         assert check_condition(Waiting(), waiting_stop_evt(raw, raw_messages)) is expected
 
-    def test_stop_payload_composes_with_probe_over_captured_transcript(self, monkeypatch: pytest.MonkeyPatch) -> None:
-
-        transcript = load_transcript(Path(__file__).parent / "fixtures" / "hook_fires" / "fire-stop.jsonl")
+    def test_stop_payload_composes_with_probe_over_captured_transcript(
+        self, monkeypatch: pytest.MonkeyPatch, snapshot_owner: FixtureOwner
+    ) -> None:
+        transcript = snapshot_owner.load(Path(__file__).parent / "fixtures" / "hook_fires" / "fire-stop.jsonl")
         ctx = build_ctx(transcript=transcript)
+        probe = RemoteSession.activity_probe
 
-        def forbidden_probe(*args: Any, **kwargs: Any) -> SessionActivityProbe:
+        def forbidden_probe(*args: Any, **kwargs: Any) -> bool:
             raise AssertionError("probe consulted despite a populated stop payload")
 
-        monkeypatch.setattr("cc_transcript.activity_probe.session_activity_probe", forbidden_probe)
+        monkeypatch.setattr(RemoteSession, "activity_probe", forbidden_probe)
         raw = {
             "background_tasks": [
                 {"id": "t1", "type": "shell", "status": "running", "description": "build", "command": "make"}
             ]
         }
         assert check_condition(Waiting(), StopEvent(_raw=raw, ctx=ctx)) is True
+        probes: list[bool] = []
 
-        probes: list[SessionActivityProbe] = []
+        def spy_probe(session: RemoteSession, **kwargs: Any) -> bool:
+            result = probe(session, **kwargs)
+            probes.append(result)
+            return result
 
-        def spy_probe(*args: Any, **kwargs: Any) -> SessionActivityProbe:
-            probe = session_activity_probe(*args, **kwargs)
-            probes.append(probe)
-            return probe
-
-        monkeypatch.setattr("cc_transcript.activity_probe.session_activity_probe", spy_probe)
+        monkeypatch.setattr(RemoteSession, "activity_probe", spy_probe)
         result = check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx))
         assert len(probes) == 1
-        assert result is probes[0].is_waiting is False
+        assert result is probes[0] is False
 
-    def test_probe_reruns_only_when_the_transcript_stamp_or_tool_registry_moves(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_probe_keeps_pinned_transcript_until_reacquired(self, tmp_path: Path, snapshot_owner: FixtureOwner) -> None:
         path = tmp_path / "session.jsonl"
-        path.write_bytes((Path(__file__).parent / "fixtures" / "hook_fires" / "fire-stop.jsonl").read_bytes())
-        ctx = build_ctx(transcript=load_transcript(path))
-        probes: list[Path] = []
+        path.write_text(json.dumps(fixture_line(0, raw_text("user", "hello"))) + "\n")
+        ctx = build_ctx(transcript=snapshot_owner.load(path))
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        before = snapshot_owner.client.call("stats")["data"]["counters"]
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        with path.open("a") as stream:
+            stream.write(
+                json.dumps(fixture_line(1, raw_assistant(raw_tool_use("Monitor", {"name": "build"}, "m1")))) + "\n"
+            )
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        after = snapshot_owner.client.call("stats")["data"]["counters"]
+        for name in ("source_opens", "source_bytes_read", "events_parsed"):
+            assert after[name] == before[name]
+        refreshed = build_ctx(transcript=snapshot_owner.load(path))
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=refreshed)) is True
+        assert refreshed.transcript_ref != ctx.transcript_ref
 
-        def spy_probe(probed: Path, **kwargs: Any) -> SessionActivityProbe:
-            probes.append(probed)
-            return session_activity_probe(probed, **kwargs)
-
-        monkeypatch.setattr("cc_transcript.activity_probe.session_activity_probe", spy_probe)
+    def test_probe_keeps_registry_binding_until_new_client(self, tmp_path: Path, snapshot_owner: FixtureOwner) -> None:
+        path = tmp_path / "session.jsonl"
+        path.write_text(
+            json.dumps(
+                fixture_line(0, raw_assistant(raw_tool_use("mcp__review__review_wait", {"name": "build"}, "m1")))
+            )
+            + "\n"
+        )
+        ctx = build_ctx(transcript=snapshot_owner.load(path))
         assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
-        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
-        assert len(probes) == 1
-        with path.open("ab") as fh:
-            fh.write(b"\n")
-        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
-        assert len(probes) == 2
         cli.reconcile_pack_tools({"review_wait": ("Monitor", None)})
+        replacement = FixtureOwner()
         try:
             assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+            refreshed = build_ctx(transcript=replacement.load(path))
+            assert check_condition(Waiting(), StopEvent(_raw={}, ctx=refreshed)) is True
         finally:
+            replacement.close()
             cli.reconcile_pack_tools({})
-        assert len(probes) == 3
 
 
 class TestFromSubagentCondition:
@@ -1783,7 +1810,9 @@ class TestCustomCondition:
 
 
 @pytest.fixture
-def event_with_subagent_tool_use(tmp_path: Path) -> Callable[[dict[str, Any]], BaseHookEvent]:
+def event_with_subagent_tool_use(
+    tmp_path: Path, snapshot_owner: FixtureOwner
+) -> Callable[[dict[str, Any]], BaseHookEvent]:
     def make(tool_use: dict[str, Any]) -> BaseHookEvent:
         session_dir = tmp_path / "session"
         subagents_dir = session_dir / "session" / "subagents"
@@ -1798,7 +1827,7 @@ def event_with_subagent_tool_use(tmp_path: Path) -> Callable[[dict[str, Any]], B
         return make_event(
             PreToolUseEvent,
             raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
-            ctx=build_ctx(transcript=load_transcript(session_file)),
+            ctx=build_ctx(transcript=snapshot_owner.load(session_file)),
         )
 
     return make
@@ -1867,7 +1896,7 @@ PYRIGHT_IN_SUBAGENT = {"type": "tool_use", "name": "Bash", "input": {"command": 
 
 
 @pytest.fixture
-def event_after_running(tmp_path: Path) -> Callable[[str], BaseHookEvent]:
+def event_after_running(tmp_path: Path, snapshot_owner: FixtureOwner) -> Callable[[str], BaseHookEvent]:
     def make(command: str) -> BaseHookEvent:
         session_file = tmp_path / "session.jsonl"
         tool_use = raw_tool_use("Bash", dict(command=command), "tu_r")
@@ -1876,7 +1905,7 @@ def event_after_running(tmp_path: Path) -> Callable[[str], BaseHookEvent]:
         return make_event(
             PreToolUseEvent,
             raw=dict(tool_name="Bash", tool_input=dict(command="echo")),
-            ctx=build_ctx(transcript=load_transcript(session_file)),
+            ctx=build_ctx(transcript=snapshot_owner.load(session_file)),
         )
 
     return make
@@ -2002,6 +2031,7 @@ class TestRanCommandSpellings:
         from cc_transcript.query import Session
 
         evt = event_with_subagent_tool_use(PYRIGHT_IN_SUBAGENT)
+        evt.ctx.transcript = fixture_session([raw_text("user", "hi")], path=evt.ctx.t.path)
         walks: list[object] = []
         deep_inputs = Session.deep_inputs
         monkeypatch.setattr(Session, "deep_inputs", lambda self: walks.append(self) or deep_inputs(self))

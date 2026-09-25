@@ -209,6 +209,7 @@ def run_cli(
     root_dir: str | None = None,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -233,6 +234,7 @@ finally:
         input=stdin_data,
         capture_output=True,
         text=True,
+        timeout=timeout,
         cwd=cwd or str(PKG_DIR),
         env={**os.environ, **env} if env else None,
     )

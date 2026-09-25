@@ -17,6 +17,7 @@ from tests.review_helpers import (
     install_judge,
     install_resolved_model,
     install_triage,
+    native_review_owner,
     user_text,
     write_transcript,
 )
@@ -39,6 +40,7 @@ async def statuses(store: ReviewStore) -> dict[str, str]:
     return {str(row["rule"]): str(row["status"]) for row in rows}
 
 
+@pytest.mark.usefixtures(native_review_owner.__name__)
 class TestTriagePass:
     async def test_junk_verdict_rejects_candidate_without_a_judge_call(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

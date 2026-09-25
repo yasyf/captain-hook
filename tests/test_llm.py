@@ -1152,6 +1152,7 @@ class TestLlmContexts:
             "Check",
             message="WARNING",
             events=Event.PreToolUse,
+            transcript=False,
             contexts=[Introduced(pattern="print($$$)", tag="prints", required=False), Introduced(kind="comment")],
         )
 

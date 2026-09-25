@@ -485,6 +485,27 @@ class TestExecuteHook:
 
 
 class TestDispatch:
+    def test_hook_fork_preserves_resolved_event_facts_and_rebinds_command(self) -> None:
+        from captain_hook.dispatch import prepare_hook_events
+        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        register_hook(Event.PreToolUse, "fixture")
+        event = input_to_event(Event.PreToolUse, Input(command="echo fixture", tasks=[], skip_permissions=False))
+        original_command = event.cmd
+        _, [fork] = prepare_hook_events(event, async_=False)
+
+        assert fork is not event
+        assert fork.ctx is not event.ctx
+        assert fork.tasks is event.tasks
+        assert fork.skip_permissions is False
+        assert fork.cmd is not original_command
+        assert fork.cmd.event is fork
+        assert original_command.event is event
+        fork.cmd.notes.append("fork only")
+        assert original_command.notes == []
+        assert str(fork.cmd) == str(original_command)
+
     def test_no_matching_hooks_returns_none(self) -> None:
         evt = make_pre_tool_event()
         result = dispatch(Event.PreToolUse, evt)
