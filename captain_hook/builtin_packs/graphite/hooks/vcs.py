@@ -1,7 +1,22 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Event, Input, Tool, UserSaid, hook
-from captain_hook.builtin_packs.graphite.hooks._lib import GraphiteRuns, HasFlag, JJReads, PushesTagRef, ReviewPassRan
+from typing import TYPE_CHECKING
+
+from captain_hook import Allow, BaseHookEvent, Event, HookResult, Input, Tool, UserSaid, hook, on
+from captain_hook.builtin_packs.graphite.hooks._lib import (
+    CcxInstalled,
+    GraphiteRuns,
+    HasFlag,
+    JJReads,
+    PushesTagRef,
+    ReviewPassRan,
+    force_pushes,
+    graphite_owns,
+    rebases_onto_own_upstream,
+)
+
+if TYPE_CHECKING:
+    from captain_hook.cmd import Call
 
 # Inline tests are Allow-only: a FileFixture can't stage a nested `.git/.graphite_repo_config`, so
 # GraphiteRuns() is always off at cwd="/" and every matcher short-circuits to allow. The fire path
@@ -106,3 +121,75 @@ hook(
         Input(command="git status", cwd="/"): Allow(),
     },
 )
+
+
+SUBMIT = (
+    "`ccx vcs stack submit` restacks every lane and submits the whole stack, and `ccx vcs ship --no-commit` "
+    "submits this branch and its downstack. Both fetch the remote trunk first and push each branch under the "
+    "lease of its last submitted version"
+)
+RESTACK = (
+    "`ccx vcs stack restack` fetches the remote trunk and replays every branch of the stack onto its parent, "
+    "across every working copy that holds one"
+)
+CREATE = (
+    '`ccx vcs ship -m "<msg>" --new-branch=<name>` commits onto a new stacked branch, and '
+    "`ccx vcs stack new <name>` cuts one into a working copy of its own"
+)
+MODIFY = (
+    '`ccx vcs ship -m "<msg>"` commits onto this branch, and `ccx vcs ship --amend` folds the change into its commit'
+)
+GT_ROUTES = {
+    "submit": SUBMIT,
+    "s": SUBMIT,
+    "ss": SUBMIT,
+    "restack": RESTACK,
+    "sync": RESTACK,
+    "create": CREATE,
+    "c": CREATE,
+    "modify": MODIFY,
+    "m": MODIFY,
+}
+REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
+
+
+def ccx_route(call: Call, evt: BaseHookEvent) -> str | None:
+    argv = call.verb_argv
+    if len(argv) < 2 or "--help" in call.flags or "-h" in call.flags:
+        return None
+    match call.name, argv[1]:
+        case "gt", "restack" if "--only" in call.flags:
+            return None
+        case "gt", verb if verb in GT_ROUTES:
+            route = GT_ROUTES[verb]
+        case "git", "rebase" if REBASE_CONTROL.isdisjoint(call.flags) and not rebases_onto_own_upstream(call, evt.cwd):
+            route = RESTACK
+        case "git", "push" if force_pushes(call):
+            route = SUBMIT
+        case _:
+            return None
+    return route if graphite_owns(call, evt.cwd) else None
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled()],
+    tests={
+        Input(command="gt submit", cwd="/"): Allow(),
+        Input(command="gt restack", cwd="/"): Allow(),
+        Input(command="git rebase --onto main a b", cwd="/"): Allow(),
+        Input(command="git push --force-with-lease", cwd="/"): Allow(),
+        Input(command="git status", cwd="/"): Allow(),
+    },
+)
+def stack_writes_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    for call in evt.cmd.calls():
+        if (route := ccx_route(call, evt)) is not None:
+            return evt.block(
+                f"BLOCKED: `{' '.join(call.verb_argv[:2])}` rewrites a Graphite stack by hand, and ccx is installed. "
+                f"{route}. A hand-run gt verb or force-push works from the local trunk, which lags the remote, and "
+                "leaves the other working copies of the stack and Graphite's parent records behind. "
+                "`gt restack --only --branch <b>`, the conflict step a ccx refusal prints, stays open, as do "
+                "`gt continue`, `gt abort`, and `git rebase --continue`/`--abort`."
+            )
+    return None

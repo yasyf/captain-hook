@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The graphite pack blocks raw stack writes when ccx is on PATH.**
+  In a repo Graphite owns, the guard blocks agent-run `gt submit` (`s`,
+  `ss`), `gt restack`, `gt sync`, `gt create` (`c`), `gt modify` (`m`),
+  `git rebase`, and force pushes (including `+refspec`). Each block names
+  the matching `ccx vcs ship`, `ccx vcs stack new`, `ccx vcs stack restack`,
+  or `ccx vcs stack submit` command. The conflict steps
+  `gt restack --only --branch <b>`, `gt continue`, and `gt abort` stay open,
+  as do rebase controls and a rebase onto `<remote>/<current-branch>` for
+  ship's recovery. `gt track`, `gt log`, `--help`, and non-force pushes stay
+  open. The guard is inert without ccx; ccx's child gt/git processes do not
+  pass through agent Bash hooks.
+
 ### Changed
 
 - **The graphite pack's messages route stack writes through ccx vcs.**
@@ -14,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trunk and replays every lane. Hand-run `gt restack` and `gt sync` can drag
   a stack onto a stale local trunk. Ship replays `needs_restack` itself, so
   the old rebase message was wrong to say it refuses a stack in that state.
+
+### Fixed
+
+- **`PushesTagRef` handles push operands with no static value.** A command
+  substitution no longer crashes the condition.
 
 ## [12.56.0] - 2026-09-24
 

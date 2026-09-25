@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -155,7 +157,7 @@ class PushesTagRef(CustomCommandLineCondition):
             call.name == "git"
             and call.targets
             and call.targets.targets[0].value == "push"
-            and any(t.value.startswith("refs/tags") for t in call.targets.targets[1:])
+            and any((t.value or "").startswith("refs/tags") for t in call.targets.targets[1:])
             for call in evt.cmd.calls()
         )
 
@@ -165,3 +167,51 @@ class ReviewPassRan(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return any(is_review_skill(skill) for window in evt.ctx.transcript.deep_inputs() for skill in window.skills)
+
+
+class CcxInstalled(CustomCondition):
+    """Matches when ``ccx`` is on PATH, so its stack verbs are there to route raw gt and git writes to."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return shutil.which("ccx") is not None
+
+
+def current_branch(cwd: Path | None) -> str | None:
+    if cwd is None:
+        return None
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(cwd), "symbolic-ref", "--short", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return probe.stdout.strip() or None
+
+
+def rebases_onto_own_upstream(call: Call, session_cwd: Path | None) -> bool:
+    """Whether a ``git rebase`` replays the branch onto its own remote-tracking ref.
+
+    That is the manual recovery ``ccx vcs ship`` prints when the remote branch moved under it
+    (``git rebase --autostash origin/<branch>``); it rewrites nothing of the stack's shape.
+    """
+    operands = [target.value for target in call.targets.targets[1:]]
+    if "--onto" in call.flags or len(operands) != 1 or operands[0] is None or "/" not in operands[0]:
+        return False
+    cwd, _ = git_location(call, session_cwd)
+    return operands[0].split("/", 1)[1] == current_branch(cwd)
+
+
+def force_pushes(call: Call) -> bool:
+    """Whether a ``git push`` overwrites remote history: a force flag or a ``+``-prefixed refspec."""
+    for flag in call.flags:
+        name = flag.split("=", 1)[0]
+        if name in {"--force", "--force-with-lease", "--force-if-includes"}:
+            return True
+        if name.startswith("-") and not name.startswith("--") and "f" in name[1:]:
+            return True
+    return any((target.value or "").startswith("+") for target in call.targets.targets[1:])

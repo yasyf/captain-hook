@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,20 @@ HOOK_CASES = [
     pytest.param("gt submit", "warn", "review pass", id="submit-gate"),
     pytest.param("git rebase main", "warn", "ccx vcs stack submit", id="restack"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def ccx_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    kept = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if not (Path(entry) / "ccx").exists()]
+    monkeypatch.setenv("PATH", os.pathsep.join(kept))
+
+
+@pytest.fixture
+def ccx_installed(ccx_absent: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (bindir := tmp_path / "ccx-bin").mkdir()
+    (ccx := bindir / "ccx").write_text("#!/bin/sh\nexit 0\n")
+    ccx.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
 
 
 @pytest.fixture
@@ -88,6 +103,10 @@ def assert_fires(result: dict[str, Any] | None, kind: str, needle: str) -> None:
         case "warn":
             assert output.get("permissionDecision") != "deny"
             assert needle in output["additionalContext"]
+
+
+def assert_not_denied(result: dict[str, Any] | None) -> None:
+    assert result is None or result["hookSpecificOutput"].get("permissionDecision") != "deny"
 
 
 def warn_context(result: dict[str, Any] | None) -> str:
@@ -350,3 +369,80 @@ def test_mutating_jj_still_blocked(isolate_modules: None, gt_repo: Path, tmp_pat
     would let the mutation in `jj log && jj new` through."""
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert_fires(dispatch_command(command, gt_repo, tmp_path), "deny", "Graphite")
+
+
+@pytest.mark.parametrize(
+    ("command", "needle"),
+    [
+        pytest.param("gt submit", "ccx vcs stack submit", id="gt-submit"),
+        pytest.param("gt ss --no-interactive", "ccx vcs stack submit", id="gt-ss"),
+        pytest.param("gt restack", "ccx vcs stack restack", id="gt-restack"),
+        pytest.param("gt sync -f", "ccx vcs stack restack", id="gt-sync"),
+        pytest.param('gt create feat -m "x"', "--new-branch", id="gt-create"),
+        pytest.param('gt modify -m "x"', "ccx vcs ship --amend", id="gt-modify"),
+        pytest.param("gt m -a", "ccx vcs ship --amend", id="gt-m"),
+        pytest.param("git rebase main", "ccx vcs stack restack", id="git-rebase"),
+        pytest.param("git rebase --onto origin/dev old-base feat", "ccx vcs stack restack", id="git-rebase-onto"),
+        pytest.param("git push --force-with-lease origin feat", "ccx vcs stack submit", id="push-lease"),
+        pytest.param("git push --force-with-lease=feat:abc origin feat", "ccx vcs stack submit", id="push-lease-value"),
+        pytest.param("git push -f origin feat", "ccx vcs stack submit", id="push-f"),
+        pytest.param("git push -uf origin feat", "ccx vcs stack submit", id="push-short-bundle"),
+        pytest.param("git push origin +feat", "ccx vcs stack submit", id="push-plus-refspec"),
+        pytest.param("git status && gt submit --stack", "ccx vcs stack submit", id="second-call"),
+    ],
+)
+def test_stack_writes_blocked_when_ccx_installed(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, needle: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_fires(dispatch_command(command, gt_repo, tmp_path), "deny", needle)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gt restack --only --branch feat",
+        "gt continue",
+        "gt abort",
+        "gt track --parent main feat",
+        "gt log",
+        "gt submit --help",
+        "git rebase --continue",
+        "git rebase --abort",
+        "git push origin feat",
+        "git push --tags",
+        "ccx vcs stack submit",
+        'ccx vcs ship -m "gt submit --force"',
+        "echo gt submit",
+    ],
+)
+def test_ccx_escape_hatches_stay_unblocked(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_not_denied(dispatch_command(command, gt_repo, tmp_path))
+
+
+def test_stack_writes_only_warn_without_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert warn_context(dispatch_command("git rebase main", gt_repo, tmp_path))
+    assert dispatch_command("gt restack", gt_repo, tmp_path) is None
+
+
+def test_stack_writes_unblocked_in_plain_git(
+    isolate_modules: None, ccx_installed: None, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command("git push --force-with-lease", git_repo, tmp_path) is None
+    assert dispatch_command("gt submit", git_repo, tmp_path) is None
+
+
+def test_rebase_onto_own_upstream_is_ccx_ships_recovery(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    """ccx vcs ship prints `git rebase --autostash origin/<branch>` when the remote branch moved under it."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "feat"], check=True)
+    assert_not_denied(dispatch_command("git rebase --autostash origin/feat", repo, tmp_path))
+    assert_fires(dispatch_command("git rebase origin/dev", repo, tmp_path), "deny", "ccx vcs stack restack")
