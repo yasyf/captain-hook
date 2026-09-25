@@ -23,7 +23,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Self, get_args
 
-from cc_transcript.context import ContextWindow, HydratedWindow
+from cc_transcript.context import ContextWindow, HydratedWindow, hydrate_windows
 from cc_transcript.judge.llm import resolved_model, structured_judge
 from cc_transcript.judge.verdicts import SLUG_PATTERN, JudgeError, canonical_slug, run_verdicts
 from cc_transcript.mining.candidates import DedupKey
@@ -131,7 +131,7 @@ def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: 
     return f"=== {label} ===\n" + (HydratedWindow(window=window, turns=turns).render(budget=budget) or "(none)")
 
 
-def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
+def render_context(window: ContextWindow, hydrated: HydratedWindow | None) -> tuple[str, Fidelity]:
     """Renders a row's window for a prompt, at the best fidelity available.
 
     While the transcript lives, the window hydrates and renders at full fidelity —
@@ -143,7 +143,7 @@ def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
     Returns:
         The rendered context and the fidelity it was rendered at.
     """
-    if (hydrated := window.hydrate()) is None:
+    if hydrated is None:
         return replace(window, fidelity="summary").render_preview(budget=CONTEXT_BUDGET), "summary"
     split = len(window.before)
     end = split + (window.trigger is not None)
@@ -208,22 +208,28 @@ def build_fix_prompt(row: Mapping[str, object], context: str) -> str:
     )
 
 
-async def build_prompt(row: Mapping[str, object], *, suggestions: Sequence[Suggestion] = ()) -> tuple[str, Fidelity]:
-    """Builds one row's judge prompt, hydrating its context window first.
+async def build_prompt(
+    row: Mapping[str, object], *, hydrated: HydratedWindow | None, suggestions: Sequence[Suggestion] = ()
+) -> tuple[str, Fidelity]:
+    """Builds one row's judge prompt from its prepared context window.
 
     Returns:
         The prompt under the row's taxonomy (FIX for ``hook_complaint`` rows,
         CREATE otherwise, the latter carrying the suggested slugs) and the
         fidelity its context rendered at.
     """
-    context, fidelity = render_context(ContextWindow.from_json(str(row["context_json"])))
+    context, fidelity = render_context(ContextWindow.from_json(str(row["context_json"])), hydrated)
     if str(row["source_kind"]) == HOOK_COMPLAINT:
         return build_fix_prompt(row, context), fidelity
     return build_create_prompt(row, context, suggestions), fidelity
 
 
 def prompt_builder(
-    fidelities: dict[str, Fidelity], store: ReviewStore, *, suggesting: bool
+    fidelities: dict[str, Fidelity],
+    store: ReviewStore,
+    hydrated: Mapping[str, HydratedWindow | None],
+    *,
+    suggesting: bool,
 ) -> Callable[[Mapping[str, object]], Awaitable[str]]:
     from cc_transcript.judge.similar import suggest_canonical_keys
 
@@ -237,7 +243,9 @@ def prompt_builder(
         return [suggestion for suggestion in ranked if SLUG_PATTERN.fullmatch(suggestion.canonical_key)]
 
     async def build(row: Mapping[str, object]) -> str:
-        prompt, fidelity = await build_prompt(row, suggestions=await suggestions_for(row))
+        prompt, fidelity = await build_prompt(
+            row, hydrated=hydrated[str(row["dedup_key"])], suggestions=await suggestions_for(row)
+        )
         fidelities[str(row["dedup_key"])] = fidelity
         return prompt
 
@@ -306,8 +314,14 @@ async def judge_pass(
     pending = await store.judge_backlog(refresh_summary=refresh_summary)
     dispatch = await store.judge_queue(
         refresh_summary=refresh_summary,
+        probe_hydration=False,
         limit=limit if limit is not None else settings.max_judge_calls_per_session,
     )
+    windows = await asyncio.to_thread(
+        hydrate_windows, [ContextWindow.from_json(str(row["context_json"])) for row in dispatch]
+    )
+    hydrated = {str(row["dedup_key"]): window for row, window in zip(dispatch, windows, strict=True)}
+    dispatch = [row for row in dispatch if not row["refreshing_summary"] or hydrated[str(row["dedup_key"])] is not None]
     fidelities: dict[str, Fidelity] = {}
     creates = any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch)
     suggesting = creates and await store.has_verdict_evidence()
@@ -315,7 +329,7 @@ async def judge_pass(
         await asyncio.to_thread(default_embedder)
     judged, failed = await run_verdicts(
         dispatch,
-        prompt_builder(fidelities, store, suggesting=suggesting),
+        prompt_builder(fidelities, store, hydrated, suggesting=suggesting),
         structured_judge(ReviewVerdict, tier=settings.judge_tier, timeout=settings.judge_timeout),
         persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,

@@ -1080,7 +1080,7 @@ class TestFixJudge:
                 }
             ),
         }
-        prompt, fidelity = await build_prompt(row)
+        prompt, fidelity = await build_prompt(row, hydrated=None)
         assert fidelity == "summary"
         assert SUMMARY_LABEL in prompt
         assert "misfire_confirmed" in prompt
@@ -1099,7 +1099,7 @@ class TestFixJudge:
             preview_chars=200,
         )
         row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": "never do X"}
-        prompt, fidelity = await build_prompt(row)
+        prompt, fidelity = await build_prompt(row, hydrated=None)
         assert fidelity == "summary"
         assert "DURABLE correction worth encoding as an" in prompt
 

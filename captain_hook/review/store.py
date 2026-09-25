@@ -1435,7 +1435,7 @@ ORDER BY repo
             )
             rows_by_id = {row["id"]: row for row in rows}
             for ref in page:
-                row = rows_by_id[ref["id"]]
+                row = rows_by_id[ref["id"]] | {"refreshing_summary": ref["verdict_id"] is not None}
                 if (
                     not refresh_summary
                     or not probe_hydration

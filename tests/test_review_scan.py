@@ -630,3 +630,22 @@ def test_candidate_confidence_gates_before_transcript_capture(
 
     monkeypatch.setattr("captain_hook.review.scan.to_candidate", forbid_capture)
     assert list(candidates_from(b"", events, [signal], settings=settings)) == []
+
+
+def test_candidates_capture_one_batch(monkeypatch: pytest.MonkeyPatch, settings: ReviewSettings) -> None:
+    from cc_transcript.context import capture_windows
+
+    entries = [*correction_entries(), user_text("no, always choose the specific parser exception")]
+    raw = "".join(json.dumps(entry) + "\n" for entry in entries).encode()
+    events = parse(entries)
+    signals = list(detect(events))
+    batches: list[list[EventRef]] = []
+
+    def capture(raw: bytes, anchors: list[EventRef]) -> list[ContextWindow]:
+        batches.append(anchors)
+        return capture_windows(raw, anchors)
+
+    monkeypatch.setattr("captain_hook.review.scan.capture_windows", capture)
+    kept = list(candidates_from(raw, events, signals, settings=settings))
+    assert len(kept) >= 2
+    assert batches == [[candidate.ref for _, candidate in kept]]

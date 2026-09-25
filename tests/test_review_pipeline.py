@@ -715,6 +715,34 @@ class TestJudgePass:
         assert len(calls) == 2
 
     @requires_llm_backend
+    async def test_judge_batch_reads_a_shared_transcript_once(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        projects_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from cc_transcript.activity import SessionActivity
+
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
+        loads: list[SessionId] = []
+        original = SessionActivity.from_session
+
+        def load(session_id: SessionId) -> SessionActivity:
+            loads.append(session_id)
+            return original(session_id)
+
+        monkeypatch.setattr(SessionActivity, "from_session", load)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=2, failed=0, pending=0, merged=2, retired=0, reopened=0
+        )
+        assert len(calls) == 2
+        assert loads == [SessionId("s1")]
+        assert await verdict_fidelities(store) == ["full", "full"]
+
+    @requires_llm_backend
     async def test_cap_limits_calls_and_pending_rows_retry_next_pass(
         self, store: ReviewStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -915,7 +943,7 @@ class TestJudgePass:
         events = parse(entries)
         window = capture_window(raw, EventRef(SessionId("sess-1"), events[-1].meta.uuid))
         row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": CORRECTION}
-        prompt, fidelity = await build_prompt(row)
+        prompt, fidelity = await build_prompt(row, hydrated=None)
         assert fidelity == "summary"
         assert "[source: transcript_message]" in prompt
         assert "add the parser" in prompt
@@ -1056,6 +1084,8 @@ class TestFidelity:
         projects_root: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from cc_transcript.activity import SessionActivity
+
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
         await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
@@ -1065,10 +1095,23 @@ class TestFidelity:
         live.unlink()
         assert (await judge_pass(store, settings=settings)).judged == 2
         live.write_bytes(content)
+        loads: list[SessionId] = []
+        original = SessionActivity.from_session
+
+        def load(session_id: SessionId) -> SessionActivity:
+            loads.append(session_id)
+            return original(session_id)
+
+        def forbidden_probe(context_json: str) -> bool:
+            raise AssertionError("summary probing must share the prompt hydration batch")
+
+        monkeypatch.setattr(SessionActivity, "from_session", load)
+        monkeypatch.setattr("cc_transcript.judge.verdicts.hydratable", forbidden_probe)
         first = await judge_pass(store, settings=settings, refresh_summary=True, limit=1)
         assert (first.judged, first.pending) == (0, 2)
         second = await judge_pass(store, settings=settings, refresh_summary=True, limit=1)
         assert (second.judged, second.pending) == (1, 1)
+        assert loads == [SessionId("s1"), SessionId("s2")]
         assert len(calls) == 3
 
     async def test_refresh_summary_rejudges_once_the_window_hydrates_again(

@@ -47,7 +47,7 @@ from cc_transcript.builders import (
     drop_sidechain,
     keep_only,
 )
-from cc_transcript.context import capture_window
+from cc_transcript.context import capture_windows
 from cc_transcript.discovery import find_in
 from cc_transcript.filterspec import (
     RESUME_PHRASE_SET,
@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
     from typing import Any
 
+    from cc_transcript.context import ContextWindow
     from cc_transcript.decisions import DecisionLog
     from cc_transcript.mining.signals import MiningSignal
     from cc_transcript.models import Transcript, TranscriptEvent
@@ -308,14 +309,14 @@ def payload_of(sig: MiningSignal) -> Mapping[str, Any] | None:
             raise AssertionError(sig.detector)
 
 
-def to_candidate(raw: bytes, sig: MiningSignal) -> FeedbackCandidate:
-    anchor = EventRef(sig.session_id, sig.event_uuid)
+def to_candidate(window: ContextWindow, sig: MiningSignal) -> FeedbackCandidate:
+    anchor = window.anchor
     return FeedbackCandidate(
         dedup_key=dedup_key(*parts(sig)),
         source_kind=sig.kind,
         occurred_at=sig.occurred_at,
         text=sig.text,
-        window=capture_window(raw, anchor),
+        window=window,
         ref=anchor,
         session_id=sig.session_id,
         cc_version=sig.cc_version,
@@ -340,12 +341,18 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
 def candidates_from(
     raw: bytes, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
 ) -> Iterator[tuple[MiningSignal, FeedbackCandidate]]:
-    for sig in signals:
-        if not survives(events, sig):
-            continue
-        floor = settings.min_confidence_fix if sig.kind == HOOK_COMPLAINT else settings.min_confidence
-        if sig.signal.confidence >= floor:
-            yield sig, to_candidate(raw, sig)
+    kept = [
+        sig
+        for sig in signals
+        if survives(events, sig)
+        and sig.signal.confidence
+        >= (settings.min_confidence_fix if sig.kind == HOOK_COMPLAINT else settings.min_confidence)
+    ]
+    if not kept:
+        return
+    windows = capture_windows(raw, [EventRef(sig.session_id, sig.event_uuid) for sig in kept])
+    for sig, window in zip(kept, windows, strict=True):
+        yield sig, to_candidate(window, sig)
 
 
 def is_reviewer_session(events: Sequence[TranscriptEvent]) -> bool:
