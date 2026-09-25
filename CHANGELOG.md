@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.58.0] - 2026-09-25
+
 ### Added
 
 - **The general pack blocks `pkill` and `killall`.** Both match every process
