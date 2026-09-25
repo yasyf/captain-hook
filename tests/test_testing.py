@@ -743,10 +743,23 @@ class TestRunInlineTests:
 
         results = run_inline_tests()
         assert len(results) == 1
-        # run_handler swallows the hook's exception and returns None, so the Warn()
-        # expectation fails rather than the run erroring — the swap/restore still ran.
-        assert results[0][1] == "fail"
+        assert results[0][1] == "error"
         assert os.environ.get("HOME") == original_home
+
+    @pytest.mark.parametrize("expected", [Allow(), Ask()], ids=["allow", "ask"])
+    def test_handler_exception_errors_whatever_the_expectation(self, expected):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input
+
+        reset()
+
+        @on(Event.Stop, tests={Input(): expected})
+        def crashing(evt):
+            raise RuntimeError("boom")
+
+        (result,) = run_inline_tests()
+        assert result[1:] == ("error", False, "RuntimeError: boom")
 
 
 class TestStubbedContext:

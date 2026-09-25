@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from contextvars import copy_context
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,7 +21,7 @@ from captain_hook.util import reqenv
 from captain_hook.util.caching import once
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
     from captain_hook.events import BaseHookEvent
 
@@ -32,6 +33,8 @@ BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
 
 type Envelope = dict[str, Any] | str
+
+_SURFACE_HANDLER_ERRORS: ContextVar[bool] = ContextVar("captain_hook_surface_handler_errors", default=False)
 
 
 @once
@@ -106,6 +109,16 @@ def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
     )
 
 
+@contextmanager
+def surfacing_handler_errors() -> Iterator[None]:
+    """Let a handler's exception propagate out of :func:`run_handler` instead of reading as no result."""
+    token = _SURFACE_HANDLER_ERRORS.set(True)
+    try:
+        yield
+    finally:
+        _SURFACE_HANDLER_ERRORS.reset(token)
+
+
 def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
     from captain_hook import faults
     from captain_hook.transcripts import TranscriptLoadError
@@ -115,6 +128,8 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
     except TranscriptLoadError:
         raise
     except Exception as exc:
+        if _SURFACE_HANDLER_ERRORS.get():
+            raise
         logger.bind(hook=entry.name).exception("hook handler failed")
         faults.record(f"hook {entry.name}", exc, str(evt.cwd) if evt.cwd else None)
         return None

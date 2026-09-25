@@ -44,7 +44,8 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
 
 ## Expected outcomes
 
-All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`.
+All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`. A handler that
+raises fails its test as an error whatever the expectation, so a crash never passes as `Allow()`.
 
 - `Block(pattern=None)` — the hook must block; optional regex searched in the block message.
 - `Warn(pattern=None)` — the hook must warn; optional regex searched in the warning.

@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal can read `ORCA_TERMINAL_HANDLE` through `reqenv.getenv` and pass it to
   `orca terminal send --terminal`. Workers no longer inherit the daemon's own
   `ORCA_*` values.
+- **A crashing handler fails its inline test.** `run_inline_tests` lets a
+  handler's exception propagate instead of reading it as no result, so the
+  test reports an error whatever it expected. Before, a crash satisfied
+  `Allow()` and `Ask()` and hid the bug. Live dispatch still logs the
+  exception, records a fault and carries on.
 - **`RewritingExistingPlan` allows a rewrite once the plan is archived.** A
   `Write` over a plan already written this session no longer matches when a
   sibling `<stem>.*.md` holds the plan's current bytes, such as

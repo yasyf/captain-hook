@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from captain_hook.conditions import matches_conditions
 from captain_hook.context import HookContext
-from captain_hook.dispatch import execute_hook
+from captain_hook.dispatch import execute_hook, surfacing_handler_errors
 from captain_hook.events import (
     BaseHookEvent,
     SessionEndEvent,
@@ -768,7 +768,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
 
     results: list[tuple[str, str, bool, str]] = []
 
-    with isolated_state_root() as state_root, pinned_caches():
+    with isolated_state_root() as state_root, pinned_caches(), surfacing_handler_errors():
         (scratch_home := state_root / "home").mkdir()
         for entry in _state.hooks:
             if not entry.spec.tests:
