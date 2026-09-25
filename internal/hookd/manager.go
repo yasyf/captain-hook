@@ -450,6 +450,9 @@ func (m *workerManager) evictIdleLocked() *workerEntry {
 func (m *workerManager) sweep(now time.Time) []*workerClient {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.restarting || m.restartError != nil {
+		return nil
+	}
 	var retired []*workerClient
 	for id, entry := range m.entries {
 		if !entry.idle() {

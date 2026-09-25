@@ -204,6 +204,9 @@ func TestRestartRetainsCohortOnSettlementError(t *testing.T) {
 	if manager.entries[entry.key.member()] != entry || manager.restarting {
 		t.Fatal("failed settlement lost cohort/admission")
 	}
+	if retired := manager.sweep(time.Now()); len(retired) != 0 || manager.entries[entry.key.member()] != entry {
+		t.Fatal("sweep retired an unsettled restart cohort")
+	}
 	if _, _, err := manager.acquire(ctx, workerKey{id: "replacement"}); !errors.Is(err, errWorkerAdmissionPaused) {
 		t.Fatalf("unsettled cohort admitted new work: %v", err)
 	}
