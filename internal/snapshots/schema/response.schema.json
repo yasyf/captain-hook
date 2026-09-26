@@ -88,6 +88,7 @@
               "discovered": "#/$defs/Discovered",
               "hydrated": "#/$defs/Hydrated",
               "loading": "#/$defs/Loading",
+              "located": "#/$defs/Located",
               "records": "#/$defs/RecordsResult",
               "released": "#/$defs/Released",
               "renewed": "#/$defs/Renewed",
@@ -107,6 +108,9 @@
             },
             {
               "$ref": "#/$defs/Resolved"
+            },
+            {
+              "$ref": "#/$defs/Located"
             },
             {
               "$ref": "#/$defs/Discovered"
@@ -640,6 +644,7 @@
                   "discovered": "#/$defs/Discovered",
                   "hydrated": "#/$defs/Hydrated",
                   "loading": "#/$defs/Loading",
+                  "located": "#/$defs/Located",
                   "records": "#/$defs/RecordsResult",
                   "released": "#/$defs/Released",
                   "renewed": "#/$defs/Renewed",
@@ -659,6 +664,9 @@
                 },
                 {
                   "$ref": "#/$defs/Resolved"
+                },
+                {
+                  "$ref": "#/$defs/Located"
                 },
                 {
                   "$ref": "#/$defs/Discovered"
@@ -753,6 +761,85 @@
         "reservation"
       ],
       "title": "Loading",
+      "type": "object"
+    },
+    "Located": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "located",
+          "title": "Kind",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "maxItems": 1024,
+          "title": "Sessions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "sessions"
+      ],
+      "title": "Located",
+      "type": "object"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Path"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Revision"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "missing",
+            "incomplete"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "status",
+        "path",
+        "revision"
+      ],
+      "title": "Location",
       "type": "object"
     },
     "RecordsResult": {

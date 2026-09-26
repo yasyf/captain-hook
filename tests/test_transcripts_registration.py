@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from captain_hook.app import on
 from captain_hook.cli import cli, dispatch_event
 from captain_hook.session import ensure_session
-from captain_hook.transcripts import register_transcript, registered_paths
+from captain_hook.transcripts import register_transcript, registered_paths, resolved_transcript_paths
 from captain_hook.types import Event
 from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_use
 
@@ -277,17 +277,23 @@ class TestRegisteredPaths:
             tmp_path / "canonical.jsonl",
             tmp_path / "a.jsonl",
         )
-        assert set(discovery_client.released) == {"a", "b", str(tmp_path / "alias.jsonl")}
+        assert discovery_client.released == [str(tmp_path / "alias.jsonl")]
 
-    def test_batches_ids_and_consumes_paginated_resolutions(self, tmp_path, discovery_client):
+    def test_locates_many_ids_in_one_request_without_leases(self, tmp_path, discovery_client):
         ids = [f"session-{i}" for i in range(257)]
         for session_id in ids:
             register_transcript("s-many", thread_id=session_id)
         discovery_client.results = {session_id: tmp_path / f"{session_id}.jsonl" for session_id in ids}
         discovery_client.page_size = 17
         assert registered_paths(ensure_session(SessionId("s-many"))) == tuple(discovery_client.results.values())
-        assert [len(request["session_ids"]) for request in discovery_client.requests] == [256, 1]
-        assert set(discovery_client.released) == set(ids)
+        assert len(discovery_client.requests) == 1
+        assert discovery_client.requests[0]["session_ids"] == ids
+        assert discovery_client.released == []
+
+    def test_batches_only_beyond_locate_request_bound(self, tmp_path, discovery_client):
+        ids = [SessionId(f"session-{i}") for i in range(1025)]
+        assert resolved_transcript_paths(discovery_client, ids, roots=[tmp_path]) == dict.fromkeys(ids)
+        assert [len(request["session_ids"]) for request in discovery_client.requests] == [1024, 1]
 
     def test_owner_is_consulted_again_after_a_prior_missing_result(self, tmp_path, discovery_client):
         register_transcript("s-new", thread_id="late")
@@ -317,17 +323,17 @@ class TestRegisteredPaths:
         register_transcript("s-missing", path=str(tmp_path / "gone.jsonl"))
         assert registered_paths(ensure_session(SessionId("s-missing"))) == ()
 
-    def test_incomplete_item_releases_all_sibling_handles(self, tmp_path, discovery_client):
+    def test_incomplete_item_is_not_treated_as_missing(self, tmp_path, discovery_client):
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         for session_id in ("incomplete", "healthy"):
             register_transcript("s-partial", thread_id=session_id)
         discovery_client.results = {"incomplete": "incomplete", "healthy": tmp_path / "healthy.jsonl"}
-        with pytest.raises(EvidenceIncomplete, match="resolution did not complete"):
+        with pytest.raises(EvidenceIncomplete, match="location did not complete"):
             registered_paths(ensure_session(SessionId("s-partial")))
-        assert discovery_client.released == ["healthy"]
+        assert discovery_client.released == []
 
-    def test_later_page_failure_releases_earlier_handles(self, tmp_path, discovery_client):
+    def test_later_page_failure_discards_partial_locations(self, tmp_path, discovery_client):
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         register_transcript("s-later-page", thread_id="healthy")
@@ -335,7 +341,7 @@ class TestRegisteredPaths:
         discovery_client.failure_after_page = EvidenceIncomplete("deadline", "fixture timeout")
         with pytest.raises(EvidenceIncomplete, match="deadline"):
             registered_paths(ensure_session(SessionId("s-later-page")))
-        assert discovery_client.released == ["healthy"]
+        assert discovery_client.released == []
 
     def test_incomplete_after_missing_page_is_not_treated_as_missing(self, discovery_client):
         from captain_hook.snapshots.client import EvidenceIncomplete
@@ -349,28 +355,22 @@ class TestRegisteredPaths:
         from captain_hook.snapshots.client import SnapshotProtocolError
 
         register_transcript("s-omitted", thread_id="unknown")
-        monkeypatch.setattr(discovery_client, "pages", lambda *args, **kwargs: iter([{"sessions": []}]))
+        monkeypatch.setattr(
+            discovery_client, "pages", lambda *args, **kwargs: iter([{"kind": "located", "sessions": []}])
+        )
         with pytest.raises(SnapshotProtocolError, match="omitted"):
             registered_paths(ensure_session(SessionId("s-omitted")))
 
-    def test_cleanup_attempts_every_lease_when_release_fails(self, tmp_path, discovery_client, monkeypatch):
-        from captain_hook.snapshots.client import EvidenceIncomplete
+    def test_duplicate_across_pages_is_rejected(self, tmp_path, discovery_client, monkeypatch):
+        from captain_hook.snapshots.client import SnapshotProtocolError
 
-        for session_id in ("a", "b"):
-            register_transcript("s-release", thread_id=session_id)
-            discovery_client.results[session_id] = tmp_path / f"{session_id}.jsonl"
-        release = discovery_client.call
-
-        def fail_one(operation, **arguments):
-            result = release(operation, **arguments)
-            if arguments["token"] == "b":
-                raise EvidenceIncomplete("deadline", "release fixture")
-            return result
-
-        monkeypatch.setattr(discovery_client, "call", fail_one)
-        with pytest.raises(EvidenceIncomplete, match="release fixture"):
-            registered_paths(ensure_session(SessionId("s-release")))
-        assert discovery_client.released == ["b", "a"]
+        register_transcript("s-duplicate", thread_id="a")
+        session = {"session_id": "a", "status": "ok", "path": str(tmp_path / "a.jsonl"), "revision": "1:2:3:4:5"}
+        monkeypatch.setattr(
+            discovery_client, "pages", lambda *args, **kwargs: iter([{"kind": "located", "sessions": [session]}] * 2)
+        )
+        with pytest.raises(SnapshotProtocolError, match="duplicate"):
+            registered_paths(ensure_session(SessionId("s-duplicate")))
 
 
 class TestLocatorValidation:
@@ -480,4 +480,4 @@ def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, 
     updated = (tmp_path / "first.jsonl", tmp_path / "later.jsonl")
     assert seen == [initial, initial, updated, updated]
     assert len(discovery_client.requests) == 2
-    assert discovery_client.released == ["second", "first"] * 2
+    assert discovery_client.released == []

@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import re
 import threading
-from contextlib import ExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
 
@@ -17,7 +16,6 @@ from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from typing import Any
 
     from cc_transcript.activity import UserClassifier
     from cc_transcript.models import TranscriptEvent
@@ -306,38 +304,32 @@ def register_transcript(
 def resolved_transcript_paths(
     client: SnapshotClient, session_ids: Sequence[SessionId], *, roots: Sequence[Path]
 ) -> dict[SessionId, Path | None]:
-    from captain_hook.snapshots.client import NATIVE_CLASSIFIER, EvidenceIncomplete, Lease, SnapshotProtocolError
+    from captain_hook.snapshots.client import EvidenceIncomplete, SnapshotProtocolError
 
     found: dict[SessionId, Path | None] = {}
     unique = list(dict.fromkeys(session_ids))
-    for offset in range(0, len(unique), 256):
-        batch = unique[offset : offset + 256]
-        with ExitStack() as cleanup:
-            results: list[dict[str, Any]] = []
-            for page in client.pages(
-                "resolve", session_ids=batch, roots=[str(root) for root in roots], classifier=NATIVE_CLASSIFIER
-            ):
-                for item in page["sessions"]:
-                    if item["description"] is not None:
-                        cleanup.callback(Lease(client, item["description"]).release)
-                results.extend(page["sessions"])
-            resolved: dict[SessionId, Path | None] = {}
-            for item in results:
+    for offset in range(0, len(unique), 1024):
+        batch = unique[offset : offset + 1024]
+        resolved: dict[SessionId, Path | None] = {}
+        for page in client.pages("locate", session_ids=batch, roots=[str(root) for root in roots]):
+            if page["kind"] != "located":
+                raise SnapshotProtocolError("locate returned an unexpected result")
+            for item in page["sessions"]:
                 session_id = SessionId(item["session_id"])
                 if session_id not in batch or session_id in resolved:
-                    raise SnapshotProtocolError("resolve returned an unexpected or duplicate session")
-                description = item["description"]
-                if item["status"] == "missing" and description is None:
+                    raise SnapshotProtocolError("locate returned an unexpected or duplicate session")
+                path = item["path"]
+                if item["status"] == "missing" and path is None:
                     resolved[session_id] = None
-                elif item["status"] == "ok" and description is not None:
-                    resolved[session_id] = Path(description["canonical_path"])
+                elif item["status"] == "ok" and isinstance(path, str):
+                    resolved[session_id] = Path(path)
                 elif item["status"] == "incomplete":
-                    raise EvidenceIncomplete("incomplete", "transcript resolution did not complete")
+                    raise EvidenceIncomplete("incomplete", "transcript location did not complete")
                 else:
-                    raise SnapshotProtocolError("resolve returned inconsistent session availability")
-            if set(resolved) != set(batch):
-                raise SnapshotProtocolError("resolve omitted a requested session")
-            found.update(resolved)
+                    raise SnapshotProtocolError("locate returned inconsistent session availability")
+        if set(resolved) != set(batch):
+            raise SnapshotProtocolError("locate omitted a requested session")
+        found.update(resolved)
     return found
 
 
