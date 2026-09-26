@@ -40,6 +40,7 @@ OWNER_ADMISSION = {
     "hook": (8, 64),
     "review": (2, 16),
     "release": (4, 32),
+    "warm": (1, 4),
 }
 
 
@@ -373,6 +374,8 @@ class OwnerService:
         lane = (
             "release"
             if request["operation"] == "release"
+            else "warm"
+            if request["operation"] in {"warm_registered", "warm_root"}
             else "review"
             if request["operation"] in {"prepare_review", "prepare_corrections"}
             else context["admission"]
@@ -404,7 +407,7 @@ class OwnerService:
             with self.guard:
                 for pending in self.pending.values():
                     pending.token.cancel()
-            for name in ("hook", "release"):
+            for name in ("hook", "release", "warm"):
                 self.executors[name].shutdown(wait=True)
             self.executors["review"].submit(self.owner.close).result()
             self.executors["review"].shutdown(wait=True)

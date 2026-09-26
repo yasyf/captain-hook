@@ -62,7 +62,8 @@ func (w *workerClient) snapshotFrame(frame wireproto.Frame) error {
 		defer cancel()
 		return w.write(ctx, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpError, ID: frame.ID, ParentID: frame.ParentID, Error: "captain: snapshot parent event is no longer active"})
 	}
-	if _, err := snapshots.Metadata(frame.Snapshot); err != nil {
+	metadata, err := snapshots.Metadata(frame.Snapshot)
+	if err != nil {
 		return err
 	}
 	encoded, err := wireproto.Marshal(frame)
@@ -73,8 +74,12 @@ func (w *workerClient) snapshotFrame(frame wireproto.Frame) error {
 		return wireproto.ErrPayloadTooLarge
 	}
 	parentContext, admission := context.Background(), "review"
+	workClass := ""
 	if frame.ParentID != 0 {
 		parentContext, admission = event.ctx, "hook"
+	} else if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
+		admission = "hook"
+		workClass = "background"
 	}
 	ctx, cancel := context.WithCancel(parentContext)
 	w.mu.Lock()
@@ -98,6 +103,7 @@ func (w *workerClient) snapshotFrame(frame wireproto.Frame) error {
 	go func() {
 		defer cancel()
 		callContext := userSnapshotContext(fmt.Sprintf("worker:%d", w.snapshotNamespace), admission, uint32(os.Geteuid()))
+		callContext.WorkClass = workClass
 		body, err := service.call(ctx, frame.Snapshot, callContext)
 		response := wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotResult, ID: frame.ID, ParentID: frame.ParentID, Snapshot: body}
 		if err != nil {

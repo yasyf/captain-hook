@@ -7,7 +7,9 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +128,286 @@ class TestRegisterCommand:
         result = CliRunner().invoke(cli, ["transcripts", "register", "--session", bad, "--thread-id", "t"])
         assert result.exit_code == 2
         assert "invalid session id" in result.output
+
+
+def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import SnapshotClient
+
+    register_transcript("s-warm", thread_id="thread-1")
+    calls = []
+    client = SnapshotClient(lambda _: {})
+    client.bind_tool_registry({})
+
+    class RootSession:
+        def view(self):
+            return {"attachments": []}
+
+        def release(self):
+            pass
+
+    def warm(operation, **arguments):
+        calls.append((operation, arguments))
+        if operation == "warm_root":
+            return {
+                "status": "ok",
+                "usage": {"source_bytes_read": 1 if len(calls) == 1 else 0, "cache_hits": 0},
+                "data": {
+                    "kind": "warmed_root",
+                    "owner_epoch": "owner",
+                    "source_revision": "revision",
+                    "source_offset": 100,
+                    "source_size": 100,
+                    "complete": True,
+                    "facts_complete": True,
+                },
+            }
+        return {
+            "status": "ok",
+            "usage": {
+                "source_bytes_read": 1 if len(calls) == 3 else 0,
+                "discovery_entries_examined": 0,
+                "cache_hits": 0 if len(calls) == 3 else 1,
+            },
+            "data": {
+                "kind": "warmed_registry",
+                "owner_epoch": "owner",
+                "membership_revision": "revision",
+                "next_index": 1,
+                "complete": True,
+                "source_offset": 0,
+                "source_size": 0,
+                "fact_cache_bytes": 100,
+                "fact_cache_write_bytes": 50,
+                "fact_cache_writes": 1,
+            },
+        }
+
+    @contextmanager
+    def scope():
+        yield client
+
+    monkeypatch.setattr(client, "call", warm)
+    monkeypatch.setattr(client, "acquire", lambda _: RootSession())
+    monkeypatch.setattr(
+        client,
+        "pages",
+        lambda *args, **kwargs: iter(({"kind": "classifier", "classifier": {"id": "native", "version": "1"}},)),
+    )
+    monkeypatch.setattr(
+        "captain_hook.transcripts.resolved_transcript_paths",
+        lambda *_args, **_kwargs: {SessionId("s-warm"): tmp_path / "root.jsonl"},
+    )
+    monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
+    monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
+    result = CliRunner().invoke(cli, ["transcripts", "warm", "--session", "s-warm", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "complete": True,
+        "root_steps": 1,
+        "root_source_bytes_read": 1,
+        "root_verify_source_bytes_read": 0,
+        "root_facts_complete": True,
+        "sources": 1,
+        "steps": 1,
+        "fact_cache_bytes": 100,
+        "fact_cache_write_bytes": 50,
+        "fact_cache_writes": 1,
+        "warm_source_bytes_read": 1,
+        "verify_complete": True,
+        "verify_steps": 1,
+        "verify_source_bytes_read": 0,
+        "verify_cache_hits": 1,
+        "elapsed_seconds": pytest.approx(0, abs=1),
+        "status": "complete",
+    }
+    assert [operation for operation, _ in calls] == ["warm_root", "warm_root", "warm_registered", "warm_registered"]
+    assert calls[2][1]["thread_ids"] == ["thread-1"]
+    assert calls[2][1]["limits"]["max_read_bytes"] == 8 * 1024 * 1024
+
+
+def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import SnapshotClient
+
+    register_transcript("s-cached", thread_id="thread-1")
+    client = SnapshotClient(lambda _: {})
+    client.bind_tool_registry({})
+    calls = []
+
+    class RootSession:
+        def view(self):
+            return {"attachments": []}
+
+        def release(self):
+            pass
+
+    def warm(operation, **arguments):
+        calls.append((operation, arguments))
+        if operation == "warm_root":
+            return {
+                "status": "ok",
+                "usage": {"source_bytes_read": 0, "cache_hits": 1},
+                "data": {
+                    "kind": "warmed_root",
+                    "owner_epoch": "owner",
+                    "source_revision": "revision",
+                    "source_offset": 100,
+                    "source_size": 100,
+                    "complete": True,
+                    "facts_complete": True,
+                },
+            }
+        registry_calls = sum(name == "warm_registered" for name, _ in calls)
+        return {
+            "status": "ok",
+            "usage": {"source_bytes_read": 0, "discovery_entries_examined": 0, "cache_hits": 8},
+            "data": {
+                "kind": "warmed_registry",
+                "owner_epoch": "owner",
+                "membership_revision": "revision",
+                "next_index": 8 if registry_calls % 2 else 10,
+                "complete": registry_calls % 2 == 0,
+                "source_offset": 0,
+                "source_size": 0,
+                "fact_cache_bytes": 100,
+                "fact_cache_write_bytes": 0,
+                "fact_cache_writes": 0,
+            },
+        }
+
+    @contextmanager
+    def scope():
+        yield client
+
+    monkeypatch.setattr(client, "call", warm)
+    monkeypatch.setattr(client, "acquire", lambda _: RootSession())
+    monkeypatch.setattr(
+        client,
+        "pages",
+        lambda *args, **kwargs: iter(({"kind": "classifier", "classifier": {"id": "native", "version": "1"}},)),
+    )
+    monkeypatch.setattr(
+        "captain_hook.transcripts.resolved_transcript_paths",
+        lambda *_args, **_kwargs: {SessionId("s-cached"): tmp_path / "root.jsonl"},
+    )
+    monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
+    monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
+    monkeypatch.setattr("captain_hook.worker.service.WARM_INTERVAL_SECONDS", 10)
+    started = time.monotonic()
+    result = CliRunner().invoke(cli, ["transcripts", "warm", "--session", "s-cached", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert time.monotonic() - started < 1
+    assert len(calls) == 6
+    assert json.loads(result.output)["verify_cache_hits"] == 16
+
+
+def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import SnapshotClient
+
+    client = SnapshotClient(lambda _: {})
+    client.bind_tool_registry({})
+    calls = []
+
+    class RootSession:
+        def view(self):
+            return {"attachments": []}
+
+        def release(self):
+            pass
+
+    def warm(operation, **arguments):
+        calls.append((operation, arguments))
+        return {
+            "status": "ok",
+            "usage": {"source_bytes_read": 0, "cache_hits": 1},
+            "data": {
+                "kind": "warmed_root",
+                "owner_epoch": "owner",
+                "source_revision": "revision",
+                "source_offset": 100,
+                "source_size": 100,
+                "complete": True,
+                "facts_complete": True,
+            },
+        }
+
+    @contextmanager
+    def scope():
+        yield client
+
+    monkeypatch.setattr(client, "call", warm)
+    monkeypatch.setattr(client, "acquire", lambda _: RootSession())
+    monkeypatch.setattr(
+        client,
+        "pages",
+        lambda *args, **kwargs: iter(({"kind": "classifier", "classifier": {"id": "captain-lane", "version": "1"}},)),
+    )
+    monkeypatch.setattr(
+        "captain_hook.transcripts.resolved_transcript_paths",
+        lambda *_args, **_kwargs: {SessionId("root-only"): tmp_path / "root.jsonl"},
+    )
+    monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
+    monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
+    result = CliRunner().invoke(cli, ["transcripts", "warm", "--session", "root-only", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert [arguments["classifier"]["id"] for _, arguments in calls] == [
+        "native",
+        "native",
+        "captain-lane",
+        "captain-lane",
+    ]
+    assert json.loads(result.output)["root_facts_complete"] is True
+    assert json.loads(result.output)["sources"] == 0
+
+
+def test_warm_command_reports_unavailable_configured_classifier(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import SnapshotClient
+
+    client = SnapshotClient(lambda _: {})
+    client.bind_tool_registry({})
+    calls = []
+
+    def warm(operation, **arguments):
+        calls.append((operation, arguments))
+        return {
+            "status": "ok",
+            "usage": {"source_bytes_read": 0, "cache_hits": 1},
+            "data": {
+                "kind": "warmed_root",
+                "owner_epoch": "owner",
+                "source_revision": "revision",
+                "source_offset": 100,
+                "source_size": 100,
+                "complete": True,
+                "facts_complete": True,
+            },
+        }
+
+    @contextmanager
+    def scope():
+        yield client
+
+    monkeypatch.setattr(client, "call", warm)
+    monkeypatch.setattr(client, "acquire", lambda _: pytest.fail("configured callback ran in operator"))
+    monkeypatch.setattr(
+        "captain_hook.transcripts.resolved_transcript_paths",
+        lambda *_args, **_kwargs: {SessionId("configured"): tmp_path / "root.jsonl"},
+    )
+    monkeypatch.setattr(
+        "captain_hook.transcripts.configured_classifier_policy",
+        lambda _: {"id": "captain-configured", "version": "digest"},
+    )
+    monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
+    monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
+    monkeypatch.setattr("captain_hook.cli._state.classifier", lambda _: True)
+    result = CliRunner().invoke(cli, ["transcripts", "warm", "--session", "configured", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output)["status"] == "classifier_unavailable"
+    assert json.loads(result.output)["root_facts_complete"] is False
+    assert [arguments["classifier"]["id"] for _, arguments in calls] == ["native", "native"]
 
 
 class TestMcpTool:
@@ -452,24 +734,38 @@ def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path):
         fixture.close()
 
 
-def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, discovery_client, monkeypatch):
-    from cc_transcript.query import Session
-
-    from captain_hook.transcripts import release_transcript
+def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import Lease, RemoteSession
+    from captain_hook.transcripts import registered_sources, release_transcript
+    from tests.test_prepared_graph_evidence import RecordingClient, description
 
     register_transcript("s-both", thread_id="first")
     register_transcript("s-both", thread_id="second")
-    discovery_client.results = {
-        "first": tmp_path / "first.jsonl",
-        "second": tmp_path / "second.jsonl",
-    }
     seen = []
+    reads = []
+    loads = []
+    client = RecordingClient()
+    source = description()
+
+    def sources(session_dir):
+        reads.append(session_dir)
+        return registered_sources(session_dir)
+
+    def loader(_):
+        loads.append(True)
+        return RemoteSession(
+            client,
+            Lease(client, source),
+            Path(source["canonical_path"]),
+            source["classifier"],
+        )
 
     def observe(_event, evt, session_dir):
-        seen.append(evt.ctx.t.attachments)
+        seen.append(evt.ctx.t.graph.sources.thread_ids)
         release_transcript(evt.ctx.transcript)
         return None
 
+    monkeypatch.setattr("captain_hook.transcripts.registered_sources", sources)
     monkeypatch.setattr("captain_hook.cli.dispatch", observe)
     monkeypatch.setattr(
         "captain_hook.cli.after_reply", lambda event, evt, raw, session_dir: observe(event, evt, session_dir)
@@ -477,18 +773,21 @@ def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, 
     session_dir = ensure_session(SessionId("s-both"))
     for index in range(2):
         if index:
-            discovery_client.results["second"] = tmp_path / "later.jsonl"
+            register_transcript("s-both", thread_id="third")
         _, background = dispatch_event(
             tmp_path,
             Event.Stop,
             {"session_id": "s-both", "transcript_path": str(tmp_path / "main.jsonl")},
             session_dir=session_dir,
-            transcript_loader=lambda _: Session(()),
+            transcript_loader=loader,
         )
         background()
 
-    initial = (tmp_path / "first.jsonl", tmp_path / "second.jsonl")
-    updated = (tmp_path / "first.jsonl", tmp_path / "later.jsonl")
-    assert seen == [initial, initial, updated, updated]
-    assert len(discovery_client.requests) == 2
-    assert discovery_client.released == []
+    assert seen == [
+        ("first", "second"),
+        ("first", "second"),
+        ("first", "second", "third"),
+        ("first", "second", "third"),
+    ]
+    assert len(reads) == 2
+    assert len(loads) == 2

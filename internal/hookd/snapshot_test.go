@@ -15,9 +15,12 @@ import (
 
 	"github.com/yasyf/captain-hook/internal/snapshots"
 	"github.com/yasyf/captain-hook/internal/wireproto"
+	"github.com/yasyf/daemonkit"
 )
 
 var statsRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"stats","id":"one"}}`)
+var warmRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"warm_registered","id":"warm","classifier":{"id":"native","version":"1"},"thread_ids":["thread"],"roots":["/tmp"],"direct_paths":[],"start_index":0,"membership_revision":null,"deadline_unix_ms":9000000000000,"limits":{"max_read_bytes":8388608,"max_events":1000000,"max_items":65536,"max_output_bytes":16777216,"max_discovery_entries":50000,"max_sources":4096}}}`)
+var warmRootRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"warm_root","id":"warm-root","path":"/tmp/root.jsonl","classifier":{"id":"native","version":"1"},"deadline_unix_ms":9000000000000,"limits":{"max_read_bytes":8388608,"max_events":1000000,"max_items":65536,"max_output_bytes":16777216,"max_discovery_entries":50000,"max_sources":4096}}}`)
 
 func fakeSnapshotOwner(t *testing.T, frames chan<- wireproto.Frame) (*snapshotOwner, net.Conn) {
 	t.Helper()
@@ -549,6 +552,86 @@ func TestBackgroundReverseSnapshotsUseReviewAdmission(t *testing.T) {
 	reply, err := wireproto.DecodeFrame(pythonConn)
 	if err != nil || reply.ID != 10 || reply.ParentID != 0 || reply.Op != wireproto.OpError {
 		t.Fatalf("reply=%+v err=%v", reply, err)
+	}
+}
+
+func TestBackgroundWarmUsesHookIdentityWithoutHookAdmission(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, ownerServer := fakeSnapshotOwner(t, frames)
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.owner = owner
+	for range cap(service.hookSlots) {
+		service.hookSlots <- struct{}{}
+	}
+	for range cap(service.hookQueue) {
+		service.hookQueue <- struct{}{}
+	}
+	for range cap(service.reviewSlots) {
+		service.reviewSlots <- struct{}{}
+	}
+	workerConn, pythonConn := net.Pipe()
+	defer pythonConn.Close()
+	worker := &workerClient{conn: workerConn, snapshots: service, snapshotNamespace: 17, snapshotEvents: map[uint64]snapshotEvent{}, reverseSnapshots: map[uint64]reverseSnapshot{}}
+	defer workerConn.Close()
+	for index, body := range []json.RawMessage{warmRequest, warmRootRequest} {
+		id := uint64(10 + index)
+		if err := worker.snapshotFrame(wireproto.Frame{Protocol: 1, Op: wireproto.OpSnapshotRequest, ID: id, Snapshot: body}); err != nil {
+			t.Fatal(err)
+		}
+		request := receiveSnapshot(t, frames)
+		var callContext snapshots.CallContext
+		if err := json.Unmarshal(request.SnapshotContext, &callContext); err != nil {
+			t.Fatal(err)
+		}
+		if callContext.Admission != "hook" || callContext.WorkClass != "background" || callContext.Claimant != "worker:17" || callContext.Authority.Kind != "user" {
+			t.Fatalf("warm context=%+v", callContext)
+		}
+		failSnapshot(t, ownerServer, request.ID)
+		reply, err := wireproto.DecodeFrame(pythonConn)
+		if err != nil || reply.ID != id || reply.ParentID != 0 || reply.Op != wireproto.OpError {
+			t.Fatalf("warm reply=%+v err=%v", reply, err)
+		}
+	}
+	if len(service.hookSlots) != cap(service.hookSlots) || len(service.hookQueue) != cap(service.hookQueue) {
+		t.Fatal("warming consumed hook admission")
+	}
+	if len(service.reviewSlots) != cap(service.reviewSlots) || len(service.warmSlots) != 0 {
+		t.Fatal("warming consumed review admission or retained a warm slot")
+	}
+}
+
+func TestTranscriptClientWarmUsesHookAdmission(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, ownerServer := fakeSnapshotOwner(t, frames)
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.owner = owner
+	product := &hostProduct{snapshots: service}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, body := range []json.RawMessage{warmRequest, warmRootRequest} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := product.transcript(ctx, daemonkit.Request{Op: opTranscript, Body: body, Caller: daemonkit.Caller{UID: 501}})
+			done <- err
+		}()
+		frame := receiveSnapshot(t, frames)
+		var callContext snapshots.CallContext
+		if err := json.Unmarshal(frame.SnapshotContext, &callContext); err != nil {
+			t.Fatal(err)
+		}
+		if callContext.Admission != "hook" || callContext.WorkClass != "background" || callContext.Authority.EffectiveUID != "501" {
+			t.Fatalf("operator warmer context=%+v", callContext)
+		}
+		failSnapshot(t, ownerServer, frame.ID)
+		if err := <-done; err == nil || err.Error() != "fixture" {
+			t.Fatalf("operator warmer response=%v", err)
+		}
 	}
 }
 

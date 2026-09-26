@@ -33,6 +33,16 @@ class FixtureOwner:
         )
         return checked("host-response", {"schema": HOST_SCHEMA, "response": result})
 
+    def client_for_context(self, **overrides: str) -> SnapshotClient:
+        def exchange(wrapper: dict[str, object]) -> dict[str, Any]:
+            request = checked("host-request", wrapper)
+            result = self.owner.call(
+                request["request"], self.context | overrides, self.owner.token_type(), request["tool_registry"]
+            )
+            return checked("host-response", {"schema": HOST_SCHEMA, "response": result})
+
+        return SnapshotClient(exchange)
+
     def load(self, path: str | Path) -> RemoteSession:
         from captain_hook.transcripts import load_transcript
 

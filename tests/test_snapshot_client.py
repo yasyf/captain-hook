@@ -1,4 +1,8 @@
+import json
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,8 +14,13 @@ from captain_hook.snapshots.client import (
     HOST_SCHEMA,
     MAX_VIEW_ATTACHMENTS,
     AttachmentLimit,
+    EvidenceIncomplete,
+    GraphEvidenceExpired,
+    GraphSources,
     Lease,
+    RegisteredWarmState,
     RemoteSession,
+    RootWarmState,
     SnapshotClient,
 )
 from captain_hook.snapshots.worker import empty_usage, failure
@@ -54,31 +63,6 @@ def description(lease="lease", classifier=None):
     }
 
 
-@pytest.mark.parametrize("count", [256, 257, 918, MAX_VIEW_ATTACHMENTS])
-def test_deep_query_preserves_all_bounded_attachments(count):
-    from captain_hook.snapshots.validation import validate
-
-    requests = []
-
-    def exchange(wrapper):
-        validate("host-request", wrapper)
-        request = wrapper["request"]
-        requests.append(request)
-        return response(request, {"kind": "scalar", "value": False})
-
-    client = SnapshotClient(exchange)
-    client.bind_tool_registry({})
-    source = description()
-    attachments = tuple(Path(f"/tmp/attachment-{index}.jsonl") for index in range(count))
-    session = RemoteSession(
-        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"], attachments=attachments
-    )
-
-    assert session.has_edit_to("src/**") is False
-    assert requests[0]["view"]["attachments"] == [str(path) for path in attachments]
-    assert len(requests) == 1
-
-
 def test_local_queries_do_not_send_registered_attachments():
     requests = []
 
@@ -101,10 +85,9 @@ def test_local_queries_do_not_send_registered_attachments():
     client = SnapshotClient(exchange)
     client.bind_tool_registry({})
     source = description()
-    attachments = tuple(Path(f"/tmp/attachment-{index}.jsonl") for index in range(918))
     session = RemoteSession(
-        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"], attachments=attachments
-    )
+        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"]
+    ).with_registered_sources(GraphSources(thread_ids=tuple(f"thread-{index}" for index in range(918))))
 
     assert len(session) == 1
     assert session.has_edit_to("src/**", subagents=False) is True
@@ -116,9 +99,10 @@ def test_deep_query_over_attachment_bound_is_incomplete_before_transport():
     client = SnapshotClient(lambda _: pytest.fail("overbound view reached transport"))
     client.bind_tool_registry({})
     source = description()
-    attachments = tuple(Path(f"/tmp/attachment-{index}.jsonl") for index in range(MAX_VIEW_ATTACHMENTS + 1))
     session = RemoteSession(
-        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"], attachments=attachments
+        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"]
+    ).with_registered_sources(
+        GraphSources(thread_ids=tuple(f"thread-{index}" for index in range(MAX_VIEW_ATTACHMENTS + 1)))
     )
 
     assert len(session.view()["attachments"]) == 0
@@ -126,21 +110,42 @@ def test_deep_query_over_attachment_bound_is_incomplete_before_transport():
         session.has_edit_to("src/**")
 
 
-def test_real_owner_walks_918_distinct_attachments_with_one_graph_request(tmp_path):
-    from dataclasses import replace
-
+def test_real_owner_reuses_prepared_graph(tmp_path, monkeypatch):
     from captain_hook.testing.snapshots import FixtureOwner
     from tests.helpers import raw_text
     from tests.test_snapshot_fixture_owner import write_messages
 
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     source = tmp_path / "root.jsonl"
     write_messages(source, raw_text("user", "root"))
-    attachments = tuple(tmp_path / f"attachment-{index}.jsonl" for index in range(918))
+    attachment_count = 9
+    attachments = tuple(tmp_path / f"attachment-{index}.jsonl" for index in range(attachment_count))
     for path in attachments:
         write_messages(path, raw_text("user", "attached"))
     fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
     try:
-        session = replace(fixture.load(source), attachments=attachments)
+        sources = GraphSources(direct_paths=attachments)
+        cold = fixture.load(source).with_registered_sources(sources)
+        before_cold = fixture.client.call("stats")["data"]["counters"]
+        try:
+            assert cold.has_edit_to("src/**") is False
+        except EvidenceIncomplete as incomplete:
+            assert incomplete.status in {"incomplete", "deadline"}
+        after_cold = fixture.client.call("stats")["data"]["counters"]
+        assert after_cold["source_bytes_read"] - before_cold["source_bytes_read"] <= 1024 * 1024
+        cold.release()
+
+        warmer = RegisteredWarmState(sources, fixture.client)
+        fixture.context["work_class"] = "background"
+        for _ in range(attachment_count // 8 + 16):
+            if warmer.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3):
+                break
+        else:
+            pytest.fail("registered fixture did not finish warming")
+        fixture.context["work_class"] = "foreground"
+
+        session = fixture.load(source).with_registered_sources(sources)
         requests = []
         exchange = fixture.client._exchange
 
@@ -149,12 +154,291 @@ def test_real_owner_walks_918_distinct_attachments_with_one_graph_request(tmp_pa
             return exchange(request)
 
         fixture.client._exchange = record
+        before = fixture.client.call("stats")["data"]["counters"]
+        session.graph.require(session)
+        prepared = fixture.client.call("stats")["data"]["counters"]
+        assert prepared["source_bytes_read"] == before["source_bytes_read"]
         assert session.has_edit_to("src/**") is False
-        graph_requests = [request for request in requests if request["operation"] == "query"]
-        assert len(graph_requests) == 1
-        assert graph_requests[0]["view"]["attachments"] == [str(path) for path in attachments]
+        assert session.has_read("README.md") is False
+        after = fixture.client.call("stats")["data"]["counters"]
+        assert after["source_bytes_read"] == prepared["source_bytes_read"]
+        assert after["nonincremental_lowering_calls"] == prepared["nonincremental_lowering_calls"]
+        assert after["nonincremental_lowering_source_bytes"] == prepared["nonincremental_lowering_source_bytes"]
+        graph_preparations = [request for request in requests if request["operation"] == "prepare_graph"]
+        graph_queries = [request for request in requests if request["operation"] == "query_graph"]
+        assert len(graph_preparations) == 1
+        assert len(graph_queries) == 2
+        assert graph_preparations[0]["direct_paths"] == [str(path) for path in attachments]
+        assert all("view" not in request and "direct_paths" not in request for request in graph_queries)
         session.release()
+        warm = fixture.load(source).with_registered_sources(sources)
+        before_warm = fixture.client.call("stats")["data"]["counters"]
+        warm.graph.require(warm)
+        assert warm.has_edit_to("src/**") is False
+        after_warm = fixture.client.call("stats")["data"]["counters"]
+        assert after_warm["source_bytes_read"] == before_warm["source_bytes_read"]
+        assert after_warm["nonincremental_lowering_calls"] == before_warm["nonincremental_lowering_calls"]
+        warm.release()
     finally:
+        fixture.close()
+
+
+def test_registered_warming_reuses_facts_across_claimants_only_under_the_same_authority(tmp_path, monkeypatch):
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    source = tmp_path / "root.jsonl"
+    attachment = tmp_path / "attachment.jsonl"
+    write_messages(source, raw_text("user", "root"))
+    write_messages(attachment, raw_text("user", "attached"))
+    fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
+    warm = RegisteredWarmState(GraphSources(direct_paths=(attachment,)), fixture.client)
+    try:
+        fixture.context["claimant"] = "operator"
+        fixture.context["work_class"] = "background"
+        assert warm.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is True
+        fixture.context["claimant"] = "foreground"
+        fixture.context["work_class"] = "foreground"
+        session = fixture.load(source).with_registered_sources(GraphSources(direct_paths=(attachment,)))
+        before = fixture.client.call("stats")["data"]["counters"]
+        assert session.has_edit_to("src/**") is False
+        after = fixture.client.call("stats")["data"]["counters"]
+        assert after["source_bytes_read"] == before["source_bytes_read"]
+        session.release()
+
+        authority = fixture.context["authority"]
+        fixture.context["authority"] = {
+            "kind": "restricted_roots",
+            "effective_uid": authority["effective_uid"],
+            "roots": [str(tmp_path)],
+        }
+        fixture.context["claimant"] = "restricted"
+        fixture.context["work_class"] = "background"
+        restricted = RegisteredWarmState(GraphSources(direct_paths=(attachment,)), fixture.client)
+        before_restricted = fixture.client.call("stats")["data"]["counters"]
+        assert restricted.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is True
+        after_restricted = fixture.client.call("stats")["data"]["counters"]
+        assert after_restricted["source_bytes_read"] > before_restricted["source_bytes_read"]
+    finally:
+        fixture.close()
+
+
+def test_native_root_warming_reuses_source_and_append_facts(tmp_path, monkeypatch):
+    from captain_hook.testing.helpers import fixture_line
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    source = tmp_path / "root.jsonl"
+    write_messages(source, raw_text("user", "x" * (1024 * 1024)))
+    fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
+    warm_client = fixture.client_for_context(work_class="background", claimant="warmer")
+    warm_client.bind_tool_registry({})
+
+    def warm_root(classifier):
+        state = RootWarmState(source, classifier, warm_client)
+        for _ in range(16):
+            if state.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3):
+                return
+        pytest.fail("root fixture did not finish warming")
+
+    def foreground_p95():
+        samples = []
+        for _ in range(12):
+            started = time.perf_counter()
+            session = fixture.load(source)
+            try:
+                assert session.has_read("missing") is False
+            finally:
+                session.release()
+            samples.append(time.perf_counter() - started)
+        return sorted(samples)[11]
+
+    try:
+        warm_root({"id": "native", "version": "1"})
+        first = fixture.load(source)
+        classifier = first.classifier
+        first.release()
+        warm_root(classifier)
+        before = fixture.client.call("stats")["data"]["counters"]
+        warm_p95 = foreground_p95()
+        after = fixture.client.call("stats")["data"]["counters"]
+        assert after["source_bytes_read"] == before["source_bytes_read"]
+        print(f"prepared root foreground p95_ms={warm_p95 * 1000:.1f}")
+        assert warm_p95 < 0.75
+
+        with source.open("a") as stream:
+            stream.write(json.dumps(fixture_line(1, raw_text("user", "tail"))) + "\n")
+        before_append = fixture.client.call("stats")["data"]["counters"]
+        warm_root({"id": "native", "version": "1"})
+        warm_root(classifier)
+        append_p95 = foreground_p95()
+        after_append = fixture.client.call("stats")["data"]["counters"]
+        assert after_append["source_bytes_read"] - before_append["source_bytes_read"] < 512 * 1024
+        print(f"prepared root append foreground p95_ms={append_p95 * 1000:.1f}")
+        assert append_p95 < 0.75
+    finally:
+        warm_client.close()
+        fixture.close()
+
+
+def test_foreground_graph_latency_stays_bounded_while_registry_warms(tmp_path, monkeypatch):
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    source = tmp_path / "root.jsonl"
+    write_messages(source, raw_text("user", "root"))
+    attachments = tuple(tmp_path / f"attachment-{index}.jsonl" for index in range(923))
+    for index, path in enumerate(attachments):
+        write_messages(path, raw_text("user", "x" * (1024 * 1024 if index == 0 else 1024)))
+    fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
+    warm_client = fixture.client_for_context(work_class="background", claimant="warmer")
+    warm_client.bind_tool_registry({})
+    sources = GraphSources(direct_paths=attachments)
+    start_together = threading.Barrier(2)
+
+    def warm():
+        start_together.wait()
+        state = RegisteredWarmState(sources, warm_client)
+        for _ in range(len(attachments) // 8 + 16):
+            if state.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3):
+                return
+        pytest.fail("registered fixture did not finish warming")
+
+    try:
+        samples = []
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(warm)
+            start_together.wait()
+            for _ in range(30):
+                started = time.perf_counter()
+                session = fixture.load(source).with_registered_sources(sources)
+                try:
+                    try:
+                        assert session.has_edit_to("src/**") is False
+                    except EvidenceIncomplete as exc:
+                        assert exc.status in {"incomplete", "deadline"} or (
+                            isinstance(exc, GraphEvidenceExpired) and exc.status in {"stale_cursor", "stale_handle"}
+                        )
+                finally:
+                    session.release()
+                samples.append(time.perf_counter() - started)
+            future.result(timeout=30)
+        p95 = sorted(samples)[28]
+        print(f"prepared graph foreground p95_ms={p95 * 1000:.1f}")
+        assert p95 < 1.0
+        requests = []
+        exchange = fixture.client._exchange
+
+        def record(request):
+            requests.append(request["request"]["operation"])
+            return exchange(request)
+
+        fixture.client._exchange = record
+        before_warm_query = fixture.client.call("stats")["data"]["counters"]
+        session = fixture.load(source).with_registered_sources(sources)
+        try:
+            assert session.has_edit_to("src/**") is False
+            assert session.has_read("README.md") is False
+        finally:
+            session.release()
+        after_warm_query = fixture.client.call("stats")["data"]["counters"]
+        assert after_warm_query["source_bytes_read"] == before_warm_query["source_bytes_read"]
+        assert requests.count("prepare_graph") == 1
+        assert requests.count("query_graph") == 2
+    finally:
+        warm_client.close()
+        fixture.close()
+
+
+def test_codex_append_warming_does_not_lower_the_whole_source(tmp_path, monkeypatch):
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    source = tmp_path / "root.jsonl"
+    active = tmp_path / "active.jsonl"
+    write_messages(source, raw_text("user", "root"))
+    metadata = {
+        "timestamp": "2026-01-01T00:00:00Z",
+        "type": "session_meta",
+        "payload": {"id": "thread-append", "cwd": str(tmp_path), "originator": "codex_exec", "source": "exec"},
+    }
+    initial = {
+        "timestamp": "2026-01-01T00:00:01Z",
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "x" * (1024 * 1024)},
+    }
+    active.write_text(json.dumps(metadata) + "\n" + json.dumps(initial) + "\n")
+    fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
+    warm_client = fixture.client_for_context(work_class="background", claimant="warmer")
+    warm_client.bind_tool_registry({})
+    sources = GraphSources(direct_paths=(active,))
+    state = RegisteredWarmState(sources, warm_client)
+
+    try:
+        for _ in range(16):
+            if state.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3):
+                break
+        else:
+            pytest.fail("active source did not finish initial warming")
+        before_append = fixture.client.call("stats")["data"]["counters"]
+        appended_samples = []
+        append_cpu_ms = []
+        for index in range(12):
+            with active.open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "timestamp": f"2026-01-01T00:00:{index + 2:02}Z",
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message" if index % 2 == 0 else "agent_message",
+                                "message": f"new-{index}",
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+            cpu_started = time.process_time()
+            for _ in range(16):
+                if state.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3):
+                    break
+            else:
+                pytest.fail("appended source did not finish warming")
+            started = time.perf_counter()
+            session = fixture.load(source).with_registered_sources(sources)
+            try:
+                assert session.has_edit_to("src/**") is False
+            finally:
+                session.release()
+            appended_samples.append(time.perf_counter() - started)
+            append_cpu_ms.append((time.process_time() - cpu_started) * 1000)
+        after_append = fixture.client.call("stats")["data"]["counters"]
+        append_p95 = sorted(appended_samples)[11]
+        lowered_bytes = (
+            after_append["nonincremental_lowering_source_bytes"] - before_append["nonincremental_lowering_source_bytes"]
+        )
+        source_bytes = after_append["source_bytes_read"] - before_append["source_bytes_read"]
+        print(f"prepared graph warm append foreground p95_ms={append_p95 * 1000:.1f}")
+        print(f"prepared graph warm append cpu_total_ms={sum(append_cpu_ms):.1f}")
+        print(f"prepared graph warm append source_bytes_read={source_bytes}")
+        print(f"prepared graph warm append nonincremental_lowering_source_bytes={lowered_bytes}")
+        assert append_p95 < 1.0
+        assert source_bytes < 2 * 1024 * 1024
+        assert lowered_bytes < 1024 * 1024
+    finally:
+        warm_client.close()
         fixture.close()
 
 
@@ -180,6 +464,112 @@ def test_abandoned_page_releases_cursor_through_cleanup_exchange():
     assert cleanup[0]["operation"] == "release"
     assert cleanup[0]["kind"] == "cursor"
     assert "owner_epoch" not in cleanup[0]
+
+
+def test_abandoned_foreground_cursor_waits_until_after_reply_for_cleanup():
+    cleanup_started = threading.Event()
+    finish_cleanup = threading.Event()
+
+    def exchange(wrapper):
+        return response(wrapper["request"], {"kind": "strings", "values": ["first"]}, cursor="cursor")
+
+    def cleanup(wrapper):
+        cleanup_started.set()
+        assert finish_cleanup.wait(2)
+        return response(wrapper["request"], {"kind": "released", "released": True})
+
+    client = SnapshotClient(exchange, cleanup_exchange=cleanup, defer_cleanup=True)
+    client.bind_tool_registry({})
+    pages = client.pages("query", view={}, query={})
+    assert next(pages) == {"kind": "strings", "values": ["first"]}
+    pages.close()
+    assert not cleanup_started.is_set()
+
+    future = ThreadPoolExecutor(max_workers=1)
+    try:
+        settled = future.submit(client.close_pending)
+        assert cleanup_started.wait(3)
+        assert not settled.done()
+        finish_cleanup.set()
+        settled.result(timeout=3)
+    finally:
+        finish_cleanup.set()
+        future.shutdown()
+
+
+def test_foreground_budget_covers_root_acquire_and_classifier():
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if request["operation"] == "acquire":
+            result = response(request, {"kind": "acquired", "description": description()})
+            result["response"]["usage"]["source_bytes_read"] = 700 * 1024
+            return result
+        if request["operation"] == "prepare_hook_view":
+            result = response(request, {"kind": "classifier", "classifier": {"id": "native", "version": "1"}})
+            result["response"]["usage"]["source_bytes_read"] = 300 * 1024
+            return result
+        result = response(request, {"kind": "scalar", "value": False})
+        result["response"]["usage"]["source_bytes_read"] = 24 * 1024
+        return result
+
+    client = SnapshotClient(exchange, foreground_seconds=0.75, foreground_read_bytes=1024 * 1024)
+    client.bind_tool_registry({})
+    session = client.acquire("/tmp/fixture.jsonl")
+    list(client.pages("prepare_hook_view", domain=True, view=session.view(), cwd="/tmp", droid=False))
+    client.call("query", view=session.view(), query={"kind": "has_read", "pattern": "x", "subagents": False})
+    with pytest.raises(EvidenceIncomplete, match="foreground transcript byte budget exhausted"):
+        client.call("stats")
+
+    assert [request["operation"] for request in requests] == ["acquire", "prepare_hook_view", "query"]
+    assert [request["limits"]["max_read_bytes"] for request in requests] == [
+        1024 * 1024,
+        324 * 1024,
+        24 * 1024,
+    ]
+    assert len({request["deadline_unix_ms"] for request in requests}) == 1
+    assert requests[0]["deadline_unix_ms"] <= int(time.time() * 1000) + 750
+
+
+def test_foreground_root_cursor_stops_before_a_second_read_step():
+    operations = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        operations.append(request["operation"])
+        result = response(request, {"kind": "strings", "values": []}, cursor="root-cursor")
+        result["response"]["usage"]["source_bytes_read"] = 1024 * 1024
+        return result
+
+    def cleanup(wrapper):
+        return response(wrapper["request"], {"kind": "released", "released": True})
+
+    client = SnapshotClient(
+        exchange,
+        cleanup_exchange=cleanup,
+        defer_cleanup=True,
+        foreground_seconds=0.75,
+        foreground_read_bytes=1024 * 1024,
+    )
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete, match="foreground transcript byte budget exhausted"):
+        list(client.pages("acquire", path="/tmp/large-root.jsonl", classifier={"id": "native", "version": "1"}))
+    assert operations == ["acquire"]
+    client.close_pending()
+
+
+def test_expired_foreground_budget_never_sends_a_native_request():
+    client = SnapshotClient(
+        lambda _: pytest.fail("expired foreground request was sent"),
+        foreground_seconds=0,
+    )
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete, match="foreground transcript deadline exhausted"):
+        client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
 
 
 def test_exitstack_lease_cleanup_retries_retained_limit():
@@ -226,8 +616,6 @@ def test_exhausted_release_capacity_preserves_original_error(monkeypatch):
             raise ValueError("original failure")
     assert not lease.released
     client.close()
-    assert len(requests) == 1
-    lease.release()
     assert lease.released
     assert len(requests) == 2
 
@@ -471,8 +859,6 @@ def test_builtin_classifier_keeps_its_existing_matching_lease():
 
 
 def test_selected_subagents_keep_child_classifiers_and_reuse_owned_leases(tmp_path):
-    from dataclasses import replace
-
     from captain_hook.testing.snapshots import FixtureOwner
     from tests.helpers import raw_assistant, raw_text, raw_tool_use
     from tests.test_snapshot_fixture_owner import write_messages
@@ -498,7 +884,7 @@ def test_selected_subagents_keep_child_classifiers_and_reuse_owned_leases(tmp_pa
     attachment.write_text("not json\n")
     fixture = FixtureOwner()
     try:
-        session = replace(fixture.load(source), attachments=(attachment,))
+        session = fixture.load(source).with_registered_sources(GraphSources(direct_paths=(attachment,)))
         assert session.classifier == {"id": "captain-conductor", "version": "1"}
         index = session.current_turn.subagents
         assert [item.id for item in index] == ["second"]
@@ -515,5 +901,57 @@ def test_selected_subagents_keep_child_classifiers_and_reuse_owned_leases(tmp_pa
         session.release()
         assert child.lease.released
         assert not fixture.client._leases
+    finally:
+        fixture.close()
+
+
+def test_post_reply_cleanup_retries_only_deferred_leases():
+    requests = []
+
+    def cleanup(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        return response(request, {"kind": "released", "released": True})
+
+    client = SnapshotClient(lambda _: pytest.fail("foreground exchange used"), cleanup_exchange=cleanup)
+    client.bind_tool_registry({})
+    active = Lease(client, description("active"))
+    deferred = Lease(client, description("deferred"))
+    deferred.cleanup_pending = True
+
+    client.close_pending()
+
+    assert not active.released
+    assert deferred.released
+    assert [request["token"] for request in requests] == ["deferred"]
+
+
+def test_graph_query_budget_bounds_each_partial_step(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import DEFAULT_LIMITS, EvidenceIncomplete
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    source = tmp_path / "root.jsonl"
+    attachment = tmp_path / "attachment.jsonl"
+    write_messages(source, raw_text("user", "root"))
+    write_messages(attachment, raw_text("user", "x" * 4096))
+    fixture = FixtureOwner()
+    try:
+        session = fixture.load(source).with_registered_sources(GraphSources(direct_paths=(attachment,)))
+        monkeypatch.setitem(DEFAULT_LIMITS, "max_read_bytes", 256)
+        before = fixture.client.call("stats")["data"]["counters"]
+        with pytest.raises(EvidenceIncomplete) as first:
+            session.has_edit_to("src/**")
+        assert first.value.status in {"source_limit", "incomplete"}
+        after_first = fixture.client.call("stats")["data"]["counters"]
+        with pytest.raises(EvidenceIncomplete) as second:
+            session.has_read("README.md")
+        assert second.value.status in {"source_limit", "incomplete"}
+        after_second = fixture.client.call("stats")["data"]["counters"]
+        assert 0 <= after_first["source_bytes_read"] - before["source_bytes_read"] <= 256
+        assert 0 <= after_second["source_bytes_read"] - after_first["source_bytes_read"] <= 256
+        session.release()
     finally:
         fixture.close()

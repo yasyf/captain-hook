@@ -96,6 +96,15 @@
       "minLength": 1,
       "title": "Registry Generation",
       "type": "string"
+    },
+    "work_class": {
+      "default": "foreground",
+      "enum": [
+        "foreground",
+        "background"
+      ],
+      "title": "Work Class",
+      "type": "string"
     }
   },
   "required": [

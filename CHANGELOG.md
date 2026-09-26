@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transcript-heavy hooks now share bounded evidence and warm it in the background.**
+  A hook prepares one graph for its conditions, reuses it across synchronous and
+  background work, and returns without a traceback when evidence is incomplete.
+  A paced worker warms large registered transcripts and root logs without
+  rereading completed sources; `capt-hook transcripts warm` prewarms a session.
 - **The graphite pack asks ccx which lane a repo rides.** A `gt repo init`
   marker is written once and stays forever, but submitting also needs
   Graphite's grant on the remote. Without it `gt submit` and every ccx stack
