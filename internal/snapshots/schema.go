@@ -144,6 +144,7 @@ type Authority struct {
 type CallContext struct {
 	Claimant           string    `json:"claimant"`
 	Admission          string    `json:"admission"`
+	WorkClass          string    `json:"work_class,omitempty"`
 	Authority          Authority `json:"authority"`
 	RegistryGeneration string    `json:"registry_generation"`
 }

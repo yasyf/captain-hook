@@ -33,7 +33,7 @@ def test_command_spellings_share_one_native_projection(tmp_path, subagents):
 
         def record(wrapper):
             request = wrapper["request"]
-            if request["operation"] == "query":
+            if request["operation"] in {"query", "query_graph"}:
                 operations.append(request["query"]["kind"])
             return exchange(wrapper)
 

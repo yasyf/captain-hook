@@ -7,9 +7,9 @@ from contextvars import copy_context
 
 import pytest
 
-from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, Lease
 from captain_hook.snapshots.validation import validator
-from captain_hook.snapshots.worker import empty_usage
+from captain_hook.snapshots.worker import empty_usage, failure
 from captain_hook.worker.protocol import (
     MAX_SNAPSHOT_FRAME,
     EventResponse,
@@ -20,6 +20,7 @@ from captain_hook.worker.protocol import (
 )
 from captain_hook.worker.runtime import _run_detached
 from captain_hook.worker.service import WorkerService
+from tests.test_snapshot_client import description
 from tests.test_worker_protocol import event
 
 
@@ -57,14 +58,14 @@ def transport():
     peers = []
     runners = []
 
-    def start(dispatch):
+    def start(dispatch, *, max_workers=16):
         worker, host = socket.socketpair()
         worker_input = worker.makefile("rb", buffering=0)
         worker_output = worker.makefile("wb", buffering=0)
         host.settimeout(3)
         host_input = host.makefile("rb", buffering=0)
         host_output = host.makefile("wb", buffering=0)
-        service = WorkerService(worker_input, worker_output, dispatch=dispatch)
+        service = WorkerService(worker_input, worker_output, dispatch=dispatch, max_workers=max_workers)
         completed = Future()
 
         def run():
@@ -126,6 +127,35 @@ def test_reverse_foreground_and_explicit_background_use_separate_admission(trans
     assert service._snapshot_pending == {}
 
 
+def test_foreground_release_waits_until_after_hook_result(transport):
+    def dispatch(request):
+        client = CURRENT_CLIENT.get()
+        client.bind_tool_registry({})
+        lease = Lease(client, description())
+        lease.release()
+        return EventResponse(), None
+
+    _, _, incoming, outgoing, _ = transport(dispatch, max_workers=1)
+    write_message(outgoing, event(42))
+    result = read_message(incoming)
+    assert result["op"] == "result"
+    cleanup = read_message(incoming)
+    assert cleanup["op"] == "snapshot_request"
+    assert cleanup.get("parent_id", 0) == 0
+    assert cleanup["snapshot"]["request"]["operation"] == "release"
+    write_message(outgoing, event(43))
+    second_result = read_message(incoming)
+    assert second_result["op"] == "result"
+    second_cleanup = read_message(incoming)
+    assert second_cleanup["snapshot"]["request"]["operation"] == "release"
+    reply = snapshot_reply(cleanup)
+    reply["snapshot"]["response"]["data"] = {"kind": "released", "released": True}
+    write_message(outgoing, reply)
+    second_reply = snapshot_reply(second_cleanup)
+    second_reply["snapshot"]["response"]["data"] = {"kind": "released", "released": True}
+    write_message(outgoing, second_reply)
+
+
 def test_eof_fails_reverse_waiter_before_draining_dispatch(transport):
     finished = threading.Event()
 
@@ -169,6 +199,36 @@ def test_cancelled_waiter_keeps_slot_until_its_terminal_reply(transport):
     assert cancelled == {"protocol": 1, "op": "snapshot_cancel", "id": snapshot["id"], "parent_id": 7}
     assert finished.wait(timeout=3)
     assert service._snapshot_pending[snapshot["id"]][1].cancelled()
+    write_message(outgoing, snapshot_reply(snapshot, error="cancelled"))
+    assert read_message(incoming)["op"] == "result"
+
+
+def test_foreground_transport_deadline_overrides_long_native_deadline(transport):
+    def dispatch(request):
+        value = {
+            "schema": "captain.transcript/1",
+            "request": {
+                "schema": "cc-transcript.snapshot/1",
+                "id": "root",
+                "operation": "stats",
+                "deadline_unix_ms": int(time.time() * 1000) + 120_000,
+            },
+        }
+        with pytest.raises(EvidenceIncomplete, match="deadline elapsed"):
+            service.snapshot_exchange(request.id, value, expires_unix_ms=int(time.time() * 1000) + 80)
+        return EventResponse(), None
+
+    service, _, incoming, outgoing, _ = transport(dispatch)
+    write_message(outgoing, event(8))
+    snapshot = read_message(incoming)
+    assert snapshot["op"] == "snapshot_request"
+    assert snapshot["snapshot"]["request"]["deadline_unix_ms"] > int(time.time() * 1000) + 60_000
+    assert read_message(incoming) == {
+        "protocol": 1,
+        "op": "snapshot_cancel",
+        "id": snapshot["id"],
+        "parent_id": 8,
+    }
     write_message(outgoing, snapshot_reply(snapshot, error="cancelled"))
     assert read_message(incoming)["op"] == "result"
 
@@ -301,3 +361,78 @@ def test_cleanup_bypass_is_release_only_and_has_its_own_deadline(monkeypatch):
         service._close_snapshots()
         service._executor.shutdown()
         service._background.shutdown()
+
+
+def test_failed_foreground_release_retries_after_reply_before_background_end(transport):
+    from captain_hook.snapshots import client as snapshot_client
+
+    def dispatch(request):
+        client = CURRENT_CLIENT.get()
+        client.bind_tool_registry({})
+        exchange = client._cleanup_exchange
+        client._cleanup_exchange = lambda wrapper: {
+            "schema": "captain.transcript/1",
+            "response": failure(wrapper["request"]["id"], "retained_limit", "busy"),
+        }
+        cleanup_seconds = snapshot_client.CLEANUP_SECONDS
+        snapshot_client.CLEANUP_SECONDS = 0
+        try:
+            lease = Lease(
+                client,
+                {
+                    "handle": {"owner_epoch": "owner", "lease_id": "lease"},
+                    "lease_expires_unix_ms": 9_000_000_000_000_000,
+                },
+            )
+            lease.release()
+        finally:
+            snapshot_client.CLEANUP_SECONDS = cleanup_seconds
+            client._cleanup_exchange = exchange
+        assert not lease.released
+        return EventResponse(), lambda: None
+
+    _, _, incoming, outgoing, _ = transport(dispatch)
+    write_message(outgoing, event(42))
+    assert read_message(incoming) == {"protocol": 1, "op": "background_begin", "id": 42}
+    assert read_message(incoming)["op"] == "result"
+    release = read_message(incoming)
+    assert release["op"] == "snapshot_request"
+    assert release.get("parent_id", 0) == 0
+    assert release["snapshot"]["request"]["operation"] == "release"
+    assert release["snapshot"]["request"]["token"] == "lease"
+    write_message(outgoing, snapshot_reply(release))
+    assert read_message(incoming) == {"protocol": 1, "op": "background_end", "id": 42}
+
+
+def test_failed_cleanup_does_not_replace_the_original_reply(transport):
+    def dispatch(request):
+        client = CURRENT_CLIENT.get()
+        client.bind_tool_registry({})
+        lease = Lease(
+            client,
+            {"handle": {"owner_epoch": "owner", "lease_id": "lease"}, "lease_expires_unix_ms": 9_000_000_000_000_000},
+        )
+        lease.cleanup_pending = True
+        return EventResponse(status="error", stderr="original failure\n", exit=1), None
+
+    _, _, incoming, outgoing, _ = transport(dispatch)
+    write_message(outgoing, event(42))
+    result = read_message(incoming)
+    assert result["op"] == "result"
+    assert result["response"]["stderr"] == "original failure\n"
+    cleanup = read_message(incoming)
+    assert cleanup["op"] == "snapshot_request"
+    assert cleanup.get("parent_id", 0) == 0
+    request = cleanup["snapshot"]["request"]
+    write_message(
+        outgoing,
+        {
+            "protocol": 1,
+            "op": "snapshot_result",
+            "id": cleanup["id"],
+            "snapshot": {
+                "schema": "captain.transcript/1",
+                "response": failure(request["id"], "invalid_request", "bad token"),
+            },
+        },
+    )

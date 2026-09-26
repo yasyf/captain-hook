@@ -13,7 +13,7 @@ import pytest
 
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO, bound_buffers
-from captain_hook.snapshots.client import AttachmentLimit, EvidenceIncomplete
+from captain_hook.snapshots.client import AttachmentLimit, EvidenceIncomplete, GraphEvidenceExpired
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest
 from captain_hook.worker.runtime import ProductRuntime
@@ -255,19 +255,39 @@ def test_attachment_bound_failure_allows_hook_without_traceback() -> None:
     assert response.stderr == ""
 
 
-def test_other_incomplete_evidence_remains_visible() -> None:
+@pytest.mark.parametrize(
+    "status", ["incomplete", "source_limit", "entry_limit", "output_limit", "deadline", "cancelled", "changed"]
+)
+def test_bounded_graph_evidence_fails_open_without_traceback(status: str) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
-        raise EvidenceIncomplete("output_limit", "evidence exceeds output bound")
+        raise EvidenceIncomplete(status, "graph budget exhausted")
 
     runtime = ProductRuntime(
         registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
     )
-    response, after = runtime.dispatch(request())
+    response, after = runtime.dispatch(request(event="Stop"))
+
+    assert after is None
+    assert response.status == "ok"
+    assert response.exit == 0
+    assert response.stdout == ""
+    assert response.stderr == ""
+
+
+@pytest.mark.parametrize("status", ["invalid_request", "parse_error", "permission_denied", "stale_handle"])
+def test_invalid_evidence_remains_visible(status: str) -> None:
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        raise EvidenceIncomplete(status, "invalid transcript evidence")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, after = runtime.dispatch(request(event="Stop"))
 
     assert after is None
     assert response.status == "error"
     assert response.exit == 1
-    assert "evidence exceeds output bound" in response.stderr
+    assert "invalid transcript evidence" in response.stderr
 
 
 def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
@@ -281,6 +301,26 @@ def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
         nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request())
+
+    assert response.exit == 0
+    assert after is not None
+    after()
+
+
+
+
+@pytest.mark.parametrize("status", ["stale_handle", "stale_cursor"])
+def test_expired_graph_evidence_fails_open_after_reply(status: str) -> None:
+    def fail() -> None:
+        raise GraphEvidenceExpired(status, "prepared graph expired")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=lambda *_, **__: (None, fail),
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    response, after = runtime.dispatch(request(event="Stop"))
 
     assert response.exit == 0
     assert after is not None

@@ -61,6 +61,53 @@ def test_owner_handshake_has_exact_build_and_config():
         handshake(io.BytesIO(encode_frame(hello)), io.BytesIO(), build="other")
 
 
+def test_warm_registered_uses_its_own_owner_lane_with_hook_cache_identity():
+    calls = []
+    owner = SimpleNamespace(
+        token_type=threading.Event,
+        call=lambda body, ctx, token, registry: (
+            calls.append((body, ctx)) or failure(body["id"], "incomplete", "bounded fixture")
+        ),
+        close=lambda: None,
+        record_transport=lambda count: None,
+        discard=lambda response, ctx: None,
+    )
+    service = OwnerService(io.BytesIO(), io.BytesIO(), owner)
+    for lane in ("hook", "review"):
+        for _ in range(OWNER_ADMISSION[lane][1]):
+            assert service.slots[lane].acquire(blocking=False)
+    frame = request(
+        operation="warm_registered",
+        classifier={"id": "native", "version": "1"},
+        thread_ids=["thread"],
+        roots=["/tmp"],
+        direct_paths=[],
+        start_index=0,
+        membership_revision=None,
+        deadline_unix_ms=9_000_000_000_000,
+        limits={
+            "max_read_bytes": 8 * 1024 * 1024,
+            "max_events": 1_000_000,
+            "max_items": 65_536,
+            "max_output_bytes": 16 * 1024 * 1024,
+            "max_discovery_entries": 50_000,
+            "max_sources": 4096,
+        },
+    )
+    try:
+        service.submit(frame)
+        wait_idle(service)
+        assert len(calls) == 1
+        assert calls[0][0]["operation"] == "warm_registered"
+        assert calls[0][1]["admission"] == "hook"
+        assert not service.slots["hook"].acquire(blocking=False)
+        assert not service.slots["review"].acquire(blocking=False)
+        assert service.slots["warm"].acquire(blocking=False)
+    finally:
+        for executor in service.executors.values():
+            executor.shutdown()
+
+
 @pytest.mark.parametrize(
     "lexeme,accepted",
     [

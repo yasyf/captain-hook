@@ -378,19 +378,31 @@
               "hydrated": "#/$defs/Core_Hydrated",
               "loading": "#/$defs/Core_Loading",
               "located": "#/$defs/Core_Located",
+              "prepared_graph": "#/$defs/Core_PreparedGraphResult",
               "records": "#/$defs/Core_RecordsResult",
               "released": "#/$defs/Core_Released",
               "renewed": "#/$defs/Core_Renewed",
               "resolved": "#/$defs/Core_Resolved",
               "scalar": "#/$defs/Core_ScalarResult",
               "stats": "#/$defs/Core_StatsResult",
-              "strings": "#/$defs/Core_StringsResult"
+              "strings": "#/$defs/Core_StringsResult",
+              "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
+              "warmed_root": "#/$defs/Core_WarmedRootResult"
             },
             "propertyName": "kind"
           },
           "oneOf": [
             {
               "$ref": "#/$defs/Core_Acquired"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedGraphResult"
+            },
+            {
+              "$ref": "#/$defs/Core_WarmedRegistryResult"
+            },
+            {
+              "$ref": "#/$defs/Core_WarmedRootResult"
             },
             {
               "$ref": "#/$defs/Core_Loading"
@@ -1036,6 +1048,42 @@
       "title": "Gauges",
       "type": "object"
     },
+    "Core_GraphHandle": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "const": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "graph_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Graph Id",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph_id",
+        "owner_epoch",
+        "revision",
+        "complete"
+      ],
+      "title": "GraphHandle",
+      "type": "object"
+    },
     "Core_Handle": {
       "additionalProperties": false,
       "properties": {
@@ -1251,19 +1299,31 @@
                   "hydrated": "#/$defs/Core_Hydrated",
                   "loading": "#/$defs/Core_Loading",
                   "located": "#/$defs/Core_Located",
+                  "prepared_graph": "#/$defs/Core_PreparedGraphResult",
                   "records": "#/$defs/Core_RecordsResult",
                   "released": "#/$defs/Core_Released",
                   "renewed": "#/$defs/Core_Renewed",
                   "resolved": "#/$defs/Core_Resolved",
                   "scalar": "#/$defs/Core_ScalarResult",
                   "stats": "#/$defs/Core_StatsResult",
-                  "strings": "#/$defs/Core_StringsResult"
+                  "strings": "#/$defs/Core_StringsResult",
+                  "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
+                  "warmed_root": "#/$defs/Core_WarmedRootResult"
                 },
                 "propertyName": "kind"
               },
               "oneOf": [
                 {
                   "$ref": "#/$defs/Core_Acquired"
+                },
+                {
+                  "$ref": "#/$defs/Core_PreparedGraphResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_WarmedRegistryResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_WarmedRootResult"
                 },
                 {
                   "$ref": "#/$defs/Core_Loading"
@@ -1811,6 +1871,320 @@
       "title": "PendingNamedTask",
       "type": "object"
     },
+    "Core_PrepareGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "direct_paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Direct Paths",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Core_Limits"
+        },
+        "operation": {
+          "const": "prepare_graph",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "thread_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Thread Ids",
+          "type": "array"
+        },
+        "view": {
+          "$ref": "#/$defs/Core_PreparedView"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "thread_ids",
+        "roots",
+        "direct_paths"
+      ],
+      "title": "PrepareGraph",
+      "type": "object"
+    },
+    "Core_PreparedErrorPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_error",
+            "has_edit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "subagents"
+      ],
+      "title": "PreparedErrorPredicate",
+      "type": "object"
+    },
+    "Core_PreparedGraphResult": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/Core_GraphHandle"
+        },
+        "kind": {
+          "const": "prepared_graph",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "handle"
+      ],
+      "title": "PreparedGraphResult",
+      "type": "object"
+    },
+    "Core_PreparedInputs": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "deep_predicate_inputs",
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "const": "forward",
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "order"
+      ],
+      "title": "PreparedInputs",
+      "type": "object"
+    },
+    "Core_PreparedListPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_command",
+            "has_edit_to",
+            "has_skill",
+            "has_skill_suffix",
+            "has_read_glob"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values",
+        "subagents"
+      ],
+      "title": "PreparedListPredicate",
+      "type": "object"
+    },
+    "Core_PreparedOverridePredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "invalidated_by": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Invalidated By",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_override",
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "token": {
+          "maxLength": 1048576,
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "token",
+        "invalidated_by",
+        "subagents"
+      ],
+      "title": "PreparedOverridePredicate",
+      "type": "object"
+    },
+    "Core_PreparedToolPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_tool",
+            "has_read",
+            "has_command_regex"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "pattern",
+        "subagents"
+      ],
+      "title": "PreparedToolPredicate",
+      "type": "object"
+    },
+    "Core_PreparedView": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 0,
+          "title": "Attachments",
+          "type": "array"
+        },
+        "classifier": {
+          "$ref": "#/$defs/Core_Classifier"
+        },
+        "handle": {
+          "$ref": "#/$defs/Core_Handle"
+        },
+        "selectors": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "after_last_tool": "#/$defs/Core_ToolBoundary",
+                "before_last_tool": "#/$defs/Core_ToolBoundary",
+                "current_turn": "#/$defs/Core_CurrentTurn",
+                "event_range": "#/$defs/Core_EventRange",
+                "prior": "#/$defs/Core_Prior",
+                "recent_events": "#/$defs/Core_Recent",
+                "recent_messages": "#/$defs/Core_Recent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Core_CurrentTurn"
+              },
+              {
+                "$ref": "#/$defs/Core_Prior"
+              },
+              {
+                "$ref": "#/$defs/Core_Recent"
+              },
+              {
+                "$ref": "#/$defs/Core_ToolBoundary"
+              },
+              {
+                "$ref": "#/$defs/Core_EventRange"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "title": "Selectors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "handle",
+        "classifier",
+        "selectors",
+        "attachments"
+      ],
+      "title": "PreparedView",
+      "type": "object"
+    },
     "Core_Prior": {
       "additionalProperties": false,
       "properties": {
@@ -1856,6 +2230,124 @@
         "count"
       ],
       "title": "Prompts",
+      "type": "object"
+    },
+    "Core_QueryGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "handle": {
+          "$ref": "#/$defs/Core_GraphHandle"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Core_Limits"
+        },
+        "operation": {
+          "const": "query_graph",
+          "title": "Operation",
+          "type": "string"
+        },
+        "query": {
+          "discriminator": {
+            "mapping": {
+              "deep_predicate_inputs": "#/$defs/Core_PreparedInputs",
+              "has_command": "#/$defs/Core_PreparedListPredicate",
+              "has_command_regex": "#/$defs/Core_PreparedToolPredicate",
+              "has_edit": "#/$defs/Core_PreparedErrorPredicate",
+              "has_edit_to": "#/$defs/Core_PreparedListPredicate",
+              "has_error": "#/$defs/Core_PreparedErrorPredicate",
+              "has_override": "#/$defs/Core_PreparedOverridePredicate",
+              "has_read": "#/$defs/Core_PreparedToolPredicate",
+              "has_read_glob": "#/$defs/Core_PreparedListPredicate",
+              "has_skill": "#/$defs/Core_PreparedListPredicate",
+              "has_skill_suffix": "#/$defs/Core_PreparedListPredicate",
+              "has_tool": "#/$defs/Core_PreparedToolPredicate"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Core_PreparedInputs"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedToolPredicate"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedListPredicate"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedOverridePredicate"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedErrorPredicate"
+            }
+          ],
+          "title": "Query"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "selectors": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "after_last_tool": "#/$defs/Core_ToolBoundary",
+                "before_last_tool": "#/$defs/Core_ToolBoundary",
+                "current_turn": "#/$defs/Core_CurrentTurn",
+                "event_range": "#/$defs/Core_EventRange",
+                "prior": "#/$defs/Core_Prior",
+                "recent_events": "#/$defs/Core_Recent",
+                "recent_messages": "#/$defs/Core_Recent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Core_CurrentTurn"
+              },
+              {
+                "$ref": "#/$defs/Core_Prior"
+              },
+              {
+                "$ref": "#/$defs/Core_Recent"
+              },
+              {
+                "$ref": "#/$defs/Core_ToolBoundary"
+              },
+              {
+                "$ref": "#/$defs/Core_EventRange"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "title": "Selectors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "handle",
+        "selectors",
+        "query"
+      ],
+      "title": "QueryGraph",
       "type": "object"
     },
     "Core_QueryRequest": {
@@ -1983,7 +2475,7 @@
           "type": "string"
         },
         "view": {
-          "$ref": "#/$defs/Core_View"
+          "$ref": "#/$defs/Core_PreparedView"
         }
       },
       "required": [
@@ -2069,7 +2561,8 @@
           "kind": {
             "enum": [
               "lease",
-              "reservation"
+              "reservation",
+              "graph"
             ]
           }
         }
@@ -2085,7 +2578,8 @@
           "enum": [
             "lease",
             "reservation",
-            "cursor"
+            "cursor",
+            "graph"
           ],
           "title": "Kind",
           "type": "string"
@@ -3272,6 +3766,285 @@
       "title": "WaitingResult",
       "type": "object"
     },
+    "Core_WarmRegistered": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Core_Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "direct_paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Direct Paths",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Core_Limits"
+        },
+        "membership_revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Membership Revision"
+        },
+        "operation": {
+          "const": "warm_registered",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "start_index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Start Index",
+          "type": "integer"
+        },
+        "thread_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Thread Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "classifier",
+        "thread_ids",
+        "roots",
+        "direct_paths",
+        "start_index",
+        "membership_revision"
+      ],
+      "title": "WarmRegistered",
+      "type": "object"
+    },
+    "Core_WarmRoot": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Core_Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Core_Limits"
+        },
+        "operation": {
+          "const": "warm_root",
+          "title": "Operation",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "path",
+        "classifier"
+      ],
+      "title": "WarmRoot",
+      "type": "object"
+    },
+    "Core_WarmedRegistryResult": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "fact_cache_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fact Cache Bytes",
+          "type": "integer"
+        },
+        "fact_cache_write_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fact Cache Write Bytes",
+          "type": "integer"
+        },
+        "fact_cache_writes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fact Cache Writes",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "warmed_registry",
+          "title": "Kind",
+          "type": "string"
+        },
+        "membership_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Membership Revision",
+          "type": "string"
+        },
+        "next_index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Next Index",
+          "type": "integer"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "source_offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Offset",
+          "type": "integer"
+        },
+        "source_size": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "owner_epoch",
+        "membership_revision",
+        "next_index",
+        "complete",
+        "source_offset",
+        "source_size",
+        "fact_cache_bytes",
+        "fact_cache_write_bytes",
+        "fact_cache_writes"
+      ],
+      "title": "WarmedRegistryResult",
+      "type": "object"
+    },
+    "Core_WarmedRootResult": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "facts_complete": {
+          "title": "Facts Complete",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "warmed_root",
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "source_offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Offset",
+          "type": "integer"
+        },
+        "source_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "source_size": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "owner_epoch",
+        "source_revision",
+        "source_offset",
+        "source_size",
+        "complete",
+        "facts_complete"
+      ],
+      "title": "WarmedRootResult",
+      "type": "object"
+    },
     "Core_WorkflowText": {
       "additionalProperties": false,
       "properties": {
@@ -3378,19 +4151,31 @@
                   "hydrated": "#/$defs/Core_Hydrated",
                   "loading": "#/$defs/Core_Loading",
                   "located": "#/$defs/Core_Located",
+                  "prepared_graph": "#/$defs/Core_PreparedGraphResult",
                   "records": "#/$defs/Core_RecordsResult",
                   "released": "#/$defs/Core_Released",
                   "renewed": "#/$defs/Core_Renewed",
                   "resolved": "#/$defs/Core_Resolved",
                   "scalar": "#/$defs/Core_ScalarResult",
                   "stats": "#/$defs/Core_StatsResult",
-                  "strings": "#/$defs/Core_StringsResult"
+                  "strings": "#/$defs/Core_StringsResult",
+                  "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
+                  "warmed_root": "#/$defs/Core_WarmedRootResult"
                 },
                 "propertyName": "kind"
               },
               "oneOf": [
                 {
                   "$ref": "#/$defs/Core_Acquired"
+                },
+                {
+                  "$ref": "#/$defs/Core_PreparedGraphResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_WarmedRegistryResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_WarmedRootResult"
                 },
                 {
                   "$ref": "#/$defs/Core_Loading"
@@ -3533,19 +4318,31 @@
                       "hydrated": "#/$defs/Core_Hydrated",
                       "loading": "#/$defs/Core_Loading",
                       "located": "#/$defs/Core_Located",
+                      "prepared_graph": "#/$defs/Core_PreparedGraphResult",
                       "records": "#/$defs/Core_RecordsResult",
                       "released": "#/$defs/Core_Released",
                       "renewed": "#/$defs/Core_Renewed",
                       "resolved": "#/$defs/Core_Resolved",
                       "scalar": "#/$defs/Core_ScalarResult",
                       "stats": "#/$defs/Core_StatsResult",
-                      "strings": "#/$defs/Core_StringsResult"
+                      "strings": "#/$defs/Core_StringsResult",
+                      "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
+                      "warmed_root": "#/$defs/Core_WarmedRootResult"
                     },
                     "propertyName": "kind"
                   },
                   "oneOf": [
                     {
                       "$ref": "#/$defs/Core_Acquired"
+                    },
+                    {
+                      "$ref": "#/$defs/Core_PreparedGraphResult"
+                    },
+                    {
+                      "$ref": "#/$defs/Core_WarmedRegistryResult"
+                    },
+                    {
+                      "$ref": "#/$defs/Core_WarmedRootResult"
                     },
                     {
                       "$ref": "#/$defs/Core_Loading"
@@ -4141,13 +4938,17 @@
               "hydrate": "#/$defs/Core_Hydrate",
               "locate": "#/$defs/Core_Locate",
               "mine": "#/$defs/Core_Mine",
+              "prepare_graph": "#/$defs/Core_PrepareGraph",
               "query": "#/$defs/Core_QueryRequest",
+              "query_graph": "#/$defs/Core_QueryGraph",
               "release": "#/$defs/Core_Release",
               "renew": "#/$defs/Core_Renew",
               "resolve": "#/$defs/Core_Resolve",
               "resume": "#/$defs/Core_Resume",
               "retain": "#/$defs/Core_Retain",
-              "stats": "#/$defs/Core_Stats"
+              "stats": "#/$defs/Core_Stats",
+              "warm_registered": "#/$defs/Core_WarmRegistered",
+              "warm_root": "#/$defs/Core_WarmRoot"
             },
             "propertyName": "operation"
           },
@@ -4190,6 +4991,18 @@
             },
             {
               "$ref": "#/$defs/Core_QueryRequest"
+            },
+            {
+              "$ref": "#/$defs/Core_PrepareGraph"
+            },
+            {
+              "$ref": "#/$defs/Core_QueryGraph"
+            },
+            {
+              "$ref": "#/$defs/Core_WarmRegistered"
+            },
+            {
+              "$ref": "#/$defs/Core_WarmRoot"
             },
             {
               "$ref": "#/$defs/Core_ActivityProbe"

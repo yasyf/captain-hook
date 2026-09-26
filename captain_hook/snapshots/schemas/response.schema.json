@@ -89,19 +89,31 @@
               "hydrated": "#/$defs/Hydrated",
               "loading": "#/$defs/Loading",
               "located": "#/$defs/Located",
+              "prepared_graph": "#/$defs/PreparedGraphResult",
               "records": "#/$defs/RecordsResult",
               "released": "#/$defs/Released",
               "renewed": "#/$defs/Renewed",
               "resolved": "#/$defs/Resolved",
               "scalar": "#/$defs/ScalarResult",
               "stats": "#/$defs/StatsResult",
-              "strings": "#/$defs/StringsResult"
+              "strings": "#/$defs/StringsResult",
+              "warmed_registry": "#/$defs/WarmedRegistryResult",
+              "warmed_root": "#/$defs/WarmedRootResult"
             },
             "propertyName": "kind"
           },
           "oneOf": [
             {
               "$ref": "#/$defs/Acquired"
+            },
+            {
+              "$ref": "#/$defs/PreparedGraphResult"
+            },
+            {
+              "$ref": "#/$defs/WarmedRegistryResult"
+            },
+            {
+              "$ref": "#/$defs/WarmedRootResult"
             },
             {
               "$ref": "#/$defs/Loading"
@@ -513,6 +525,42 @@
       "title": "Gauges",
       "type": "object"
     },
+    "GraphHandle": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "const": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "graph_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Graph Id",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph_id",
+        "owner_epoch",
+        "revision",
+        "complete"
+      ],
+      "title": "GraphHandle",
+      "type": "object"
+    },
     "Handle": {
       "additionalProperties": false,
       "properties": {
@@ -645,19 +693,31 @@
                   "hydrated": "#/$defs/Hydrated",
                   "loading": "#/$defs/Loading",
                   "located": "#/$defs/Located",
+                  "prepared_graph": "#/$defs/PreparedGraphResult",
                   "records": "#/$defs/RecordsResult",
                   "released": "#/$defs/Released",
                   "renewed": "#/$defs/Renewed",
                   "resolved": "#/$defs/Resolved",
                   "scalar": "#/$defs/ScalarResult",
                   "stats": "#/$defs/StatsResult",
-                  "strings": "#/$defs/StringsResult"
+                  "strings": "#/$defs/StringsResult",
+                  "warmed_registry": "#/$defs/WarmedRegistryResult",
+                  "warmed_root": "#/$defs/WarmedRootResult"
                 },
                 "propertyName": "kind"
               },
               "oneOf": [
                 {
                   "$ref": "#/$defs/Acquired"
+                },
+                {
+                  "$ref": "#/$defs/PreparedGraphResult"
+                },
+                {
+                  "$ref": "#/$defs/WarmedRegistryResult"
+                },
+                {
+                  "$ref": "#/$defs/WarmedRootResult"
                 },
                 {
                   "$ref": "#/$defs/Loading"
@@ -840,6 +900,25 @@
         "revision"
       ],
       "title": "Location",
+      "type": "object"
+    },
+    "PreparedGraphResult": {
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "$ref": "#/$defs/GraphHandle"
+        },
+        "kind": {
+          "const": "prepared_graph",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "handle"
+      ],
+      "title": "PreparedGraphResult",
       "type": "object"
     },
     "RecordsResult": {
@@ -1340,6 +1419,135 @@
         "tool_registry_generation"
       ],
       "title": "WaitingResult",
+      "type": "object"
+    },
+    "WarmedRegistryResult": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "fact_cache_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fact Cache Bytes",
+          "type": "integer"
+        },
+        "fact_cache_write_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fact Cache Write Bytes",
+          "type": "integer"
+        },
+        "fact_cache_writes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fact Cache Writes",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "warmed_registry",
+          "title": "Kind",
+          "type": "string"
+        },
+        "membership_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Membership Revision",
+          "type": "string"
+        },
+        "next_index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Next Index",
+          "type": "integer"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "source_offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Offset",
+          "type": "integer"
+        },
+        "source_size": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "owner_epoch",
+        "membership_revision",
+        "next_index",
+        "complete",
+        "source_offset",
+        "source_size",
+        "fact_cache_bytes",
+        "fact_cache_write_bytes",
+        "fact_cache_writes"
+      ],
+      "title": "WarmedRegistryResult",
+      "type": "object"
+    },
+    "WarmedRootResult": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "facts_complete": {
+          "title": "Facts Complete",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "warmed_root",
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "source_offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Offset",
+          "type": "integer"
+        },
+        "source_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "source_size": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "owner_epoch",
+        "source_revision",
+        "source_offset",
+        "source_size",
+        "complete",
+        "facts_complete"
+      ],
+      "title": "WarmedRootResult",
       "type": "object"
     }
   },

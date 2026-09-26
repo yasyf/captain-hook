@@ -51,6 +51,20 @@
       "title": "Max Preparation Ms",
       "type": "integer"
     },
+    "max_prepared_disk_bytes": {
+      "default": 2147483648,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Prepared Disk Bytes",
+      "type": "integer"
+    },
+    "max_prepared_fact_memory_bytes": {
+      "default": 134217728,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Prepared Fact Memory Bytes",
+      "type": "integer"
+    },
     "max_projection_bytes": {
       "default": 16777216,
       "exclusiveMinimum": 0,

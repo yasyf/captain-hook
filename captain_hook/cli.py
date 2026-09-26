@@ -278,7 +278,7 @@ def dispatch_event(
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
-    from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_paths
+    from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_sources
     from captain_hook.util import reqenv
 
     record_heartbeat(event, raw)
@@ -287,31 +287,33 @@ def dispatch_event(
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
         else raw.get("transcript_path")
     )
-    attachment_paths: tuple[Path, ...] | None = None
-    attachment_lock = threading.Lock()
-
-    def attachments() -> tuple[Path, ...]:
-        nonlocal attachment_paths
-
-        with attachment_lock:
-            if attachment_paths is None:
-                attachment_paths = registered_paths(session_dir)
-            return attachment_paths
-
+    transcript = lazy_transcript(
+        resolved_path, loader=transcript_loader, attach=lambda: registered_sources(session_dir)
+    )
+    background_transcript = transcript.fork()
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=lazy_transcript(resolved_path, loader=transcript_loader, attach=attachments),
+        transcript=transcript,
         settings=_state.settings,
         project_root=root,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
     within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)
-    envelope = None if within_margin else dispatch(event, evt, session_dir=session_dir)
+    try:
+        envelope = None if within_margin else dispatch(event, evt, session_dir=session_dir)
+        if within_margin:
+            transcript.release()
+    except BaseException:
+        transcript.release()
+        background_transcript.release()
+        raise
 
     def background() -> None:
-        transcript = lazy_transcript(resolved_path, loader=transcript_loader, attach=attachments)
-        fresh = event.event_class(_raw=raw, ctx=ctx.fork(transcript))
-        after_reply(event, fresh, raw, session_dir)
+        fresh = event.event_class(_raw=raw, ctx=ctx.fork(background_transcript))
+        try:
+            after_reply(event, fresh, raw, session_dir)
+        finally:
+            background_transcript.release()
 
     return envelope, background
 
@@ -818,6 +820,173 @@ def transcripts_register(
     except ValueError as e:
         raise click.UsageError(str(e)) from e
     click.echo(f"  registered {provider} transcript for session {session_id}: {entry.thread_id or entry.path}")
+
+
+@transcripts.command(name="warm")
+@click.option("--session", "session_id", required=True, help="Claude Code session id to warm")
+@click.option(
+    "--root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="Project root whose hook tool registry matches the session",
+)
+@click.option("--max-seconds", type=click.IntRange(min=1, max=3600), default=900, show_default=True)
+def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
+    """Warm a session's registered transcript facts under paced native work limits."""
+    from contextlib import redirect_stderr, redirect_stdout
+    from io import StringIO
+    from time import monotonic, sleep, time
+
+    from cc_transcript.discovery import CLAUDE_PROJECTS_DIR
+
+    from captain_hook.session import state_root
+    from captain_hook.snapshots.client import (
+        NATIVE_CLASSIFIER,
+        EvidenceIncomplete,
+        RegisteredWarmState,
+        RootWarmState,
+        client_scope,
+    )
+    from captain_hook.transcripts import (
+        INVALID_SESSION_ID,
+        configured_classifier_policy,
+        registered_sources,
+        resolved_transcript_paths,
+    )
+    from captain_hook.worker.service import WARM_INTERVAL_SECONDS, WARM_STEP_BYTES, WARM_STEP_SECONDS
+
+    if not session_id or INVALID_SESSION_ID.search(session_id):
+        raise click.UsageError("invalid session id")
+    session_dir = state_root() / "hooks" / "sessions" / SessionId(session_id)
+    sources = registered_sources(session_dir)
+    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+        CliState(root=root.resolve()).discover()
+    if _state.load_errors:
+        raise click.ClickException("hook discovery failed for project root")
+    started = monotonic()
+
+    def advance(state: RegisteredWarmState | RootWarmState) -> tuple[bool, int, str | None, int, int]:
+        steps = read_bytes = cache_hits = 0
+        complete = False
+        failure = None
+        while (remaining := max_seconds - (monotonic() - started)) > 0:
+            steps += 1
+            try:
+                complete = state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=min(WARM_STEP_SECONDS, remaining))
+            except EvidenceIncomplete as exc:
+                read_bytes += state.last_usage.get("source_bytes_read", 0)
+                cache_hits += state.last_usage.get("cache_hits", 0)
+                failure = exc.status
+                break
+            read_bytes += state.last_usage["source_bytes_read"]
+            cache_hits += state.last_usage["cache_hits"]
+            if complete:
+                break
+            if state.last_usage["source_bytes_read"]:
+                sleep(min(WARM_INTERVAL_SECONDS, max(0, max_seconds - (monotonic() - started))))
+        return complete, steps, failure, read_bytes, cache_hits
+
+    with client_scope() as client:
+        client.foreground_deadline_unix_ms = int((time() + max_seconds) * 1000)
+        client.tool_registry()
+        try:
+            root_path = resolved_transcript_paths(client, [SessionId(session_id)], roots=[CLAUDE_PROJECTS_DIR])[
+                SessionId(session_id)
+            ]
+        except EvidenceIncomplete as exc:
+            raise click.ClickException(f"root transcript location {exc.status}") from exc
+        if root_path is None:
+            raise click.ClickException("root transcript is unavailable")
+        root_warmer = RootWarmState(root_path, NATIVE_CLASSIFIER, client)
+        root_warmed, root_steps, root_failure, root_reads, _ = advance(root_warmer)
+        root_verified = False
+        root_verify_reads = 0
+        classifier = NATIVE_CLASSIFIER
+        if root_warmed:
+            root_verified, _, verify_failure, root_verify_reads, _ = advance(
+                RootWarmState(root_path, NATIVE_CLASSIFIER, client)
+            )
+            root_failure = root_failure or verify_failure
+        classifier_ready = False
+        if root_verified and _state.classifier is not None:
+            classifier = configured_classifier_policy(root)
+            classifier_ready = True
+            root_failure = "classifier_unavailable"
+        elif root_verified:
+            try:
+                session = client.acquire(root_path)
+                try:
+                    prepared = list(
+                        client.pages(
+                            "prepare_hook_view",
+                            domain=True,
+                            view=session.view(),
+                            cwd=str(root.resolve()),
+                            droid=False,
+                        )
+                    )
+                    if len(prepared) != 1 or prepared[0]["kind"] != "classifier":
+                        raise click.ClickException("root classifier preparation returned invalid evidence")
+                    classifier = prepared[0]["classifier"]
+                    classifier_ready = True
+                finally:
+                    session.release()
+            except EvidenceIncomplete as exc:
+                root_failure = root_failure or exc.status
+        classified_warmed = classified_verified = classifier_ready and classifier == NATIVE_CLASSIFIER
+        classified_reads = classified_verify_reads = 0
+        classified_steps = 0
+        if classifier_ready and classifier != NATIVE_CLASSIFIER and classifier["id"] != "captain-configured":
+            classified_warmed, classified_steps, classified_failure, classified_reads, _ = advance(
+                RootWarmState(root_path, classifier, client)
+            )
+            root_failure = root_failure or classified_failure
+            if classified_warmed:
+                classified_verified, _, verify_failure, classified_verify_reads, _ = advance(
+                    RootWarmState(root_path, classifier, client)
+                )
+                root_failure = root_failure or verify_failure
+        warmer = RegisteredWarmState(sources, client)
+        warmed, steps, failure_status, warm_reads, _ = (
+            advance(warmer) if sources.thread_ids or sources.direct_paths else (True, 0, None, 0, 0)
+        )
+        verified = False
+        verify_steps = verify_reads = verify_hits = 0
+        if warmed:
+            if sources.thread_ids or sources.direct_paths:
+                verified, verify_steps, verify_failure, verify_reads, verify_hits = advance(
+                    RegisteredWarmState(sources, client)
+                )
+                failure_status = failure_status or verify_failure
+            else:
+                verified = True
+    complete = root_warmed and root_verified and classified_warmed and classified_verified and warmed and verified
+    click.echo(
+        json.dumps(
+            {
+                "complete": complete,
+                "root_steps": root_steps + classified_steps,
+                "root_source_bytes_read": root_reads + classified_reads,
+                "root_verify_source_bytes_read": root_verify_reads + classified_verify_reads,
+                "root_facts_complete": classified_warmed and classified_verified,
+                "sources": len(sources.thread_ids) + len(sources.direct_paths),
+                "steps": steps,
+                "fact_cache_bytes": warmer.fact_cache_bytes,
+                "fact_cache_write_bytes": warmer.fact_cache_write_bytes,
+                "fact_cache_writes": warmer.fact_cache_writes,
+                "warm_source_bytes_read": warm_reads,
+                "verify_complete": verified,
+                "verify_steps": verify_steps,
+                "verify_source_bytes_read": verify_reads,
+                "verify_cache_hits": verify_hits,
+                "elapsed_seconds": round(monotonic() - started, 3),
+                "status": root_failure or failure_status or ("complete" if complete else "deadline"),
+            },
+            sort_keys=True,
+        )
+    )
+    if not complete:
+        raise SystemExit(1)
 
 
 @cli.command()

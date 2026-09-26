@@ -100,7 +100,7 @@ jobs:
           uv build
           rm -rf .wheel-smoke
           uv venv --seed .wheel-smoke
-          uv pip install --python .wheel-smoke/bin/python dist/*.whl
+          uv pip install --refresh-package cc-transcript --python .wheel-smoke/bin/python dist/*.whl
           .wheel-smoke/bin/capt-hook --help
           test -x .wheel-smoke/bin/hook
           test -x .wheel-smoke/bin/hookd

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import re
 import threading
 from pathlib import Path
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
-    from captain_hook.snapshots.client import RemoteSession, SnapshotClient
+    from captain_hook.snapshots.client import GraphSources, RemoteSession, SnapshotClient
 
 # A session id becomes a filesystem path component via ``ensure_session``; external callers (CLI, MCP)
 # must not smuggle path separators or traversal past that trust boundary.
@@ -62,6 +61,18 @@ def transcript_session_id(events: Sequence[TranscriptEvent], *, path: Path | Non
     )
 
 
+def configured_classifier_policy(project_dir: str | Path | None) -> dict[str, str]:
+    from captain_hook.app import _state
+    from captain_hook.cli import CliState
+    from captain_hook.daemon.registry import Fingerprint
+
+    return {
+        "id": "captain-configured",
+        "version": _state.registry_fingerprint
+        or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest,
+    }
+
+
 @overload
 def load_transcript(path: str | Path) -> RemoteSession: ...
 
@@ -73,7 +84,7 @@ def load_transcript(path: None) -> Session: ...
 def load_transcript(path: str | Path | None) -> Session | RemoteSession:
     from cc_transcript.query import Session
 
-    from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
+    from captain_hook.snapshots.client import CURRENT_CLIENT, NATIVE_CLASSIFIER, EvidenceIncomplete
 
     if not path:
         return Session(())
@@ -81,18 +92,15 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
         raise EvidenceIncomplete("invalid_request", "transcript loading requires an admitted snapshot client")
     from captain_hook.app import _state
 
-    session = client.acquire(path)
+    try:
+        session = client.acquire(path)
+    except EvidenceIncomplete as exc:
+        if exc.status in {"incomplete", "deadline"}:
+            client.schedule_root_warm(path, NATIVE_CLASSIFIER)
+        raise
     try:
         if _state.classifier is not None:
-            from captain_hook.cli import CliState
-            from captain_hook.daemon.registry import Fingerprint
-
-            project_dir = resolve_project_dir()
-            policy = {
-                "id": "captain-configured",
-                "version": _state.registry_fingerprint
-                or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest,
-            }
+            policy = configured_classifier_policy(resolve_project_dir())
             return client.classify(session, _state.classifier, policy)
         data = list(
             client.pages(
@@ -106,6 +114,11 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
         if len(data) != 1 or data[0]["kind"] != "classifier":
             raise EvidenceIncomplete("invalid_request", "hook classifier preparation returned invalid evidence")
         return session.with_classifier(data[0]["classifier"])
+    except EvidenceIncomplete as exc:
+        if exc.status in {"incomplete", "deadline"}:
+            client.schedule_root_warm(path, session.classifier)
+        session.release()
+        raise
     except BaseException:
         session.release()
         raise
@@ -239,12 +252,12 @@ def lazy_transcript(
     path: str | Path | None,
     *,
     loader: Callable[[str | Path | None], Session | RemoteSession] | None = None,
-    attach: Callable[[], Sequence[Path]] | None = None,
+    attach: Callable[[], GraphSources] | None = None,
 ) -> LazyTranscript:
     resolve = loader or load_transcript
 
     def load() -> Session | RemoteSession:
-        from captain_hook.snapshots.client import EvidenceIncomplete
+        from captain_hook.snapshots.client import EvidenceIncomplete, RemoteSession
 
         reqenv.checkpoint()
         try:
@@ -253,8 +266,8 @@ def lazy_transcript(
             raise
         except Exception as exc:
             raise TranscriptLoadError(path) from exc
-        if attach and (extra := tuple(attach())):
-            session = dataclasses.replace(session, attachments=(*session.attachments, *extra))
+        if attach and isinstance(session, RemoteSession):
+            session = session.with_registered_sources(attach())
         return session
 
     return LazyTranscript(TranscriptPins(load), seed=True)
@@ -299,6 +312,20 @@ def register_transcript(
         if key not in {(e.provider, e.thread_id, e.path) for e in blob.entries}:
             blob.entries.append(entry)
     return entry
+
+
+def registered_sources(session_dir: Path | None) -> GraphSources:
+    from cc_transcript.codex import sessions_root
+
+    from captain_hook.snapshots.client import GraphSources
+
+    entries = SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
+    return GraphSources(
+        thread_ids=tuple(dict.fromkeys(entry.thread_id for entry in entries if entry.thread_id)),
+        roots=(sessions_root(),) if any(entry.thread_id for entry in entries) else (),
+        direct_paths=tuple(dict.fromkeys(Path(entry.path) for entry in entries if entry.path)),
+        session_key=str(session_dir) if session_dir is not None else None,
+    )
 
 
 def resolved_transcript_paths(

@@ -489,6 +489,42 @@
       "title": "EventRef",
       "type": "object"
     },
+    "GraphHandle": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "const": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "graph_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Graph Id",
+          "type": "string"
+        },
+        "owner_epoch": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Owner Epoch",
+          "type": "string"
+        },
+        "revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph_id",
+        "owner_epoch",
+        "revision",
+        "complete"
+      ],
+      "title": "GraphHandle",
+      "type": "object"
+    },
     "Handle": {
       "additionalProperties": false,
       "properties": {
@@ -972,6 +1008,301 @@
       "title": "PendingNamedTask",
       "type": "object"
     },
+    "PrepareGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "direct_paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Direct Paths",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "prepare_graph",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "thread_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Thread Ids",
+          "type": "array"
+        },
+        "view": {
+          "$ref": "#/$defs/PreparedView"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "thread_ids",
+        "roots",
+        "direct_paths"
+      ],
+      "title": "PrepareGraph",
+      "type": "object"
+    },
+    "PreparedErrorPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_error",
+            "has_edit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "subagents"
+      ],
+      "title": "PreparedErrorPredicate",
+      "type": "object"
+    },
+    "PreparedInputs": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "deep_predicate_inputs",
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "const": "forward",
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "order"
+      ],
+      "title": "PreparedInputs",
+      "type": "object"
+    },
+    "PreparedListPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_command",
+            "has_edit_to",
+            "has_skill",
+            "has_skill_suffix",
+            "has_read_glob"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values",
+        "subagents"
+      ],
+      "title": "PreparedListPredicate",
+      "type": "object"
+    },
+    "PreparedOverridePredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "invalidated_by": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Invalidated By",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_override",
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "token": {
+          "maxLength": 1048576,
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "token",
+        "invalidated_by",
+        "subagents"
+      ],
+      "title": "PreparedOverridePredicate",
+      "type": "object"
+    },
+    "PreparedToolPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_tool",
+            "has_read",
+            "has_command_regex"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "pattern",
+        "subagents"
+      ],
+      "title": "PreparedToolPredicate",
+      "type": "object"
+    },
+    "PreparedView": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 0,
+          "title": "Attachments",
+          "type": "array"
+        },
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "selectors": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "after_last_tool": "#/$defs/ToolBoundary",
+                "before_last_tool": "#/$defs/ToolBoundary",
+                "current_turn": "#/$defs/CurrentTurn",
+                "event_range": "#/$defs/EventRange",
+                "prior": "#/$defs/Prior",
+                "recent_events": "#/$defs/Recent",
+                "recent_messages": "#/$defs/Recent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CurrentTurn"
+              },
+              {
+                "$ref": "#/$defs/Prior"
+              },
+              {
+                "$ref": "#/$defs/Recent"
+              },
+              {
+                "$ref": "#/$defs/ToolBoundary"
+              },
+              {
+                "$ref": "#/$defs/EventRange"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "title": "Selectors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "handle",
+        "classifier",
+        "selectors",
+        "attachments"
+      ],
+      "title": "PreparedView",
+      "type": "object"
+    },
     "Prior": {
       "additionalProperties": false,
       "properties": {
@@ -1017,6 +1348,124 @@
         "count"
       ],
       "title": "Prompts",
+      "type": "object"
+    },
+    "QueryGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "handle": {
+          "$ref": "#/$defs/GraphHandle"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "query_graph",
+          "title": "Operation",
+          "type": "string"
+        },
+        "query": {
+          "discriminator": {
+            "mapping": {
+              "deep_predicate_inputs": "#/$defs/PreparedInputs",
+              "has_command": "#/$defs/PreparedListPredicate",
+              "has_command_regex": "#/$defs/PreparedToolPredicate",
+              "has_edit": "#/$defs/PreparedErrorPredicate",
+              "has_edit_to": "#/$defs/PreparedListPredicate",
+              "has_error": "#/$defs/PreparedErrorPredicate",
+              "has_override": "#/$defs/PreparedOverridePredicate",
+              "has_read": "#/$defs/PreparedToolPredicate",
+              "has_read_glob": "#/$defs/PreparedListPredicate",
+              "has_skill": "#/$defs/PreparedListPredicate",
+              "has_skill_suffix": "#/$defs/PreparedListPredicate",
+              "has_tool": "#/$defs/PreparedToolPredicate"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PreparedInputs"
+            },
+            {
+              "$ref": "#/$defs/PreparedToolPredicate"
+            },
+            {
+              "$ref": "#/$defs/PreparedListPredicate"
+            },
+            {
+              "$ref": "#/$defs/PreparedOverridePredicate"
+            },
+            {
+              "$ref": "#/$defs/PreparedErrorPredicate"
+            }
+          ],
+          "title": "Query"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "selectors": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "after_last_tool": "#/$defs/ToolBoundary",
+                "before_last_tool": "#/$defs/ToolBoundary",
+                "current_turn": "#/$defs/CurrentTurn",
+                "event_range": "#/$defs/EventRange",
+                "prior": "#/$defs/Prior",
+                "recent_events": "#/$defs/Recent",
+                "recent_messages": "#/$defs/Recent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CurrentTurn"
+              },
+              {
+                "$ref": "#/$defs/Prior"
+              },
+              {
+                "$ref": "#/$defs/Recent"
+              },
+              {
+                "$ref": "#/$defs/ToolBoundary"
+              },
+              {
+                "$ref": "#/$defs/EventRange"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "title": "Selectors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "handle",
+        "selectors",
+        "query"
+      ],
+      "title": "QueryGraph",
       "type": "object"
     },
     "QueryRequest": {
@@ -1144,7 +1593,7 @@
           "type": "string"
         },
         "view": {
-          "$ref": "#/$defs/View"
+          "$ref": "#/$defs/PreparedView"
         }
       },
       "required": [
@@ -1191,7 +1640,8 @@
           "kind": {
             "enum": [
               "lease",
-              "reservation"
+              "reservation",
+              "graph"
             ]
           }
         }
@@ -1207,7 +1657,8 @@
           "enum": [
             "lease",
             "reservation",
-            "cursor"
+            "cursor",
+            "graph"
           ],
           "title": "Kind",
           "type": "string"
@@ -1807,6 +2258,156 @@
       "title": "View",
       "type": "object"
     },
+    "WarmRegistered": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "direct_paths": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Direct Paths",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "membership_revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Membership Revision"
+        },
+        "operation": {
+          "const": "warm_registered",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "start_index": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Start Index",
+          "type": "integer"
+        },
+        "thread_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Thread Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "classifier",
+        "thread_ids",
+        "roots",
+        "direct_paths",
+        "start_index",
+        "membership_revision"
+      ],
+      "title": "WarmRegistered",
+      "type": "object"
+    },
+    "WarmRoot": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "warm_root",
+          "title": "Operation",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "path",
+        "classifier"
+      ],
+      "title": "WarmRoot",
+      "type": "object"
+    },
     "WorkflowText": {
       "additionalProperties": false,
       "properties": {
@@ -1849,13 +2450,17 @@
       "hydrate": "#/$defs/Hydrate",
       "locate": "#/$defs/Locate",
       "mine": "#/$defs/Mine",
+      "prepare_graph": "#/$defs/PrepareGraph",
       "query": "#/$defs/QueryRequest",
+      "query_graph": "#/$defs/QueryGraph",
       "release": "#/$defs/Release",
       "renew": "#/$defs/Renew",
       "resolve": "#/$defs/Resolve",
       "resume": "#/$defs/Resume",
       "retain": "#/$defs/Retain",
-      "stats": "#/$defs/Stats"
+      "stats": "#/$defs/Stats",
+      "warm_registered": "#/$defs/WarmRegistered",
+      "warm_root": "#/$defs/WarmRoot"
     },
     "propertyName": "operation"
   },
@@ -1898,6 +2503,18 @@
     },
     {
       "$ref": "#/$defs/QueryRequest"
+    },
+    {
+      "$ref": "#/$defs/PrepareGraph"
+    },
+    {
+      "$ref": "#/$defs/QueryGraph"
+    },
+    {
+      "$ref": "#/$defs/WarmRegistered"
+    },
+    {
+      "$ref": "#/$defs/WarmRoot"
     },
     {
       "$ref": "#/$defs/ActivityProbe"

@@ -85,6 +85,7 @@ class FixtureSnapshot:
 
 class FixtureOwner:
     def __init__(self):
+        self._defer_cleanup = False
         self._leases = set()
         self.policy = ReviewPolicy()
         self.snapshots = {}

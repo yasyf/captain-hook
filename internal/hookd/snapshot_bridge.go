@@ -22,7 +22,18 @@ func (p *hostProduct) transcript(ctx context.Context, req daemonkit.Request) (da
 		case <-ctx.Done():
 		}
 	}()
-	callContext := userSnapshotContext(fmt.Sprintf("review:%d", req.Session.ID()), "review", req.Caller.UID)
+	metadata, err := snapshots.Metadata(req.Body)
+	if err != nil {
+		return daemonkit.Reply{}, err
+	}
+	admission := "review"
+	if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
+		admission = "hook"
+	}
+	callContext := userSnapshotContext(fmt.Sprintf("review:%d", req.Session.ID()), admission, req.Caller.UID)
+	if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
+		callContext.WorkClass = "background"
+	}
 	body, err := p.snapshots.call(ctx, req.Body, callContext)
 	return daemonkit.Reply{Body: body}, err
 }

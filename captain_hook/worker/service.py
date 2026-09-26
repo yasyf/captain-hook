@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from captain_hook.worker.protocol import (
@@ -31,15 +34,32 @@ from captain_hook.worker.protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+    from pathlib import Path
     from typing import BinaryIO
+
+    from captain_hook.snapshots.client import GraphSources, RegisteredWarmState, RootWarmState, SnapshotClient
 
     type Background = Callable[[], None]
     type Dispatch = Callable[[EventRequest], tuple[EventResponse, Background | None]]
 
 REQUEST_THREADS = 16
 MAX_PENDING_SNAPSHOTS = 256
+MAX_PENDING_CLEANUPS = 64
+MAX_WARM_JOBS = 32
+WARM_STEP_BYTES = 8 * 1024 * 1024
+WARM_STEP_SECONDS = 3
+WARM_INTERVAL_SECONDS = 2
 BACKGROUND_SNAPSHOT_CLIENT: ContextVar[Any] = ContextVar("background_snapshot_client", default=None)
+
+
+@dataclass
+class WarmJob:
+    owner_key: str
+    fingerprint: str
+    state: RegisteredWarmState | RootWarmState
+    admitted_order: int = 0
+    last_served: int = 0
 
 
 def handshake(input_stream: BinaryIO, output_stream: BinaryIO, *, build: str) -> bool:
@@ -66,6 +86,16 @@ class WorkerService:
         self._dispatch = dispatch
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="capt-hook-worker")
         self._background = ThreadPoolExecutor(max_workers=4, thread_name_prefix="capt-hook-async")
+        self._cleanup = ThreadPoolExecutor(max_workers=2, thread_name_prefix="capt-hook-cleanup")
+        self._cleanup_slots = threading.BoundedSemaphore(MAX_PENDING_CLEANUPS)
+        self._warm_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capt-hook-graph-warm")
+        self._warm_guard = threading.Lock()
+        self._warm_jobs: dict[str, WarmJob] = {}
+        self._warm_queue: deque[str] = deque()
+        self._warm_queued: set[str] = set()
+        self._warm_running = False
+        self._warm_order = 0
+        self._warm_stop = threading.Event()
         self._write_guard = threading.Lock()
         self._guard = threading.Condition()
         self._outstanding = 0
@@ -84,10 +114,14 @@ class WorkerService:
                 else:
                     self._submit(decode_event(message))
         finally:
+            with self._warm_guard:
+                self._warm_stop.set()
             self._close_snapshots()
             self._drain()
             self._executor.shutdown()
             self._background.shutdown(wait=True)
+            self._cleanup.shutdown(wait=True)
+            self._warm_executor.shutdown(wait=True)
         if self._failure is not None:
             raise self._failure
 
@@ -104,20 +138,48 @@ class WorkerService:
         if request.deadline_passed():
             self._write(error_response(request.id, "deadline passed before dispatch"))
             return
+        from loguru import logger
+
         start = time.perf_counter()
-        from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient
+        from captain_hook.snapshots.client import CURRENT_CLIENT, GRAPH_READ_BYTES, GRAPH_WORK_SECONDS, SnapshotClient
 
         def cleanup(value: dict[str, object]) -> dict[str, Any]:
             return self.snapshot_exchange(0, value, cleanup=True)
 
-        foreground = SnapshotClient(lambda value: self.snapshot_exchange(request.id, value), cleanup_exchange=cleanup)
-        background_client = SnapshotClient(lambda value: self.snapshot_exchange(0, value), cleanup_exchange=cleanup)
+        foreground = SnapshotClient(
+            lambda value: self.snapshot_exchange(
+                request.id, value, expires_unix_ms=foreground.foreground_deadline_unix_ms
+            ),
+            cleanup_exchange=cleanup,
+            warm_scheduler=self.schedule_graph_warm,
+            root_warm_scheduler=self.schedule_root_warm,
+            defer_cleanup=True,
+            foreground_seconds=GRAPH_WORK_SECONDS,
+            foreground_read_bytes=GRAPH_READ_BYTES,
+        )
+        background_client = SnapshotClient(
+            lambda value: self.snapshot_exchange(0, value),
+            cleanup_exchange=cleanup,
+            warm_scheduler=self.schedule_graph_warm,
+            root_warm_scheduler=self.schedule_root_warm,
+        )
+
+        def retry_pending_cleanup() -> None:
+            for client in (foreground, background_client):
+                try:
+                    client.close_pending()
+                except Exception:
+                    logger.exception("snapshot client cleanup failed")
+
         token = CURRENT_CLIENT.set(foreground)
         background_token = BACKGROUND_SNAPSHOT_CLIENT.set(background_client)
         try:
             response, background = self._dispatch(request)
         except Exception:
-            self._write(error_response(request.id, traceback.format_exc()))
+            try:
+                self._write(error_response(request.id, traceback.format_exc()))
+            finally:
+                self._schedule_cleanup(retry_pending_cleanup)
             return
         finally:
             CURRENT_CLIENT.reset(token)
@@ -125,7 +187,10 @@ class WorkerService:
         elapsed_ms = (time.perf_counter() - start) * 1000
         result = result_response(request.id, replace(response, elapsed_ms=elapsed_ms))
         if background is None:
-            self._write(result)
+            try:
+                self._write(result)
+            finally:
+                self._schedule_cleanup(retry_pending_cleanup)
             return
         self._write(background_begin_message(request.id))
         with self._guard:
@@ -134,17 +199,24 @@ class WorkerService:
             self._write(result)
             future = self._background.submit(background)
         except BaseException:
-            self._end_background(request.id)
+            retry_pending_cleanup()
+            try:
+                self._end_background(request.id)
+            except Exception:
+                logger.exception("background completion failed")
             raise
-        future.add_done_callback(lambda completed: self._background_done(request.id, completed))
+        future.add_done_callback(lambda completed: self._background_done(request.id, completed, retry_pending_cleanup))
 
-    def _background_done(self, request_id: int, future: Future[None]) -> None:
+    def _background_done(
+        self, request_id: int, future: Future[None], retry_pending_cleanup: Callable[[], None]
+    ) -> None:
         try:
             if (exc := future.exception()) is not None:
                 with self._guard:
                     if self._failure is None:
                         self._failure = exc
         finally:
+            retry_pending_cleanup()
             try:
                 self._end_background(request_id)
             except BaseException as exc:
@@ -160,6 +232,19 @@ class WorkerService:
                 self._background_outstanding -= 1
                 self._guard.notify_all()
 
+    def _schedule_cleanup(self, cleanup: Callable[[], None]) -> None:
+        if not self._cleanup_slots.acquire(blocking=False):
+            cleanup()
+            return
+
+        def run() -> None:
+            try:
+                cleanup()
+            finally:
+                self._cleanup_slots.release()
+
+        self._cleanup.submit(run)
+
     def _done(self, future: Future[None]) -> None:
         with self._guard:
             if (exc := future.exception()) is not None and self._failure is None:
@@ -168,6 +253,104 @@ class WorkerService:
             if self._outstanding == 0:
                 self._guard.notify_all()
 
+    def schedule_graph_warm(self, client: SnapshotClient, sources: GraphSources) -> None:
+        from captain_hook.snapshots.client import RegisteredWarmState
+
+        if not sources.thread_ids and not sources.direct_paths:
+            return
+        descriptor = {
+            "thread_ids": sources.thread_ids,
+            "roots": [str(root) for root in sources.roots],
+            "direct_paths": [str(path) for path in sources.direct_paths],
+            "tool_registry": client.tool_registry(),
+        }
+        fingerprint = hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        owner_key = sources.session_key or fingerprint
+        warm_client = client.clone_for_exchange(lambda value: self.snapshot_exchange(0, value))
+        self._schedule_warm_job(owner_key, fingerprint, RegisteredWarmState(sources, warm_client))
+
+    def schedule_root_warm(self, client: SnapshotClient, path: Path, classifier: Mapping[str, str]) -> None:
+        from captain_hook.snapshots.client import RootWarmState
+
+        descriptor = {
+            "path": str(path.absolute()),
+            "classifier": dict(classifier),
+            "tool_registry": client.tool_registry(),
+        }
+        fingerprint = hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        owner_key = f"root:{descriptor['path']}:{classifier['id']}:{classifier['version']}"
+        warm_client = client.clone_for_exchange(lambda value: self.snapshot_exchange(0, value))
+        self._schedule_warm_job(owner_key, fingerprint, RootWarmState(path, dict(classifier), warm_client))
+
+    def _schedule_warm_job(self, owner_key: str, fingerprint: str, state: RegisteredWarmState | RootWarmState) -> None:
+        with self._warm_guard:
+            if self._warm_stop.is_set():
+                return
+            previous = self._warm_jobs.get(owner_key)
+            if previous is not None and previous.fingerprint == fingerprint:
+                return
+            if previous is None and len(self._warm_jobs) >= MAX_WARM_JOBS:
+                victim = max(self._warm_jobs.values(), key=lambda job: (job.last_served, job.admitted_order))
+                del self._warm_jobs[victim.owner_key]
+                if victim.owner_key in self._warm_queued:
+                    self._warm_queue.remove(victim.owner_key)
+                    self._warm_queued.remove(victim.owner_key)
+            self._warm_order += 1
+            self._warm_jobs[owner_key] = WarmJob(owner_key, fingerprint, state, admitted_order=self._warm_order)
+            if owner_key not in self._warm_queued:
+                self._warm_queue.append(owner_key)
+                self._warm_queued.add(owner_key)
+            if not self._warm_running:
+                self._warm_running = True
+                self._warm_executor.submit(self._run_warm_loop)
+
+    def _run_warm_loop(self) -> None:
+        from loguru import logger
+
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        while not self._warm_stop.is_set():
+            with self._warm_guard:
+                if not self._warm_queue:
+                    self._warm_running = False
+                    return
+                owner_key = self._warm_queue.popleft()
+                self._warm_queued.remove(owner_key)
+                job = self._warm_jobs[owner_key]
+            try:
+                complete = self._warm_step(job)
+                failed = False
+            except EvidenceIncomplete as exc:
+                logger.bind(status=exc.status, reason=exc.reason).warning("transcript warming stopped")
+                complete = True
+                failed = True
+            except Exception:
+                logger.exception("transcript warming failed")
+                complete = True
+                failed = True
+            with self._warm_guard:
+                current = self._warm_jobs.get(owner_key) is job
+                if current:
+                    if complete:
+                        del self._warm_jobs[owner_key]
+                    elif owner_key not in self._warm_queued:
+                        self._warm_order += 1
+                        job.last_served = self._warm_order
+                        self._warm_queue.append(owner_key)
+                        self._warm_queued.add(owner_key)
+            if current and complete and not failed:
+                logger.bind(warm_key=job.fingerprint[:16], kind=type(job.state).__name__).info(
+                    "transcript warming complete"
+                )
+            interval = WARM_INTERVAL_SECONDS if job.state.last_usage.get("source_bytes_read", 0) else 0
+            if self._warm_stop.wait(interval):
+                break
+        with self._warm_guard:
+            self._warm_running = False
+
+    def _warm_step(self, job: WarmJob) -> bool:
+        return job.state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=WARM_STEP_SECONDS)
+
     def _write(self, message: dict[str, object], *, max_frame: int | None = None) -> None:
         with self._write_guard:
             if max_frame is None:
@@ -175,7 +358,9 @@ class WorkerService:
             else:
                 write_message(self._output, message, max_frame=max_frame)
 
-    def snapshot_exchange(self, parent_id: int, request: dict[str, Any], *, cleanup: bool = False) -> dict[str, Any]:
+    def snapshot_exchange(
+        self, parent_id: int, request: dict[str, Any], *, cleanup: bool = False, expires_unix_ms: int | None = None
+    ) -> dict[str, Any]:
         from captain_hook.snapshots.client import CLEANUP_SECONDS, EvidenceIncomplete, SnapshotProtocolError
         from captain_hook.util import reqenv
 
@@ -194,6 +379,8 @@ class WorkerService:
         )
         if parent_id and (remaining := reqenv.seconds_left()) is not None:
             expires = min(expires, time.time() + remaining)
+        if expires_unix_ms is not None:
+            expires = min(expires, expires_unix_ms / 1000)
         future: Future[dict[str, Any]] = Future()
         with self._snapshot_guard:
             if self._snapshot_closed:

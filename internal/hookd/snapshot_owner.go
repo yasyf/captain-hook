@@ -272,8 +272,10 @@ type snapshotService struct {
 	closed       bool
 	hookSlots    chan struct{}
 	reviewSlots  chan struct{}
+	warmSlots    chan struct{}
 	hookQueue    chan struct{}
 	reviewQueue  chan struct{}
+	warmQueue    chan struct{}
 	releaseSlots chan struct{}
 	releaseQueue chan struct{}
 	config       json.RawMessage
@@ -288,6 +290,7 @@ func newSnapshotService(manager *workerManager) (*snapshotService, error) {
 	service := &snapshotService{manager: manager, config: config,
 		hookSlots: make(chan struct{}, 4), reviewSlots: make(chan struct{}, 1),
 		hookQueue: make(chan struct{}, 64), reviewQueue: make(chan struct{}, 16),
+		warmSlots: make(chan struct{}, 1), warmQueue: make(chan struct{}, 4),
 		releaseSlots: make(chan struct{}, 4), releaseQueue: make(chan struct{}, 64)}
 	service.start = service.startOwner
 	return service, nil
@@ -391,6 +394,8 @@ func (s *snapshotService) call(ctx context.Context, request json.RawMessage, cal
 	}
 	if metadata.Operation == "release" {
 		slots, queue = s.releaseSlots, s.releaseQueue
+	} else if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
+		slots, queue = s.warmSlots, s.warmQueue
 	}
 	select {
 	case queue <- struct{}{}:

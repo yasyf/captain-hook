@@ -18,7 +18,7 @@ from captain_hook.daemon.context import RequestBuffers, capture_output, request_
 from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import envelope_text
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, AttachmentLimit, EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, GraphEvidenceExpired
 from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
@@ -37,6 +37,21 @@ if TYPE_CHECKING:
 
     class RegistryLike(Protocol):
         def get(self) -> Any: ...
+
+
+FAIL_OPEN_EVIDENCE_STATUSES = frozenset(
+    {
+        "incomplete",
+        "source_limit",
+        "entry_limit",
+        "output_limit",
+        "deadline",
+        "cancelled",
+        "changed",
+        "retained_limit",
+        "lease_limit",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,13 +137,8 @@ class ProductRuntime:
             except SystemExit as exc:
                 return self._response(buffers, exit_code=_exit_code(exc.code)), None
             except EvidenceIncomplete as exc:
-                if isinstance(exc, AttachmentLimit):
-                    logger.bind(status=exc.status, reason=exc.reason).warning(
-                        "registered transcript attachment bound exceeded"
-                    )
-                    return EventResponse(), None
-                if exc.status in {"retained_limit", "lease_limit"}:
-                    logger.bind(status=exc.status, reason=exc.reason).warning("snapshot admission saturated")
+                if isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES:
+                    logger.bind(status=exc.status, reason=exc.reason).warning("snapshot evidence incomplete")
                     return EventResponse(), None
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
@@ -211,11 +221,8 @@ def _run_detached(background: Background) -> None:
             try:
                 background()
             except EvidenceIncomplete as exc:
-                if isinstance(exc, AttachmentLimit):
-                    logger.bind(status=exc.status, reason=exc.reason).warning("post-reply attachment bound exceeded")
-                    return
-                if exc.status in {"retained_limit", "lease_limit"}:
-                    logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot admission saturated")
+                if isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES:
+                    logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot evidence incomplete")
                     return
                 logger.bind(status=exc.status, reason=exc.reason).error("post-reply evidence incomplete")
                 raise
