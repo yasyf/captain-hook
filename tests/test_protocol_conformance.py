@@ -20,12 +20,8 @@ from captain_hook.worker.protocol import (
     MAX_EVENT_ENVELOPE,
     MAX_EVENT_INPUT,
     MAX_FRAME,
-    MAX_SNAPSHOT_FRAME,
-    OP_SNAPSHOT_REQUEST,
-    OP_SNAPSHOT_RESULT,
-    OP_SNAPSHOT_CANCEL,
-    SNAPSHOT_FRAME_FIELDS,
     MAX_HOST_PAYLOAD,
+    MAX_SNAPSHOT_FRAME,
     OP_ADOPT,
     OP_BACKGROUND_BEGIN,
     OP_BACKGROUND_END,
@@ -33,7 +29,11 @@ from captain_hook.worker.protocol import (
     OP_EVENT,
     OP_HELLO,
     OP_RESULT,
+    OP_SNAPSHOT_CANCEL,
+    OP_SNAPSHOT_REQUEST,
+    OP_SNAPSHOT_RESULT,
     PROTOCOL,
+    SNAPSHOT_FRAME_FIELDS,
     EventRequest,
     EventResponse,
     ProtocolError,
@@ -46,6 +46,8 @@ from captain_hook.worker.protocol import (
     result_response,
     write_message,
 )
+
+pytestmark = pytest.mark.go_toolchain
 
 if TYPE_CHECKING:
     pass
@@ -65,9 +67,18 @@ def python_descriptor() -> dict[str, object]:
             "worker_frame": MAX_FRAME,
             "snapshot_frame": MAX_SNAPSHOT_FRAME,
         },
-        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR, "adopt": OP_ADOPT, "background_begin": OP_BACKGROUND_BEGIN, "background_end": OP_BACKGROUND_END,
-                "snapshot_request": OP_SNAPSHOT_REQUEST,
-                "snapshot_result": OP_SNAPSHOT_RESULT, "snapshot_cancel": OP_SNAPSHOT_CANCEL},
+        "ops": {
+            "hello": OP_HELLO,
+            "event": OP_EVENT,
+            "result": OP_RESULT,
+            "error": OP_ERROR,
+            "adopt": OP_ADOPT,
+            "background_begin": OP_BACKGROUND_BEGIN,
+            "background_end": OP_BACKGROUND_END,
+            "snapshot_request": OP_SNAPSHOT_REQUEST,
+            "snapshot_result": OP_SNAPSHOT_RESULT,
+            "snapshot_cancel": OP_SNAPSHOT_CANCEL,
+        },
         "fields": {
             "worker_frame": sorted(
                 HELLO_KEYS

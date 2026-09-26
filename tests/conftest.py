@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -27,6 +28,32 @@ if TYPE_CHECKING:
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    count_text = os.environ.get("CAPTAIN_CI_TEST_SHARD_COUNT")
+    index_text = os.environ.get("CAPTAIN_CI_TEST_SHARD_INDEX")
+    if count_text is None and index_text is None:
+        return
+    if count_text is None or index_text is None:
+        raise pytest.UsageError("both Captain CI test shard settings are required")
+    try:
+        count = int(count_text)
+        index = int(index_text)
+    except ValueError as exc:
+        raise pytest.UsageError("Captain CI test shard settings must be integers") from exc
+    if count < 1 or not 0 <= index < count:
+        raise pytest.UsageError("Captain CI test shard index must be within the shard count")
+
+    selected = []
+    deselected = []
+    for item in items:
+        digest = hashlib.sha256(item.nodeid.encode()).digest()
+        shard = 0 if item.get_closest_marker("go_toolchain") else int.from_bytes(digest[:8], "big") % count
+        (selected if shard == index else deselected).append(item)
+    items[:] = selected
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
 
 
 @pytest.fixture(autouse=True)

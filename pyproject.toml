@@ -57,6 +57,7 @@ dev = [
     "ruff>=0.8",
     "hatchling>=1.27",
     "capt-hook",
+    "pytest-xdist>=3.8,<4",
 ]
 
 [project.scripts]
@@ -97,6 +98,7 @@ exclude = ["captain_hook/bin"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = ["-ra", "--strict-markers", "--tb=short", "-q"]
+markers = ["go_toolchain: tests that require the Go toolchain"]
 
 [tool.pyright]
 pythonVersion = "3.13"
