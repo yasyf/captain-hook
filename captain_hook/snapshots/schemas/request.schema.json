@@ -1751,7 +1751,7 @@
             "pattern": "^/",
             "type": "string"
           },
-          "maxItems": 256,
+          "maxItems": 1024,
           "title": "Attachments",
           "type": "array"
         },

@@ -5,7 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from captain_hook.snapshots.client import CORE_SCHEMA, HOST_SCHEMA, Lease, RemoteSession, SnapshotClient
+from captain_hook.snapshots.client import (
+    CORE_SCHEMA,
+    HOST_SCHEMA,
+    MAX_VIEW_ATTACHMENTS,
+    AttachmentLimit,
+    Lease,
+    RemoteSession,
+    SnapshotClient,
+)
 from captain_hook.snapshots.worker import empty_usage, failure
 
 
@@ -44,6 +52,110 @@ def description(lease="lease", classifier=None):
         "classifier": classifier or {"id": "native", "version": "1"},
         "provisional_tail": False,
     }
+
+
+@pytest.mark.parametrize("count", [256, 257, 918, MAX_VIEW_ATTACHMENTS])
+def test_deep_query_preserves_all_bounded_attachments(count):
+    from captain_hook.snapshots.validation import validate
+
+    requests = []
+
+    def exchange(wrapper):
+        validate("host-request", wrapper)
+        request = wrapper["request"]
+        requests.append(request)
+        return response(request, {"kind": "scalar", "value": False})
+
+    client = SnapshotClient(exchange)
+    client.bind_tool_registry({})
+    source = description()
+    attachments = tuple(Path(f"/tmp/attachment-{index}.jsonl") for index in range(count))
+    session = RemoteSession(
+        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"], attachments=attachments
+    )
+
+    assert session.has_edit_to("src/**") is False
+    assert requests[0]["view"]["attachments"] == [str(path) for path in attachments]
+    assert len(requests) == 1
+
+
+def test_local_queries_do_not_send_registered_attachments():
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if request["operation"] == "activity_probe":
+            return response(
+                request,
+                {
+                    "kind": "activity_probe",
+                    "waiting": False,
+                    "reason": "no waiting tool",
+                    "tool_registry_generation": "fixture",
+                },
+            )
+        value = 1 if request["query"]["kind"] == "event_count" else True
+        return response(request, {"kind": "scalar", "value": value})
+
+    client = SnapshotClient(exchange)
+    client.bind_tool_registry({})
+    source = description()
+    attachments = tuple(Path(f"/tmp/attachment-{index}.jsonl") for index in range(918))
+    session = RemoteSession(
+        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"], attachments=attachments
+    )
+
+    assert len(session) == 1
+    assert session.has_edit_to("src/**", subagents=False) is True
+    assert session.activity_probe(waiting_tools=[], tool_registry_generation="fixture") is False
+    assert all(request["view"]["attachments"] == [] for request in requests)
+
+
+def test_deep_query_over_attachment_bound_is_incomplete_before_transport():
+    client = SnapshotClient(lambda _: pytest.fail("overbound view reached transport"))
+    client.bind_tool_registry({})
+    source = description()
+    attachments = tuple(Path(f"/tmp/attachment-{index}.jsonl") for index in range(MAX_VIEW_ATTACHMENTS + 1))
+    session = RemoteSession(
+        client, Lease(client, source), Path(source["canonical_path"]), source["classifier"], attachments=attachments
+    )
+
+    assert len(session.view()["attachments"]) == 0
+    with pytest.raises(AttachmentLimit, match="registered transcript attachments exceed 1024"):
+        session.has_edit_to("src/**")
+
+
+def test_real_owner_walks_918_distinct_attachments_with_one_graph_request(tmp_path):
+    from dataclasses import replace
+
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    source = tmp_path / "root.jsonl"
+    write_messages(source, raw_text("user", "root"))
+    attachments = tuple(tmp_path / f"attachment-{index}.jsonl" for index in range(918))
+    for path in attachments:
+        write_messages(path, raw_text("user", "attached"))
+    fixture = FixtureOwner()
+    try:
+        session = replace(fixture.load(source), attachments=attachments)
+        requests = []
+        exchange = fixture.client._exchange
+
+        def record(request):
+            requests.append(request["request"])
+            return exchange(request)
+
+        fixture.client._exchange = record
+        assert session.has_edit_to("src/**") is False
+        graph_requests = [request for request in requests if request["operation"] == "query"]
+        assert len(graph_requests) == 1
+        assert graph_requests[0]["view"]["attachments"] == [str(path) for path in attachments]
+        session.release()
+    finally:
+        fixture.close()
 
 
 def test_abandoned_page_releases_cursor_through_cleanup_exchange():

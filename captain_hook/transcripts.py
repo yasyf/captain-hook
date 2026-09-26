@@ -364,4 +364,4 @@ def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
                 assert entry.thread_id is not None
                 if (path := resolved[SessionId(entry.thread_id)]) is not None:
                     paths.append(path)
-    return tuple(paths)
+    return tuple(dict.fromkeys(paths))
