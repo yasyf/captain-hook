@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.go_toolchain
+
 ROOT = Path(__file__).parents[1]
 
 

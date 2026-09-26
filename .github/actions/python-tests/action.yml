@@ -5,6 +5,15 @@ inputs:
   python-version:
     description: Python version passed to setup-uv.
     required: true
+  shard-count:
+    description: Number of Python test shards.
+    default: "1"
+  shard-index:
+    description: Zero-based Python test shard index.
+    default: "0"
+  workers:
+    description: Number of pytest worker processes.
+    default: "0"
 
 runs:
   using: composite
@@ -41,17 +50,19 @@ runs:
       run: uv sync --locked --extra dev
 
     - name: Test shared evidence through the real Python owner pipe
-      if: runner.os == 'macOS'
+      if: runner.os == 'macOS' && inputs.shard-index == '0'
       shell: bash
       env:
         CAPTAIN_TEST_SNAPSHOT_PYTHON: ${{ github.workspace }}/.venv/bin/python
       run: go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
 
     - name: Test shared evidence fixtures
+      if: inputs.shard-index == '0'
       shell: bash
       run: uv run --no-sync pytest tests/test_snapshot_fixture_owner.py -q
 
     - name: Check generated snapshot schemas
+      if: inputs.shard-index == '0'
       shell: bash
       run: |
         uv run --no-sync python -m captain_hook.snapshots.schema internal/snapshots/schema --check
@@ -66,4 +77,8 @@ runs:
 
     - name: Test
       shell: bash
-      run: uv run --no-sync pytest
+      env:
+        CAPTAIN_CI_TEST_SHARD_COUNT: ${{ inputs.shard-count }}
+        CAPTAIN_CI_TEST_SHARD_INDEX: ${{ inputs.shard-index }}
+        CAPTAIN_CI_TEST_WORKERS: ${{ inputs.workers }}
+      run: uv run --no-sync pytest -n "$CAPTAIN_CI_TEST_WORKERS" --durations=20

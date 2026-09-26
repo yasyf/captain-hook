@@ -71,18 +71,31 @@ jobs:
       matrix:
         python-version: ["3.13"]
         os: [ubuntu-latest, macos-15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        exclude:
+          - {os: macos-15, shard: 2}
+          - {os: macos-15, shard: 3}
+          - {os: macos-15, shard: 4}
+          - {os: macos-15, shard: 5}
+          - {os: macos-15, shard: 6}
+          - {os: macos-15, shard: 7}
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
+        if: matrix.shard == 0
         with:
           go-version: 1.26.5
 
       - uses: ./.github/actions/python-tests
         with:
           python-version: ${{ matrix.python-version }}
+          shard-count: ${{ matrix.os == 'macos-15' && '2' || '8' }}
+          shard-index: ${{ matrix.shard }}
+          workers: ${{ matrix.os == 'macos-15' && '3' || '0' }}
 
       - name: Build + smoke-test wheel in a fresh venv
+        if: matrix.shard == 0
         run: |
           uv build
           rm -rf .wheel-smoke
