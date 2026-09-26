@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from collections.abc import Callable
@@ -11,7 +12,7 @@ import pytest
 import captain_hook
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
-from captain_hook.testing.helpers import input_to_event
+from captain_hook.testing.helpers import input_to_event, stubbed_commands
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
 from tests.helpers import raw_text, raw_tool_msg
@@ -693,3 +694,207 @@ def test_landing_nudge_stays_quiet_off_its_shape(
 def test_landing_nudge_needs_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert dispatch_command("gh pr view 42 --json state", gt_repo, tmp_path) is None
+
+
+ENQUEUED = "37768ef4"
+QUEUE_STATUS = "ccx vcs pr status"
+PR_LOOKUP = "gh api graphql"
+STACK_LIST = "ccx vcs stack list"
+
+
+def queue_report(number: int, queue: str, enqueued: str | None = None) -> dict[str, Any]:
+    return {"number": number, "queue": queue, "state": "OPEN", "base": "dev"} | (
+        {"enqueued": enqueued} if enqueued else {}
+    )
+
+
+def pr_lookup(*numbers: int | None) -> str:
+    nodes = {f"b{index}": {"nodes": [{"number": number}] if number else []} for index, number in enumerate(numbers)}
+    return json.dumps({"data": {"repository": nodes}})
+
+
+def stack_list(*branches: str, current: str, restack: frozenset[str] = frozenset()) -> str:
+    return json.dumps(
+        {
+            "branches": [
+                {"branch": branch, "current": branch == current, "needs_restack": branch in restack}
+                for branch in branches
+            ]
+        }
+    )
+
+
+def queued_repo(tmp_path: Path, *branches: str) -> tuple[Path, dict[str, str]]:
+    repo = real_gt_repo(tmp_path, None)
+    git = ["git", "-C", str(repo)]
+    heads = {}
+    for branch in branches:
+        subprocess.run([*git, "checkout", "-q", "-b", branch], check=True)
+        subprocess.run(
+            [*git, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", branch],
+            check=True,
+        )
+        heads[branch] = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    return repo, heads
+
+
+def dispatch_stubbed(command: str, repo: Path, tmp_path: Path, commands: dict[str, str]) -> dict[str, Any] | None:
+    with stubbed_commands(commands):
+        return dispatch_command(command, repo, tmp_path)
+
+
+@pytest.mark.parametrize("command", ["git push", "git push origin feat", "git push -u origin HEAD", "ccx vcs push"])
+def test_a_push_to_a_queued_pr_is_denied(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
+    result = dispatch_stubbed(command, repo, tmp_path, commands)
+    assert_fires(result, "deny", f"#26315 (`feat`) at `{ENQUEUED}`")
+    assert_fires(result, "deny", "ccx vcs stack new <name>")
+
+
+def test_a_ship_onto_a_queued_pr_is_denied_even_at_the_enqueued_head(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    """Ship commits before it pushes, so the branch's head at hook time is not what reaches the remote."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, heads = queued_repo(tmp_path, "feat")
+    commands = {
+        STACK_LIST: stack_list("feat", current="feat"),
+        PR_LOOKUP: pr_lookup(26315),
+        QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"][:8])]),
+    }
+    assert_fires(dispatch_stubbed('ccx vcs ship -m "fix"', repo, tmp_path, commands), "deny", "#26315")
+
+
+def test_a_push_to_a_pr_not_queued_is_allowed(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    for report in [queue_report(26315, "not queued"), queue_report(26315, "landed")]:
+        commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([report])}
+        assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+def test_a_push_of_the_enqueued_head_is_allowed(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, heads = queued_repo(tmp_path, "feat")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"])])}
+    assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+def test_the_stacked_pr_recipe_is_allowed_over_a_queued_parent(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    """The recipe the denial names: the parent rides the child's downstack push unchanged, at its enqueued head."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, heads = queued_repo(tmp_path, "feat", "follow-up")
+    commands = {
+        STACK_LIST: stack_list("feat", "follow-up", current="follow-up"),
+        PR_LOOKUP: pr_lookup(26315, None),
+        QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"][:8])]),
+    }
+    assert_not_denied(dispatch_stubbed('ccx vcs ship -m "fix"', repo, tmp_path, commands))
+
+
+@pytest.mark.parametrize("command", ["git push # ccx:raw", "ccx vcs ship -m x  # ccx:raw"])
+def test_the_raw_marker_pushes_to_a_queued_pr(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    commands = {
+        STACK_LIST: stack_list("feat", current="feat"),
+        PR_LOOKUP: pr_lookup(26315),
+        QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)]),
+    }
+    assert_not_denied(dispatch_stubbed(command, repo, tmp_path, commands))
+
+
+def test_the_raw_env_pushes_to_a_queued_pr(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    monkeypatch.setenv("CAPT_HOOK_CCX_RAW", "1")
+    repo, _ = queued_repo(tmp_path, "feat")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
+    assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+@pytest.mark.parametrize(
+    "commands",
+    [
+        pytest.param({PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: 'unknown command "pr" for "ccx vcs"'}, id="status"),
+        pytest.param({PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: "[]"}, id="status-empty"),
+        pytest.param({PR_LOOKUP: "HTTP 502"}, id="lookup"),
+    ],
+)
+def test_a_failed_queue_check_allows_the_push(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, commands: dict[str, str]
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+def test_the_queue_check_needs_ccx(isolate_modules: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
+    assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+@pytest.mark.parametrize("command", ["ccx vcs stack submit", "gt submit", "gt ss"])
+def test_a_stack_submit_is_denied_on_its_one_queued_branch(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "base", "feat")
+    commands = {
+        STACK_LIST: stack_list("base", "feat", current="base"),
+        PR_LOOKUP: pr_lookup(26314, 26315),
+        QUEUE_STATUS: json.dumps([queue_report(26314, "not queued"), queue_report(26315, "queued", ENQUEUED)]),
+    }
+    result = dispatch_stubbed(command, repo, tmp_path, commands)
+    assert_fires(result, "deny", f"#26315 (`feat`) at `{ENQUEUED}`")
+    assert result is not None
+    assert "#26314" not in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_stack_submit_that_replays_a_queued_branch_is_denied(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    """A branch the submit restacks first reaches the remote at a new head, whatever it reads now."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, heads = queued_repo(tmp_path, "feat")
+    commands = {
+        PR_LOOKUP: pr_lookup(26315),
+        QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"])]),
+    }
+    assert_not_denied(
+        dispatch_stubbed(
+            "ccx vcs stack submit", repo, tmp_path, commands | {STACK_LIST: stack_list("feat", current="feat")}
+        )
+    )
+    restacked = commands | {STACK_LIST: stack_list("feat", current="feat", restack=frozenset({"feat"}))}
+    assert_fires(dispatch_stubbed("ccx vcs stack submit", repo, tmp_path, restacked), "deny", "#26315")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("git commit --allow-empty -m next && git push origin feat", id="commit-then-push"),
+        pytest.param("git push --all origin", id="all"),
+        pytest.param("git push origin :", id="matching"),
+        pytest.param("git push --tags origin feat", id="tags-and-branch"),
+    ],
+)
+def test_pushes_the_hook_must_not_read_as_no_ops(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, heads = queued_repo(tmp_path, "feat")
+    enqueued = heads["feat"] if command.startswith("git commit") else ENQUEUED
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", enqueued)])}
+    assert_fires(dispatch_stubbed(command, repo, tmp_path, commands), "deny", "#26315")

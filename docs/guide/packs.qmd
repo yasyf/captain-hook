@@ -31,7 +31,7 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   Neither can a marker on a repo Graphite has no access to: with ccx on PATH the pack reads
   `ccx vcs lane --json` and stands down wherever ccx reports a lane other than `gt`, five-minute
   cached per repository so a linked worktree and its main checkout read one verdict.
-  None of its hooks refuse a command. A jj write gets a note saying the repository's stack lives in
+  One hook refuses a command; the rest note or rewrite. A jj write gets a note saying the repository's stack lives in
   Graphite; read-only `jj` commands (`log`, `status`, `diff`, `bookmark list`, …) get none when
   *every* `jj` call on the line is a read. Raw `git commit`/`git push`/branch writes get a note
   naming `ccx vcs ship`/`ccx vcs stack new`. Its pre-submit review reminder quiets once a cc-review
@@ -50,7 +50,13 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   `CAPT_HOOK_CCX_RAW=1` for the session, to run it as written and silence the note. With ccx
   on PATH, a `gh pr view --json` query for landing fields warns and names `ccx vcs pr status <n>`
   (ccx 0.64.1 or later) or `ccx vcs status`; the warning quiets after either command runs this
-  session.
+  session. The one refusal is a push to a PR the Graphite merge queue holds. With ccx on PATH,
+  `git push`, `ccx vcs push`, `ccx vcs ship`, `ccx vcs stack submit`, and `gt submit` look up
+  each pushed branch's open PR and read their queue state in one `ccx vcs pr status --json` call.
+  A queued PR that receives any head but the commit the queue admitted is refused. The queue
+  lands that commit and drops the rest, so the refusal names `ccx vcs stack new <name>` and
+  `ccx vcs ship` to put the change in a stacked PR instead. `# ccx:raw` or `CAPT_HOOK_CCX_RAW=1`
+  pushes anyway, and a lookup that fails or times out allows the push.
 
 Two more activate by language, detected from the repo's build manifests:
 
