@@ -26,6 +26,7 @@ CORE_SCHEMA = "cc-transcript.snapshot/1"
 HOST_SCHEMA = "captain.transcript/1"
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
+MAX_VIEW_ATTACHMENTS = 1024
 CLEANUP_SECONDS = 5
 DEFAULT_LIMITS = {
     "max_read_bytes": 512 * 1024 * 1024,
@@ -48,6 +49,11 @@ class EvidenceIncomplete(RuntimeError):
 class SnapshotProtocolError(EvidenceIncomplete):
     def __init__(self, reason: str) -> None:
         super().__init__("invalid_request", reason)
+
+
+class AttachmentLimit(EvidenceIncomplete):
+    def __init__(self) -> None:
+        super().__init__("source_limit", f"registered transcript attachments exceed {MAX_VIEW_ATTACHMENTS}")
 
 
 def encode_frame(message: Mapping[str, object]) -> bytes:
@@ -383,12 +389,15 @@ class RemoteSession:
     selectors: tuple[Mapping[str, object], ...] = ()
     attachments: tuple[Path, ...] = ()
 
-    def view(self) -> dict[str, object]:
+    def view(self, *, deep: bool = False) -> dict[str, object]:
+        attachments = self.attachments if deep else ()
+        if len(attachments) > MAX_VIEW_ATTACHMENTS:
+            raise AttachmentLimit()
         return {
             "handle": self.lease.require(),
             "classifier": dict(self.classifier),
             "selectors": [dict(s) for s in self.selectors],
-            "attachments": [str(p) for p in self.attachments],
+            "attachments": [str(p) for p in attachments],
         }
 
     def selected(self, **selector: object) -> RemoteSession:
@@ -453,7 +462,11 @@ class RemoteSession:
 
     def query(self, query: Mapping[str, object]) -> Any:
         values: list[Any] = []
-        for data in self.client.pages("query", view=self.view(), query=dict(query)):
+        deep = query.get("subagents") is True or query["kind"] in {
+            "deep_predicate_inputs",
+            "sidechain_membership",
+        }
+        for data in self.client.pages("query", view=self.view(deep=deep), query=dict(query)):
             match data.get("kind"):
                 case "scalar":
                     values.append(data["value"])

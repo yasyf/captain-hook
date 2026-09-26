@@ -13,7 +13,7 @@ import pytest
 
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO, bound_buffers
-from captain_hook.snapshots.client import EvidenceIncomplete
+from captain_hook.snapshots.client import AttachmentLimit, EvidenceIncomplete
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest
 from captain_hook.worker.runtime import ProductRuntime
@@ -231,6 +231,22 @@ def test_snapshot_capacity_failure_allows_hook_without_traceback(status: str) ->
         registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
     )
     response, after = runtime.dispatch(request())
+
+    assert after is None
+    assert response.status == "ok"
+    assert response.exit == 0
+    assert response.stdout == ""
+    assert response.stderr == ""
+
+
+def test_attachment_bound_failure_allows_hook_without_traceback() -> None:
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        raise AttachmentLimit()
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, after = runtime.dispatch(request(event="Stop"))
 
     assert after is None
     assert response.status == "ok"

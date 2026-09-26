@@ -18,7 +18,7 @@ from captain_hook.daemon.context import RequestBuffers, capture_output, request_
 from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import envelope_text
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT, AttachmentLimit, EvidenceIncomplete
 from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
@@ -122,11 +122,16 @@ class ProductRuntime:
             except SystemExit as exc:
                 return self._response(buffers, exit_code=_exit_code(exc.code)), None
             except EvidenceIncomplete as exc:
-                if exc.status not in {"retained_limit", "lease_limit"}:
-                    buffers.stderr.write(traceback.format_exc())
-                    return self._response(buffers, status="error", exit_code=1), None
-                logger.bind(status=exc.status, reason=exc.reason).warning("snapshot admission saturated")
-                return EventResponse(), None
+                if isinstance(exc, AttachmentLimit):
+                    logger.bind(status=exc.status, reason=exc.reason).warning(
+                        "registered transcript attachment bound exceeded"
+                    )
+                    return EventResponse(), None
+                if exc.status in {"retained_limit", "lease_limit"}:
+                    logger.bind(status=exc.status, reason=exc.reason).warning("snapshot admission saturated")
+                    return EventResponse(), None
+                buffers.stderr.write(traceback.format_exc())
+                return self._response(buffers, status="error", exit_code=1), None
             except Exception:
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
@@ -206,6 +211,9 @@ def _run_detached(background: Background) -> None:
             try:
                 background()
             except EvidenceIncomplete as exc:
+                if isinstance(exc, AttachmentLimit):
+                    logger.bind(status=exc.status, reason=exc.reason).warning("post-reply attachment bound exceeded")
+                    return
                 if exc.status in {"retained_limit", "lease_limit"}:
                     logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot admission saturated")
                     return

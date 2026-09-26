@@ -290,6 +290,17 @@ class TestRegisteredPaths:
         assert discovery_client.requests[0]["session_ids"] == ids
         assert discovery_client.released == []
 
+    def test_deduplicates_owner_canonical_paths(self, tmp_path, discovery_client):
+        register_transcript("s-aliases", thread_id="first")
+        register_transcript("s-aliases", path=str(tmp_path / "alias.jsonl"))
+        register_transcript("s-aliases", thread_id="second")
+        canonical = tmp_path / "canonical.jsonl"
+        discovery_client.results = {"first": canonical, "second": canonical}
+        discovery_client.paths[str(tmp_path / "alias.jsonl")] = canonical
+
+        assert registered_paths(ensure_session(SessionId("s-aliases"))) == (canonical,)
+        assert discovery_client.released == [str(tmp_path / "alias.jsonl")]
+
     def test_batches_only_beyond_locate_request_bound(self, tmp_path, discovery_client):
         ids = [SessionId(f"session-{i}") for i in range(1025)]
         assert resolved_transcript_paths(discovery_client, ids, roots=[tmp_path]) == dict.fromkeys(ids)
