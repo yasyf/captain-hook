@@ -4,7 +4,8 @@ fragments = [
   "docs-build-middle-1",
   "cc-skills:docs-build-sync",
   "docs-build-middle-2",
-  "cc-skills:docs-build-tail",
+  "cc-skills:docs-build-fast-tail",
+  "cc-skills:docs-quality-jobs",
   "cc-skills:docs-publish",
 ]
 
