@@ -726,6 +726,70 @@
       "title": "ListPredicate",
       "type": "object"
     },
+    "Locate": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "locate",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "session_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "minItems": 1,
+          "title": "Session Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "session_ids",
+        "roots"
+      ],
+      "title": "Locate",
+      "type": "object"
+    },
     "MessageCount": {
       "additionalProperties": false,
       "properties": {
@@ -1783,6 +1847,7 @@
       "describe": "#/$defs/Describe",
       "discover": "#/$defs/Discover",
       "hydrate": "#/$defs/Hydrate",
+      "locate": "#/$defs/Locate",
       "mine": "#/$defs/Mine",
       "query": "#/$defs/QueryRequest",
       "release": "#/$defs/Release",
@@ -1800,6 +1865,9 @@
     },
     {
       "$ref": "#/$defs/Resolve"
+    },
+    {
+      "$ref": "#/$defs/Locate"
     },
     {
       "$ref": "#/$defs/Discover"

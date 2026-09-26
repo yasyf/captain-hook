@@ -377,6 +377,7 @@
               "discovered": "#/$defs/Core_Discovered",
               "hydrated": "#/$defs/Core_Hydrated",
               "loading": "#/$defs/Core_Loading",
+              "located": "#/$defs/Core_Located",
               "records": "#/$defs/Core_RecordsResult",
               "released": "#/$defs/Core_Released",
               "renewed": "#/$defs/Core_Renewed",
@@ -396,6 +397,9 @@
             },
             {
               "$ref": "#/$defs/Core_Resolved"
+            },
+            {
+              "$ref": "#/$defs/Core_Located"
             },
             {
               "$ref": "#/$defs/Core_Discovered"
@@ -1246,6 +1250,7 @@
                   "discovered": "#/$defs/Core_Discovered",
                   "hydrated": "#/$defs/Core_Hydrated",
                   "loading": "#/$defs/Core_Loading",
+                  "located": "#/$defs/Core_Located",
                   "records": "#/$defs/Core_RecordsResult",
                   "released": "#/$defs/Core_Released",
                   "renewed": "#/$defs/Core_Renewed",
@@ -1265,6 +1270,9 @@
                 },
                 {
                   "$ref": "#/$defs/Core_Resolved"
+                },
+                {
+                  "$ref": "#/$defs/Core_Located"
                 },
                 {
                   "$ref": "#/$defs/Core_Discovered"
@@ -1476,6 +1484,149 @@
         "reservation"
       ],
       "title": "Loading",
+      "type": "object"
+    },
+    "Core_Locate": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Core_Limits"
+        },
+        "operation": {
+          "const": "locate",
+          "title": "Operation",
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Roots",
+          "type": "array"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "session_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "minItems": 1,
+          "title": "Session Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "session_ids",
+        "roots"
+      ],
+      "title": "Locate",
+      "type": "object"
+    },
+    "Core_Located": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "located",
+          "title": "Kind",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/Core_Location"
+          },
+          "maxItems": 1024,
+          "title": "Sessions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "sessions"
+      ],
+      "title": "Located",
+      "type": "object"
+    },
+    "Core_Location": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Path"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Revision"
+        },
+        "session_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "missing",
+            "incomplete"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "status",
+        "path",
+        "revision"
+      ],
+      "title": "Location",
       "type": "object"
     },
     "Core_MessageCount": {
@@ -3226,6 +3377,7 @@
                   "discovered": "#/$defs/Core_Discovered",
                   "hydrated": "#/$defs/Core_Hydrated",
                   "loading": "#/$defs/Core_Loading",
+                  "located": "#/$defs/Core_Located",
                   "records": "#/$defs/Core_RecordsResult",
                   "released": "#/$defs/Core_Released",
                   "renewed": "#/$defs/Core_Renewed",
@@ -3245,6 +3397,9 @@
                 },
                 {
                   "$ref": "#/$defs/Core_Resolved"
+                },
+                {
+                  "$ref": "#/$defs/Core_Located"
                 },
                 {
                   "$ref": "#/$defs/Core_Discovered"
@@ -3377,6 +3532,7 @@
                       "discovered": "#/$defs/Core_Discovered",
                       "hydrated": "#/$defs/Core_Hydrated",
                       "loading": "#/$defs/Core_Loading",
+                      "located": "#/$defs/Core_Located",
                       "records": "#/$defs/Core_RecordsResult",
                       "released": "#/$defs/Core_Released",
                       "renewed": "#/$defs/Core_Renewed",
@@ -3396,6 +3552,9 @@
                     },
                     {
                       "$ref": "#/$defs/Core_Resolved"
+                    },
+                    {
+                      "$ref": "#/$defs/Core_Located"
                     },
                     {
                       "$ref": "#/$defs/Core_Discovered"

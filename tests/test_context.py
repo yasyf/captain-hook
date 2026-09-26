@@ -87,7 +87,7 @@ class TestSessionManagement:
         cleanup_stale()
         assert sd.is_dir()
         assert discovery_client.requests[0]["roots"] == [str(CLAUDE_PROJECTS_DIR), str(sessions_root())]
-        assert discovery_client.released == [SESSION_ID]
+        assert discovery_client.released == []
 
     def test_cleanup_stale_excludes_current_session(self, tmp_path, monkeypatch, discovery_client):
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
@@ -119,7 +119,7 @@ class TestSessionManagement:
         with pytest.raises(EvidenceIncomplete):
             cleanup_stale()
         assert all(sd.is_dir() for sd in dirs)
-        assert [len(request["session_ids"]) for request in discovery_client.requests] == [256, 1]
+        assert [len(request["session_ids"]) for request in discovery_client.requests] == [257]
 
     def test_cleanup_stale_has_production_call_site(self) -> None:
         import re
