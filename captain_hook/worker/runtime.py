@@ -48,6 +48,7 @@ FAIL_OPEN_EVIDENCE_STATUSES = frozenset(
         "deadline",
         "cancelled",
         "changed",
+        "missing",
         "retained_limit",
         "lease_limit",
     }

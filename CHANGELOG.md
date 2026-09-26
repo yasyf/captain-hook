@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Missing transcript evidence no longer breaks prompt hooks.** A
+  `UserPromptSubmit` hook whose transcript path is absent now allows the prompt
+  without a Python traceback and records the typed `missing` status in its log.
 - **Transcript-heavy hooks now share bounded evidence and warm it in the background.**
   A hook prepares one graph for its conditions, reuses it across synchronous and
   background work, and returns without a traceback when evidence is incomplete.
