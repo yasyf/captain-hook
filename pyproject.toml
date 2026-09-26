@@ -82,6 +82,9 @@ build-backend = "hatchling.build"
 [tool.uv]
 environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
 
+[tool.uv.sources]
+great-docs = { git = "https://github.com/yasyf/great-docs", rev = "2a9315baf34a4c90f3512a2199215fe1b8755ff4" }
+
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"
 
