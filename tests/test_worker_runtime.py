@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.metadata
 import io
+import json
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,12 +31,13 @@ class Snapshot:
 
 
 class FakeRegistry:
-    def __init__(self) -> None:
+    def __init__(self, state: app.State | None = None) -> None:
         self.calls = 0
+        self.state = state or app.State()
 
     def get(self) -> Snapshot:
         self.calls += 1
-        return Snapshot(app.State())
+        return Snapshot(self.state)
 
 
 def request(*, request_id: int = 1, event: str = "PreToolUse", payload_raw: str = "{}") -> EventRequest:
@@ -256,7 +259,8 @@ def test_attachment_bound_failure_allows_hook_without_traceback() -> None:
 
 
 @pytest.mark.parametrize(
-    "status", ["incomplete", "source_limit", "entry_limit", "output_limit", "deadline", "cancelled", "changed"]
+    "status",
+    ["incomplete", "source_limit", "entry_limit", "output_limit", "deadline", "cancelled", "changed", "missing"],
 )
 def test_bounded_graph_evidence_fails_open_without_traceback(status: str) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
@@ -272,6 +276,63 @@ def test_bounded_graph_evidence_fails_open_without_traceback(status: str) -> Non
     assert response.exit == 0
     assert response.stdout == ""
     assert response.stderr == ""
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_user_prompt_transcript_missing_fails_open_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: bool
+) -> None:
+    from cc_transcript.query import Session
+
+    from captain_hook import Event, on
+
+    state = app.State()
+    seen = []
+    with app.use_state(state):
+
+        @on(Event.UserPromptSubmit)
+        def probe(evt):
+            seen.append("entered")
+            _ = evt.ctx.t
+            seen.append("loaded")
+
+    monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda *args: None)
+    monkeypatch.setattr("captain_hook.cli.after_reply", lambda *args: None)
+    transcript = tmp_path / "transcript.jsonl"
+    if not missing:
+        transcript.write_text("\n")
+
+    def load(path):
+        if not Path(path).is_file():
+            raise EvidenceIncomplete("missing", "No such file or directory (os error 2)")
+        return Session(())
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state),
+        transcript_loader=load,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    response, after = runtime.dispatch(
+        EventRequest(
+            id=1,
+            event="UserPromptSubmit",
+            root=str(tmp_path),
+            cwd=str(tmp_path),
+            env={"CLAUDE_PROJECT_DIR": str(tmp_path)},
+            payload_raw=json.dumps({"transcript_path": str(transcript), "prompt": "synthetic"}),
+            client_pid=os.getpid(),
+            client_ppid=os.getppid(),
+            deadline_unix_ms=int(time.time() * 1000) + 10_000,
+        )
+    )
+
+    assert response.status == "ok"
+    assert response.exit == 0
+    assert "Traceback" not in response.stderr
+    assert seen == (["entered"] if missing else ["entered", "loaded"])
+    if after is not None:
+        after()
 
 
 @pytest.mark.parametrize("status", ["invalid_request", "parse_error", "permission_denied", "stale_handle"])
@@ -305,8 +366,6 @@ def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
     assert response.exit == 0
     assert after is not None
     after()
-
-
 
 
 @pytest.mark.parametrize("status", ["stale_handle", "stale_cursor"])
