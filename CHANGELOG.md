@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The graphite pack refuses a push to a PR the merge queue holds.** With
+  ccx on PATH, the pack resolves each branch that `git push`, `ccx vcs
+  push`, `ccx vcs ship`, `ccx vcs stack submit`, or `gt submit` pushes to its
+  open PR. One `ccx vcs pr status --json` call then reads the queue state of
+  all of them. A branch the queue holds is refused unless its pushed head is
+  the commit the queue admitted, since the queue lands that commit and
+  silently drops anything pushed after it. The refusal names the PR and its enqueued commit
+  and gives the stacked-PR route: `ccx vcs stack new <name>`, then `ccx vcs
+  ship`. `# ccx:raw` or `CAPT_HOOK_CCX_RAW=1` pushes anyway, and a failed or
+  timed-out lookup allows the push and logs why.
+
 ### Fixed
 
 - **Missing transcript evidence no longer breaks prompt hooks.** A
