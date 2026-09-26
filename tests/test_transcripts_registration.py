@@ -279,14 +279,24 @@ class TestRegisteredPaths:
         )
         assert set(discovery_client.released) == {"a", "b", str(tmp_path / "alias.jsonl")}
 
-    def test_batches_ids_and_consumes_paginated_resolutions(self, tmp_path, discovery_client):
+    def test_batches_ids_and_consumes_paginated_resolutions(self, tmp_path, discovery_client, monkeypatch):
         ids = [f"session-{i}" for i in range(257)]
         for session_id in ids:
             register_transcript("s-many", thread_id=session_id)
         discovery_client.results = {session_id: tmp_path / f"{session_id}.jsonl" for session_id in ids}
         discovery_client.page_size = 17
+        live_leases = []
+        release = discovery_client.call
+
+        def track_release(operation, **arguments):
+            live_leases.append(len(discovery_client._leases))
+            return release(operation, **arguments)
+
+        monkeypatch.setattr(discovery_client, "call", track_release)
         assert registered_paths(ensure_session(SessionId("s-many"))) == tuple(discovery_client.results.values())
-        assert [len(request["session_ids"]) for request in discovery_client.requests] == [256, 1]
+        assert [len(request["session_ids"]) for request in discovery_client.requests] == [16] * 16 + [1]
+        assert max(live_leases) == 16
+        assert discovery_client._leases == set()
         assert set(discovery_client.released) == set(ids)
 
     def test_owner_is_consulted_again_after_a_prior_missing_result(self, tmp_path, discovery_client):
@@ -370,7 +380,7 @@ class TestRegisteredPaths:
         monkeypatch.setattr(discovery_client, "call", fail_one)
         with pytest.raises(EvidenceIncomplete, match="release fixture"):
             registered_paths(ensure_session(SessionId("s-release")))
-        assert discovery_client.released == ["b", "a"]
+        assert discovery_client.released == ["a", "b", "b"]
 
 
 class TestLocatorValidation:
@@ -480,4 +490,4 @@ def test_dispatch_reuses_registered_paths_between_sync_and_background(tmp_path, 
     updated = (tmp_path / "first.jsonl", tmp_path / "later.jsonl")
     assert seen == [initial, initial, updated, updated]
     assert len(discovery_client.requests) == 2
-    assert discovery_client.released == ["second", "first"] * 2
+    assert discovery_client.released == ["first", "second"] * 2
