@@ -305,7 +305,7 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 docs = [
-    { name = "great-docs", specifier = ">=0.15,<0.16" },
+    { name = "great-docs", git = "https://github.com/yasyf/great-docs?rev=2a9315baf34a4c90f3512a2199215fe1b8755ff4" },
     { name = "griffelib", specifier = ">=2.0" },
 ]
 
@@ -671,8 +671,8 @@ wheels = [
 
 [[package]]
 name = "great-docs"
-version = "0.15.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.15.1.dev1+g2a9315baf"
+source = { git = "https://github.com/yasyf/great-docs?rev=2a9315baf34a4c90f3512a2199215fe1b8755ff4#2a9315baf34a4c90f3512a2199215fe1b8755ff4" }
 dependencies = [
     { name = "click" },
     { name = "griffe" },
@@ -682,10 +682,6 @@ dependencies = [
     { name = "pygments" },
     { name = "requests" },
     { name = "ruff" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/25/37/3466f0064353554c5be4a70e29e946dac090c1ad614b00447148d86d22f2/great_docs-0.15.0.tar.gz", hash = "sha256:2fd4c8843723c913b70960aaaf4ccf23c0b0c54aa59cb856422363dd5d54baf1", size = 31035297, upload-time = "2026-07-10T18:31:02.618Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6f/dd/c7460a23ae0a2483c6fd320bfd600dbc0ca802f4be0823cc8a775ad5c18e/great_docs-0.15.0-py3-none-any.whl", hash = "sha256:98ad7d9140fc90328db0638e16d6004e29717b372e063ca9cb38568662829a91", size = 980201, upload-time = "2026-07-10T18:31:00.767Z" },
 ]
 
 [[package]]
