@@ -335,6 +335,7 @@ def test_foreground_graph_latency_stays_bounded_while_registry_warms(tmp_path, m
         p95 = sorted(samples)[28]
         print(f"prepared graph foreground p95_ms={p95 * 1000:.1f}")
         assert p95 < 1.0
+        monkeypatch.setattr("captain_hook.snapshots.client.GRAPH_WORK_SECONDS", 3.0)
         requests = []
         exchange = fixture.client._exchange
 

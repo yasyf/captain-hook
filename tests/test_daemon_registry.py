@@ -151,6 +151,13 @@ def test_unchanged_root_walks_for_language_markers_once(project: CliState, monke
     assert walks == []
 
 
+def test_home_root_skips_language_marker_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(manager.os, "walk", lambda *args, **kwargs: pytest.fail("home root was walked"))
+    assert registry._language_markers(tmp_path, fresh=True) == ()
+    assert manager.active_builtins(tmp_path) == ("fixes", "general", "graphite", "performance", "steering")
+
+
 def test_nested_language_marker_lands_within_the_ttl(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     (nested := project.root / "services" / "api").mkdir(parents=True)
     before = fp(project)
