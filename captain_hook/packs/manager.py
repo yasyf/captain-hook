@@ -268,6 +268,8 @@ def detect_languages(root: Path) -> frozenset[str]:
     file is itself checked against the accumulated spec, so an individually-ignored ``go.mod`` never
     counts. Each language short-circuits on its first surviving marker; the walk stops once all are found.
     """
+    if root == Path.home():
+        return frozenset()
     pending = dict(LANGUAGE_MARKERS)
     found: set[str] = set()
     specs: dict[str, GitIgnoreSpec | None] = {}
