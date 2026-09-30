@@ -2,11 +2,158 @@ package hookd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yasyf/captain-hook/internal/wireproto"
+	"github.com/yasyf/daemonkit"
 )
+
+const (
+	destructivePayload = `{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}`
+	benignPayload      = `{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"git status"}}`
+)
+
+type scriptedClient struct {
+	response wireproto.EventResponse
+	err      error
+	requests []wireproto.EventRequest
+}
+
+func (c *scriptedClient) Event(_ context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
+	c.requests = append(c.requests, request)
+	return c.response, c.err
+}
+
+func (c *scriptedClient) Close() error { return nil }
+
+func scriptClient(t *testing.T, client *scriptedClient, open error) {
+	t.Helper()
+	previous := openEventClient
+	openEventClient = func() (eventClient, error) {
+		if open != nil {
+			return nil, open
+		}
+		return client, nil
+	}
+	t.Cleanup(func() { openEventClient = previous })
+}
+
+func runEvent(t *testing.T, event, payload string) (int, string, string) {
+	t.Helper()
+	t.Setenv("CLAUDE_PROJECT_DIR", "/project")
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"run", event}, strings.NewReader(payload), &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestRunDeniesAMandatoryEventTheGuardDidNotComplete(t *testing.T) {
+	refused := errors.Join(fmt.Errorf("captain: %w", daemonkit.ErrAbsent), context.DeadlineExceeded)
+	for _, tc := range []struct {
+		name, event, kind string
+		open              error
+		client            scriptedClient
+	}{
+		{"host unavailable", "PreToolUse", "host-unavailable",
+			errors.New("captain: open signed host: /Users/x/Captain Hook.app is not installed"), scriptedClient{}},
+		{"refused until the deadline", "PreToolUse", "transport-refused", nil, scriptedClient{err: refused}},
+		{"timed out", "PreToolUse", "transport-timeout", nil, scriptedClient{err: context.DeadlineExceeded}},
+		{"other transport error", "PreToolUse", "transport-error", nil,
+			scriptedClient{err: errors.New("captain: decode event response: boom")}},
+		{"worker error", "PreToolUse", "worker-error", nil, scriptedClient{response: wireproto.EventResponse{
+			Schema: wireproto.Schema, Status: "error", Stderr: "Traceback /Users/x/secret.py\n", Exit: 1,
+		}}},
+		{"shed", "PreToolUse", "shed", nil, scriptedClient{response: shedResponse(3, 4*time.Second, time.Second)}},
+		{"no verdict", "PreToolUse", "no-verdict", nil,
+			scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"}}},
+		{"permission request", "PermissionRequest", "no-verdict", nil,
+			scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := tc.client
+			scriptClient(t, &client, tc.open)
+			code, stdout, stderr := runEvent(t, tc.event, destructivePayload)
+			if want := wireproto.DenyEnvelope(tc.event, tc.kind) + "\n"; code != 0 || stdout != want {
+				t.Fatalf("exit=%d stdout=%q, want exit 0 with %q", code, stdout, want)
+			}
+			if !strings.Contains(stderr, "("+tc.kind+")") || strings.Contains(stderr, "/Users") ||
+				strings.Contains(stderr, "boom") || strings.Contains(stderr, "Traceback") {
+				t.Fatalf("stderr = %q, want the kind alone", stderr)
+			}
+			if tc.open == nil && (len(client.requests) != 1 || !client.requests[0].Mandatory) {
+				t.Fatalf("requests = %+v, want one mandatory request", client.requests)
+			}
+		})
+	}
+}
+
+func TestRunPassesACompletedGuardThroughUnchanged(t *testing.T) {
+	deny := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",` +
+		`"permissionDecisionReason":"BLOCKED: pkill signals every process matching a name"}}` + "\n"
+	for name, tc := range map[string]struct {
+		response       wireproto.EventResponse
+		stdout, stderr string
+	}{
+		"empty allow": {wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Guard: wireproto.GuardCompleted}, "", ""},
+		"the guard's own deny": {wireproto.EventResponse{
+			Schema: wireproto.Schema, Status: "ok", Stdout: deny, Guard: wireproto.GuardCompleted,
+		}, deny, ""},
+		"a sibling's stderr": {wireproto.EventResponse{
+			Schema: wireproto.Schema, Status: "ok", Stderr: "warned\n", Guard: wireproto.GuardCompleted,
+		}, "", "warned\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scriptClient(t, &scriptedClient{response: tc.response}, nil)
+			code, stdout, stderr := runEvent(t, "PreToolUse", destructivePayload)
+			if code != 0 || stdout != tc.stdout || stderr != tc.stderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q, want 0 %q %q", code, stdout, stderr, tc.stdout, tc.stderr)
+			}
+		})
+	}
+}
+
+func TestRunKeepsNonMandatoryOutcomesAsTheyWere(t *testing.T) {
+	shed := shedResponse(3, 4*time.Second, time.Second)
+	for _, tc := range []struct {
+		name, event, payload string
+		open                 error
+		client               scriptedClient
+		code                 int
+		stdout, stderr       string
+	}{
+		{"host unavailable", "PreToolUse", benignPayload, errors.New("captain: open signed host: absent"),
+			scriptedClient{}, 1, "", "captain: open signed host: absent\n"},
+		{"transport error", "PreToolUse", benignPayload, nil,
+			scriptedClient{err: errors.New("captain: decode event response: boom")}, 1, "",
+			"captain: decode event response: boom\n"},
+		{"worker error", "PreToolUse", benignPayload, nil, scriptedClient{response: wireproto.EventResponse{
+			Schema: wireproto.Schema, Status: "error", Stderr: "Traceback\n", Exit: 1,
+		}}, 1, "", "Traceback\n"},
+		{"shed", "PreToolUse", benignPayload, nil, scriptedClient{response: shed}, 0, "", shed.Stderr},
+		{"no guard", "PreToolUse", benignPayload, nil,
+			scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "{}\n"}},
+			0, "{}\n", ""},
+		{"destructive payload outside the guarded events", "PostToolUse", destructivePayload, nil,
+			scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"}}, 0, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := tc.client
+			scriptClient(t, &client, tc.open)
+			code, stdout, stderr := runEvent(t, tc.event, tc.payload)
+			if code != tc.code || stdout != tc.stdout || stderr != tc.stderr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q, want %d %q %q", code, stdout, stderr, tc.code, tc.stdout, tc.stderr)
+			}
+			if tc.open == nil && (len(client.requests) != 1 || client.requests[0].Mandatory) {
+				t.Fatalf("requests = %+v, want one non-mandatory request", client.requests)
+			}
+		})
+	}
+}
 
 func TestMainRejectsUnknownCommandsWithoutPassThrough(t *testing.T) {
 	t.Parallel()

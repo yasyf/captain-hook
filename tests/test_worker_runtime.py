@@ -16,6 +16,7 @@ import pytest
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO, bound_buffers
 from captain_hook.snapshots.client import AttachmentLimit, EvidenceIncomplete, GraphEvidenceExpired
+from captain_hook.types import Event, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest
 from captain_hook.worker.runtime import ProductRuntime
@@ -40,7 +41,9 @@ class FakeRegistry:
         return Snapshot(self.state)
 
 
-def request(*, request_id: int = 1, event: str = "PreToolUse", payload_raw: str = "{}") -> EventRequest:
+def request(
+    *, request_id: int = 1, event: str = "PreToolUse", payload_raw: str = "{}", mandatory: bool = False
+) -> EventRequest:
     return EventRequest(
         id=request_id,
         event=event,
@@ -51,6 +54,7 @@ def request(*, request_id: int = 1, event: str = "PreToolUse", payload_raw: str 
         client_pid=100,
         client_ppid=99,
         deadline_unix_ms=1_700_000_000_000,
+        mandatory=mandatory,
     )
 
 
@@ -117,6 +121,85 @@ def test_dispatch_writes_a_plain_text_envelope_verbatim() -> None:
     response, _ = runtime.dispatch(request(event="PreCompact"))
 
     assert response.stdout == "discovered out\nKeep the plan path.\n"
+
+
+def mandatory_hook(name: str, events: Event = Event.PreToolUse) -> RegisteredHook:
+    return RegisteredHook(spec=HookSpec(events=events, mandatory=True), name=name, source_file=f"/hooks/{name}.py")
+
+
+def runtime_with(state: app.State, complete: list[str]) -> ProductRuntime:
+    def dispatch(root: object, event: object, raw: object, **kwargs: object) -> tuple[None, object]:
+        for key in complete:
+            reqenv.note_mandatory_completed(key)
+        return None, lambda: None
+
+    return ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state),
+        dispatcher=dispatch,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+
+
+def test_guard_completes_once_every_mandatory_hook_for_the_event_ran() -> None:
+    state = app.State()
+    state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("second_guard")))
+    response, _ = runtime_with(state, [hook.state_key for hook in state.hooks]).dispatch(request(mandatory=True))
+    assert response.guard == "completed"
+    assert response.message()["guard"] == "completed"
+    assert response.stdout == "discovered out\n"
+
+
+def test_guard_is_reported_only_to_a_mandatory_request() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request())
+    assert response.guard == ""
+    assert "guard" not in response.message()
+
+
+@pytest.mark.parametrize(
+    ("hooks", "complete"),
+    [
+        ([], []),
+        (["guard_sessions"], []),
+        (["guard_sessions", "second_guard"], ["guard_sessions"]),
+    ],
+    ids=["no mandatory hook registered", "the guard never ran", "one of two guards ran"],
+)
+def test_guard_stays_empty_unless_every_mandatory_hook_completed(hooks: list[str], complete: list[str]) -> None:
+    state = app.State()
+    state.hooks.extend(mandatory_hook(name) for name in hooks)
+    completed = [hook.state_key for hook in state.hooks if hook.name in complete]
+    response, _ = runtime_with(state, completed).dispatch(request(mandatory=True))
+    assert response.guard == ""
+
+
+def test_guard_counts_only_the_mandatory_hooks_registered_for_the_event() -> None:
+    state = app.State()
+    state.hooks.extend((mandatory_hook("permission_guard", Event.PermissionRequest), mandatory_hook("guard_sessions")))
+    response, _ = runtime_with(state, [state.hooks[1].state_key]).dispatch(request(mandatory=True))
+    assert response.guard == "completed"
+    response, _ = runtime_with(state, [state.hooks[1].state_key]).dispatch(
+        request(event="PermissionRequest", mandatory=True)
+    )
+    assert response.guard == ""
+
+
+def test_guard_stays_empty_when_dispatch_fails() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        reqenv.note_mandatory_completed(state.hooks[0].state_key)
+        raise ValueError("broken hook")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, _ = runtime.dispatch(request(mandatory=True))
+    assert response.exit == 1
+    assert response.guard == ""
 
 
 def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) -> None:

@@ -327,7 +327,7 @@ func TestConformanceVerify(t *testing.T) {
 
 func TestEventReplyCarriesExactlyTheClientFields(t *testing.T) {
 	t.Parallel()
-	want := []string{"elapsed_ms", "exit", "schema", "status", "stderr", "stdout"}
+	want := []string{"elapsed_ms", "exit", "guard", "schema", "status", "stderr", "stdout"}
 	if got := wireFields(EventReply{}); !slices.Equal(got, want) {
 		t.Fatalf("EventReply fields = %v, want %v", got, want)
 	}

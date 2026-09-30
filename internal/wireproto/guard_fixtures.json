@@ -1,0 +1,200 @@
+[
+  {
+    "name": "incident: pkill then orca check",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "pkill -x sleep 2>/dev/null; sleep 0; orca orchestration check --peek --run run_7715a23a5657 --json 2>&1 | head -c 600; echo; echo rc=$?"}},
+    "mandatory": true
+  },
+  {
+    "name": "backslash inside the name",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "p\\kill node"}},
+    "mandatory": true
+  },
+  {
+    "name": "quoted name",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "'orca' terminal close"}},
+    "mandatory": true
+  },
+  {
+    "name": "bracketed name",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "[k]ill 14575"}},
+    "mandatory": true
+  },
+  {
+    "name": "json unicode escape in the name",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "\u006bill 14575"}},
+    "mandatory": true
+  },
+  {
+    "name": "kelvin sign spells kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "\u212aill -9 -1"}},
+    "mandatory": true
+  },
+  {
+    "name": "kelvin sign spells killall",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "\u212aillall claude"}},
+    "mandatory": true
+  },
+  {
+    "name": "long s spells shutdown",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "\u017fhutdown -h now"}},
+    "mandatory": true
+  },
+  {
+    "name": "long s inside fuser",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "fu\u017fer -k 3000/tcp"}},
+    "mandatory": true
+  },
+  {
+    "name": "dotted capital i spells ionice",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "\u0130onice -c 3 sleep 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "dotless i spells ionice",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "\u0131onice -c 3 sleep 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "nested mcp payload",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "mcp__x__call", "tool_input": {"opts": {"cmd": "orca terminal close --terminal term_x"}}},
+    "mandatory": true
+  },
+  {
+    "name": "program with argv list",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "mcp__runner__exec", "tool_input": {"command": "kill", "args": ["-9", "14575"]}},
+    "mandatory": true
+  },
+  {
+    "name": "argv list alone",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "mcp__runner__exec", "tool_input": {"command": ["pkill", "-x", "sleep"]}},
+    "mandatory": true
+  },
+  {
+    "name": "code payload",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "mcp__jupyter__run", "tool_input": {"code": "import os\nos.kill(14575, 9)"}},
+    "mandatory": true
+  },
+  {
+    "name": "monitor payload",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Monitor", "tool_input": {"command": "pkill -f poll", "description": "x", "timeout_ms": 1000}},
+    "mandatory": true
+  },
+  {
+    "name": "workflow script naming kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Workflow", "tool_input": {"script": "await agent({prompt: 'kill the dev server'})"}},
+    "mandatory": true
+  },
+  {
+    "name": "orca list is mandatory but healthy",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "orca terminal list --json"}},
+    "mandatory": true
+  },
+  {
+    "name": "echo pkill is mandatory but healthy",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "echo pkill -f never"}},
+    "mandatory": true
+  },
+  {
+    "name": "new workspace hotkey is mandatory but healthy",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "orca computer hotkey --app Orca --key CmdOrCtrl+N"}},
+    "mandatory": true
+  },
+  {
+    "name": "kill probe is mandatory but healthy",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "kill -0 14575"}},
+    "mandatory": true
+  },
+  {
+    "name": "permission request",
+    "event": "PermissionRequest",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "pkill -f \"pr-poll.sh Forge-AI/monorepo 28026\""}},
+    "mandatory": true
+  },
+  {
+    "name": "sudo reboot",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "sudo reboot"}},
+    "mandatory": true
+  },
+  {
+    "name": "mixed case name",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "Killall Orca"}},
+    "mandatory": true
+  },
+  {
+    "name": "git status",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "git status"}},
+    "mandatory": false
+  },
+  {
+    "name": "send message",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "SendMessage", "tool_input": {"to": "main", "message": "hello"}},
+    "mandatory": false
+  },
+  {
+    "name": "agent prompt",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Agent", "tool_input": {"prompt": "summarize", "description": "digest"}},
+    "mandatory": false
+  },
+  {
+    "name": "name inside a longer word",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "skillet --search killer_feature"}},
+    "mandatory": false
+  },
+  {
+    "name": "file edit",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Edit", "tool_input": {"file_path": "/w/notes.md", "old_string": "a", "new_string": "b"}},
+    "mandatory": false
+  },
+  {
+    "name": "pgrep only",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "mcp__runner__exec", "tool_input": {"cmd": "pgrep -f claude"}},
+    "mandatory": false
+  },
+  {
+    "name": "post tool use is never mandatory",
+    "event": "PostToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "pkill -x sleep"}, "tool_response": "done"},
+    "mandatory": false
+  },
+  {
+    "name": "stop is never mandatory",
+    "event": "Stop",
+    "payload": {"session_id": "s1", "stop_hook_active": false},
+    "mandatory": false
+  },
+  {
+    "name": "no tool input",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash"},
+    "mandatory": false
+  }
+]

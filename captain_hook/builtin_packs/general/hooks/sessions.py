@@ -16,6 +16,7 @@ from captain_hook import Allow, Block, Event, Input, LambdaCondition, on
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, OSASCRIPT, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
+from captain_hook.guard_literal import QUOTING_CHARS, names_guarded
 from captain_hook.util import proc, reqenv
 from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import SHELLS, safe_parse_command_line
@@ -70,8 +71,6 @@ LAUNCHERS = (
     "chroot",
 )
 GUARDED_PROGRAM = re.compile(rf"\b({'|'.join(GUARDED_PROGRAMS)})\b", re.IGNORECASE)
-GUARDED_WORD = re.compile(rf"\b({'|'.join((*GUARDED_PROGRAMS, *LAUNCHERS, 'find'))})\b", re.IGNORECASE)
-QUOTING = re.compile(r"[\\'\"\[\]]")
 QUOTED_WORD = re.compile(r'"(?:[^"\\]|\\.)*"')
 NEGATIVE_TARGET = re.compile(r"-\d+")
 FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
@@ -736,7 +735,7 @@ def guarded_program_in(args: tuple[str, ...]) -> str | None:
             name
             for arg in args
             for token in re.split(r"[\s;|&()<>=`]+", arg)
-            if (name := PurePath(QUOTING.sub("", token)).name.casefold()) in GUARDED_PROGRAMS
+            if (name := PurePath(QUOTING_CHARS.sub("", token)).name.casefold()) in GUARDED_PROGRAMS
         ),
         None,
     )
@@ -921,7 +920,7 @@ def text_verdict(text: str, source: str, facts: Facts, cwd: Path | str | None) -
     line = safe_parse_command_line(text)
     if calls := () if line is None else Cmd(line, raw=text, cwd=cwd).calls():
         return next((verdict for call in calls if (verdict := call_verdict(call, facts)) is not None), None)
-    if (named := GUARDED_PROGRAM.search(QUOTING.sub("", text))) is None:
+    if (named := GUARDED_PROGRAM.search(QUOTING_CHARS.sub("", text))) is None:
         return None
     return denial(
         f"BLOCKED: {source} names `{named.group(1)}` but is not shell the guard can parse (a comment, non-shell "
@@ -934,10 +933,6 @@ def candidate_texts(evt: BaseHookEvent) -> Iterator[str]:
         yield evt.input.command
     elif evt.tool_name not in {"Workflow", "Skill"}:
         yield from command_texts(evt.input.raw)
-
-
-def names_guarded(text: str) -> bool:
-    return GUARDED_WORD.search(QUOTING.sub("", text)) is not None
 
 
 def names_a_guarded_program(evt: BaseHookEvent) -> bool:
@@ -966,6 +961,7 @@ def first_denial(evt: ToolRewriteEvent) -> Denial | None:
     only_if=[LambdaCondition(names_a_guarded_program)],
     respect_gitignore=False,
     skip_planning_agents=False,
+    mandatory=True,
     tests={
         guarded(
             command=(
@@ -985,6 +981,10 @@ def first_denial(evt: ToolRewriteEvent) -> Denial | None:
         guarded(command="killall claude"): Block(),
         guarded(command="sudo killall Orca"): Block(),
         guarded(command="killall5 -15"): Block(),
+        guarded(command="Kill -9 -1"): Block(),
+        guarded(command="Killall claude"): Block(),
+        guarded(command="ſhutdown -h now"): Block(),
+        guarded(command="fuſer -k 3000/tcp"): Block(),
         guarded(command="fuser -k 3000/tcp"): Block(pattern="fuser -k"),
         guarded(command="fuser -ki -TERM /tmp/sock"): Block(),
         guarded(command="npx kill-port 3000"): Block(pattern="kill-port"),

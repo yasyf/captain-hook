@@ -263,6 +263,10 @@ jobs:
           unzip -l dist/*.whl | grep -q 'capt_hook_client/client.py'
           if unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/langs.py'
+          unzip -l dist/*.whl | grep -q 'captain_hook/guard_literal.py'
+          unzip -l dist/*.whl | grep -q 'capt_hook_client/guard_literal.py'
+          tar tzf dist/*.tar.gz | grep -q 'internal/wireproto/guard.json'
+          .wheel-smoke/bin/python -c 'from capt_hook_client import guard_literal as shim; from captain_hook import guard_literal as guard; import inspect; assert inspect.getsource(shim) == inspect.getsource(guard); assert shim.mandatory("PreToolUse", b"{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pkill -x sleep\"}}"); print("guard literal OK")'
           unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/worker.py'
           unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/schemas/host-request.schema.json'
           .wheel-smoke/bin/python -c 'from captain_hook.snapshots.validation import validator; from cc_transcript.snapshots import TranscriptStore; validator("host-request").check_schema(validator("host-request").schema)'

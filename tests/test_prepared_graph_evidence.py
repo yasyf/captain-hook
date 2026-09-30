@@ -223,7 +223,7 @@ def test_sync_and_background_share_one_preparation_across_clients(tmp_path, monk
             source["classifier"],
         )
 
-    def sync(_event, evt, session_dir):
+    def sync(_event, evt, session_dir, advisory=True):
         assert evt.ctx.t.has_edit_to("src/**") is False
         release_transcript(evt.ctx.transcript)
         return None

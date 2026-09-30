@@ -23,6 +23,7 @@ class RequestOverrides:
     abandoned: list[str] = field(default_factory=list[str])
     evidence_gaps: list[str] = field(default_factory=list[str])
     warmups: list[str] = field(default_factory=list[str])
+    mandatory_completed: list[str] = field(default_factory=list[str])
 
 
 class Abandoned(BaseException):
@@ -116,6 +117,15 @@ def warmups() -> list[str]:
 
 def warmed(resource: str) -> None:
     warmups().append(resource)
+
+
+def mandatory_completed() -> list[str]:
+    """The state keys of the ``mandatory=True`` hooks the bound request ran to a verdict; scratch for the cold CLI."""
+    return [] if (ov := _OVERRIDES.get()) is None else ov.mandatory_completed
+
+
+def note_mandatory_completed(state_key: str) -> None:
+    mandatory_completed().append(state_key)
 
 
 @contextmanager

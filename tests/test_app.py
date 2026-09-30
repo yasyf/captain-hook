@@ -9,6 +9,7 @@ from loguru import logger
 
 from captain_hook.app import (
     AsyncDecisionError,
+    MandatoryHookError,
     _state,
     get_matching_hooks,
     load_gitignore,
@@ -92,6 +93,34 @@ class TestAsyncDecisionGuard:
     def test_allows_sync_hook_on_decision_event(self) -> None:
         register_hook(Event.Stop, message="m")  # sync is the correct way to gate a decision event
         assert len(_state.hooks) == 1
+
+
+class TestMandatoryGuard:
+    """mandatory=True is the hook the client denies for; it must decide synchronously on the events it prefilters."""
+
+    @pytest.mark.parametrize("event", [Event.PostToolUse, Event.Stop, Event.PreToolUse | Event.SessionStart])
+    def test_hook_rejects_mandatory_outside_the_guarded_events(self, event: Event) -> None:
+        with pytest.raises(MandatoryHookError, match="prefilters only PreToolUse and PermissionRequest"):
+            register_hook(event, message="m", block=True, mandatory=True)
+        assert _state.hooks == []
+
+    def test_on_rejects_mandatory_with_async(self) -> None:
+        with pytest.raises(MandatoryHookError, match="async_=True"):
+
+            @on(Event.PostToolUse, async_=True, mandatory=True)
+            def handler(evt: Any) -> None:
+                return None
+
+        assert _state.hooks == []
+
+    def test_registers_on_the_guarded_events(self) -> None:
+        @on(Event.PreToolUse | Event.PermissionRequest, mandatory=True)
+        def guard(evt: Any) -> None:
+            return None
+
+        register_hook(Event.PermissionRequest, message="m", block=True, mandatory=True)
+        register_hook(Event.PreToolUse, message="m", block=True)
+        assert [hook.spec.mandatory for hook in _state.hooks] == [True, True, False]
 
 
 class TestRegistrationFields:

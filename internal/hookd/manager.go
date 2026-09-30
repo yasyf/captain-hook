@@ -212,6 +212,7 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	if deadline, ok := ctx.Deadline(); ok {
 		request.DeadlineUnixMS = deadline.UnixMilli()
 	}
+	ctx = withMandatory(ctx, request)
 	entry, adm, err := m.acquire(ctx, key)
 	if err != nil {
 		return wireproto.EventResponse{}, err
@@ -257,7 +258,7 @@ type admission struct {
 
 func (m *workerManager) reserveLocked(ctx context.Context, entry *workerEntry) admission {
 	ahead := entry.load
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := ctx.Deadline(); ok && !isMandatory(ctx) {
 		remaining := deadline.Sub(m.now())
 		if wait := time.Duration(ahead) * entry.service; wait > remaining {
 			return admission{shed: true, ahead: ahead, wait: wait, remaining: remaining}
@@ -274,6 +275,23 @@ func shedResponse(ahead int, wait, remaining time.Duration) wireproto.EventRespo
 		Stderr: fmt.Sprintf("capt-hook: %d events ahead on this worker take %s, past the %s left; no verdict\n",
 			ahead, wait.Round(time.Millisecond), remaining.Round(time.Millisecond)),
 	}
+}
+
+// mandatoryDispatch keys the admission context value carrying
+// EventRequest.Mandatory: a mandatory event waits for its worker like any
+// other, bound by the client's deadline alone, and is never shed.
+type mandatoryDispatch struct{}
+
+func withMandatory(ctx context.Context, request wireproto.EventRequest) context.Context {
+	if !request.Mandatory {
+		return ctx
+	}
+	return context.WithValue(ctx, mandatoryDispatch{}, true)
+}
+
+func isMandatory(ctx context.Context) bool {
+	mandatory, _ := ctx.Value(mandatoryDispatch{}).(bool)
+	return mandatory
 }
 
 func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, admission, error) {

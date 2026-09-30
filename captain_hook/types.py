@@ -1029,6 +1029,7 @@ class HookSpec:
     tests: InlineTests | None = None
     async_: bool = False
     skip_planning_agents: bool = True
+    mandatory: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)

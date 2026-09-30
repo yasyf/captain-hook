@@ -35,7 +35,9 @@ def hello(build: str = "12.9.1") -> dict[str, object]:
     return {"protocol": 1, "op": "hello", "build": build}
 
 
-def event(request_id: int, *, payload_raw: str | None = None, deadline_unix_ms: int = 0) -> dict[str, object]:
+def event(
+    request_id: int, *, payload_raw: str | None = None, deadline_unix_ms: int = 0, mandatory: object = None
+) -> dict[str, object]:
     return {
         "protocol": 1,
         "op": "event",
@@ -50,6 +52,7 @@ def event(request_id: int, *, payload_raw: str | None = None, deadline_unix_ms: 
             "client_pid": 100,
             "client_ppid": 99,
             "deadline_unix_ms": deadline_unix_ms,
+            **({} if mandatory is None else {"mandatory": mandatory}),
         },
     }
 
@@ -82,6 +85,16 @@ def test_event_frame_decodes_exact_go_envelope() -> None:
         client_ppid=99,
         deadline_unix_ms=0,
     )
+
+
+def test_mandatory_flag_and_guard_completion_are_on_the_wire_only_when_set() -> None:
+    assert decode_event(event(8, mandatory=True)).mandatory is True
+    assert decode_event(event(9, mandatory=False)).mandatory is False
+    assert decode_event(event(10)).mandatory is False
+    with pytest.raises(ProtocolError, match="invalid event request"):
+        decode_event(event(11, mandatory="yes"))
+    assert "guard" not in EventResponse().message()
+    assert EventResponse(guard="completed").message()["guard"] == "completed"
 
 
 def test_read_message_reassembles_short_reads() -> None:

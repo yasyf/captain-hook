@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from captain_hook.app import get_hook_candidates
+from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
 from captain_hook.conditions import matches_conditions
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete, fails_open
@@ -230,6 +230,10 @@ class FirstBlock:
         with self._guard:
             return self._index is not None and self._index < index
 
+    def precede(self, index: int) -> None:
+        """Record a block settled before the fan-out that sits ahead of fan-out *index*: it dooms *index* onward."""
+        self.record(index - 1)
+
 
 def doomed_by_block(entry: RegisteredHook, index: int, blocked: FirstBlock) -> bool:
     """Whether an earlier hook's block makes *entry* a wasted call — the deny is set, and it cannot ride along."""
@@ -320,18 +324,19 @@ def start_hooks(
     session_dir: Path | None,
     margin: float,
     fanout: Fanout,
+    blocked: FirstBlock,
 ) -> list[Future[HookResult | None]]:
     """Start each group of matching hooks as the worker's fan-out budget admits it, carrying the request's contextvars.
 
     A group the budget has not admitted by the time the caller's deadline is inside *margin* never
     starts: its hooks are cancelled, which :func:`combine` reads as hooks that were never called.
+    *blocked* carries a block settled before the fan-out, so the hooks it dooms never start either.
     """
     from captain_hook.transcripts import release_transcript
 
     futures: list[Future[HookResult | None]] = [Future() for _ in entries]
     for future, evt in zip(futures, events, strict=True):
         future.add_done_callback(lambda _, transcript=evt.ctx.transcript: release_transcript(transcript))
-    blocked = FirstBlock()
     for group in groups:
         if not fanout.admit(collect_budget(margin)):
             logger.bind(hooks=[entries[index].name for index in group]).warning(
@@ -544,10 +549,11 @@ def prepare_hook_events(
     evt: BaseHookEvent,
     *,
     async_: bool,
+    mandatory: bool | None = None,
 ) -> tuple[list[RegisteredHook], list[BaseHookEvent]]:
     from captain_hook.transcripts import fork_transcript, release_transcript
 
-    entries = get_hook_candidates(evt, async_=async_)
+    entries = get_hook_candidates(evt, async_=async_, mandatory=mandatory)
     forks: list[BaseHookEvent] = []
     try:
         for entry in entries:
@@ -585,10 +591,60 @@ def prepare_hook_events(
     return matching, events
 
 
+def dispatch_mandatory(
+    evt: BaseHookEvent,
+    session_dir: Path | None = None,
+) -> tuple[list[RegisteredHook], list[Future[HookResult | None]]]:
+    """Run the event's ``mandatory=True`` hooks to their verdicts on the request thread, ahead of every budget.
+
+    The Go client denies a guarded call whose mandatory hooks it cannot see complete, so these
+    take no fan-out permit, never skip at the deadline margin, and are never abandoned: each runs
+    here in registration order and records its completion in
+    :func:`captain_hook.util.reqenv.mandatory_completed` whether its conditions matched, its own
+    opt-outs (:func:`captain_hook.app.skips_event`) left the event alone, or it ran to a verdict.
+    Incomplete transcript evidence records nothing — a mandatory hook is evidence-free by
+    contract, so a fail-open skip leaves it unrun — and any other exception, a handler's included,
+    is the whole event's: a crashed mandatory hook must read as no completion, never as a verdict.
+    The settled futures fold into :func:`combine` at the hooks' own registration positions.
+    """
+    from captain_hook.transcripts import fork_transcript, release_transcript
+
+    entries = get_mandatory_hooks(evt.event)
+    futures: list[Future[HookResult | None]] = []
+    for entry in entries:
+        fork = copy(evt)
+        fork.ctx = evt.ctx.fork(fork_transcript(evt.ctx.transcript))
+        fork.__dict__.pop("cmd", None)
+        try:
+            with surfacing_handler_errors():
+                result = (
+                    execute_hook(entry, fork, session_dir)
+                    if not skips_event(entry.spec, fork) and matches_conditions(entry.spec, fork)
+                    else None
+                )
+        except EvidenceIncomplete as exc:
+            if not fails_open(exc):
+                raise
+            logger.bind(hook=entry.name, status=exc.status, reason=exc.reason).warning(
+                "mandatory hook left unrun: evidence incomplete"
+            )
+            result = None
+        else:
+            reqenv.note_mandatory_completed(entry.state_key)
+        finally:
+            release_transcript(fork.ctx.transcript)
+        future: Future[HookResult | None] = Future()
+        future.set_result(result)
+        futures.append(future)
+    return entries, futures
+
+
 def dispatch(
     event: Event,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
+    *,
+    advisory: bool = True,
 ) -> Envelope | None:
     """Dispatch an event to all matching hooks at once and combine their results, deny-wins.
 
@@ -603,15 +659,43 @@ def dispatch(
     verdict abandoned rather than holding the reply. Once the envelope is settled, every hook still
     running — abandoned, or doomed by an earlier block — unwinds at its next
     :func:`captain_hook.util.reqenv.checkpoint`, and whatever never started is cancelled.
+
+    The event's ``mandatory=True`` hooks are the exception to every bound above: they run first,
+    to their verdicts, on this thread (:func:`dispatch_mandatory`), but fold at their own
+    registration positions, so a mandatory block dooms exactly the handler-backed hooks registered
+    after it and an advisory hook registered before it keeps its run, its ledger write, and its
+    claim on the deny's reason. ``advisory=False`` stops after them, so a caller already inside the
+    deadline margin still completes the guard while skipping the hooks the margin exists for.
     """
-    matching, events = prepare_hook_events(evt, async_=False)
+    from captain_hook.transcripts import release_transcript
+
+    try:
+        entries, futures = dispatch_mandatory(evt, session_dir)
+    except BaseException:
+        release_transcript(evt.ctx.transcript)
+        raise
+    if not advisory:
+        release_transcript(evt.ctx.transcript)
+        return combine(event, entries, futures, SYNC_DEADLINE_MARGIN_SECONDS)
+    matching, events = prepare_hook_events(evt, async_=False, mandatory=False)
     if not matching:
-        return None
+        return combine(event, entries, futures, SYNC_DEADLINE_MARGIN_SECONDS)
+    ranks = registration_ranks()
+    blocked = FirstBlock()
+    for entry, future in zip(entries, futures, strict=True):
+        if (result := future.result()) is not None and result.action is Action.block:
+            blocked.precede(sum(ranks[id(hook)] < ranks[id(entry)] for hook in matching))
+            break
     groups = hook_groups(matching)
     fanout = Fanout(len(groups))
     try:
-        futures = start_hooks(matching, groups, events, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, fanout)
-        return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
+        started = start_hooks(matching, groups, events, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, fanout, blocked)
+        folded = sorted(
+            zip([*entries, *matching], [*futures, *started], strict=True), key=lambda pair: ranks[id(pair[0])]
+        )
+        return combine(
+            event, [entry for entry, _ in folded], [future for _, future in folded], SYNC_DEADLINE_MARGIN_SECONDS
+        )
     finally:
         fanout.close()
 

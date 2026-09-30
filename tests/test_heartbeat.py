@@ -94,12 +94,13 @@ def test_within_margin_skips_sync_verdict_but_keeps_heartbeat_and_background(
     from captain_hook import cli
     from captain_hook.util import reqenv
 
-    sync_ran = False
+    phases: list[bool] = []
 
-    def fake_dispatch(event: Event, evt: object, *, session_dir: object = None) -> dict[str, object]:
-        nonlocal sync_ran
-        sync_ran = True
-        return {"decision": "block"}
+    def fake_dispatch(
+        event: Event, evt: object, *, session_dir: object = None, advisory: bool = True
+    ) -> dict[str, object] | None:
+        phases.append(advisory)
+        return {"decision": "block"} if advisory else None
 
     monkeypatch.setattr(cli, "dispatch", fake_dispatch)
     overrides = reqenv.RequestOverrides(
@@ -113,8 +114,8 @@ def test_within_margin_skips_sync_verdict_but_keeps_heartbeat_and_background(
     with reqenv.use_request(overrides):
         envelope, background = cli.dispatch_event(_Path("/x"), Event.PreToolUse, raw, session_dir=None)
 
-    assert envelope is None, "the synchronous verdict must be skipped inside the margin"
-    assert sync_ran is False, "no synchronous hook fan-out for a verdict that would be skipped"
+    assert envelope is None, "the advisory verdict must be skipped inside the margin"
+    assert phases == [False], "only the mandatory phase runs for a verdict that would be skipped"
     (beat,) = beats(hb_db, "s1")
     assert beat.event == "PreToolUse"
     background()
@@ -127,11 +128,10 @@ def test_outside_margin_runs_the_sync_verdict(hb_db: Path, monkeypatch: pytest.M
     from captain_hook import cli
     from captain_hook.util import reqenv
 
-    sync_ran = False
+    phases: list[bool] = []
 
-    def fake_dispatch(event: Event, evt: object, *, session_dir: object = None) -> None:
-        nonlocal sync_ran
-        sync_ran = True
+    def fake_dispatch(event: Event, evt: object, *, session_dir: object = None, advisory: bool = True) -> None:
+        phases.append(advisory)
         return None
 
     monkeypatch.setattr(cli, "dispatch", fake_dispatch)
@@ -146,4 +146,4 @@ def test_outside_margin_runs_the_sync_verdict(hb_db: Path, monkeypatch: pytest.M
     with reqenv.use_request(overrides):
         cli.dispatch_event(_Path("/x"), Event.PreToolUse, raw, session_dir=None)
 
-    assert sync_ran is True, "a request with budget to spare must run its synchronous hooks"
+    assert phases == [True], "a request with budget to spare must run its advisory hooks too"

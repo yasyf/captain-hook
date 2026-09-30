@@ -1,6 +1,7 @@
 package hookd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -674,6 +675,58 @@ func TestDispatchShedsWhenTheQueueOutlastsTheDeadline(t *testing.T) {
 		t.Fatalf("dispatch within budget = %+v, %v; want the worker's reply", served, err)
 	}
 	<-frames
+}
+
+func TestDispatchNeverShedsAMandatoryEvent(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	frames := make(chan wireproto.Frame, 1)
+	worker, serverConn := silentWorker(t)
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(serverConn)
+			if err != nil {
+				return
+			}
+			frames <- frame
+			_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+				Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID,
+				Response: &wireproto.EventResponse{
+					Schema: wireproto.Schema, Status: "ok", Stdout: "served", Guard: wireproto.GuardCompleted,
+				},
+			})
+		}
+	}()
+	request := testEventRequest("PreToolUse")
+	request.Root = "/live"
+	request.Mandatory = true
+	key, err := makeWorkerKey(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := &workerEntry{ready: make(chan struct{}), key: key, worker: worker, load: 5, service: time.Second}
+	worker.setOnSettle(func() { manager.settleLoad(entry) })
+	close(entry.ready)
+	manager.entries[key.member()] = entry
+
+	short, cancelShort := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelShort()
+	served, err := manager.dispatch(short, request)
+	if err != nil || served.Stdout != "served" || served.Guard != wireproto.GuardCompleted {
+		t.Fatalf("mandatory dispatch past the queue estimate = %+v, %v; want the worker's reply", served, err)
+	}
+	frame := <-frames
+	if frame.Request == nil || !frame.Request.Mandatory {
+		t.Fatalf("the worker received %+v, want the mandatory flag on the wire", frame.Request)
+	}
+}
+
+func TestShedResponseCarriesNoGuardField(t *testing.T) {
+	t.Parallel()
+	encoded, err := wireproto.Marshal(shedResponse(3, 4*time.Second, time.Second))
+	if err != nil || bytes.Contains(encoded, []byte("guard")) {
+		t.Fatalf("shed reply = %s, %v; want no guard field for a pre-guard client to refuse", encoded, err)
+	}
 }
 
 func replyingWorker(t *testing.T, manager *workerManager, entry *workerEntry, hold <-chan struct{}) *workerClient {

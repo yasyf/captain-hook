@@ -1,0 +1,22 @@
+{
+  "events": ["PreToolUse", "PermissionRequest"],
+  "quoting": "[\\\\'\"\\[\\]]",
+  "guarded": "\\b(kill|pkill|killall|killall5|fuser|skill|snice|kill-port|orca|launchctl|osascript|shutdown|reboot|halt|poweroff|renice|tmux|softwareupdate|pmset|caffeinate|setsid|builtin|noglob|stdbuf|unbuffer|script|watch|parallel|chrt|ionice|taskset|arch|su|chroot|find)\\b",
+  "folds": {
+    "İ": "i",
+    "ı": "i",
+    "ſ": "s",
+    "K": "k"
+  },
+  "kinds": [
+    "host-unavailable",
+    "transport-error",
+    "transport-timeout",
+    "transport-refused",
+    "shed",
+    "no-verdict",
+    "worker-error"
+  ],
+  "reason": "BLOCKED: the session guard did not complete ({kind}) and this call names a session-ending program, so it stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain Hook host answers, or ask the owner to run it.",
+  "max_event_input": 33554432
+}

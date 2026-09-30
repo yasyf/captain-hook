@@ -37,6 +37,29 @@ class AsyncDecisionError(TypeError):
     """A hook combined ``async_=True`` with a decision-capable event, whose verdict would be lost."""
 
 
+class MandatoryHookError(TypeError):
+    """A hook combined ``mandatory=True`` with a mode or event the client cannot hold the call for."""
+
+
+def reject_mandatory_misuse(events: Event, async_: bool, mandatory: bool) -> None:
+    """Reject a ``mandatory=True`` hook that is asynchronous or subscribes past the client's guarded events.
+
+    The Go client denies a guarded call whose mandatory hooks it cannot see complete, so such a
+    hook must decide synchronously, and only on the events whose payload the client prefilters.
+    """
+    if not mandatory:
+        return
+    if async_:
+        raise MandatoryHookError(
+            "mandatory=True is invalid with async_=True: the client can only hold a call for a synchronous verdict."
+        )
+    if outside := events & ~(Event.PreToolUse | Event.PermissionRequest):
+        names = ", ".join(sorted(e.name for e in outside if e.name))
+        raise MandatoryHookError(
+            f"mandatory=True is invalid on {names}: the client prefilters only PreToolUse and PermissionRequest."
+        )
+
+
 def reject_async_decision(events: Event, async_: bool) -> None:
     """Reject an async hook on a decision-capable event: Claude Code never awaits its stdout.
 
@@ -184,8 +207,10 @@ def hook(
     tests: InlineTests | None = None,
     async_: bool = False,
     skip_planning_agents: bool | None = None,
+    mandatory: bool = False,
 ) -> None:
     reject_async_decision(events, async_)
+    reject_mandatory_misuse(events, async_, mandatory)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     _state.hooks.append(
@@ -202,6 +227,7 @@ def hook(
                 tests=tests,
                 async_=async_,
                 skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
+                mandatory=mandatory,
             ),
             name=hook_name("hook", None, message),
             source_file=caller_file(),
@@ -220,8 +246,10 @@ def on(
     async_: bool = False,
     skip_planning_agents: bool = True,
     advisory_on_deny: bool = False,
+    mandatory: bool = False,
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
+    reject_mandatory_misuse(events, async_, mandatory)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     spec = HookSpec(
@@ -234,6 +262,7 @@ def on(
         async_=async_,
         skip_planning_agents=skip_planning_agents,
         advisory_on_deny=advisory_on_deny,
+        mandatory=mandatory,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:
@@ -262,20 +291,34 @@ def is_planning_agent_skip(spec: HookSpec, evt: BaseHookEvent) -> bool:
     return bool(evt.agent_type and evt.agent_type in names)
 
 
-def get_hook_candidates(evt: BaseHookEvent, *, async_: bool | None = None) -> list[RegisteredHook]:
+def skips_event(spec: HookSpec, evt: BaseHookEvent) -> bool:
+    """Whether *spec*'s own opt-outs leave *evt* to other hooks: a planning agent, or a gitignored file."""
+    return is_planning_agent_skip(spec, evt) or (
+        spec.respect_gitignore and bool(_state.gitignore_patterns) and bool(evt.file) and is_gitignored(str(evt.file))
+    )
+
+
+def get_hook_candidates(
+    evt: BaseHookEvent, *, async_: bool | None = None, mandatory: bool | None = None
+) -> list[RegisteredHook]:
     return [
         h
         for h in _state.hooks
         if evt.event in h.spec.events
         and (async_ is None or h.spec.async_ is async_)
-        and not is_planning_agent_skip(h.spec, evt)
-        and (
-            not h.spec.respect_gitignore
-            or not _state.gitignore_patterns
-            or not evt.file
-            or not is_gitignored(str(evt.file))
-        )
+        and (mandatory is None or h.spec.mandatory is mandatory)
+        and not skips_event(h.spec, evt)
     ]
+
+
+def get_mandatory_hooks(event: Event) -> list[RegisteredHook]:
+    """Every ``mandatory=True`` registration for *event*, before any per-event opt-out, in registration order."""
+    return [h for h in _state.hooks if h.spec.mandatory and event in h.spec.events]
+
+
+def registration_ranks() -> dict[int, int]:
+    """Each registered hook's position, keyed by ``id``, for folding two phases' verdicts back into one order."""
+    return {id(h): index for index, h in enumerate(_state.hooks)}
 
 
 def get_matching_hooks(evt: BaseHookEvent, *, async_: bool | None = None) -> list[RegisteredHook]:

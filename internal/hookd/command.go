@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
+	"github.com/yasyf/daemonkit"
 )
 
 const (
@@ -115,17 +116,26 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	request.Mandatory = wireproto.Mandatory(request.Event, []byte(request.PayloadRaw))
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	client, err := NewClient()
+	client, err := openEventClient()
 	var response wireproto.EventResponse
 	if err == nil {
 		defer client.Close()
 		response, err = client.Event(ctx, request)
 	}
 	if err != nil {
+		if request.Mandatory {
+			return denyMandatory(stdout, stderr, request.Event, failureKind(err, client != nil))
+		}
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if request.Mandatory {
+		if kind := incompleteKind(response); kind != "" {
+			return denyMandatory(stdout, stderr, request.Event, kind)
+		}
 	}
 	_, stdoutErr := io.WriteString(stdout, response.Stdout)
 	_, stderrErr := io.WriteString(stderr, response.Stderr)
@@ -138,6 +148,60 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return response.Exit
+}
+
+// eventClient is the host session runCommand dispatches through.
+type eventClient interface {
+	Event(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error)
+	Close() error
+}
+
+// openEventClient opens the host session.
+var openEventClient = func() (eventClient, error) {
+	client, err := NewClient()
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+// denyMandatory answers a mandatory event whose guard did not complete: the
+// deny envelope on stdout, the kind alone on stderr, and exit 0 so Claude Code
+// reads the verdict rather than a hook error it would let the call through on.
+func denyMandatory(stdout, stderr io.Writer, event, kind string) int {
+	if _, err := io.WriteString(stdout, wireproto.DenyEnvelope(event, kind)+"\n"); err != nil {
+		fmt.Fprintf(stderr, "capt-hookd: write result: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "capt-hookd: the session guard did not complete (%s); denied\n", kind)
+	return 0
+}
+
+func failureKind(err error, opened bool) string {
+	switch {
+	case !opened:
+		return "host-unavailable"
+	case errors.Is(err, daemonkit.ErrAbsent) || errors.Is(err, daemonkit.ErrDraining) ||
+		errors.Is(err, daemonkit.ErrNotReady) || errors.Is(err, daemonkit.ErrSessionCapacity):
+		return "transport-refused"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "transport-timeout"
+	default:
+		return "transport-error"
+	}
+}
+
+func incompleteKind(response wireproto.EventResponse) string {
+	switch {
+	case response.Exit != 0:
+		return "worker-error"
+	case response.Guard == wireproto.GuardCompleted:
+		return ""
+	case strings.Contains(response.Stderr, "no verdict"):
+		return "shed"
+	default:
+		return "no-verdict"
+	}
 }
 
 func eventRequest(event string, stdin io.Reader) (wireproto.EventRequest, error) {
