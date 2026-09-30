@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.62.0] - 2026-09-30
+
 ### Added
 
 - **`llm_gate` takes `once_per_turn`.** Any LLM hook firing in a turn silences
