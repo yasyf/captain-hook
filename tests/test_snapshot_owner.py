@@ -87,6 +87,7 @@ def test_warm_registered_uses_its_own_owner_lane_with_hook_cache_identity():
         deadline_unix_ms=9_000_000_000_000,
         limits={
             "max_read_bytes": 8 * 1024 * 1024,
+            "max_source_read_bytes": 8 * 1024 * 1024,
             "max_events": 1_000_000,
             "max_items": 65_536,
             "max_output_bytes": 16 * 1024 * 1024,
@@ -139,6 +140,7 @@ def test_actual_owner_ingress_preserves_numeric_lexemes(lexeme, accepted):
         deadline_unix_ms=12345,
         limits={
             "max_read_bytes": 1,
+            "max_source_read_bytes": 1,
             "max_events": 1,
             "max_items": 1,
             "max_output_bytes": 1,

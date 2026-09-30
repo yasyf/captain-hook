@@ -155,7 +155,7 @@ class WorkerService:
             root_warm_scheduler=self.schedule_root_warm,
             defer_cleanup=True,
             foreground_seconds=(allowance := foreground_allowance(request.event))[0],
-            foreground_read_bytes=allowance[1],
+            foreground_source_read_bytes=allowance[1],
         )
         background_client = SnapshotClient(
             lambda value: self.snapshot_exchange(0, value),

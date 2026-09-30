@@ -19,8 +19,8 @@ import (
 )
 
 var statsRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"stats","id":"one"}}`)
-var warmRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"warm_registered","id":"warm","classifier":{"id":"native","version":"1"},"thread_ids":["thread"],"roots":["/tmp"],"direct_paths":[],"start_index":0,"membership_revision":null,"deadline_unix_ms":9000000000000,"limits":{"max_read_bytes":8388608,"max_events":1000000,"max_items":65536,"max_output_bytes":16777216,"max_discovery_entries":50000,"max_sources":4096}}}`)
-var warmRootRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"warm_root","id":"warm-root","path":"/tmp/root.jsonl","classifier":{"id":"native","version":"1"},"deadline_unix_ms":9000000000000,"limits":{"max_read_bytes":8388608,"max_events":1000000,"max_items":65536,"max_output_bytes":16777216,"max_discovery_entries":50000,"max_sources":4096}}}`)
+var warmRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"warm_registered","id":"warm","classifier":{"id":"native","version":"1"},"thread_ids":["thread"],"roots":["/tmp"],"direct_paths":[],"start_index":0,"membership_revision":null,"deadline_unix_ms":9000000000000,"limits":{"max_read_bytes":8388608,"max_source_read_bytes":8388608,"max_events":1000000,"max_items":65536,"max_output_bytes":16777216,"max_discovery_entries":50000,"max_sources":4096}}}`)
+var warmRootRequest = json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"warm_root","id":"warm-root","path":"/tmp/root.jsonl","classifier":{"id":"native","version":"1"},"deadline_unix_ms":9000000000000,"limits":{"max_read_bytes":8388608,"max_source_read_bytes":8388608,"max_events":1000000,"max_items":65536,"max_output_bytes":16777216,"max_discovery_entries":50000,"max_sources":4096}}}`)
 
 func fakeSnapshotOwner(t *testing.T, frames chan<- wireproto.Frame) (*snapshotOwner, net.Conn) {
 	t.Helper()
@@ -638,7 +638,7 @@ func TestTranscriptClientWarmUsesHookAdmission(t *testing.T) {
 func TestCaptainDomainRequestUsesGeneratedIngressSchema(t *testing.T) {
 	request := map[string]any{"schema": "captain.transcript/1", "tool_registry": []any{}, "request": map[string]any{
 		"schema": "captain.transcript/1", "id": "one", "operation": "prepare_review", "deadline_unix_ms": time.Now().Add(time.Second).UnixMilli(),
-		"limits": map[string]int{"max_read_bytes": 1024, "max_events": 10, "max_items": 10, "max_output_bytes": 1024, "max_discovery_entries": 10, "max_sources": 10},
+		"limits": map[string]int{"max_read_bytes": 1024, "max_source_read_bytes": 1024, "max_events": 10, "max_items": 10, "max_output_bytes": 1024, "max_discovery_entries": 10, "max_sources": 10},
 		"view":   map[string]any{"handle": map[string]string{"owner_epoch": "e", "snapshot_id": "s", "generation": "g", "lease_id": "l"}, "classifier": map[string]string{"id": "captain", "version": "1"}, "selectors": []any{}, "attachments": []string{}},
 		"policy": map[string]string{"id": "captain-review", "version": "1"}, "min_confidence": 0.5, "min_confidence_fix": 0.25,
 	}}

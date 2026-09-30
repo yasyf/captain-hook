@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Transcript queries and classification get a separate work budget.**
+  `max_source_read_bytes` bounds physical reads to the remaining per-dispatch
+  allowance of `1 MiB` for tool events, or `8 MiB` for `Stop`, `SubagentStop`, and
+  `UserPromptSubmit`. Foreground work over snapshots in memory gets its own
+  `64 MiB` `max_read_bytes` cap, so reading the transcript no longer shrinks
+  that cap. Background work keeps its `512 MiB` logical cap. This requires
+  `cc-transcript` 14.29.0.
+- **The reviewer prepares corrections around large turns.** A turn whose events
+  together exceed `1 MiB` no longer fails correction preparation. Each request
+  materializes one activity window for all its anchors, and a batch whose window
+  exceeds the `16 MiB` output bound splits until each request fits. An anchor
+  whose own window still exceeds it is refused with a warning naming the bound and
+  the bytes it needs, and the spawn report counts it as `refused`; the other
+  anchors continue. A transcript whose review preparation exceeds its bound is
+  refused the same way and skipped until it changes, and the scan continues with the
+  other transcripts. Review preparation materializes each transcript event at most
+  once, shared by every survival check and hook-complaint detection, and an event over
+  the `1 MiB` record bound refuses correction preparation as it refuses review.
+
 ## [12.65.1] - 2026-09-30
 
 ### Fixed

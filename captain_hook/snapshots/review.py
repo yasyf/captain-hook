@@ -68,6 +68,23 @@ class ReviewPolicy:
             await log.close()
 
 
+class MaterializedEvents(Sequence[Any]):
+    def __init__(self, events: Sequence[Any]) -> None:
+        self.events = events
+        self.materialized: dict[int, Any] = {}
+
+    def __len__(self) -> int:
+        return len(self.events)
+
+    def __getitem__(self, index: Any) -> Any:
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(len(self)))]
+        position = index + len(self) if index < 0 else index
+        if position not in self.materialized:
+            self.materialized[position] = self.events[position]
+        return self.materialized[position]
+
+
 class ProjectionBudget:
     def __init__(self, *, maximum: int = MAX_RESULT_BYTES, snapshot: Any = None) -> None:
         self.remaining = maximum
@@ -262,7 +279,7 @@ async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_
         return result
     budget = ProjectionBudget(maximum=request["limits"]["max_output_bytes"], snapshot=snapshot)
     budget.add(result)
-    events = snapshot.events
+    events = MaterializedEvents(snapshot.events)
     signals: list[MiningSignal] = []
     signal_chars = 0
 
@@ -328,12 +345,10 @@ async def prepare_corrections(snapshot: Any, request: Mapping[str, Any]) -> dict
         snapshot, max_bytes=min(request["limits"]["max_read_bytes"], request["limits"]["max_output_bytes"])
     )
     budget = ProjectionBudget(maximum=request["limits"]["max_output_bytes"], snapshot=snapshot)
-    for raw_anchor, feedback in zip(request["anchors"], request["feedback"], strict=True):
+    anchors = [EventRef(**raw_anchor) for raw_anchor in request["anchors"]]
+    activity = snapshot.activity(request["view"]["classifier"], anchors=anchors, lookback_turns=40, lookahead_turns=120)
+    for raw_anchor, anchor, feedback in zip(request["anchors"], anchors, request["feedback"], strict=True):
         snapshot.checkpoint()
-        anchor = EventRef(**raw_anchor)
-        activity = snapshot.activity(
-            request["view"]["classifier"], anchor=anchor, lookback_turns=40, lookahead_turns=120
-        )
         pairs = harvest_pairs(activity, anchor, repo=repo, git_runner=git)
         if not pairs or (turn := activity.turn_of(anchor)) is None:
             continue

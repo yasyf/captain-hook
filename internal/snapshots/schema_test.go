@@ -54,7 +54,7 @@ func TestMetadataNumericDeadlines(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := json.RawMessage(fmt.Sprintf(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"acquire","id":"numeric","deadline_unix_ms":%s,"path":"/fixture.jsonl","classifier":{"id":"default","version":"1"},"limits":{"max_read_bytes":1,"max_events":1,"max_items":1,"max_output_bytes":1,"max_discovery_entries":1,"max_sources":1}}}`, test.number))
+			request := json.RawMessage(fmt.Sprintf(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"acquire","id":"numeric","deadline_unix_ms":%s,"path":"/fixture.jsonl","classifier":{"id":"default","version":"1"},"limits":{"max_read_bytes":1,"max_source_read_bytes":1,"max_events":1,"max_items":1,"max_output_bytes":1,"max_discovery_entries":1,"max_sources":1}}}`, test.number))
 			metadata, err := Metadata(request)
 			if !test.valid {
 				if err == nil {

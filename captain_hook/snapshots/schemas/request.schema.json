@@ -707,6 +707,12 @@
           "title": "Max Read Bytes",
           "type": "integer"
         },
+        "max_source_read_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 536870912,
+          "title": "Max Source Read Bytes",
+          "type": "integer"
+        },
         "max_sources": {
           "exclusiveMinimum": 0,
           "maximum": 65536,
@@ -716,6 +722,7 @@
       },
       "required": [
         "max_read_bytes",
+        "max_source_read_bytes",
         "max_events",
         "max_items",
         "max_output_bytes",

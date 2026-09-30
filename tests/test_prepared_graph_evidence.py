@@ -68,7 +68,7 @@ def test_multiple_deep_checks_prepare_once_and_query_by_handle(count):
     assert operation == "prepare_graph"
     assert prepare["thread_ids"] == [f"thread-{i}" for i in range(count)]
     assert prepare["view"]["attachments"] == []
-    assert prepare["limits"]["max_read_bytes"] == 1024 * 1024
+    assert prepare["limits"]["max_source_read_bytes"] == 1024 * 1024
     assert prepare["limits"]["max_discovery_entries"] == 50_000
     assert prepare["limits"]["max_sources"] == 4096
     assert 0 < prepare["deadline_unix_ms"] - int(time.time() * 1000) <= 750
