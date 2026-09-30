@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowance of `1 MiB` for tool events, or `8 MiB` for `Stop`, `SubagentStop`, and
   `UserPromptSubmit`. Foreground work over snapshots in memory gets its own
   `64 MiB` `max_read_bytes` cap, so reading the transcript no longer shrinks
-  that cap. Background work keeps its `512 MiB` logical cap.
+  that cap. Background work keeps its `512 MiB` logical cap. This requires
+  `cc-transcript` 14.29.0.
 
 ## [12.65.0] - 2026-09-30
 
