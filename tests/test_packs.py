@@ -32,6 +32,7 @@ GENERAL_HOOKS = {
     "prompts",
     "questions",
     "review",
+    "sessions",
     "tasks",
     "tombstones",
     "tools",

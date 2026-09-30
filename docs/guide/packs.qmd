@@ -10,8 +10,12 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 
 `capt-hook` ships seven builtin packs. Five are always active in every repo:
 
-- `general` — language-agnostic guards: git/jj command safety, a `pkill`/`killall` block, doc and
-  prompt nudges, task and plan discipline, model-routing nudges, a code-review gate, a
+- `general` — language-agnostic guards: git/jj command safety, a session guard that denies
+  `pkill`/`killall`, a `kill` or `renice` of any pid, since a process under this session may
+  belong to a nested agent, a teammate, or a sibling worker,
+  `orca terminal close`/`worktree rm`/`worker-stop`, `launchctl` teardown, session-ending
+  `osascript`/`softwareupdate`/`pmset`/`tmux`, and `shutdown`/`reboot`, in Bash and in MCP payloads,
+  doc and prompt nudges, task and plan discipline, model-routing nudges, a code-review gate, a
   docs-freshness gate, a detour
   check-in nudge, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
   comment that was already over budget only warns), `rm` safety, and a plain-English reply rewrite.

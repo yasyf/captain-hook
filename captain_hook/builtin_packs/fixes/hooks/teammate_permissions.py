@@ -15,13 +15,13 @@ from captain_hook import (
     approve,
 )
 from captain_hook.builtin_packs.fixes.hooks._lib import (
-    MAX_SCAN_DEPTH,
     DangerousCommandLine,
     DangerousMcpTool,
     DangerousPayloadCommand,
     McpTool,
     NativeTool,
 )
+from captain_hook.util.payload import MAX_SCAN_DEPTH
 
 NESTED_AT_CAP: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(MAX_SCAN_DEPTH), {"cmd": "rm -rf /"})
 NESTED_PAST_CAP: dict[str, object] = reduce(
