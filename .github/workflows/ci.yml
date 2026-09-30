@@ -88,13 +88,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: uv run --no-sync python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 
-      - name: Build the wheel and two host builds
+      - name: Build two releases of the wheel and host
         run: |
           set -euo pipefail
           uv build --wheel --out-dir "$RUNNER_TEMP/wheelhouse"
           go build -o "$RUNNER_TEMP/capt-hookd" ./cmd/capt-hookd
+          uv version --frozen 0.0.1
+          uv build --wheel --out-dir "$RUNNER_TEMP/wheelhouse-next"
+          git checkout pyproject.toml
           go build -ldflags "-X github.com/yasyf/captain-hook/internal/hookd.Build=0.0.1" \
-            -o "$RUNNER_TEMP/capt-hookd-mismatch" ./cmd/capt-hookd
+            -o "$RUNNER_TEMP/capt-hookd-next" ./cmd/capt-hookd
 
       - name: Install the host
         env:
@@ -107,10 +110,10 @@ jobs:
           cmp "$RUNNER_TEMP/capt-hookd" ~/.local/share/captain-hook/host/capt-hookd
           test "$(~/.local/bin/capt-hookd --version)" = '{"schema":1,"build":"0.0.0"}'
 
-      - name: Supervise the host
+      - name: Start the workspace supervisor
         run: |
           set -euo pipefail
-          setsid nohup ~/.local/share/captain-hook/host/capt-hookd serve > "$RUNNER_TEMP/host.out" 2>&1 < /dev/null &
+          setsid nohup ~/.local/bin/capt-hookd supervise > "$RUNNER_TEMP/supervisor.out" 2>&1 < /dev/null &
           for _ in $(seq 60); do
             captain_hook/bin/hook status > /dev/null 2>&1 && exit 0
             sleep 1
@@ -119,16 +122,36 @@ jobs:
 
       - name: Dispatch through the plugin shims
         env:
-          CAPTAIN_TEST_LINUX_HOST_MISMATCH: ${{ runner.temp }}/capt-hookd-mismatch
+          CAPTAIN_TEST_LINUX_HOST_MISMATCH: ${{ runner.temp }}/capt-hookd-next
         run: |
           set -euo pipefail
           captain_hook/bin/capt-hook --help > /dev/null
           uv run --no-sync pytest tests/test_linux_host.py tests/test_formula_deployment_contract.py
 
+      - name: Upgrade the supervised host in place
+        env:
+          UV_FIND_LINKS: ${{ runner.temp }}/wheelhouse-next
+        run: |
+          set -euo pipefail
+          before="$(captain_hook/bin/hook status | jq -r .pid)"
+          "$RUNNER_TEMP/capt-hookd-next" package-install
+          test "$(cat ~/.local/share/captain-hook/host/version.json)" = '{"schema":1,"build":"0.0.1"}'
+          status="$(captain_hook/bin/hook status)"
+          test "$(jq -r .build <<< "$status")" = 0.0.1
+          test "$(jq -r .pid <<< "$status")" != "$before"
+
+      - name: Dispatch through the upgraded host
+        env:
+          CAPTAIN_TEST_LINUX_HOST_MISMATCH: ${{ runner.temp }}/capt-hookd
+        run: |
+          set -euo pipefail
+          captain_hook/bin/capt-hook --help > /dev/null
+          uv run --no-sync pytest tests/test_linux_host.py
+
       - name: Host logs
         if: failure()
         run: |
-          cat "$RUNNER_TEMP/host.out" || true
+          cat "$RUNNER_TEMP/supervisor.out" || true
           cat ~/.cache/captain-hook/host-v1/capt-hookd.log || true
 
   helper-test:

@@ -16,12 +16,12 @@ const (
 )
 
 // hostDaemon is the one declaration the serving host, every launcher, and the
-// deployment read. Program, Args, and Log stay unset because Client.Ensure
-// never runs here: launchd's job for this daemon is declared exactly once, by
-// exactAgents, and converged by the deployment. A Program built from the
-// installed bundle would also refuse construction on a machine where the app
-// is not installed yet, which is exactly where a launcher must still be able
-// to report that it is not installed.
+// deployment read. Program, Args, and Log stay unset: on darwin launchd's job
+// is declared exactly once, by exactAgents, and on linux supervisedHostDaemon
+// adds them only where it ensures the supervised host. A Program built from the
+// installed host would also refuse construction on a machine where it is not
+// installed yet, which is exactly where a launcher must still be able to
+// report that it is not installed.
 func hostDaemon() daemonkit.Daemon {
 	return daemonkit.Daemon{
 		Label:       hostServiceLabel,

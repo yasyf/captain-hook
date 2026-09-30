@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/artifact"
 	"github.com/yasyf/daemonkit/durable"
+	"github.com/yasyf/daemonkit/supervise"
 )
 
 const (
@@ -77,11 +79,49 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err := linkExecutable(installed.host, installed.link); err != nil {
 		return err
 	}
-	return stopInstalledHost(ctx)
+	if err := ensureSupervisedHost(ctx, installed); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
+		return err
+	}
+	return nil
+}
+
+// supervisedHostDaemon is hostDaemon with the program the workspace's
+// supervisor runs: the installed host, served in place.
+func supervisedHostDaemon(installed installedPaths) (daemonkit.Daemon, error) {
+	resolved, err := resolvePaths()
+	if err != nil {
+		return daemonkit.Daemon{}, err
+	}
+	program, err := daemonkit.InBundle(installed.dir, installedHostName)
+	if err != nil {
+		return daemonkit.Daemon{}, err
+	}
+	d := hostDaemon()
+	d.Program, d.Args, d.Log = program, []string{"serve"}, resolved.log
+	return d, nil
+}
+
+// ensureSupervisedHost converges the label's supervisor on the installed host,
+// draining an incumbent of any other build first.
+func ensureSupervisedHost(ctx context.Context, installed installedPaths) error {
+	d, err := supervisedHostDaemon(installed)
+	if err != nil {
+		return err
+	}
+	client, err := daemonkit.Open(d)
+	if err != nil {
+		return fmt.Errorf("captain package: open host: %w", err)
+	}
+	ensureCtx, cancel := context.WithTimeout(ctx, hostStopTimeout)
+	defer cancel()
+	if _, err := client.Ensure(ensureCtx); err != nil {
+		return fmt.Errorf("captain package: ensure the supervised host: %w", err)
+	}
+	return nil
 }
 
 func uninstallPackagedApplication(ctx context.Context) error {
-	if err := stopInstalledHost(ctx); err != nil {
+	if err := stopInstalledHost(ctx); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
 		return err
 	}
 	installed, err := resolveInstalledPaths()

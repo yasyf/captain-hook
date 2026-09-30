@@ -5,8 +5,8 @@ github.com/ebitengine/purego v0.10.1/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLA
 github.com/jessevdk/go-flags v1.4.0/go.mod h1:4FA24M0QyGHXBuZZK/XkWh8h0e1EYbRYJSGM75WSRxI=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
-github.com/yasyf/daemonkit v0.31.1 h1:xG4+N8xOGQJwLGXkwCFc6JbwsZdY5MdJLCxpZ9GEeWw=
-github.com/yasyf/daemonkit v0.31.1/go.mod h1:3qcpiMyByFCbb9WcrzMYLcES/u/iUmE9UWBQb644ubo=
+github.com/yasyf/daemonkit v0.31.2-0.20260930060041-a3d1b3d46a14 h1:W0OP1nMfHxGC+gv61b9QKsWqWThMSKmPCuLujqr0FkQ=
+github.com/yasyf/daemonkit v0.31.2-0.20260930060041-a3d1b3d46a14/go.mod h1:3qcpiMyByFCbb9WcrzMYLcES/u/iUmE9UWBQb644ubo=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
 golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/text v0.14.0 h1:ScX5w1eTa3QqT8oi6+ziP7dTV1S2+ALU0bI+0zXKWiQ=

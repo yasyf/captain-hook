@@ -29,7 +29,7 @@ const (
 // Main executes one capt-hookd client or host command and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|transcript-client|status|restart-workers|package-install|package-uninstall")
+		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|supervise|run|transcript-client|status|restart-workers|package-install|package-uninstall")
 		return 2
 	}
 	switch args[0] {
@@ -37,6 +37,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return versionCommand(args[1:], stdout, stderr)
 	case "serve":
 		return serveCommand(args[1:], stderr)
+	case "supervise":
+		return superviseCommand(args[1:], stderr)
 	case "transcript-client":
 		return transcriptClientCommand(args[1:], stdin, stdout, stderr)
 	case "run":
@@ -77,6 +79,18 @@ func serveCommand(args []string, stderr io.Writer) int {
 		err = server.Run(context.Background())
 	}
 	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func superviseCommand(args []string, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintln(stderr, "capt-hookd supervise: no arguments accepted")
+		return 2
+	}
+	if err := superviseHost(context.Background()); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
