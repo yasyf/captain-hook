@@ -880,6 +880,91 @@ def test_lease_renews_only_near_its_reported_expiry(monkeypatch):
     assert lease.expires_unix_ms == 110_000
 
 
+def test_a_lease_at_the_foreground_deadline_is_not_renewed(monkeypatch):
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        assert request["operation"] == "acquire", "a lease the owner cannot extend was renewed"
+        details = description() | {"lease_expires_unix_ms": request["deadline_unix_ms"]}
+        return response(request, {"kind": "acquired", "description": details})
+
+    client = SnapshotClient(exchange, foreground_seconds=0.75)
+    client.bind_tool_registry({})
+    session = client.acquire("/tmp/fixture.jsonl")
+
+    assert session.lease.expires_unix_ms == client.foreground_deadline_unix_ms == 100_750
+    assert session.lease.require() == session.lease.handle
+
+
+def test_a_lease_renews_against_the_client_that_requires_it(monkeypatch):
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: 129.5)
+    calls = []
+
+    def exchange(wrapper):
+        calls.append(wrapper["request"]["operation"])
+        return response(wrapper["request"], {"kind": "renewed", "expires_unix_ms": 159_500})
+
+    foreground = SnapshotClient(exchange)
+    foreground.foreground_deadline_unix_ms = 100_750
+    background = SnapshotClient(exchange)
+    lease = Lease(foreground, description() | {"lease_expires_unix_ms": 130_000})
+
+    assert lease.require(background) == lease.handle
+    assert calls == ["renew"]
+    assert lease.expires_unix_ms == 159_500
+
+
+@pytest.mark.parametrize("operation", ["retain", "renew"])
+def test_a_stale_handle_after_the_foreground_deadline_is_a_deadline(monkeypatch, operation):
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: clock.now)
+
+    def exchange(wrapper):
+        clock.now = 100.752
+        return {"schema": HOST_SCHEMA, "response": failure(wrapper["request"]["id"], "stale_handle", "expired")}
+
+    client = SnapshotClient(exchange, foreground_seconds=0.75)
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete, match="lease expired at the foreground transcript deadline") as caught:
+        client.call(operation, handle=description()["handle"])
+    assert caught.value.status == "deadline"
+
+
+def test_a_stale_handle_before_the_foreground_deadline_stays_stale(monkeypatch):
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+
+    def exchange(wrapper):
+        return {"schema": HOST_SCHEMA, "response": failure(wrapper["request"]["id"], "stale_handle", "foreign")}
+
+    client = SnapshotClient(exchange, foreground_seconds=0.75)
+    client.bind_tool_registry({})
+
+    assert client.call("retain", handle=description()["handle"])["status"] == "stale_handle"
+
+
+def test_release_after_the_foreground_deadline_accepts_a_stale_handle(monkeypatch):
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: clock.now)
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        if request["operation"] == "acquire":
+            details = description() | {"lease_expires_unix_ms": request["deadline_unix_ms"]}
+            return response(request, {"kind": "acquired", "description": details})
+        clock.now = 101.0
+        return {"schema": HOST_SCHEMA, "response": failure(request["id"], "stale_handle", "expired")}
+
+    client = SnapshotClient(exchange, foreground_seconds=0.75)
+    client.bind_tool_registry({})
+    session = client.acquire("/tmp/fixture.jsonl")
+
+    session.release()
+
+    assert session.lease.released
+
+
 @pytest.mark.parametrize(
     ("changes", "rewritten"),
     [

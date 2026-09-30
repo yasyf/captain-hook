@@ -337,6 +337,13 @@ class SnapshotClient:
                     self._foreground_source_bytes += result["usage"]["source_bytes_read"]
                     if self._foreground_source_bytes > self._foreground_source_read_bytes:
                         raise SnapshotProtocolError("foreground transcript byte budget was exceeded")
+            if (
+                result.get("status") == "stale_handle"
+                and operation != "release"
+                and self.foreground_deadline_unix_ms is not None
+                and int(time.time() * 1000) >= self.foreground_deadline_unix_ms
+            ):
+                raise EvidenceIncomplete("deadline", "lease expired at the foreground transcript deadline")
             if result.get("status") != "retained_limit":
                 return result
             if retry_until is None:
@@ -490,12 +497,16 @@ class Lease:
         self.subagent_guard = threading.Lock()
         self.subagent_views: dict[str, RemoteSubagentIndex] = {}
 
+    def renewable_by(self, client: SnapshotClient) -> bool:
+        return (deadline := client.foreground_deadline_unix_ms) is None or self.expires_unix_ms < deadline
+
     def require(self, client: SnapshotClient | None = None) -> dict[str, str]:
+        client = client or self.client
         with self.guard:
             if self.closed or self.released:
                 raise EvidenceIncomplete("stale_handle", "preparation lease was already released")
-            if self.expires_unix_ms <= time.time() * 1000 + 1000:
-                result = (client or self.client).call("renew", handle=self.handle)
+            if self.renewable_by(client) and self.expires_unix_ms <= time.time() * 1000 + 1000:
+                result = client.call("renew", handle=self.handle)
                 if result["status"] != "ok":
                     raise EvidenceIncomplete(result["status"], result["reason"])
                 self.expires_unix_ms = result["data"]["expires_unix_ms"]

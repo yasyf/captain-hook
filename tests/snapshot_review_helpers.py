@@ -87,6 +87,7 @@ class FixtureOwner:
     def __init__(self):
         self._defer_cleanup = False
         self._leases = set()
+        self.foreground_deadline_unix_ms = None
         self.policy = ReviewPolicy()
         self.snapshots = {}
         self.calls = []
