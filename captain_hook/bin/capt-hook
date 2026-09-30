@@ -1,1 +1,5 @@
-../scripts/install-mcp.sh
+#!/bin/bash
+case "$OSTYPE" in
+  linux*) exec "${0%/*}/../linux/bin/capt-hook" "$@" ;;
+esac
+. "${0%/*}/../scripts/install-mcp.sh"

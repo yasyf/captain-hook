@@ -20,6 +20,14 @@ and verifies the host answers. The helper embedded in that exact path owns
 the per-user host and its Python workers. There is no unsigned or project-local daemon and
 no cold fallback when the host is missing.
 
+### Linux amd64
+
+On a private single-user VM, install the captain-hook plugin. With `uv`,
+`curl`, and `sha256sum` on PATH, run `"$CLAUDE_PLUGIN_ROOT/linux/install.sh"`.
+Keep `~/.local/bin/capt-hookd supervise` running in the foreground under
+the workspace's manager for long-lived processes.
+The host trusts any process with the same UID, which can impersonate it.
+
 ## 2. Scaffold
 
 From your repo root:

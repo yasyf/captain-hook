@@ -29,11 +29,6 @@ const (
 	// generation to terminate, waits five seconds, force-terminates what stayed,
 	// and proves quiet absence after that.
 	appStopTimeout = 20 * time.Second
-
-	// hostStopTimeout must clear hostShutdownTimeout: a serving host is drained
-	// through the grace its own LaunchAgent promises it before its agent comes
-	// down, and a budget shorter than that grace would end the stop mid-drain.
-	hostStopTimeout = hostShutdownTimeout + 15*time.Second
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -80,20 +75,6 @@ func ensureRealDirectory(path string) error {
 		return fmt.Errorf("captain package: %q is not a real directory", path)
 	}
 	return nil
-}
-
-// canonicalExecutable is this process's own image in the form the kernel
-// reports one: absolute and symlink-free.
-func canonicalExecutable() (string, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("captain package: resolve current executable: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(executable)
-	if err != nil {
-		return "", fmt.Errorf("captain package: resolve %q: %w", executable, err)
-	}
-	return resolved, nil
 }
 
 func packagedApplicationPath() (string, error) {
@@ -311,21 +292,6 @@ func quiesceInstalledApplication(ctx context.Context, controllerApp, installedAp
 	}
 	if len(result.Stderr) != 0 {
 		return fmt.Errorf("captain package: stopping the installed app wrote stderr: %q", string(result.Stderr))
-	}
-	return nil
-}
-
-// stopInstalledHost makes nothing serve the host label and takes its agent
-// down, draining the incumbent through the control lane.
-func stopInstalledHost(ctx context.Context) error {
-	client, err := daemonkit.Open(hostDaemon())
-	if err != nil {
-		return fmt.Errorf("captain package: open signed host: %w", err)
-	}
-	stopCtx, cancel := context.WithTimeout(ctx, hostStopTimeout)
-	defer cancel()
-	if err := client.Stop(stopCtx); err != nil {
-		return fmt.Errorf("captain package: stop installed host: %w", err)
 	}
 	return nil
 }

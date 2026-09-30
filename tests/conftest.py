@@ -60,12 +60,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def deny_installed_processes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CAPT_HOOK_TEST_NO_LIVE", "1")
     start = subprocess.Popen
-    installed = Path.home() / "Applications" / "Captain Hook.app"
+    installed = (Path.home() / "Applications" / "Captain Hook.app", Path.home() / ".local/share/captain-hook/host")
 
     def checked_start(args: Any, *positional: Any, **keywords: Any) -> Any:
         command = args[0] if isinstance(args, list | tuple) else args
         if isinstance(command, str | bytes | Path) and Path(os.fsdecode(command)).is_absolute():
-            if Path(os.fsdecode(command)).is_relative_to(installed):
+            if any(Path(os.fsdecode(command)).is_relative_to(root) for root in installed):
                 raise AssertionError("tests must not start an installed Captain Hook helper")
         return start(args, *positional, **keywords)
 

@@ -75,3 +75,12 @@ def test_missing_client_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "execv", missing_execv)
     with pytest.raises(SystemExit, match="1"):
         client.main()
+
+
+def test_host_is_the_fixed_platform_install() -> None:
+    install = (
+        "Applications/Captain Hook.app/Contents/Helpers/capt-hookd"
+        if sys.platform == "darwin"
+        else ".local/share/captain-hook/host/capt-hookd"
+    )
+    assert client.HOST == os.path.join(os.path.expanduser("~"), install)

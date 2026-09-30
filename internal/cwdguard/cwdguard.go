@@ -1,3 +1,5 @@
+//go:build darwin
+
 // Package cwdguard leaves a removed working directory for "/" before package os
 // runs os/executable_darwin.go's `initCwd, initCwdErr = Getwd()`, whose libc
 // fallback scans the former parent; importing only syscall puts this init ahead

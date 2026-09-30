@@ -1,0 +1,14 @@
+#!/usr/bin/env binrun
+{
+  "schema": 1,
+  "name": "capt-hook",
+  "kind": "python-tool",
+  "version": {
+    "file": "~/.local/share/captain-hook/host/version.json",
+    "json_field": "build"
+  },
+  "tool": {
+    "dist": "capt-hook",
+    "entrypoint": "capt-hook"
+  }
+}

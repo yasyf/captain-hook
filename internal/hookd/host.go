@@ -33,6 +33,15 @@ const hostSchema daemonkit.Schema = "captain-hook.host.v1"
 // Build is stamped from the release tag into the wheel and signed helper.
 var Build = "0.0.0"
 
+type hostVersion struct {
+	Schema int    `json:"schema"`
+	Build  string `json:"build"`
+}
+
+func currentHostVersion() hostVersion {
+	return hostVersion{Schema: wireproto.Schema, Build: Build}
+}
+
 type statusResponse struct {
 	Schema  int            `json:"schema"`
 	Build   string         `json:"build"`

@@ -139,8 +139,39 @@ jobs:
       MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
       MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
 
+  linux-host:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+
+      - name: Build the Linux host
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir linux-host
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X github.com/yasyf/captain-hook/internal/hookd.Build=$version" \
+            -o linux-host/capt-hookd ./cmd/capt-hookd
+          test "$(linux-host/capt-hookd version)" = "{\"schema\":1,\"build\":\"$version\"}"
+          tar -C linux-host -czf "captain-hook-$TAG-linux-amd64.tar.gz" capt-hookd
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-host
+          path: captain-hook-*-linux-amd64.tar.gz
+          if-no-files-found: error
+
   stage-release:
-    needs: [build, python-assets, helper]
+    needs: [build, python-assets, helper, linux-host]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -156,6 +187,11 @@ jobs:
         with:
           name: ${{ needs.helper.outputs.artifact_name }}
           path: helper-artifact
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-host
+          path: linux-artifact
 
       - name: Assemble the exact complete release
         env:
@@ -181,6 +217,12 @@ jobs:
           cp "${helper_assets[0]}" "dist/$HELPER_ASSET_FILENAME"
           cp "$helper_sidecar" "dist/$HELPER_ASSET_FILENAME.sha256"
           (cd dist && sha256sum -c "$HELPER_ASSET_FILENAME.sha256")
+
+          linux_asset="captain-hook-${RELEASE_TAG}-linux-amd64.tar.gz"
+          mapfile -t linux_assets < <(find linux-artifact -type f)
+          test "${#linux_assets[@]}" = 1
+          test "${linux_assets[0]}" = "linux-artifact/$linux_asset"
+          cp "${linux_assets[0]}" "dist/$linux_asset"
           test "$(sha256sum "dist/$HELPER_ASSET_FILENAME" | awk '{print $1}')" = "$HELPER_SHA256"
           test "$HELPER_ASSET_URL" = \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${HELPER_ASSET_FILENAME}"
