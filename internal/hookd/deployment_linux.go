@@ -18,9 +18,12 @@ import (
 const (
 	installedHostName    = "capt-hookd"
 	installedVersionName = "version.json"
+	installLockName      = "install.lock"
+	superviseLockName    = "supervise.lock"
 )
 
 type installedPaths struct {
+	root string
 	dir  string
 	host string
 	link string
@@ -34,12 +37,27 @@ func resolveInstalledPaths() (installedPaths, error) {
 	if err != nil {
 		return installedPaths{}, fmt.Errorf("captain package: resolve user home: %w", err)
 	}
-	dir := filepath.Join(home, ".local", "share", "captain-hook", "host")
+	root := filepath.Join(home, ".local", "share", "captain-hook")
+	dir := filepath.Join(root, "host")
 	return installedPaths{
+		root: root,
 		dir:  dir,
 		host: filepath.Join(dir, installedHostName),
 		link: filepath.Join(home, ".local", "bin", installedHostName),
 	}, nil
+}
+
+// lock takes one of the install's exclusive locks, kept beside the host dir so
+// an uninstall that removes the dir still holds it.
+func (p installedPaths) lock(ctx context.Context, name string) (*durable.Lock, error) {
+	if err := os.MkdirAll(p.root, 0o755); err != nil {
+		return nil, fmt.Errorf("captain package: create %q: %w", p.root, err)
+	}
+	lock, err := durable.AcquireLock(ctx, filepath.Join(p.root, name))
+	if err != nil {
+		return nil, fmt.Errorf("captain package: take %s: %w", name, err)
+	}
+	return lock, nil
 }
 
 func applyPackagedApplication(ctx context.Context) error {
@@ -61,6 +79,11 @@ func applyPackagedApplication(ctx context.Context) error {
 	if source == installed.host {
 		return errors.New("captain package: packaged source and installed target must differ")
 	}
+	lock, err := installed.lock(ctx, installLockName)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	for _, dir := range []string{installed.dir, filepath.Dir(installed.link)} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("captain package: create %q: %w", dir, err)
@@ -126,11 +149,16 @@ func ensureSupervisedHost(ctx context.Context, client *daemonkit.Client) error {
 }
 
 func uninstallPackagedApplication(ctx context.Context) error {
-	if err := stopInstalledHost(ctx); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
-		return err
-	}
 	installed, err := resolveInstalledPaths()
 	if err != nil {
+		return err
+	}
+	lock, err := installed.lock(ctx, installLockName)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := stopInstalledHost(ctx); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
 		return err
 	}
 	if err := durable.Remove(installed.link); err != nil {
