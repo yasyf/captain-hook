@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.61.0] - 2026-09-30
+
 ### Added
 
 - **Linux amd64 gains a host with a foreground supervisor.** The plugin's
