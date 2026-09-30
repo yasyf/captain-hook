@@ -883,18 +883,9 @@ class RemoteSession:
                     client.schedule_root_warm(self.path, classifier)
                 raise
             try:
-                if any(
-                    self.lease.description[field] != classified.lease.description[field]
-                    for field in (
-                        "source_id",
-                        "mtime_ns",
-                        "ctime_ns",
-                        "source_bytes",
-                        "committed_bytes",
-                        "provisional_tail",
-                    )
-                ):
-                    raise EvidenceIncomplete("changed", "transcript changed during classifier selection")
+                before, after = self.lease.description, classified.lease.description
+                if after["source_id"] != before["source_id"] or after["committed_bytes"] < before["committed_bytes"]:
+                    raise EvidenceIncomplete("changed", "transcript was rewritten during classifier selection")
             except BaseException:
                 classified.release()
                 raise

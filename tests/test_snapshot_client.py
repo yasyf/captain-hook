@@ -879,26 +879,23 @@ def test_lease_renews_only_near_its_reported_expiry(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("changed_field", "changed_value"),
+    ("changes", "rewritten"),
     [
-        (None, None),
-        ("source_id", "other"),
-        ("mtime_ns", "4"),
-        ("ctime_ns", "5"),
-        ("source_bytes", 101),
-        ("committed_bytes", 99),
-        ("provisional_tail", True),
+        ({}, False),
+        ({"mtime_ns": "4", "ctime_ns": "5", "source_bytes": 150, "committed_bytes": 150}, False),
+        ({"source_bytes": 101, "provisional_tail": True}, False),
+        ({"source_id": "other"}, True),
+        ({"source_bytes": 99, "committed_bytes": 99}, True),
     ],
 )
-def test_builtin_classifier_acquires_a_matching_lease_and_checks_source_revision(changed_field, changed_value):
+def test_builtin_classifier_accepts_an_appended_transcript_and_rejects_a_rewrite(changes, rewritten):
     from captain_hook.snapshots.client import EvidenceIncomplete
 
     classifier = {"id": "captain-lane", "version": "1"}
     initial = description("initial")
     derived = description("classified", classifier)
     derived["handle"] = dict(derived["handle"], snapshot_id="derived", generation="derived")
-    if changed_field is not None:
-        derived[changed_field] = changed_value
+    derived.update(changes)
     requests = []
 
     def exchange(wrapper):
@@ -913,8 +910,8 @@ def test_builtin_classifier_acquires_a_matching_lease_and_checks_source_revision
     client = SnapshotClient(exchange)
     original = RemoteSession(client, Lease(client, initial), Path(initial["canonical_path"]), initial["classifier"])
     try:
-        if changed_field is not None:
-            with pytest.raises(EvidenceIncomplete, match="transcript changed during classifier selection"):
+        if rewritten:
+            with pytest.raises(EvidenceIncomplete, match="transcript was rewritten during classifier selection"):
                 original.with_classifier(classifier)
             assert not original.lease.released
             assert requests[-1]["token"] == "classified"
