@@ -885,3 +885,20 @@ func TestSnapshotOwnerStartupNobodyHoldsADeadlineOnEndsAtTheReadinessBound(t *te
 		t.Fatalf("startups after one ended generation = %d, %t; want 2, false", epoch, starting)
 	}
 }
+
+func TestSnapshotOwnerFirstWaiterHoldsTheStartupFromItsConstruction(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, entered, release := stalledSnapshotService(t, clock)
+	service.manager.readiness = 0
+	ctx, cancel := context.WithDeadline(context.Background(), clock.Now().Add(30*time.Second))
+	defer cancel()
+	got := make(chan error, 1)
+	go func() { _, err := service.get(ctx); got <- err }()
+	<-entered
+	clock.Advance(workerReadinessTimeout + 3*time.Second)
+	expireSnapshotStartup(service)
+	close(release)
+	if err := <-got; err != nil {
+		t.Fatalf("first waiter = %v; the readiness timer fired before its deadline was registered", err)
+	}
+}

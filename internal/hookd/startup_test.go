@@ -28,7 +28,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 func TestStartupWithNoWaiterDeadlineEndsAtReadiness(t *testing.T) {
 	t.Parallel()
 	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
-	s := newStartup(context.Background(), clock.Now, 0)
+	s, _ := newStartup(context.Background(), clock.Now, 0, time.Time{})
 	<-s.ctx.Done()
 	if !errors.Is(s.ctx.Err(), context.Canceled) {
 		t.Fatalf("startup context = %v, want cancelled at the readiness bound", s.ctx.Err())
@@ -39,8 +39,7 @@ func TestStartupWithNoWaiterDeadlineEndsAtReadiness(t *testing.T) {
 func TestStartupHoldsToItsLatestLiveWaiterDeadline(t *testing.T) {
 	t.Parallel()
 	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
-	s := newStartup(context.Background(), clock.Now, 10*time.Second)
-	leaveFirst := s.join(clock.Now().Add(time.Minute))
+	s, leaveFirst := newStartup(context.Background(), clock.Now, 10*time.Second, clock.Now().Add(time.Minute))
 	leaveLater := s.join(clock.Now().Add(2 * time.Minute))
 	s.join(time.Time{})()
 
@@ -61,8 +60,7 @@ func TestStartupHoldsToItsLatestLiveWaiterDeadline(t *testing.T) {
 func TestStartupOutlivesNoWaiterOnceEveryWaiterLeaves(t *testing.T) {
 	t.Parallel()
 	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
-	s := newStartup(context.Background(), clock.Now, 10*time.Second)
-	leave := s.join(clock.Now().Add(time.Hour))
+	s, leave := newStartup(context.Background(), clock.Now, 10*time.Second, clock.Now().Add(time.Hour))
 	leave()
 	leave()
 
@@ -76,10 +74,26 @@ func TestStartupOutlivesNoWaiterOnceEveryWaiterLeaves(t *testing.T) {
 func TestStartupEndStopsItsBound(t *testing.T) {
 	t.Parallel()
 	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
-	s := newStartup(context.Background(), clock.Now, time.Hour)
+	s, _ := newStartup(context.Background(), clock.Now, time.Hour, time.Time{})
 	s.end()
 	if !errors.Is(s.ctx.Err(), context.Canceled) {
 		t.Fatalf("ended startup context = %v, want cancelled", s.ctx.Err())
 	}
 	s.join(clock.Now().Add(time.Hour))()
+}
+
+func TestTheFirstWaiterHoldsTheStartupFromItsConstruction(t *testing.T) {
+	t.Parallel()
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	s, leave := newStartup(context.Background(), clock.Now, 0, clock.Now().Add(30*time.Second))
+	clock.Advance(workerReadinessTimeout + 3*time.Second)
+	s.expire()
+	if s.ctx.Err() != nil {
+		t.Fatal("a startup whose first waiter holds a deadline was cancelled at the readiness bound")
+	}
+	leave()
+	s.expire()
+	if !errors.Is(s.ctx.Err(), context.Canceled) {
+		t.Fatalf("startup context after its only waiter left = %v, want cancelled", s.ctx.Err())
+	}
 }

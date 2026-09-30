@@ -807,7 +807,7 @@ func TestAGrownMemberSurvivesAnImmediateSweep(t *testing.T) {
 	manager.start = func(context.Context, workerKey) (*workerClient, error) { return worker, nil }
 
 	manager.mu.Lock()
-	entry := manager.startMemberLocked(workerKey{id: "pool", root: root}, 0)
+	entry, _ := manager.startMemberLocked(workerKey{id: "pool", root: root}, 0, time.Time{})
 	manager.mu.Unlock()
 	<-entry.ready
 	manager.wg.Wait()

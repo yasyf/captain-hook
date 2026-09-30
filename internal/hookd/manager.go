@@ -287,6 +287,8 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		return nil, admission{}, errWorkerAdmissionPaused
 	}
 	var evicted *workerClient
+	deadline, _ := ctx.Deadline()
+	var leave func()
 	view := m.poolLocked(key.id)
 	entry := view.ready
 	if key.affinity != "" && !ephemeralRoot(key.root) {
@@ -296,7 +298,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		if member := m.entries[target.member()]; member != nil {
 			entry = member
 		} else if view.starting == nil && view.size < m.poolSize && len(m.entries) < maxLiveWorkers {
-			entry = m.startMemberLocked(key, shard)
+			entry, leave = m.startMemberLocked(key, shard, deadline)
 		}
 	}
 	switch {
@@ -312,24 +314,24 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 			}
 			evicted = victim.worker
 		}
-		entry = m.startMemberLocked(key, view.shard)
+		entry, leave = m.startMemberLocked(key, view.shard, deadline)
 	case key.affinity == "" && entry.load > 0 && !entry.ephemeral && view.starting == nil &&
 		view.size < m.poolSize && len(m.entries) < maxLiveWorkers:
-		m.startMemberLocked(key, view.shard)
+		m.startMemberLocked(key, view.shard, time.Time{})
 	}
 	entry.lastUsed = m.now()
 	entry.inflight++
 	ready := entry.started()
 	var adm admission
-	leave := func() {}
 	if ready {
 		adm = m.reserveLocked(ctx, entry)
-	} else {
-		deadline, _ := ctx.Deadline()
+	} else if leave == nil {
 		leave = entry.startup.join(deadline)
 	}
 	m.mu.Unlock()
-	defer leave()
+	if leave != nil {
+		defer leave()
+	}
 
 	if evicted != nil {
 		_ = m.settle(evicted)
@@ -368,16 +370,17 @@ func (m *workerManager) admitted(entry *workerEntry, adm admission) (*workerEntr
 	return entry, adm, nil
 }
 
-func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry {
+func (m *workerManager) startMemberLocked(key workerKey, shard int, deadline time.Time) (*workerEntry, func()) {
 	key.shard = shard
+	ephemeral := ephemeralRoot(key.root)
+	bound, leave := newStartup(m.lifetime, m.now, m.readiness, deadline)
 	entry := &workerEntry{
-		ready: make(chan struct{}), startup: newStartup(m.lifetime, m.now, m.readiness),
-		key: key, inflight: 1, ephemeral: ephemeralRoot(key.root), lastUsed: m.now(),
+		ready: make(chan struct{}), startup: bound, key: key, inflight: 1, ephemeral: ephemeral, lastUsed: m.now(),
 	}
 	m.entries[key.member()] = entry
 	m.wg.Add(1)
 	go m.startEntry(entry)
-	return entry
+	return entry, leave
 }
 
 func (m *workerManager) startEntry(entry *workerEntry) {

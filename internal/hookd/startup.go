@@ -21,13 +21,16 @@ type startup struct {
 	ended     bool
 }
 
-func newStartup(parent context.Context, now func() time.Time, readiness time.Duration) *startup {
+// newStartup registers the first waiter's deadline before the timer is armed,
+// so the bound never reads empty between construction and that waiter's join.
+func newStartup(parent context.Context, now func() time.Time, readiness time.Duration, deadline time.Time) (*startup, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	s := &startup{ctx: ctx, cancel: cancel, now: now, readiness: now().Add(readiness), waiters: make(map[uint64]time.Time)}
 	s.mu.Lock()
-	s.timer = time.AfterFunc(readiness, s.expire)
-	s.mu.Unlock()
-	return s
+	defer s.mu.Unlock()
+	leave := s.registerLocked(deadline)
+	s.timer = time.AfterFunc(s.boundLocked().Sub(now()), s.expire)
+	return s, leave
 }
 
 // join holds the startup open to deadline until leave is called; a waiter
@@ -35,13 +38,18 @@ func newStartup(parent context.Context, now func() time.Time, readiness time.Dur
 func (s *startup) join(deadline time.Time) (leave func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	leave = s.registerLocked(deadline)
+	s.armLocked()
+	return leave
+}
+
+func (s *startup) registerLocked(deadline time.Time) (leave func()) {
 	if s.ended || deadline.IsZero() {
 		return func() {}
 	}
 	s.joined++
 	id := s.joined
 	s.waiters[id] = deadline
-	s.armLocked()
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()

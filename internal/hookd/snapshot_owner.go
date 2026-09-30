@@ -326,11 +326,11 @@ func (s *snapshotService) get(ctx context.Context) (*snapshotOwner, error) {
 			return owner, nil
 		}
 	}
+	deadline, _ := ctx.Deadline()
+	var leave func()
 	if s.starting == nil {
-		startup := &snapshotStartup{
-			ready: make(chan struct{}),
-			bound: newStartup(s.manager.lifetime, s.manager.now, s.manager.readiness),
-		}
+		startup := &snapshotStartup{ready: make(chan struct{})}
+		startup.bound, leave = newStartup(s.manager.lifetime, s.manager.now, s.manager.readiness, deadline)
 		s.starting = startup
 		s.epoch++
 		previous := s.owner
@@ -338,8 +338,9 @@ func (s *snapshotService) get(ctx context.Context) (*snapshotOwner, error) {
 		go s.startGeneration(startup, previous)
 	}
 	startup := s.starting
-	deadline, _ := ctx.Deadline()
-	leave := startup.bound.join(deadline)
+	if leave == nil {
+		leave = startup.bound.join(deadline)
+	}
 	s.mu.Unlock()
 	defer leave()
 	select {

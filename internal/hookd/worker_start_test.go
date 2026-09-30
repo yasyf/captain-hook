@@ -390,3 +390,56 @@ func TestCancellingEveryWaiterEndsTheStartupAtReadiness(t *testing.T) {
 		t.Fatal("a startup every waiter abandoned outlived the readiness bound")
 	}
 }
+
+type holdingClock struct {
+	fakeClock
+	calls    int
+	holdCall int
+	held     chan struct{}
+	release  chan struct{}
+}
+
+func (c *holdingClock) Now() time.Time {
+	c.mu.Lock()
+	c.calls++
+	hold := c.calls == c.holdCall
+	c.mu.Unlock()
+	if hold {
+		close(c.held)
+		<-c.release
+	}
+	return c.fakeClock.Now()
+}
+
+// TestTheFirstWaiterHoldsTheMemberStartupFromItsConstruction pins the window
+// between arming the readiness timer and the first join: the clock blocks
+// startMemberLocked on its lastUsed read, past where the caller once joined,
+// while the readiness bound is already behind the clock.
+func TestTheFirstWaiterHoldsTheMemberStartupFromItsConstruction(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	clock := &holdingClock{fakeClock: fakeClock{now: time.Now()}, holdCall: 3, held: make(chan struct{}), release: make(chan struct{})}
+	manager.now, manager.readiness = clock.Now, 0
+	worker, _ := silentWorker(t)
+	started, releaseStart := stallStart(manager, worker, nil)
+	key := workerKey{id: "held-construction", root: "/live"}
+
+	ctx, cancel := context.WithDeadline(t.Context(), clock.Now().Add(30*time.Second))
+	defer cancel()
+	result := acquireAsync(manager, ctx, key)
+	<-clock.held
+	clock.Advance(workerReadinessTimeout + 3*time.Second)
+	close(clock.release)
+	<-started
+	cachedEntry(manager, key.member()).startup.expire()
+	close(releaseStart)
+
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("waiter = %v; the readiness timer fired before its deadline was registered", got.err)
+	}
+	if got.entry.worker != worker || worker.broken() {
+		t.Fatal("waiter did not get the worker whose startup it held from construction")
+	}
+	manager.release(got.entry)
+}
