@@ -6,14 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [12.62.0] - 2026-09-30
+## [12.63.0] - 2026-09-30
 
 ### Added
 
-- **`llm_gate` takes `once_per_turn`.** Any LLM hook firing in a turn silences
-  every gate for the rest of that turn. Teammate and other-session messages wake
-  an orchestrator without opening a new turn, so one fire muted a Stop gate
-  until the user next typed. `once_per_turn=False` judges every Stop.
 - **A session is told when its hooks stop running.** When transcript evidence
   comes back incomplete, a dispatch fails open. Claude Code gets an empty
   success and no hook runs. One such dispatch is harmless, but on 2026-09-29 a
@@ -26,6 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   due on an event whose output nobody reads, such as `PreCompact` or
   `Notification`, waits for the next fail-open that can carry it. Set
   `CAPT_HOOK_FAIL_OPEN_WARN_AFTER` to move the first warning.
+
+### Fixed
+
+- **The host spawns again once the machine's process count grows.**
+  daemonkit v0.32.1 fixes a limit that froze at the host's first spawn. After
+  that, every snapshot-owner and worker spawn failed with `EAGAIN` for hours,
+  and every hook in every session failed open. The host now also retries a
+  spawn the kernel rejects with `EAGAIN`, five times over 1.55 s, inside the
+  worker's readiness budget.
+- **An LLM hook call starts one `claude` process instead of three.** Choosing
+  a backend ran `claude auth status` on every call, and the Claude Agent SDK
+  ran `claude -v` against the CLI it bundles. The worker now reuses a selected
+  backend for five minutes and skips the version probe. A `UserPromptSubmit`
+  in the monorepo went from 4.3 spawns to 2.3.
+
+## [12.62.0] - 2026-09-30
+
+### Added
+
+- **`llm_gate` takes `once_per_turn`.** Any LLM hook firing in a turn silences
+  every gate for the rest of that turn. Teammate and other-session messages wake
+  an orchestrator without opening a new turn, so one fire muted a Stop gate
+  until the user next typed. `once_per_turn=False` judges every Stop.
 
 ### Fixed
 
@@ -43,17 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The judge read each message clipped to 700 characters, so a list at the
     end of a long report never reached it.
   - Teammate wakes shared the fire latch described above.
-- **The host spawns again once the machine's process count grows.**
-  daemonkit v0.32.1 fixes a limit that froze at the host's first spawn. After
-  that, every snapshot-owner and worker spawn failed with `EAGAIN` for hours,
-  and every hook in every session failed open. The host now also retries a
-  spawn the kernel rejects with `EAGAIN`, five times over 1.55 s, inside the
-  worker's readiness budget.
-- **An LLM hook call starts one `claude` process instead of three.** Choosing
-  a backend ran `claude auth status` on every call, and the Claude Agent SDK
-  ran `claude -v` against the CLI it bundles. The worker now reuses a selected
-  backend for five minutes and skips the version probe. A `UserPromptSubmit`
-  in the monorepo went from 4.3 spawns to 2.3.
 
 ## [12.61.0] - 2026-09-30
 
