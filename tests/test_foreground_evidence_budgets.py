@@ -24,6 +24,8 @@ from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_resu
 TURNS = 120
 PAYLOAD = 4096
 SESSION = "budget-session"
+DEADLINE_SECONDS = 30.0
+TOOL_SECONDS, _ = foreground_allowance(Event.PreToolUse.name)
 WARM_ROUND_TRIPS = {False: 10, True: 8}
 
 GUARDS: dict[str, Callable[[BaseHookEvent, str], bool]] = {
@@ -166,8 +168,9 @@ def dispatch(
     event: Event,
     transcript: Transcript,
     exchange: Callable[[dict[str, object]], dict[str, Any]] | None = None,
+    seconds: float = DEADLINE_SECONDS,
 ) -> tuple[object, list[str]]:
-    seconds, source_read_bytes = foreground_allowance(event.name)
+    _, source_read_bytes = foreground_allowance(event.name)
     client = SnapshotClient(
         exchange or owner.exchange, foreground_seconds=seconds, foreground_source_read_bytes=source_read_bytes
     )
@@ -188,7 +191,7 @@ def dispatch(
 @pytest.mark.parametrize("guard", list(GUARDS))
 @pytest.mark.parametrize("event", [Event.PreToolUse, Event.Stop], ids=["tool", "turn"])
 @pytest.mark.parametrize("phase", list(PHASES))
-def test_a_transcript_guard_blocks_within_the_foreground_allowance(
+def test_a_transcript_guard_blocks_within_the_foreground_read_allowance(
     tmp_path: Path, owner: FixtureOwner, transcript: Transcript, event: Event, phase: str, guard: str
 ) -> None:
     transcript.write("alpha")
@@ -214,7 +217,7 @@ def test_a_foreground_dispatch_never_renews_a_lease_the_owner_cannot_extend(
     denied.clear()
     exchange = HeldExchange(owner, None)
 
-    _, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange)
+    _, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange, TOOL_SECONDS)
 
     assert gaps == []
     assert denied == ["has_command"]
@@ -229,7 +232,7 @@ def test_a_retain_answered_after_the_foreground_deadline_is_a_deadline_gap(
     denied = register(Event.PreToolUse, transcript, "has_command")
     exchange = HeldExchange(owner, "retain")
 
-    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange)
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange, TOOL_SECONDS)
 
     assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
     assert denied == []
@@ -249,7 +252,7 @@ def test_a_late_lease_skips_only_the_hook_that_read_it(
 
     exchange = HeldExchange(owner, "retain")
 
-    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange)
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange, TOOL_SECONDS)
 
     assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
     assert denied == ["policy"]
