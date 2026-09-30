@@ -897,6 +897,24 @@ def test_a_lease_at_the_foreground_deadline_is_not_renewed(monkeypatch):
     assert session.lease.require() == session.lease.handle
 
 
+def test_a_lease_renews_against_the_client_that_requires_it(monkeypatch):
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: 129.5)
+    calls = []
+
+    def exchange(wrapper):
+        calls.append(wrapper["request"]["operation"])
+        return response(wrapper["request"], {"kind": "renewed", "expires_unix_ms": 159_500})
+
+    foreground = SnapshotClient(exchange)
+    foreground.foreground_deadline_unix_ms = 100_750
+    background = SnapshotClient(exchange)
+    lease = Lease(foreground, description() | {"lease_expires_unix_ms": 130_000})
+
+    assert lease.require(background) == lease.handle
+    assert calls == ["renew"]
+    assert lease.expires_unix_ms == 159_500
+
+
 @pytest.mark.parametrize("operation", ["retain", "renew"])
 def test_a_stale_handle_after_the_foreground_deadline_is_a_deadline(monkeypatch, operation):
     clock = SimpleNamespace(now=100.0)

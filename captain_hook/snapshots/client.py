@@ -497,16 +497,16 @@ class Lease:
         self.subagent_guard = threading.Lock()
         self.subagent_views: dict[str, RemoteSubagentIndex] = {}
 
-    @property
-    def renewable(self) -> bool:
-        return (deadline := self.client.foreground_deadline_unix_ms) is None or self.expires_unix_ms < deadline
+    def renewable_by(self, client: SnapshotClient) -> bool:
+        return (deadline := client.foreground_deadline_unix_ms) is None or self.expires_unix_ms < deadline
 
     def require(self, client: SnapshotClient | None = None) -> dict[str, str]:
+        client = client or self.client
         with self.guard:
             if self.closed or self.released:
                 raise EvidenceIncomplete("stale_handle", "preparation lease was already released")
-            if self.renewable and self.expires_unix_ms <= time.time() * 1000 + 1000:
-                result = (client or self.client).call("renew", handle=self.handle)
+            if self.renewable_by(client) and self.expires_unix_ms <= time.time() * 1000 + 1000:
+                result = client.call("renew", handle=self.handle)
                 if result["status"] != "ok":
                     raise EvidenceIncomplete(result["status"], result["reason"])
                 self.expires_unix_ms = result["data"]["expires_unix_ms"]
