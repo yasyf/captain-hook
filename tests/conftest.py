@@ -139,17 +139,6 @@ def stub_helper_notify(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureR
 
 
 @pytest.fixture(autouse=True)
-def stub_backend_selection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer ``spawnllm.select_backend`` with a ready backend, so no test spawns an auth probe."""
-    from unittest.mock import MagicMock
-
-    import spawnllm
-
-    ready = MagicMock(provider="claude", resolve_model=lambda model: model)
-    monkeypatch.setattr(spawnllm, "select_backend", lambda **_: ready)
-
-
-@pytest.fixture(autouse=True)
 def isolate_tracked_models():
     session_tracked, durable_tracked = SessionStore.TRACKED[:], DurableStore.TRACKED[:]
     yield

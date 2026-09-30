@@ -72,10 +72,9 @@ def ready_backend(specialty: TSpecialty | None, model: TModel | str) -> LlmBacke
     with READY_BACKENDS_LOCK:
         if (ready := READY_BACKENDS.get(key)) is not None and time.monotonic() - ready[0] < READY_BACKEND_TTL_SECONDS:
             return ready[1]
-    backend = select_backend(specialty=specialty, model=model)
-    with READY_BACKENDS_LOCK:
+        backend = select_backend(specialty=specialty, model=model)
         READY_BACKENDS[key] = (time.monotonic(), backend)
-    return backend
+        return backend
 
 
 def remember_model_rejection(specialty: str, model: str, exc: BaseException, backend: LlmBackend) -> None:

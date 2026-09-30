@@ -354,6 +354,10 @@ CLAUDE = MagicMock(provider="claude", resolve_model=lambda model: {"small": "cla
 
 
 class TestCallLlm:
+    @pytest.fixture(autouse=True)
+    def ready_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("spawnllm.select_backend", lambda **_: CLAUDE)
+
     def test_rejected_model_fails_fast_while_the_same_backend_serves_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from spawnllm import BackendCallError
 

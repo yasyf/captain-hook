@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `systemMessage` for the user, and `additionalContext` for the model where
   the event takes one. The message gives the count and the latest cause. A
   Stop only ever gets the `systemMessage`, never a block. A warning that falls
-  due on `PreCompact` waits for the next event. Set
+  due on an event whose output nobody reads, such as `PreCompact` or
+  `Notification`, waits for the next fail-open that can carry it. Set
   `CAPT_HOOK_FAIL_OPEN_WARN_AFTER` to move the first warning.
 
 ### Fixed

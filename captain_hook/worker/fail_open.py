@@ -12,6 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from cc_transcript.ids import SessionId
+from filelock import Timeout
+from loguru import logger
 from pydantic import BaseModel
 
 from captain_hook.dispatch import format_output
@@ -24,6 +26,16 @@ if TYPE_CHECKING:
 
 WARN_AFTER_ENV = "CAPT_HOOK_FAIL_OPEN_WARN_AFTER"
 DEFAULT_WARN_AFTER = 3
+TALLY_LOCK_SECONDS = 0.5
+SURFACING_EVENTS = (
+    Event.SessionStart
+    | Event.UserPromptSubmit
+    | Event.PreToolUse
+    | Event.PostToolUse
+    | Event.PostToolUseFailure
+    | Event.Stop
+    | Event.SubagentStop
+)
 
 
 class FailOpenTally(BaseModel):
@@ -32,13 +44,23 @@ class FailOpenTally(BaseModel):
 
 
 def tally_fail_open(event: Event, session_id: str, exc: EvidenceIncomplete) -> dict[str, object] | None:
-    """Count one fail-open for the session; return the envelope to send when a warning is due."""
+    """Count one fail-open for the session; return the envelope to send when a warning is due.
+
+    Runs inside the fail-open handler, so a tally it cannot take is logged and dropped rather than
+    raised over the response, and a warning due on an event whose output nobody reads stays due.
+    """
     warn_after = int(reqenv.getenv(WARN_AFTER_ENV) or DEFAULT_WARN_AFTER)
-    with SessionSlot(ensure_session(SessionId(session_id)), FailOpenTally).mutate() as tally:
-        tally.count += 1
-        if event is Event.PreCompact or tally.count < max(warn_after, 2 * tally.warned_at):
-            return None
-        tally.warned_at = count = tally.count
+    try:
+        with SessionSlot(ensure_session(SessionId(session_id)), FailOpenTally).mutate(
+            timeout=TALLY_LOCK_SECONDS
+        ) as tally:
+            tally.count += 1
+            if event not in SURFACING_EVENTS or tally.count < max(warn_after, 2 * tally.warned_at):
+                return None
+            tally.warned_at = count = tally.count
+    except (Timeout, OSError):
+        logger.opt(exception=True).warning("fail-open tally skipped")
+        return None
     message = (
         f"capt-hook: {count} hook dispatches in this session failed open, so none of their hooks ran "
         f"(latest: {exc.status}: {exc.reason}). Guards such as Stop gates and permission checks are "

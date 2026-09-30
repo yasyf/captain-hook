@@ -431,14 +431,30 @@ def test_fail_open_warning_on_stop_never_blocks_the_stop(tmp_path: Path) -> None
     assert set(envelope) == {"systemMessage"}
 
 
-def test_fail_open_warning_due_on_pre_compact_waits_for_the_next_event(tmp_path: Path) -> None:
+def test_fail_open_warning_waits_for_an_event_whose_output_is_read(tmp_path: Path) -> None:
     runtime = fail_open_runtime()
 
-    compact, _ = runtime.dispatch(session_request(tmp_path, event="PreCompact", warn_after="1"))
+    silent = [
+        runtime.dispatch(session_request(tmp_path, event=event, warn_after="1"))[0].stdout
+        for event in ("PreCompact", "Notification", "SessionEnd")
+    ]
     prompt, _ = runtime.dispatch(session_request(tmp_path, event="UserPromptSubmit", warn_after="1"))
 
-    assert compact.stdout == ""
-    assert "2 hook dispatches" in json.loads(prompt.stdout)["systemMessage"]
+    assert silent == ["", "", ""]
+    assert "4 hook dispatches" in json.loads(prompt.stdout)["systemMessage"]
+
+
+def test_a_contended_tally_still_fails_open(tmp_path: Path) -> None:
+    from filelock import FileLock
+
+    session_dir = tmp_path / "hooks" / "sessions" / "fail-open-session"
+    session_dir.mkdir(parents=True)
+    runtime = fail_open_runtime()
+
+    with FileLock(str(session_dir / "fail_open_tally.json.lock")):
+        response, after = runtime.dispatch(session_request(tmp_path, warn_after="1"))
+
+    assert (response.status, response.exit, response.stdout, response.stderr, after) == ("ok", 0, "", "", None)
 
 
 @pytest.mark.parametrize("status", ["stale_handle", "stale_cursor"])

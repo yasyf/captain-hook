@@ -819,6 +819,7 @@ class TestCallLlmIntegration:
 
         monkeypatch.setattr(spawnllm, "call_sync", fake_call)
         monkeypatch.setattr(spawnllm, "extract_sync", fake_extract)
+        monkeypatch.setattr(spawnllm, "select_backend", lambda **_: object())
         return captured
 
     def test_call_llm_forwards_review_specialty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
