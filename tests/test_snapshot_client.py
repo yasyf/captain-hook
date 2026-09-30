@@ -645,8 +645,20 @@ def test_acquire_queues_for_admission_until_a_slot_frees():
     assert len({request["id"] for request in requests}) == 3
 
 
-@pytest.mark.parametrize("client_options", [{"foreground_seconds": 0.05}, {"preparation_seconds": 0.05}])
-def test_admission_queueing_stops_at_the_first_request_deadline(client_options):
+@pytest.mark.parametrize("client_options", [{"foreground_seconds": 0.5}, {"preparation_seconds": 0.5}])
+def test_admission_queueing_stops_at_the_first_request_deadline(monkeypatch, client_options):
+    from captain_hook.snapshots import client as snapshot_client
+
+    clock = SimpleNamespace(now=0.0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(
+        snapshot_client,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock.now, time=lambda: 1_700_000_000 + clock.now, sleep=sleep),
+    )
     requests = []
 
     def exchange(wrapper):
@@ -656,15 +668,14 @@ def test_admission_queueing_stops_at_the_first_request_deadline(client_options):
     client = SnapshotClient(exchange, **client_options)
     client.bind_tool_registry({})
 
-    started = time.monotonic()
     try:
         result = client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
     except EvidenceIncomplete as exc:
         assert exc.status == "deadline"
     else:
         assert result["status"] == "retained_limit"
-    assert time.monotonic() - started < 1
-    assert len(requests) > 1
+    assert 0.5 <= clock.now < 0.6
+    assert len(requests) > 5
     assert len({request["deadline_unix_ms"] for request in requests}) == 1
 
 
