@@ -287,7 +287,6 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		return nil, admission{}, errWorkerAdmissionPaused
 	}
 	var evicted *workerClient
-	deadline, _ := ctx.Deadline()
 	view := m.poolLocked(key.id)
 	entry := view.ready
 	if key.affinity != "" && !ephemeralRoot(key.root) {
@@ -297,7 +296,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		if member := m.entries[target.member()]; member != nil {
 			entry = member
 		} else if view.starting == nil && view.size < m.poolSize && len(m.entries) < maxLiveWorkers {
-			entry = m.startMemberLocked(key, shard, deadline)
+			entry = m.startMemberLocked(key, shard)
 		}
 	}
 	switch {
@@ -313,21 +312,24 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 			}
 			evicted = victim.worker
 		}
-		entry = m.startMemberLocked(key, view.shard, deadline)
+		entry = m.startMemberLocked(key, view.shard)
 	case key.affinity == "" && entry.load > 0 && !entry.ephemeral && view.starting == nil &&
 		view.size < m.poolSize && len(m.entries) < maxLiveWorkers:
-		m.startMemberLocked(key, view.shard, time.Time{})
+		m.startMemberLocked(key, view.shard)
 	}
 	entry.lastUsed = m.now()
 	entry.inflight++
 	ready := entry.started()
 	var adm admission
+	leave := func() {}
 	if ready {
 		adm = m.reserveLocked(ctx, entry)
 	} else {
-		entry.startup.extend(deadline)
+		deadline, _ := ctx.Deadline()
+		leave = entry.startup.join(deadline)
 	}
 	m.mu.Unlock()
+	defer leave()
 
 	if evicted != nil {
 		_ = m.settle(evicted)
@@ -366,10 +368,10 @@ func (m *workerManager) admitted(entry *workerEntry, adm admission) (*workerEntr
 	return entry, adm, nil
 }
 
-func (m *workerManager) startMemberLocked(key workerKey, shard int, deadline time.Time) *workerEntry {
+func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry {
 	key.shard = shard
 	entry := &workerEntry{
-		ready: make(chan struct{}), startup: newStartup(m.lifetime, m.now, m.readiness, deadline),
+		ready: make(chan struct{}), startup: newStartup(m.lifetime, m.now, m.readiness),
 		key: key, inflight: 1, ephemeral: ephemeralRoot(key.root), lastUsed: m.now(),
 	}
 	m.entries[key.member()] = entry

@@ -84,6 +84,25 @@ type EventResponse struct {
 	Warmup    bool    `json:"warmup"`
 }
 
+// EventReply is the host's reply to a client: the response without the
+// worker-transport metadata, so a client built before that metadata existed
+// still decodes it strictly.
+type EventReply struct {
+	Schema    int     `json:"schema"`
+	Status    string  `json:"status"`
+	Stdout    string  `json:"stdout"`
+	Stderr    string  `json:"stderr"`
+	Exit      int     `json:"exit"`
+	ElapsedMS float64 `json:"elapsed_ms"`
+}
+
+func (response EventResponse) Reply() EventReply {
+	return EventReply{
+		Schema: response.Schema, Status: response.Status, Stdout: response.Stdout, Stderr: response.Stderr,
+		Exit: response.Exit, ElapsedMS: response.ElapsedMS,
+	}
+}
+
 // AdoptRequest hands the host a process the worker started in a session of its
 // own, which the worker's settlement therefore cannot reach. The host records
 // it, terminates its session once LifetimeMS has run, and settles it with

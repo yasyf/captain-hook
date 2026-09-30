@@ -756,9 +756,88 @@ func TestSnapshotReleaseBypassesSaturatedReviewAdmission(t *testing.T) {
 	}
 }
 
+func stalledSnapshotService(t *testing.T, clock *fakeClock) (*snapshotService, chan struct{}, chan struct{}) {
+	t.Helper()
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	service.start = func(ctx context.Context) (*snapshotOwner, error) {
+		close(entered)
+		select {
+		case <-release:
+			return &snapshotOwner{}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return service, entered, release
+}
+
+func expireSnapshotStartup(service *snapshotService) *snapshotStartup {
+	service.mu.Lock()
+	startup := service.starting
+	service.mu.Unlock()
+	startup.bound.expire()
+	return startup
+}
+
+func TestSnapshotOwnerStartupCancellingTheLatestWaiterWithdrawsItsDeadline(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, entered, _ := stalledSnapshotService(t, clock)
+	firstCtx, cancelFirst := context.WithDeadline(context.Background(), clock.Now().Add(20*time.Second))
+	defer cancelFirst()
+	first := make(chan error, 1)
+	go func() { _, err := service.get(firstCtx); first <- err }()
+	<-entered
+	laterCtx, cancelLater := context.WithDeadline(context.Background(), clock.Now().Add(40*time.Second))
+	later := make(chan error, 1)
+	go func() { _, err := service.get(laterCtx); later <- err }()
+	cancelLater()
+	if err := <-later; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled joiner = %v, want %v", err, context.Canceled)
+	}
+
+	clock.Advance(30 * time.Second)
+	expireSnapshotStartup(service)
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("waiter past its own deadline = %v, want the owner startup ended", err)
+	}
+	if epoch, starting := service.startups(); epoch != 2 || starting {
+		t.Fatalf("startups = %d, %t; want the generation ended", epoch, starting)
+	}
+}
+
+func TestSnapshotOwnerStartupCancellingEveryWaiterEndsItAtReadiness(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, entered, _ := stalledSnapshotService(t, clock)
+	ctx, cancel := context.WithDeadline(context.Background(), clock.Now().Add(time.Hour))
+	results := make(chan error, 2)
+	go func() { _, err := service.get(ctx); results <- err }()
+	<-entered
+	go func() { _, err := service.get(ctx); results <- err }()
+	cancel()
+	for range 2 {
+		if err := <-results; !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled waiter = %v, want %v", err, context.Canceled)
+		}
+	}
+
+	clock.Advance(workerReadinessTimeout + time.Second)
+	startup := expireSnapshotStartup(service)
+	<-startup.ready
+	if !errors.Is(startup.err, context.Canceled) {
+		t.Fatalf("generation every waiter left = %v, want cancelled at the readiness bound", startup.err)
+	}
+	if epoch, starting := service.startups(); epoch != 2 || starting {
+		t.Fatalf("startups = %d, %t; want the generation ended", epoch, starting)
+	}
+}
+
 func TestSnapshotOwnerStartupOutlivesTheReadinessBoundForAWaiter(t *testing.T) {
 	clock := &fakeClock{now: time.Now()}
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}

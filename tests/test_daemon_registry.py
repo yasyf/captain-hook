@@ -528,6 +528,22 @@ def test_concurrent_get_builds_once(project: CliState) -> None:
     assert all(s is snaps[0] for s in snaps)
 
 
+def test_a_persistently_unreadable_roster_is_served_as_service_time_not_warm_up(
+    project: CliState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable(root: Path) -> list[manager.ResolvedPack]:
+        raise plugins.PluginListError("plugin roster unreadable")
+
+    monkeypatch.setattr(plugins, "resolve_plugin_packs", unreadable)
+    reg = Registry(project)
+    requests = [reqenv.RequestOverrides(env={}, cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(3)]
+    for overrides in requests:
+        with reqenv.use_request(overrides):
+            assert not reg.get().cacheable
+
+    assert [overrides.warmups for overrides in requests] == [[], [], []]
+
+
 def test_a_roster_that_would_not_enumerate_is_served_but_never_cached(
     project: CliState, monkeypatch: pytest.MonkeyPatch
 ) -> None:

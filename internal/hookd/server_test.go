@@ -86,3 +86,26 @@ func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 		t.Fatal("unknown op dispatched")
 	}
 }
+
+func TestEventReplyDecodesStrictlyIntoTheParentShape(t *testing.T) {
+	t.Parallel()
+	response := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "out", Stderr: "err", Exit: 2, ElapsedMS: 12.5, Warmup: true}
+	reply, err := encodeReply(response.Reply())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parent struct {
+		Schema    int     `json:"schema"`
+		Status    string  `json:"status"`
+		Stdout    string  `json:"stdout"`
+		Stderr    string  `json:"stderr"`
+		Exit      int     `json:"exit"`
+		ElapsedMS float64 `json:"elapsed_ms"`
+	}
+	if err := decodeStrict(reply.Body, &parent); err != nil {
+		t.Fatalf("a client built before warmup existed rejects the host reply: %v", err)
+	}
+	if parent.Schema != wireproto.Schema || parent.Status != "ok" || parent.Stdout != "out" || parent.Stderr != "err" || parent.Exit != 2 || parent.ElapsedMS != 12.5 {
+		t.Fatalf("public reply = %+v", parent)
+	}
+}

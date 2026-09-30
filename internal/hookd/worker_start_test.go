@@ -258,7 +258,7 @@ func TestAWaitedOnStartupOutlivesTheReadinessBound(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
 	clock := &fakeClock{now: time.Now()}
-	manager.now, manager.readiness = clock.Now, 0
+	manager.now = clock.Now
 	worker, _ := silentWorker(t)
 	started, release := stallStart(manager, worker, nil)
 	key := workerKey{id: "slow-hello", root: "/live"}
@@ -326,5 +326,67 @@ func TestAStartupNobodyHoldsADeadlineOnEndsAtTheReadinessBound(t *testing.T) {
 	manager.wg.Wait()
 	if cachedEntry(manager, key.member()) != nil {
 		t.Fatal("a start the readiness bound ended stayed cached")
+	}
+}
+
+func TestCancellingTheLatestWaiterWithdrawsItsDeadline(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	clock := &fakeClock{now: time.Now()}
+	manager.now = clock.Now
+	started, _ := stallStart(manager, nil, errors.New("unreachable"))
+	key := workerKey{id: "withdrawn", root: "/live"}
+
+	firstCtx, cancelFirst := context.WithDeadline(t.Context(), clock.Now().Add(20*time.Second))
+	defer cancelFirst()
+	first := acquireAsync(manager, firstCtx, key)
+	<-started
+	awaitHolds(t, manager, key.member(), 2)
+	laterCtx, cancelLater := context.WithDeadline(t.Context(), clock.Now().Add(40*time.Second))
+	later := acquireAsync(manager, laterCtx, key)
+	awaitHolds(t, manager, key.member(), 3)
+	cancelLater()
+	if got := <-later; !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("cancelled joiner = %v, want %v", got.err, context.Canceled)
+	}
+
+	clock.Advance(30 * time.Second)
+	cachedEntry(manager, key.member()).startup.expire()
+	if got := <-first; !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("waiter past its own deadline = %v, want the startup ended: the cancelled joiner's 40 s no longer holds it", got.err)
+	}
+	manager.wg.Wait()
+	if cachedEntry(manager, key.member()) != nil {
+		t.Fatal("a startup held only by a cancelled waiter's deadline stayed cached")
+	}
+}
+
+func TestCancellingEveryWaiterEndsTheStartupAtReadiness(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	clock := &fakeClock{now: time.Now()}
+	manager.now = clock.Now
+	started, _ := stallStart(manager, nil, errors.New("unreachable"))
+	key := workerKey{id: "abandoned-deadlines", root: "/live"}
+
+	ctx, cancel := context.WithDeadline(t.Context(), clock.Now().Add(time.Hour))
+	first := acquireAsync(manager, ctx, key)
+	<-started
+	awaitHolds(t, manager, key.member(), 2)
+	second := acquireAsync(manager, ctx, key)
+	awaitHolds(t, manager, key.member(), 3)
+	cancel()
+	for _, result := range []<-chan acquired{first, second} {
+		if got := <-result; !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("cancelled waiter = %v, want %v", got.err, context.Canceled)
+		}
+	}
+	awaitHolds(t, manager, key.member(), 1)
+
+	clock.Advance(workerReadinessTimeout + time.Second)
+	cachedEntry(manager, key.member()).startup.expire()
+	manager.wg.Wait()
+	if cachedEntry(manager, key.member()) != nil {
+		t.Fatal("a startup every waiter abandoned outlived the readiness bound")
 	}
 }
