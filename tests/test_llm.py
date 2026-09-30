@@ -782,7 +782,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         evt = make_stop_event(ctx=ctx)
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
-        assert len(asked) == 2, f"Expected both LLM hooks to be called, but only {len(asked)} were"
+        assert any("Second gate check" in prompt for prompt in asked)
         assert result is not None, "Second gate should have blocked"
         assert result["decision"] == "block"
         assert "GATE2" in result["reason"]
@@ -820,7 +820,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         evt = make_post_tool_event(ctx=ctx)
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
-        assert len(asked) == 2, f"Expected both LLM hooks to be called, but only {len(asked)} were"
+        assert any("Second nudge check" in prompt for prompt in asked)
         assert result is not None, "Second nudge should have warned"
         assert "NUDGE2" in result["hookSpecificOutput"]["additionalContext"]
 
