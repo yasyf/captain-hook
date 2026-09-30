@@ -798,6 +798,38 @@ def test_the_stacked_pr_recipe_is_allowed_over_a_queued_parent(
     assert_not_denied(dispatch_stubbed('ccx vcs ship -m "fix"', repo, tmp_path, commands))
 
 
+@pytest.mark.parametrize(
+    ("command", "lookup", "denied"),
+    [
+        pytest.param('ccx vcs ship -m "fix"', pr_lookup(26315, 26316), True, id="ship"),
+        pytest.param('ccx vcs ship --tip-only -m "fix"', pr_lookup(26316), False, id="tip-only"),
+        pytest.param("ccx vcs ship --tip-only --no-commit", pr_lookup(26316), False, id="tip-only-no-commit"),
+    ],
+)
+def test_a_tip_only_ship_leaves_a_queued_parent_alone(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str, lookup: str, denied: bool
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat", "follow-up")
+    commands = {
+        STACK_LIST: stack_list("feat", "follow-up", current="follow-up"),
+        PR_LOOKUP: lookup,
+        QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED), queue_report(26316, "not queued")]),
+    }
+    result = dispatch_stubbed(command, repo, tmp_path, commands)
+    if denied:
+        assert_fires(result, "deny", f"#26315 (`feat`) at `{ENQUEUED}`")
+    else:
+        assert_not_denied(result)
+
+
+def test_a_tip_only_ship_of_a_queued_pr_is_denied(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, heads = queued_repo(tmp_path, "feat")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"])])}
+    assert_fires(dispatch_stubbed('ccx vcs ship --tip-only -m "fix"', repo, tmp_path, commands), "deny", "#26315")
+
+
 @pytest.mark.parametrize("command", ["git push # ccx:raw", "ccx vcs ship -m x  # ccx:raw"])
 def test_the_raw_marker_pushes_to_a_queued_pr(
     isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str

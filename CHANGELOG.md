@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.65.1] - 2026-09-30
+
+### Fixed
+
+- **The queued-PR guard lets `ccx vcs ship --tip-only` ship onto a queued
+  parent.** `--tip-only` pushes only the branch being shipped, never an
+  ancestor, but the guard planned the whole downstack and refused the ship
+  whenever a parent sat in the Graphite merge queue. It now plans only the
+  tip, so a ship of the queued branch itself is still refused.
+
 ## [12.65.0] - 2026-09-30
 
 ### Fixed

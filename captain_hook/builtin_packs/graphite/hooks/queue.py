@@ -161,10 +161,21 @@ def stack_submit_pushes(call: Call, session_cwd: Path | None) -> list[Push] | No
     return stack_pushes(call, session_cwd, upstack=True)
 
 
+def tip_only_pushes(call: Call, session_cwd: Path | None, flags: set[str]) -> list[Push]:
+    if (
+        flags & NEW_BRANCH_FLAGS
+        or (target := option(call.args, TARGET_FLAGS) or current_branch(call, session_cwd)) is None
+    ):
+        return []
+    return pushed(call, session_cwd, target, target) if "--no-commit" in flags else [Push(target, None)]
+
+
 def ship_pushes(call: Call, session_cwd: Path | None) -> list[Push] | None:
     flags = {flag.split("=", 1)[0] for flag in call.flags}
     if "--no-push" in flags:
         return []
+    if "--tip-only" in flags:
+        return tip_only_pushes(call, session_cwd, flags)
     if (downstack := stack_pushes(call, session_cwd, upstack=False)) is None:
         return None
     if (
