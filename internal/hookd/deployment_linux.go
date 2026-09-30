@@ -18,14 +18,26 @@ const (
 	installedVersionName = "version.json"
 )
 
-// installedHostDir is the fixed home of the Linux host: the plugin's hook shim
-// execs its capt-hookd, and the CLI descriptor reads its version.json.
-func installedHostDir() (string, error) {
+type installedPaths struct {
+	dir  string
+	host string
+	link string
+}
+
+// resolveInstalledPaths names the fixed Linux install: the plugin's hook shim
+// execs host, the CLI descriptor reads the version.json beside it, and link
+// puts it on the user's PATH.
+func resolveInstalledPaths() (installedPaths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("captain package: resolve user home: %w", err)
+		return installedPaths{}, fmt.Errorf("captain package: resolve user home: %w", err)
 	}
-	return filepath.Join(home, ".local", "share", "captain-hook", "host"), nil
+	dir := filepath.Join(home, ".local", "share", "captain-hook", "host")
+	return installedPaths{
+		dir:  dir,
+		host: filepath.Join(dir, installedHostName),
+		link: filepath.Join(home, ".local", "bin", installedHostName),
+	}, nil
 }
 
 func applyPackagedApplication(ctx context.Context) error {
@@ -40,26 +52,30 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	dir, err := installedHostDir()
+	installed, err := resolveInstalledPaths()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("captain package: create %q: %w", dir, err)
-	}
-	target := filepath.Join(dir, installedHostName)
-	if source == target {
+	if source == installed.host {
 		return errors.New("captain package: packaged source and installed target must differ")
 	}
-	if err := installExecutable(source, target); err != nil {
+	for _, dir := range []string{installed.dir, filepath.Dir(installed.link)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("captain package: create %q: %w", dir, err)
+		}
+	}
+	if err := installExecutable(source, installed.host); err != nil {
 		return err
 	}
 	version, err := json.Marshal(currentHostVersion())
 	if err != nil {
 		return err
 	}
-	if err := durable.WriteFile(filepath.Join(dir, installedVersionName), append(version, '\n'), 0o644); err != nil {
+	if err := durable.WriteFile(filepath.Join(installed.dir, installedVersionName), append(version, '\n'), 0o644); err != nil {
 		return fmt.Errorf("captain package: publish installed version: %w", err)
+	}
+	if err := linkExecutable(installed.host, installed.link); err != nil {
+		return err
 	}
 	return stopInstalledHost(ctx)
 }
@@ -68,12 +84,15 @@ func uninstallPackagedApplication(ctx context.Context) error {
 	if err := stopInstalledHost(ctx); err != nil {
 		return err
 	}
-	dir, err := installedHostDir()
+	installed, err := resolveInstalledPaths()
 	if err != nil {
 		return err
 	}
-	if err := durable.RemoveTree(dir); err != nil {
-		return fmt.Errorf("captain package: remove %q: %w", dir, err)
+	if err := durable.Remove(installed.link); err != nil {
+		return fmt.Errorf("captain package: remove %q: %w", installed.link, err)
+	}
+	if err := durable.RemoveTree(installed.dir); err != nil {
+		return fmt.Errorf("captain package: remove %q: %w", installed.dir, err)
 	}
 	return nil
 }
@@ -94,6 +113,20 @@ func installExecutable(source, target string) error {
 	}
 	if err := out.Commit(); err != nil {
 		return fmt.Errorf("captain package: publish %q: %w", target, err)
+	}
+	return nil
+}
+
+func linkExecutable(host, link string) error {
+	staged := link + ".staged"
+	if err := durable.Remove(staged); err != nil {
+		return fmt.Errorf("captain package: clear %q: %w", staged, err)
+	}
+	if err := os.Symlink(host, staged); err != nil {
+		return fmt.Errorf("captain package: stage %q: %w", link, err)
+	}
+	if err := durable.Rename(staged, link); err != nil {
+		return fmt.Errorf("captain package: publish %q: %w", link, err)
 	}
 	return nil
 }

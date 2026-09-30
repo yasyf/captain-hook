@@ -105,6 +105,7 @@ jobs:
           "$RUNNER_TEMP/capt-hookd" package-install
           test "$(cat ~/.local/share/captain-hook/host/version.json)" = '{"schema":1,"build":"0.0.0"}'
           cmp "$RUNNER_TEMP/capt-hookd" ~/.local/share/captain-hook/host/capt-hookd
+          test "$(~/.local/bin/capt-hookd --version)" = '{"schema":1,"build":"0.0.0"}'
 
       - name: Supervise the host
         run: |
