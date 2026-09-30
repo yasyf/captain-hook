@@ -81,7 +81,7 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 		if err != nil {
 			return daemonkit.Reply{}, err
 		}
-		return encodeReply(response)
+		return encodeReply(response.Reply())
 	case opStatus:
 		if len(req.Body) != 0 {
 			return daemonkit.Reply{}, errors.New("captain: status request must be empty")

@@ -44,11 +44,8 @@ func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawM
 	if err := snapshots.Validate("config", config); err != nil {
 		return nil, err
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, err
-		}
-	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	hello := wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: Build, SnapshotConfig: config}
 	if err := wireproto.EncodeFrameLimit(conn, hello, snapshots.MaxFrameBytes); err != nil {
 		return nil, err
@@ -60,8 +57,8 @@ func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawM
 	if response.Op != wireproto.OpHello || response.Build != Build || response.ID != 0 || response.ParentID != 0 || response.Request != nil || response.Response != nil || response.Adopt != nil || response.Error != "" || len(response.Snapshot)+len(response.SnapshotContext)+len(response.SnapshotConfig) != 0 {
 		return nil, errors.New("captain: snapshot owner rejected exact build handshake")
 	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return nil, err
+	if !stop() {
+		return nil, ctx.Err()
 	}
 	owner := &snapshotOwner{cancelGrace: workerSettlementTimeout, conn: conn, pending: make(map[uint64]snapshotPending)}
 	go owner.readLoop()
@@ -269,6 +266,7 @@ type snapshotService struct {
 	mu           sync.Mutex
 	owner        *snapshotOwner
 	starting     *snapshotStartup
+	epoch        uint64
 	closed       bool
 	hookSlots    chan struct{}
 	reviewSlots  chan struct{}
@@ -298,9 +296,16 @@ func newSnapshotService(manager *workerManager) (*snapshotService, error) {
 
 type snapshotStartup struct {
 	ready    chan struct{}
+	bound    *startup
 	owner    *snapshotOwner
 	err      error
 	closeErr error
+}
+
+func (s *snapshotService) startups() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epoch, s.starting != nil
 }
 
 func (s *snapshotService) get(ctx context.Context) (*snapshotOwner, error) {
@@ -319,15 +324,23 @@ func (s *snapshotService) get(ctx context.Context) (*snapshotOwner, error) {
 			return owner, nil
 		}
 	}
+	deadline, _ := ctx.Deadline()
+	var leave func()
 	if s.starting == nil {
 		startup := &snapshotStartup{ready: make(chan struct{})}
+		startup.bound, leave = newStartup(s.manager.lifetime, s.manager.now, s.manager.readiness, deadline)
 		s.starting = startup
+		s.epoch++
 		previous := s.owner
 		s.owner = nil
 		go s.startGeneration(startup, previous)
 	}
 	startup := s.starting
+	if leave == nil {
+		leave = startup.bound.join(deadline)
+	}
 	s.mu.Unlock()
+	defer leave()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -337,10 +350,12 @@ func (s *snapshotService) get(ctx context.Context) (*snapshotOwner, error) {
 }
 
 func (s *snapshotService) startGeneration(startup *snapshotStartup, previous *snapshotOwner) {
-	ctx, cancel := context.WithTimeout(s.manager.lifetime, workerReadinessTimeout)
-	defer cancel()
+	ctx := startup.bound.ctx
+	defer startup.bound.end()
 	if previous != nil {
-		startup.err = previous.stop(ctx)
+		stopCtx, cancel := context.WithTimeout(ctx, workerSettlementTimeout)
+		startup.err = previous.stop(stopCtx)
+		cancel()
 	}
 	if startup.err == nil {
 		startup.owner, startup.err = s.start(ctx)
@@ -370,6 +385,7 @@ func (s *snapshotService) startGeneration(startup *snapshotStartup, previous *sn
 	}
 	s.mu.Lock()
 	s.starting = nil
+	s.epoch++
 	close(startup.ready)
 	s.mu.Unlock()
 }
@@ -432,8 +448,10 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 	}
 	cmd := daemonkit.Cmd{Path: python, Args: []string{"-P", "-m", "captain_hook.snapshots.worker"},
 		Dir: filepath.Clean(os.TempDir()), Env: workerBaseEnvironment(os.Environ()), Session: true, Exec: daemonkit.ServingSameUser()}
-	child, err := spawnPastEAGAIN(ctx, spawnBackoff, func() (*daemonkit.Child, error) {
-		return s.manager.owner.Spawn(ctx, cmd, daemonkit.ChannelStdio, s.manager.logWriter)
+	spawnCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
+	defer cancel()
+	child, err := spawnPastEAGAIN(spawnCtx, spawnBackoff, func() (*daemonkit.Child, error) {
+		return s.manager.owner.Spawn(spawnCtx, cmd, daemonkit.ChannelStdio, s.manager.logWriter)
 	})
 	if err != nil {
 		return nil, err

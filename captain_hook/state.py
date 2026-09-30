@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, ClassVar, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from captain_hook.util import reqenv
+
 if TYPE_CHECKING:
     from types import FrameType, ModuleType
 
@@ -54,6 +56,7 @@ class NlpResources:
 
     @cached_property
     def spacy(self) -> spacy.language.Language:
+        reqenv.warmed("spacy")
         with self._lock:
             if "spacy" not in self.__dict__:
                 self.__dict__["spacy"] = load_spacy()
@@ -65,6 +68,7 @@ class NlpResources:
 
         from captain_hook.util.model_cache import ensure_wn_lexicon
 
+        reqenv.warmed("wn")
         with self._lock:
             if "wn" not in self.__dict__:
                 ensure_wn_lexicon()
@@ -311,7 +315,9 @@ def record_fire(evt: BaseHookEvent) -> None:
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
-    return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > evt.ctx.event_count - evt.ctx.current_turn_event_count
+    return (
+        ps := evt.ctx.s[PrimitiveState].get()
+    ) is not None and ps.last_fired_at > evt.ctx.event_count - evt.ctx.current_turn_event_count
 
 
 from captain_hook.session import SessionStore  # noqa: E402

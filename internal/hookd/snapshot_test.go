@@ -134,7 +134,7 @@ func TestSnapshotOwnerCancellationIsIsolated(t *testing.T) {
 func TestSnapshotAdmissionReservesHookWhileReviewRuns(t *testing.T) {
 	frames := make(chan wireproto.Frame, 8)
 	owner, server := fakeSnapshotOwner(t, frames)
-	manager := &workerManager{lifetime: context.Background(), logWriter: io.Discard}
+	manager := &workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout}
 	service, err := newSnapshotService(manager)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestSnapshotAdmissionReservesHookWhileReviewRuns(t *testing.T) {
 }
 
 func TestSnapshotOwnerStartupSharedAndNotBoundToFirstWaiter(t *testing.T) {
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestSnapshotOwnerStartupSharedAndNotBoundToFirstWaiter(t *testing.T) {
 }
 
 func TestSnapshotInvalidRequestNeverStartsOwner(t *testing.T) {
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestWorkerLateSnapshotCancelDoesNotFailAnotherEvent(t *testing.T) {
 }
 
 func TestSnapshotStartupFailureCanRecover(t *testing.T) {
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func TestUnacknowledgedSnapshotCancellationRecoversOnlyEvidenceOwner(t *testing.
 	owner, server := fakeSnapshotOwner(t, frames)
 	owner.cancelGrace = 30 * time.Millisecond
 	hookWorker := &workerClient{}
-	manager := &workerManager{lifetime: context.Background(), logWriter: io.Discard, entries: map[string]*workerEntry{"hook": {worker: hookWorker}}}
+	manager := &workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout, entries: map[string]*workerEntry{"hook": {worker: hookWorker}}}
 	service, err := newSnapshotService(manager)
 	if err != nil {
 		t.Fatal(err)
@@ -528,7 +528,7 @@ func TestUnacknowledgedSnapshotCancellationRecoversOnlyEvidenceOwner(t *testing.
 func TestBackgroundReverseSnapshotsUseReviewAdmission(t *testing.T) {
 	frames := make(chan wireproto.Frame, 8)
 	owner, ownerServer := fakeSnapshotOwner(t, frames)
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +558,7 @@ func TestBackgroundReverseSnapshotsUseReviewAdmission(t *testing.T) {
 func TestBackgroundWarmUsesHookIdentityWithoutHookAdmission(t *testing.T) {
 	frames := make(chan wireproto.Frame, 8)
 	owner, ownerServer := fakeSnapshotOwner(t, frames)
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +606,7 @@ func TestBackgroundWarmUsesHookIdentityWithoutHookAdmission(t *testing.T) {
 func TestTranscriptClientWarmUsesHookAdmission(t *testing.T) {
 	frames := make(chan wireproto.Frame, 8)
 	owner, ownerServer := fakeSnapshotOwner(t, frames)
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,7 +648,7 @@ func TestCaptainDomainRequestUsesGeneratedIngressSchema(t *testing.T) {
 	}
 	frames := make(chan wireproto.Frame, 8)
 	owner, server := fakeSnapshotOwner(t, frames)
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,7 +680,7 @@ func TestCaptainDomainRequestUsesGeneratedIngressSchema(t *testing.T) {
 func TestSnapshotReleaseBypassesSaturatedReviewAdmission(t *testing.T) {
 	frames := make(chan wireproto.Frame, 8)
 	owner, server := fakeSnapshotOwner(t, frames)
-	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,5 +753,152 @@ func TestSnapshotReleaseBypassesSaturatedReviewAdmission(t *testing.T) {
 	case extra := <-frames:
 		t.Fatalf("release requested additional owner work: %+v", extra)
 	default:
+	}
+}
+
+func stalledSnapshotService(t *testing.T, clock *fakeClock) (*snapshotService, chan struct{}, chan struct{}) {
+	t.Helper()
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	service.start = func(ctx context.Context) (*snapshotOwner, error) {
+		close(entered)
+		select {
+		case <-release:
+			return &snapshotOwner{}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return service, entered, release
+}
+
+func expireSnapshotStartup(service *snapshotService) *snapshotStartup {
+	service.mu.Lock()
+	startup := service.starting
+	service.mu.Unlock()
+	startup.bound.expire()
+	return startup
+}
+
+func TestSnapshotOwnerStartupCancellingTheLatestWaiterWithdrawsItsDeadline(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, entered, _ := stalledSnapshotService(t, clock)
+	firstCtx, cancelFirst := context.WithDeadline(context.Background(), clock.Now().Add(20*time.Second))
+	defer cancelFirst()
+	first := make(chan error, 1)
+	go func() { _, err := service.get(firstCtx); first <- err }()
+	<-entered
+	laterCtx, cancelLater := context.WithDeadline(context.Background(), clock.Now().Add(40*time.Second))
+	later := make(chan error, 1)
+	go func() { _, err := service.get(laterCtx); later <- err }()
+	cancelLater()
+	if err := <-later; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled joiner = %v, want %v", err, context.Canceled)
+	}
+
+	clock.Advance(30 * time.Second)
+	expireSnapshotStartup(service)
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("waiter past its own deadline = %v, want the owner startup ended", err)
+	}
+	if epoch, starting := service.startups(); epoch != 2 || starting {
+		t.Fatalf("startups = %d, %t; want the generation ended", epoch, starting)
+	}
+}
+
+func TestSnapshotOwnerStartupCancellingEveryWaiterEndsItAtReadiness(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, entered, _ := stalledSnapshotService(t, clock)
+	ctx, cancel := context.WithDeadline(context.Background(), clock.Now().Add(time.Hour))
+	results := make(chan error, 2)
+	go func() { _, err := service.get(ctx); results <- err }()
+	<-entered
+	go func() { _, err := service.get(ctx); results <- err }()
+	cancel()
+	for range 2 {
+		if err := <-results; !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled waiter = %v, want %v", err, context.Canceled)
+		}
+	}
+
+	clock.Advance(workerReadinessTimeout + time.Second)
+	startup := expireSnapshotStartup(service)
+	<-startup.ready
+	if !errors.Is(startup.err, context.Canceled) {
+		t.Fatalf("generation every waiter left = %v, want cancelled at the readiness bound", startup.err)
+	}
+	if epoch, starting := service.startups(); epoch != 2 || starting {
+		t.Fatalf("startups = %d, %t; want the generation ended", epoch, starting)
+	}
+}
+
+func TestSnapshotOwnerStartupOutlivesTheReadinessBoundForAWaiter(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	owner := &snapshotOwner{}
+	service.start = func(ctx context.Context) (*snapshotOwner, error) {
+		close(entered)
+		select {
+		case <-release:
+			return owner, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), clock.Now().Add(30*time.Second))
+	defer cancel()
+	got := make(chan error, 1)
+	go func() { _, err := service.get(ctx); got <- err }()
+	<-entered
+	clock.Advance(workerReadinessTimeout + 3*time.Second)
+	service.mu.Lock()
+	bound := service.starting.bound
+	service.mu.Unlock()
+	bound.expire()
+	close(release)
+	if err := <-got; err != nil {
+		t.Fatalf("waiter = %v; the readiness bound tore down an owner startup its deadline still covered", err)
+	}
+}
+
+func TestSnapshotOwnerStartupNobodyHoldsADeadlineOnEndsAtTheReadinessBound(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.start = func(ctx context.Context) (*snapshotOwner, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if _, err := service.get(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("get without a deadline = %v, want the readiness bound to end the start", err)
+	}
+	if epoch, starting := service.startups(); epoch != 2 || starting {
+		t.Fatalf("startups after one ended generation = %d, %t; want 2, false", epoch, starting)
+	}
+}
+
+func TestSnapshotOwnerFirstWaiterHoldsTheStartupFromItsConstruction(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	service, entered, release := stalledSnapshotService(t, clock)
+	service.manager.readiness = 0
+	ctx, cancel := context.WithDeadline(context.Background(), clock.Now().Add(30*time.Second))
+	defer cancel()
+	got := make(chan error, 1)
+	go func() { _, err := service.get(ctx); got <- err }()
+	<-entered
+	clock.Advance(workerReadinessTimeout + 3*time.Second)
+	expireSnapshotStartup(service)
+	close(release)
+	if err := <-got; err != nil {
+		t.Fatalf("first waiter = %v; the readiness timer fired before its deadline was registered", err)
 	}
 }

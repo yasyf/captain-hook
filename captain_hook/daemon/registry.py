@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from captain_hook import app
 from captain_hook.daemon.tree import DirectoryTreeCache
 from captain_hook.packs import manager, plugins
+from captain_hook.util import reqenv
 from captain_hook.util.caching import LRUDict, StampedCache
 
 if TYPE_CHECKING:
@@ -76,7 +77,9 @@ def _roster_stamp(root: Path) -> RosterStamp:
 
 
 def _plugin_inputs(root: Path, *, fresh: bool) -> tuple[PluginTree, ...] | str:
-    return PLUGIN_WALKS.get(root, _roster_stamp(root), PLUGIN_TTL, lambda: _plugin_trees(root, fresh=fresh), fresh=fresh)
+    return PLUGIN_WALKS.get(
+        root, _roster_stamp(root), PLUGIN_TTL, lambda: _plugin_trees(root, fresh=fresh), fresh=fresh
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,11 +121,13 @@ class Registry:
             return hit
         with self._build_lock:
             if (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
+                reqenv.warmed("registry")
                 self._reconcile_tools(hit)
                 return hit
             snapshot = self._build()
             if snapshot.cacheable:
                 self._cache[snapshot.fingerprint] = snapshot
+                reqenv.warmed("registry")
             return snapshot
 
     def drop_all(self) -> None:

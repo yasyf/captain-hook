@@ -15,6 +15,7 @@ from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
 from captain_hook.packs import manager, plugins
+from captain_hook.util import reqenv
 from tests.helpers import make_project as scaffold
 from tests.helpers import plant_roster
 
@@ -62,9 +63,17 @@ def test_unchanged_tree_twice_is_equal(project: CliState) -> None:
     assert fp(project).digest == fp(project).digest
 
 
-def test_warm_registry_avoids_hook_directory_enumeration(
-    project: CliState, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_registry_build_marks_the_bound_request_warm_up(project: CliState) -> None:
+    reg = Registry(project)
+    requests = [reqenv.RequestOverrides(env={}, cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(2)]
+    for overrides in requests:
+        with reqenv.use_request(overrides):
+            reg.get()
+
+    assert [overrides.warmups for overrides in requests] == [["registry"], []]
+
+
+def test_warm_registry_avoids_hook_directory_enumeration(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     hooks = Path(project.hooks)
     (hooks / "nested").mkdir()
     (hooks / "nested" / "data.txt").write_text("one")
@@ -517,6 +526,22 @@ def test_concurrent_get_builds_once(project: CliState) -> None:
 
     assert builds == 1
     assert all(s is snaps[0] for s in snaps)
+
+
+def test_a_persistently_unreadable_roster_is_served_as_service_time_not_warm_up(
+    project: CliState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable(root: Path) -> list[manager.ResolvedPack]:
+        raise plugins.PluginListError("plugin roster unreadable")
+
+    monkeypatch.setattr(plugins, "resolve_plugin_packs", unreadable)
+    reg = Registry(project)
+    requests = [reqenv.RequestOverrides(env={}, cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(3)]
+    for overrides in requests:
+        with reqenv.use_request(overrides):
+            assert not reg.get().cacheable
+
+    assert [overrides.warmups for overrides in requests] == [[], [], []]
 
 
 def test_a_roster_that_would_not_enumerate_is_served_but_never_cached(

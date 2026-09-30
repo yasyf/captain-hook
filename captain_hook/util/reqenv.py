@@ -22,6 +22,7 @@ class RequestOverrides:
     deadline_unix_ms: int = 0
     abandoned: list[str] = field(default_factory=list[str])
     evidence_gaps: list[str] = field(default_factory=list[str])
+    warmups: list[str] = field(default_factory=list[str])
 
 
 class Abandoned(BaseException):
@@ -106,6 +107,15 @@ def abandoned() -> list[str]:
 def evidence_gaps() -> list[str]:
     """The hooks the bound request skipped for incomplete transcript evidence; a scratch list for the cold CLI."""
     return [] if (ov := _OVERRIDES.get()) is None else ov.evidence_gaps
+
+
+def warmups() -> list[str]:
+    """The one-time loads the bound request paid for, a registry build or an NLP resource; scratch for the cold CLI."""
+    return [] if (ov := _OVERRIDES.get()) is None else ov.warmups
+
+
+def warmed(resource: str) -> None:
+    warmups().append(resource)
 
 
 @contextmanager

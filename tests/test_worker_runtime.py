@@ -139,6 +139,7 @@ def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) ->
     assert "queue_ms=" in served
     assert "elapsed_ms=" in served
     assert "abandoned=['straggler']" in served
+    assert "warmups=[]" in served
     assert "session_log_path" not in served
     assert "event='NotAnEvent'" in rejected
     assert "abandoned=[]" in rejected
@@ -171,6 +172,39 @@ def test_nlp_warms_once_after_the_first_reply_off_the_request_thread() -> None:
     release.set()
     next(t for t in threading.enumerate() if t.name == "capt-hook-nlp-warm").join()
     assert warmed == ["capt-hook-nlp-warm"]
+
+
+def test_dispatch_reports_a_one_time_load_as_warm_up() -> None:
+    class ColdRegistry(FakeRegistry):
+        def get(self) -> Snapshot:
+            if self.calls == 0:
+                reqenv.warmed("registry")
+            return super().get()
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: ColdRegistry(),
+        dispatcher=lambda *_, **__: (None, lambda: None),
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    first, _ = runtime.dispatch(request(request_id=1))
+    second, _ = runtime.dispatch(request(request_id=2))
+
+    assert first.warmup is True
+    assert second.warmup is False
+
+
+def test_nlp_resource_loads_mark_the_bound_request_warm_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    from captain_hook import state
+
+    monkeypatch.setattr(state, "load_spacy", object)
+    resources = state.NlpResources()
+    requests = [reqenv.RequestOverrides(env={}, cwd="/project", client_ppid=99, session_id="s") for _ in range(2)]
+    for overrides in requests:
+        with reqenv.use_request(overrides):
+            resources.spacy
+
+    assert [overrides.warmups for overrides in requests] == [["spacy"], []]
 
 
 def test_registry_is_reused_for_the_same_root() -> None:

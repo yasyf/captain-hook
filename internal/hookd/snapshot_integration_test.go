@@ -89,7 +89,7 @@ func TestSnapshotRealPythonOwnerSharesLoadsAcrossClients(t *testing.T) {
 	owner := pythonSnapshotOwner(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	service, err := newSnapshotService(&workerManager{lifetime: ctx, logWriter: io.Discard})
+	service, err := newSnapshotService(&workerManager{lifetime: ctx, logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}

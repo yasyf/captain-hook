@@ -113,3 +113,21 @@ func testEventRequest(event string) wireproto.EventRequest {
 		ClientPID: 10, ClientPPID: 9,
 	}
 }
+
+func TestHandshakeEndsWhenItsStartupIsCancelled(t *testing.T) {
+	t.Parallel()
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	go func() { _, _ = wireproto.DecodeFrame(serverConn) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := handshakeWorker(ctx, clientConn, "12.9.1")
+		done <- err
+	}()
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a handshake outlived the startup that was cancelled under it")
+	}
+}
