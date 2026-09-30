@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// startup bounds one worker start by whoever waits on it: readiness after it
-// began, or the latest deadline among the waiters still holding it.
 type startup struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -21,8 +19,6 @@ type startup struct {
 	ended     bool
 }
 
-// newStartup registers the first waiter's deadline before the timer is armed,
-// so the bound never reads empty between construction and that waiter's join.
 func newStartup(parent context.Context, now func() time.Time, readiness time.Duration, deadline time.Time) (*startup, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	s := &startup{ctx: ctx, cancel: cancel, now: now, readiness: now().Add(readiness), waiters: make(map[uint64]time.Time)}
@@ -33,8 +29,6 @@ func newStartup(parent context.Context, now func() time.Time, readiness time.Dur
 	return s, leave
 }
 
-// join holds the startup open to deadline until leave is called; a waiter
-// without a deadline holds nothing.
 func (s *startup) join(deadline time.Time) (leave func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

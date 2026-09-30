@@ -302,8 +302,6 @@ type snapshotStartup struct {
 	closeErr error
 }
 
-// startups counts generation starts begun and ended, and whether one is in
-// flight, so a dispatch can tell it overlapped an owner startup.
 func (s *snapshotService) startups() (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

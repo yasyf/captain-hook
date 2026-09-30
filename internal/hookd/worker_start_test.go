@@ -250,10 +250,6 @@ func TestCloseSettlesAWorkerThatFinishedStartingUnderIt(t *testing.T) {
 	}
 }
 
-// TestAWaitedOnStartupOutlivesTheReadinessBound pins the sprite failure: a
-// hello that took longer than workerReadinessTimeout was torn down under a
-// hook with 17 s of deadline left, which then failed open on
-// `captain: handshake Python product worker`. The bound belongs to the waiter.
 func TestAWaitedOnStartupOutlivesTheReadinessBound(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
@@ -411,10 +407,6 @@ func (c *holdingClock) Now() time.Time {
 	return c.fakeClock.Now()
 }
 
-// TestTheFirstWaiterHoldsTheMemberStartupFromItsConstruction pins the window
-// between arming the readiness timer and the first join: the clock blocks
-// startMemberLocked on its lastUsed read, past where the caller once joined,
-// while the readiness bound is already behind the clock.
 func TestTheFirstWaiterHoldsTheMemberStartupFromItsConstruction(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)

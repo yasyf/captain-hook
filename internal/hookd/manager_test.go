@@ -869,11 +869,6 @@ func serviceOf(manager *workerManager, entry *workerEntry) time.Duration {
 	return entry.service
 }
 
-// TestColdDispatchesDoNotSeedTheServiceTime pins the sprite shed: a member's
-// first dispatch carried 15 s of imports and registry discovery and its second
-// 9 s of NLP loading, the smoothed service time read 13.9 s, and the fourth
-// concurrent event on the member was shed at `3 events ahead ... take 41.816s`
-// while its siblings answered in a second.
 func TestColdDispatchesDoNotSeedTheServiceTime(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
