@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
@@ -584,7 +585,9 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 	}
 	ctx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
 	defer cancel()
-	child, err := m.owner.Spawn(ctx, workerCmd(key, python), daemonkit.ChannelStdio, m.logWriter)
+	child, err := spawnPastEAGAIN(ctx, spawnBackoff, func() (*daemonkit.Child, error) {
+		return m.owner.Spawn(ctx, workerCmd(key, python), daemonkit.ChannelStdio, m.logWriter)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("captain: spawn Python product worker: %w", err)
 	}
@@ -601,6 +604,28 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 	m.wg.Add(1)
 	go m.watch(worker, child)
 	return worker, nil
+}
+
+var spawnBackoff = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond}
+
+// spawnPastEAGAIN retries a spawn the kernel refused on the uid's process count, which moves by
+// the second on a machine running many sessions, so a refusal is often gone a moment later.
+func spawnPastEAGAIN(ctx context.Context, backoff []time.Duration, spawn func() (*daemonkit.Child, error)) (*daemonkit.Child, error) {
+	child, err := spawn()
+	for _, delay := range backoff {
+		if !errors.Is(err, syscall.EAGAIN) {
+			return child, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+		child, err = spawn()
+	}
+	return child, err
 }
 
 // workerCmd runs the worker with -P, so the session repo the worker's Dir names

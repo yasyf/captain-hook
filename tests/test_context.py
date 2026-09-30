@@ -358,6 +358,7 @@ class TestCallLlm:
         from spawnllm import BackendCallError
 
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        monkeypatch.setattr("captain_hook.context.READY_BACKEND_TTL_SECONDS", 0.0)
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         selected = [CODEX]
 
@@ -403,11 +404,47 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("spawnllm.call_sync", side_effect=BackendCallError('codex exited 1: {"status":503}')):
-            with pytest.raises(BackendCallError):
-                ctx.call_llm("test prompt")
+        with (
+            patch("spawnllm.select_backend", return_value=CODEX),
+            patch("spawnllm.call_sync", side_effect=BackendCallError('codex exited 1: {"status":503}')),
+            pytest.raises(BackendCallError),
+        ):
+            ctx.call_llm("test prompt")
         with patch("spawnllm.call_sync", return_value="ok"):
             assert ctx.call_llm("test prompt") == "ok"
+
+    def test_backend_selection_is_probed_once_per_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        clock = [1000.0]
+        monkeypatch.setattr("captain_hook.context.time.monotonic", lambda: clock[0])
+
+        with (
+            patch("spawnllm.select_backend", return_value=CLAUDE) as select,
+            patch("spawnllm.call_sync", return_value="ok") as served,
+        ):
+            for _ in range(3):
+                assert ctx.call_llm("test prompt") == "ok"
+            assert select.call_count == 1
+            clock[0] += 301.0
+            assert ctx.call_llm("test prompt") == "ok"
+            assert select.call_count == 2
+        assert all(call.kwargs["backend"] is CLAUDE for call in served.call_args_list)
+
+    def test_an_unavailable_backend_is_probed_again_next_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm import BackendUnavailable
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+
+        with (
+            patch("spawnllm.select_backend", side_effect=[BackendUnavailable("none"), CLAUDE]) as select,
+            patch("spawnllm.call_sync", return_value="ok"),
+        ):
+            with pytest.raises(BackendUnavailable):
+                ctx.call_llm("test prompt")
+            assert ctx.call_llm("test prompt") == "ok"
+        assert select.call_count == 2
 
     def test_dispatch_forwards_specialty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")

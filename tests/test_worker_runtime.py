@@ -368,6 +368,79 @@ def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
     after()
 
 
+
+def spawn_refused(*_: object, **__: object) -> tuple[None, object]:
+    raise EvidenceIncomplete("cancelled", "posix_spawn python: resource temporarily unavailable")
+
+
+def session_request(state_dir: Path, *, event: str = "PreToolUse", warn_after: str | None = None) -> EventRequest:
+    env = {"CLAUDE_PROJECT_DIR": "/project", "CAPTAIN_HOOK_STATE_DIR": str(state_dir)}
+    if warn_after is not None:
+        env["CAPT_HOOK_FAIL_OPEN_WARN_AFTER"] = warn_after
+    return EventRequest(
+        id=1,
+        event=event,
+        root="/project",
+        cwd="/project",
+        env=env,
+        payload_raw=json.dumps({"session_id": "fail-open-session"}),
+        client_pid=100,
+        client_ppid=99,
+        deadline_unix_ms=1_700_000_000_000,
+    )
+
+
+def fail_open_runtime() -> ProductRuntime:
+    return ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=spawn_refused, install_writer=False, nlp_warmer=lambda: None
+    )
+
+
+def test_fail_opens_warn_at_the_threshold_and_each_doubling_across_workers(tmp_path: Path) -> None:
+    shards = [fail_open_runtime(), fail_open_runtime()]
+
+    warned = []
+    for count in range(1, 10):
+        response, after = shards[count % 2].dispatch(session_request(tmp_path, warn_after="2"))
+        assert (response.status, response.exit, response.stderr, after) == ("ok", 0, "", None)
+        if response.stdout:
+            warned.append((count, json.loads(response.stdout)))
+
+    assert [count for count, _ in warned] == [2, 4, 8]
+    count, envelope = warned[-1]
+    assert envelope["systemMessage"].startswith("capt-hook: 8 hook dispatches in this session failed open")
+    assert "cancelled: posix_spawn python: resource temporarily unavailable" in envelope["systemMessage"]
+    assert envelope["hookSpecificOutput"] == {"hookEventName": "PreToolUse", "additionalContext": envelope["systemMessage"]}
+
+
+def test_fail_open_warning_defaults_to_the_third_dispatch(tmp_path: Path) -> None:
+    runtime = fail_open_runtime()
+
+    stdouts = [runtime.dispatch(session_request(tmp_path))[0].stdout for _ in range(3)]
+
+    assert stdouts[:2] == ["", ""]
+    assert "3 hook dispatches" in json.loads(stdouts[2])["systemMessage"]
+
+
+def test_fail_open_warning_on_stop_never_blocks_the_stop(tmp_path: Path) -> None:
+    runtime = fail_open_runtime()
+
+    response, _ = runtime.dispatch(session_request(tmp_path, event="Stop", warn_after="1"))
+
+    envelope = json.loads(response.stdout)
+    assert set(envelope) == {"systemMessage"}
+
+
+def test_fail_open_warning_due_on_pre_compact_waits_for_the_next_event(tmp_path: Path) -> None:
+    runtime = fail_open_runtime()
+
+    compact, _ = runtime.dispatch(session_request(tmp_path, event="PreCompact", warn_after="1"))
+    prompt, _ = runtime.dispatch(session_request(tmp_path, event="UserPromptSubmit", warn_after="1"))
+
+    assert compact.stdout == ""
+    assert "2 hook dispatches" in json.loads(prompt.stdout)["systemMessage"]
+
+
 @pytest.mark.parametrize("status", ["stale_handle", "stale_cursor"])
 def test_expired_graph_evidence_fails_open_after_reply(status: str) -> None:
     def fail() -> None:
@@ -487,3 +560,11 @@ def test_worker_bounds_the_transcript_parse_pool(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("CC_TRANSCRIPT_PARSE_THREADS", "2")
     bound_transcript_parse_pool()
     assert os.environ["CC_TRANSCRIPT_PARSE_THREADS"] == "2"
+
+
+def test_worker_skips_the_bundled_cli_version_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from captain_hook.worker.__main__ import skip_bundled_cli_version_probe
+
+    monkeypatch.delenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", raising=False)
+    skip_bundled_cli_version_probe()
+    assert os.environ["CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK"] == "1"

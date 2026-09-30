@@ -23,6 +23,7 @@ from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
 from captain_hook.util import reqenv
+from captain_hook.worker.fail_open import tally_fail_open
 from captain_hook.worker.protocol import EventRequest, EventResponse
 from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 
@@ -140,7 +141,8 @@ class ProductRuntime:
             except EvidenceIncomplete as exc:
                 if isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES:
                     logger.bind(status=exc.status, reason=exc.reason).warning("snapshot evidence incomplete")
-                    return EventResponse(), None
+                    warning = tally_fail_open(event, session_id, exc) if session_id else None
+                    return EventResponse(stdout=envelope_text(warning) + "\n" if warning else ""), None
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
             except Exception:

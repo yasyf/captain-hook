@@ -14,7 +14,7 @@ from loguru import logger
 
 from captain_hook import decisions, heartbeat
 from captain_hook.app import reset
-from captain_hook.context import UNSUPPORTED_MODELS
+from captain_hook.context import READY_BACKENDS, UNSUPPORTED_MODELS
 from captain_hook.daemon.registry import MARKER_WALKS, PLUGIN_WALKS
 from captain_hook.durable import DurableStore
 from captain_hook.review.repo import resolve_repo_key
@@ -111,12 +111,14 @@ def clear_global_caches():
     for cached in caches:
         cached.cache_clear()
     UNSUPPORTED_MODELS.clear()
+    READY_BACKENDS.clear()
     decisions.reset_cached_log()
     heartbeat.reset_cached_log()
     yield
     for cached in caches:
         cached.cache_clear()
     UNSUPPORTED_MODELS.clear()
+    READY_BACKENDS.clear()
     decisions.reset_cached_log()
     heartbeat.reset_cached_log()
 
@@ -134,6 +136,17 @@ def stub_helper_notify(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureR
     if request.module.__name__.endswith("test_desktop_client"):
         return
     monkeypatch.setattr(client, "notify", lambda **_: client.NotifyOutcome(client.Lane.dropped, False, "stubbed"))
+
+
+@pytest.fixture(autouse=True)
+def stub_backend_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer ``spawnllm.select_backend`` with a ready backend, so no test spawns an auth probe."""
+    from unittest.mock import MagicMock
+
+    import spawnllm
+
+    ready = MagicMock(provider="claude", resolve_model=lambda model: model)
+    monkeypatch.setattr(spawnllm, "select_backend", lambda **_: ready)
 
 
 @pytest.fixture(autouse=True)

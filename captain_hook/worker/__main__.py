@@ -14,6 +14,15 @@ def bound_transcript_parse_pool() -> None:
     os.environ.setdefault("CC_TRANSCRIPT_PARSE_THREADS", str(TRANSCRIPT_PARSE_THREADS))
 
 
+def skip_bundled_cli_version_probe() -> None:
+    """Stop the Claude Agent SDK from spawning ``claude -v`` before every LLM call.
+
+    The SDK checks the version of the CLI it bundles, which is pinned with it, so the probe can
+    only ever pass; on a machine near its process limit it is one more spawn per hook LLM call.
+    """
+    os.environ.setdefault("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
+
+
 def adopt_user_path() -> None:
     """Replace launchd's ``PATH`` with the user's own before anything discovers a command.
 
@@ -56,6 +65,7 @@ def main() -> None:
     from captain_hook.daemon.logsink import configure_daemon_logging
 
     bound_transcript_parse_pool()
+    skip_bundled_cli_version_probe()
     router = configure_daemon_logging(worker_log_key(build, os.environ["CAPT_HOOK_WORKER_SHARD"]))
     adopt_user_path()
     fallback = sys.stderr

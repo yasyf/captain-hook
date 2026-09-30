@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every gate for the rest of that turn. Teammate and other-session messages wake
   an orchestrator without opening a new turn, so one fire muted a Stop gate
   until the user next typed. `once_per_turn=False` judges every Stop.
+- **A session is told when its hooks stop running.** When transcript evidence
+  comes back incomplete, a dispatch fails open. Claude Code gets an empty
+  success and no hook runs. One such dispatch is harmless, but on 2026-09-29 a
+  single session had 3,736 of them and nothing showed it. The count now
+  lives in the session's state directory, shared by every worker. On the
+  third fail-open, and again each time the count doubles, the response carries
+  a `systemMessage` for the user, and `additionalContext` for the model where
+  the event takes one. The message gives the count and the latest cause. A
+  Stop only ever gets the `systemMessage`, never a block. A warning that falls
+  due on `PreCompact` waits for the next event. Set
+  `CAPT_HOOK_FAIL_OPEN_WARN_AFTER` to move the first warning.
 
 ### Fixed
 
@@ -29,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The judge read each message clipped to 700 characters, so a list at the
     end of a long report never reached it.
   - Teammate wakes shared the fire latch described above.
+- **The host spawns again once the machine's process count grows.**
+  daemonkit v0.32.1 fixes a limit that froze at the host's first spawn. After
+  that, every snapshot-owner and worker spawn failed with `EAGAIN` for hours,
+  and every hook in every session failed open. The host now also retries a
+  spawn the kernel rejects with `EAGAIN`, five times over 1.55 s, inside the
+  worker's readiness budget.
+- **An LLM hook call starts one `claude` process instead of three.** Choosing
+  a backend ran `claude auth status` on every call, and the Claude Agent SDK
+  ran `claude -v` against the CLI it bundles. The worker now reuses a selected
+  backend for five minutes and skips the version probe. A `UserPromptSubmit`
+  in the monorepo went from 4.3 spawns to 2.3.
 
 ## [12.61.0] - 2026-09-30
 

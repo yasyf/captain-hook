@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/yasyf/daemonkit v0.32.0
+	github.com/yasyf/daemonkit v0.32.1
 )
 
 require (

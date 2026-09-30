@@ -432,7 +432,9 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 	}
 	cmd := daemonkit.Cmd{Path: python, Args: []string{"-P", "-m", "captain_hook.snapshots.worker"},
 		Dir: filepath.Clean(os.TempDir()), Env: workerBaseEnvironment(os.Environ()), Session: true, Exec: daemonkit.ServingSameUser()}
-	child, err := s.manager.owner.Spawn(ctx, cmd, daemonkit.ChannelStdio, s.manager.logWriter)
+	child, err := spawnPastEAGAIN(ctx, spawnBackoff, func() (*daemonkit.Child, error) {
+		return s.manager.owner.Spawn(ctx, cmd, daemonkit.ChannelStdio, s.manager.logWriter)
+	})
 	if err != nil {
 		return nil, err
 	}
