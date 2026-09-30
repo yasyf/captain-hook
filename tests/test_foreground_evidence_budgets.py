@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,7 @@ from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_resu
 TURNS = 120
 PAYLOAD = 4096
 SESSION = "budget-session"
+WARM_ROUND_TRIPS = {False: 10, True: 8}
 
 GUARDS: dict[str, Callable[[BaseHookEvent, str], bool]] = {
     "user_text": lambda evt, marker: marker in evt.ctx.t.user_text,
@@ -138,9 +140,37 @@ def register(event: Event, transcript: Transcript, name: str) -> list[str]:
     return denied
 
 
-def dispatch(owner: FixtureOwner, root: Path, event: Event, transcript: Transcript) -> tuple[object, list[str]]:
+class HeldExchange:
+    def __init__(self, owner: FixtureOwner, operation: str | None) -> None:
+        self.owner = owner
+        self.operation = operation
+        self.operations: list[str] = []
+        self.deadline_unix_ms: int | None = None
+
+    def __call__(self, wrapper: dict[str, object]) -> dict[str, Any]:
+        request = wrapper["request"]
+        assert isinstance(request, dict)
+        self.operations.append(request["operation"])
+        if "deadline_unix_ms" in request:
+            self.deadline_unix_ms = request["deadline_unix_ms"]
+        if request["operation"] == self.operation:
+            assert self.deadline_unix_ms is not None
+            while time.time() * 1000 <= self.deadline_unix_ms + 1:
+                time.sleep(0.001)
+        return self.owner.exchange(wrapper)
+
+
+def dispatch(
+    owner: FixtureOwner,
+    root: Path,
+    event: Event,
+    transcript: Transcript,
+    exchange: Callable[[dict[str, object]], dict[str, Any]] | None = None,
+) -> tuple[object, list[str]]:
     seconds, source_read_bytes = foreground_allowance(event.name)
-    client = SnapshotClient(owner.exchange, foreground_seconds=seconds, foreground_source_read_bytes=source_read_bytes)
+    client = SnapshotClient(
+        exchange or owner.exchange, foreground_seconds=seconds, foreground_source_read_bytes=source_read_bytes
+    )
     payload = {"session_id": SESSION, "transcript_path": str(transcript.path), "cwd": str(root)} | (
         {"tool_name": "Bash", "tool_input": {"command": "git push origin HEAD"}} if event is Event.PreToolUse else {}
     )
@@ -173,3 +203,54 @@ def test_a_transcript_guard_blocks_within_the_foreground_allowance(
     assert gaps == []
     assert denied == [guard]
     assert envelope is not None
+
+
+def test_a_foreground_dispatch_never_renews_a_lease_the_owner_cannot_extend(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript
+) -> None:
+    transcript.write("alpha")
+    denied = register(Event.PreToolUse, transcript, "has_command")
+    dispatch(owner, tmp_path, Event.PreToolUse, transcript)
+    denied.clear()
+    exchange = HeldExchange(owner, None)
+
+    _, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange)
+
+    assert gaps == []
+    assert denied == ["has_command"]
+    assert "renew" not in exchange.operations
+    assert len(exchange.operations) == WARM_ROUND_TRIPS[transcript.sidechain]
+
+
+def test_a_retain_answered_after_the_foreground_deadline_is_a_deadline_gap(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript
+) -> None:
+    transcript.write("alpha")
+    denied = register(Event.PreToolUse, transcript, "has_command")
+    exchange = HeldExchange(owner, "retain")
+
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange)
+
+    assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
+    assert denied == []
+    assert envelope is None
+
+
+def test_a_late_lease_skips_only_the_hook_that_read_it(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript
+) -> None:
+    transcript.write("alpha")
+    denied = register(Event.PreToolUse, transcript, "has_command")
+
+    @on(Event.PreToolUse)
+    def policy(evt: BaseHookEvent) -> HookResult:
+        denied.append("policy")
+        return evt.block("policy guard")
+
+    exchange = HeldExchange(owner, "retain")
+
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange)
+
+    assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
+    assert denied == ["policy"]
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
