@@ -32,6 +32,7 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     release_tests = workflow[workflow.index("\n  release-tests:") : workflow.index("\n  build:")]
     build = workflow[workflow.index("\n  build:") : workflow.index("\n  python-assets:")]
     python_assets = workflow[workflow.index("\n  python-assets:") : workflow.index("\n  helper-version:")]
+    linux_host = workflow[workflow.index("\n  linux-host:") : workflow.index("\n  stage-release:")]
     stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
     smoke = workflow[workflow.index("\n  smoke-draft:") : workflow.index("\n  # PyPI Trusted Publishing")]
     publish_pypi = workflow[workflow.index("\n  publish-pypi:") : workflow.index("\n  publish-github:")]
@@ -47,9 +48,16 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert 'test "${#assets[@]}" = 2' in python_assets
     assert "Smoke-test the built wheel" in python_assets
 
+    assert "needs: build" in linux_host
+    assert "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build" in linux_host
+    assert "internal/hookd.Build=$version" in linux_host
+    assert 'tar -C linux-host -czf "captain-hook-$TAG-linux-amd64.tar.gz" capt-hookd' in linux_host
+
     for required in (
-        "needs: [build, python-assets, helper]",
+        "needs: [build, python-assets, helper, linux-host]",
         "name: ${{ needs.helper.outputs.artifact_name }}",
+        "name: linux-host",
+        'linux_asset="captain-hook-${RELEASE_TAG}-linux-amd64.tar.gz"',
         'helper_sidecar="${helper_assets[0]}.sha256"',
         'sha256sum -c "$HELPER_ASSET_FILENAME.sha256"',
         "SHA256SUMS.txt",
