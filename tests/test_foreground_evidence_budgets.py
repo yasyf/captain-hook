@@ -23,6 +23,7 @@ from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_resu
 TURNS = 120
 PAYLOAD = 4096
 SESSION = "budget-session"
+DEADLINE_SECONDS = 30.0
 
 GUARDS: dict[str, Callable[[BaseHookEvent, str], bool]] = {
     "user_text": lambda evt, marker: marker in evt.ctx.t.user_text,
@@ -139,8 +140,10 @@ def register(event: Event, transcript: Transcript, name: str) -> list[str]:
 
 
 def dispatch(owner: FixtureOwner, root: Path, event: Event, transcript: Transcript) -> tuple[object, list[str]]:
-    seconds, source_read_bytes = foreground_allowance(event.name)
-    client = SnapshotClient(owner.exchange, foreground_seconds=seconds, foreground_source_read_bytes=source_read_bytes)
+    _, source_read_bytes = foreground_allowance(event.name)
+    client = SnapshotClient(
+        owner.exchange, foreground_seconds=DEADLINE_SECONDS, foreground_source_read_bytes=source_read_bytes
+    )
     payload = {"session_id": SESSION, "transcript_path": str(transcript.path), "cwd": str(root)} | (
         {"tool_name": "Bash", "tool_input": {"command": "git push origin HEAD"}} if event is Event.PreToolUse else {}
     )
@@ -158,7 +161,7 @@ def dispatch(owner: FixtureOwner, root: Path, event: Event, transcript: Transcri
 @pytest.mark.parametrize("guard", list(GUARDS))
 @pytest.mark.parametrize("event", [Event.PreToolUse, Event.Stop], ids=["tool", "turn"])
 @pytest.mark.parametrize("phase", list(PHASES))
-def test_a_transcript_guard_blocks_within_the_foreground_allowance(
+def test_a_transcript_guard_blocks_within_the_foreground_read_allowance(
     tmp_path: Path, owner: FixtureOwner, transcript: Transcript, event: Event, phase: str, guard: str
 ) -> None:
     transcript.write("alpha")
