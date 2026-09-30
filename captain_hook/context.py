@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
+import time
 from copy import copy
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
 RECENT_WINDOW = 15
 UNSUPPORTED_MODELS: dict[tuple[str, str], ModelRejection] = {}
 UNSUPPORTED_MODELS_LOCK = threading.Lock()
+READY_BACKEND_TTL_SECONDS = 300.0
+READY_BACKENDS: dict[tuple[str | None, str], tuple[float, LlmBackend]] = {}
+READY_BACKENDS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,17 +60,28 @@ def is_unsupported_model(exc: BaseException) -> bool:
     )
 
 
-def remember_model_rejection(specialty: str, model: str, exc: BaseException, backend: LlmBackend | None) -> None:
-    from spawnllm import BackendUnavailable, select_backend
+def ready_backend(specialty: TSpecialty | None, model: TModel | str) -> LlmBackend:
+    """The backend spawnllm would select, probed at most once per :data:`READY_BACKEND_TTL_SECONDS`.
 
-    try:
-        serving = backend or select_backend(specialty=specialty, model=model)
-    except BackendUnavailable:
-        return
-    resolved = serving.resolve_model(model)
+    Selection spawns the backend's CLI to check its login, ``claude auth status`` for the default
+    one, and a hook that asks an LLM on every prompt paid that spawn on every call.
+    """
+    from spawnllm import select_backend
+
+    key = (specialty, model)
+    with READY_BACKENDS_LOCK:
+        if (ready := READY_BACKENDS.get(key)) is not None and time.monotonic() - ready[0] < READY_BACKEND_TTL_SECONDS:
+            return ready[1]
+        backend = select_backend(specialty=specialty, model=model)
+        READY_BACKENDS[key] = (time.monotonic(), backend)
+        return backend
+
+
+def remember_model_rejection(specialty: str, model: str, exc: BaseException, backend: LlmBackend) -> None:
+    resolved = backend.resolve_model(model)
     if resolved.partition(":")[0] in last_error_line(exc):
         with UNSUPPORTED_MODELS_LOCK:
-            UNSUPPORTED_MODELS[(specialty, model)] = ModelRejection(serving.provider, resolved, str(exc))
+            UNSUPPORTED_MODELS[(specialty, model)] = ModelRejection(backend.provider, resolved, str(exc))
 
 
 def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int | None:
@@ -374,13 +389,13 @@ class HookContext:
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
-        from spawnllm import BackendCallError, call_sync, extract_sync, select_backend
+        from spawnllm import BackendCallError, call_sync, extract_sync
 
         reqenv.checkpoint()
+        serving = backend or ready_backend(specialty, model)
         with UNSUPPORTED_MODELS_LOCK:
             rejection = UNSUPPORTED_MODELS.get((specialty, model))
         if rejection is not None:
-            serving = backend or select_backend(specialty=specialty, model=model)
             if (serving.provider, serving.resolve_model(model)) == (rejection.provider, rejection.model):
                 raise BackendCallError(rejection.message)
             with UNSUPPORTED_MODELS_LOCK:
@@ -397,7 +412,7 @@ class HookContext:
                 return extract_sync(
                     prompt,
                     response_model,
-                    backend=backend,
+                    backend=serving,
                     specialty=specialty,
                     model=model,
                     agent=agent,
@@ -405,11 +420,11 @@ class HookContext:
                     timeout=timeout,
                 )
             return call_sync(
-                prompt, backend=backend, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
+                prompt, backend=serving, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
             )
         except BackendCallError as exc:
             if is_unsupported_model(exc):
-                remember_model_rejection(specialty, model, exc, backend)
+                remember_model_rejection(specialty, model, exc, serving)
             raise
 
     def assemble_prompt(
