@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
+from capt_hook_client.client import HOST
+
 if TYPE_CHECKING:
     from cc_transcript.activity import ToolUse
     from cc_transcript.ids import ToolUseId
@@ -111,10 +113,7 @@ class Bridge:
     def __init__(self, command: Sequence[str] | None = None) -> None:
         if command is None and os.environ.get("CAPT_HOOK_TEST_NO_LIVE") == "1":
             raise SnapshotProtocolError("tests must supply an isolated snapshot transport")
-        self._command = tuple(
-            command
-            or (str(Path.home() / "Applications/Captain Hook.app/Contents/Helpers/capt-hookd"), "transcript-client")
-        )
+        self._command = tuple(command or (HOST, "transcript-client"))
         self._process: subprocess.Popen[bytes] | None = None
         self._guard = threading.Lock()
         self._id = 0

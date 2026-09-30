@@ -6,13 +6,10 @@ import os
 import sys
 from typing import NoReturn
 
-HOST = os.path.join(
-    os.path.expanduser("~"),
-    "Applications",
-    "Captain Hook.app",
-    "Contents",
-    "Helpers",
-    "capt-hookd",
+HOST = (
+    os.path.join(os.path.expanduser("~"), "Applications", "Captain Hook.app", "Contents", "Helpers", "capt-hookd")
+    if sys.platform == "darwin"
+    else os.path.join(os.path.expanduser("~"), ".local", "share", "captain-hook", "host", "capt-hookd")
 )
 
 

@@ -1,1 +1,5 @@
-../scripts/install-binary.sh
+#!/bin/bash
+case "$OSTYPE" in
+  linux*) exec "$HOME/.local/share/captain-hook/host/capt-hookd" "$@" ;;
+esac
+. "${0%/*}/../scripts/install-binary.sh"

@@ -286,7 +286,7 @@ def dispatch_update() -> None:
     carrying a deferral acts on it immediately, claiming :data:`APPLY_STAMP` instead of waiting out a
     check window a headless peer already claimed — one apply per window, whichever session brings it.
     """
-    if not (settings := UpdateSettings()).enabled:
+    if sys.platform != "darwin" or not (settings := UpdateSettings()).enabled:
         return
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("update skip: CAPT_HOOK_SPAWNED set")

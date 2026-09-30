@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/yasyf/captain-hook/internal/cwdguard"
 	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
@@ -61,10 +60,7 @@ func versionCommand(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "capt-hookd version: no arguments accepted")
 		return 2
 	}
-	if err := json.NewEncoder(stdout).Encode(struct {
-		Schema int    `json:"schema"`
-		Build  string `json:"build"`
-	}{Schema: wireproto.Schema, Build: Build}); err != nil {
+	if err := json.NewEncoder(stdout).Encode(currentHostVersion()); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

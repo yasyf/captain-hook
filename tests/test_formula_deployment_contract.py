@@ -3,6 +3,7 @@ import os
 import plistlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,42 @@ def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
     assert cli["tool"] == {"dist": "capt-hook", "entrypoint": "capt-hook"}
 
 
+def test_linux_cli_reads_the_installed_host_version() -> None:
+    """PIN: on Linux the CLI's tool env tracks the host ``package-install`` published, not a plist."""
+    cli = json.loads((ROOT / "captain_hook/linux/bin/capt-hook.binrun").read_text().split("\n", 1)[1])
+    assert cli["kind"] == "python-tool"
+    assert cli["version"] == {"file": "~/.local/share/captain-hook/host/version.json", "json_field": "build"}
+    assert cli["tool"] == {"dist": "capt-hook", "entrypoint": "capt-hook"}
+    linux_cli = ROOT / "captain_hook/linux/bin/capt-hook"
+    assert linux_cli.resolve() == (ROOT / "captain_hook/scripts/install-mcp.sh").resolve()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the Linux hook shim")
+@pytest.mark.parametrize("installed", [True, False])
+def test_linux_hook_dispatch_execs_the_installed_host(installed: bool, tmp_path: Path) -> None:
+    """PIN: a Linux hook event execs the host ``package-install`` placed, and a missing one fails open."""
+    host = tmp_path / ".local/share/captain-hook/host/capt-hookd"
+    if installed:
+        host.parent.mkdir(parents=True)
+        host.write_text('#!/bin/sh\necho "host $*"\n')
+        host.chmod(0o755)
+    result = subprocess.run(
+        [ROOT / "captain_hook/bin/hook", "run", "PreToolUse"],
+        env={"PATH": os.environ["PATH"], "HOME": str(tmp_path)},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if installed:
+        assert (result.returncode, result.stdout) == (0, "host run PreToolUse\n"), result.stderr
+    else:
+        assert result.returncode not in (0, 2)
+        assert str(host) in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the signed-app hook shim")
 @pytest.mark.parametrize(
     ("installed", "code", "output"),
     [

@@ -8,6 +8,7 @@ state dir, so the throttle stamp never leaks across tests.
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +17,11 @@ import pytest
 from captain_hook.desktop import client
 from captain_hook.desktop.client import Lane, NotifyOutcome
 from captain_hook.update import updater
+
+
+@pytest.fixture(autouse=True)
+def homebrew_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
 
 
 @pytest.fixture
@@ -269,6 +275,16 @@ def test_dispatch_detaches_once_per_throttle_window(monkeypatch: pytest.MonkeyPa
     updater.dispatch_update()
 
     assert detaches == [True]
+
+
+def test_dispatch_skips_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CAPT_HOOK_SPAWNED", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    detaches = record_detach(monkeypatch)
+
+    updater.dispatch_update()
+
+    assert detaches == []
 
 
 def test_dispatch_skips_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
