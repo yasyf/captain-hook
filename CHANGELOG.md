@@ -6,6 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`llm_gate` takes `once_per_turn`.** Any LLM hook firing in a turn silences
+  every gate for the rest of that turn. Teammate and other-session messages wake
+  an orchestrator without opening a new turn, so one fire muted a Stop gate
+  until the user next typed. `once_per_turn=False` judges every Stop.
+
+### Fixed
+
+- **The general pack's Stop gate now catches a turn that ends on a list of
+  things the user owes.** The gate is renamed `narrate_then_wait`, from
+  `prose_question_to_user`. A closing message that leaves a read, approval,
+  click or "go" on the user in prose now blocks, for example "Still with you:
+  the design in #27868 is held for your read". The agent is told to ask
+  through `AskUserQuestion`, or to say what the item waits on and who is
+  producing it. Four gaps let an orchestrator's finals through:
+  - Any `AskUserQuestion` in the turn stood the gate down, even one about
+    other items. The gate now stands down only when the ask comes after the
+    agent's last prose.
+  - No signal matched the owner-owed wording.
+  - The judge read each message clipped to 700 characters, so a list at the
+    end of a long report never reached it.
+  - Teammate wakes shared the fire latch described above.
+
 ## [12.61.0] - 2026-09-30
 
 ### Added
