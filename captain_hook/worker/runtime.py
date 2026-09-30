@@ -18,12 +18,12 @@ from captain_hook.daemon.context import RequestBuffers, capture_output, request_
 from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import envelope_text
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, GraphEvidenceExpired
+from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
 from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
 from captain_hook.util import reqenv
-from captain_hook.worker.fail_open import tally_fail_open
+from captain_hook.worker.fail_open import fail_open_envelope, tally_fail_open, with_warning
 from captain_hook.worker.protocol import EventRequest, EventResponse
 from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 
@@ -38,22 +38,6 @@ if TYPE_CHECKING:
 
     class RegistryLike(Protocol):
         def get(self) -> Any: ...
-
-
-FAIL_OPEN_EVIDENCE_STATUSES = frozenset(
-    {
-        "incomplete",
-        "source_limit",
-        "entry_limit",
-        "output_limit",
-        "deadline",
-        "cancelled",
-        "changed",
-        "missing",
-        "retained_limit",
-        "lease_limit",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,10 +123,11 @@ class ProductRuntime:
             except SystemExit as exc:
                 return self._response(buffers, exit_code=_exit_code(exc.code)), None
             except EvidenceIncomplete as exc:
-                if isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES:
+                if fails_open(exc):
                     logger.bind(status=exc.status, reason=exc.reason).warning("snapshot evidence incomplete")
-                    warning = tally_fail_open(event, session_id, exc) if session_id else None
-                    return EventResponse(stdout=envelope_text(warning) + "\n" if warning else ""), None
+                    warning = tally_fail_open(event, session_id, f"{exc.status}: {exc.reason}") if session_id else None
+                    envelope = fail_open_envelope(event, warning) if warning else None
+                    return EventResponse(stdout=envelope_text(envelope) + "\n" if envelope else ""), None
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
             except Exception:
@@ -183,15 +168,21 @@ class ProductRuntime:
                 transcript_loader=self._transcript_loader,
             )
             context = contextvars.copy_context()
+        if (
+            session_id
+            and (gaps := reqenv.evidence_gaps())
+            and (warning := tally_fail_open(event, session_id, gaps[-1]))
+        ):
+            output = with_warning(event, output, warning)
         if output:
             buffers.stdout.write(envelope_text(output) + "\n")
-        return lambda: self._after_reply(context, background)
+        return lambda: self._after_reply(context, background, session_id)
 
-    def _after_reply(self, context: contextvars.Context, background: Background) -> None:
+    def _after_reply(self, context: contextvars.Context, background: Background, session_id: str | None) -> None:
         with self._nlp_warmup_guard:
             if self._nlp_warmup.ident is None:
                 self._nlp_warmup.start()
-        context.run(_run_detached, background)
+        context.run(_run_detached, background, session_id)
 
     def _registry(self, root: str) -> RegistryLike:
         with self._registries_guard:
@@ -217,22 +208,27 @@ class ProductRuntime:
         )
 
 
-def _run_detached(background: Background) -> None:
+def _run_detached(background: Background, session_id: str | None) -> None:
     token = CURRENT_CLIENT.set(BACKGROUND_SNAPSHOT_CLIENT.get())
+    replied = len(reqenv.evidence_gaps())
+    late: list[str] = []
     try:
         with capture_output():
             try:
                 background()
             except EvidenceIncomplete as exc:
-                if isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES:
-                    logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot evidence incomplete")
-                    return
-                logger.bind(status=exc.status, reason=exc.reason).error("post-reply evidence incomplete")
-                raise
+                if not fails_open(exc):
+                    logger.bind(status=exc.status, reason=exc.reason).error("post-reply evidence incomplete")
+                    raise
+                logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot evidence incomplete")
+                late.append(f"{exc.status}: {exc.reason}")
             except Exception:
                 logger.exception("post-reply dispatch failed")
     finally:
         CURRENT_CLIENT.reset(token)
+    late = reqenv.evidence_gaps()[replied:] + late
+    if session_id and late:
+        tally_fail_open(None, session_id, late[-1])
 
 
 def _warm_nlp(warmer: Callable[[], None]) -> None:

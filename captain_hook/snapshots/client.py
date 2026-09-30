@@ -32,6 +32,9 @@ MAX_VIEW_ATTACHMENTS = 1024
 CLEANUP_SECONDS = 5
 GRAPH_WORK_SECONDS = 0.75
 GRAPH_READ_BYTES = 1024 * 1024
+GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
+GATE_WORK_SECONDS = 5.0
+GATE_READ_BYTES = 8 * 1024 * 1024
 GRAPH_DISCOVERY_ENTRIES = 50_000
 GRAPH_SOURCE_LIMIT = 4096
 DEFAULT_LIMITS = {
@@ -43,6 +46,15 @@ DEFAULT_LIMITS = {
     "max_sources": 65_536,
 }
 NATIVE_CLASSIFIER = {"id": "native", "version": "1"}
+
+
+def monotonic_deadline(deadline_unix_ms: int) -> float:
+    return time.monotonic() + deadline_unix_ms / 1000 - time.time()
+
+
+def foreground_allowance(event: str) -> tuple[float, int]:
+    """The seconds and source bytes one dispatch may spend on evidence; turn-level gates fire rarely and get more."""
+    return (GATE_WORK_SECONDS, GATE_READ_BYTES) if event in GATE_EVENTS else (GRAPH_WORK_SECONDS, GRAPH_READ_BYTES)
 
 
 def graph_limits() -> dict[str, int]:
@@ -72,6 +84,26 @@ class AttachmentLimit(EvidenceIncomplete):
 
 class GraphEvidenceExpired(EvidenceIncomplete):
     pass
+
+
+FAIL_OPEN_EVIDENCE_STATUSES = frozenset(
+    {
+        "incomplete",
+        "source_limit",
+        "entry_limit",
+        "output_limit",
+        "deadline",
+        "cancelled",
+        "changed",
+        "missing",
+        "retained_limit",
+        "lease_limit",
+    }
+)
+
+
+def fails_open(exc: EvidenceIncomplete) -> bool:
+    return isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES
 
 
 def encode_frame(message: Mapping[str, object]) -> bytes:
@@ -248,7 +280,8 @@ class SnapshotClient:
 
         from captain_hook.snapshots.validation import checked
 
-        cleanup_deadline = time.monotonic() + CLEANUP_SECONDS if operation == "release" else None
+        retry_until = time.monotonic() + CLEANUP_SECONDS if operation == "release" else None
+        admission_deadline_unix_ms = int((time.time() + self._preparation_seconds) * 1000)
         retry_delay = 0.01
         while True:
             with self._guard:
@@ -269,7 +302,7 @@ class SnapshotClient:
                 **arguments,
             }
             if operation not in {"resume", "release", "retain", "renew", "describe", "stats", "submit_classifier"}:
-                request.setdefault("deadline_unix_ms", int((time.time() + self._preparation_seconds) * 1000))
+                request.setdefault("deadline_unix_ms", admission_deadline_unix_ms)
                 request.setdefault("limits", DEFAULT_LIMITS.copy())
             if self.foreground_deadline_unix_ms is not None and "deadline_unix_ms" in request:
                 request["deadline_unix_ms"] = min(int(request["deadline_unix_ms"]), self.foreground_deadline_unix_ms)
@@ -299,10 +332,14 @@ class SnapshotClient:
                     self._foreground_source_bytes += result["usage"]["source_bytes_read"]
                     if self._foreground_source_bytes > self._foreground_read_bytes:
                         raise SnapshotProtocolError("foreground transcript byte budget was exceeded")
-            if cleanup_deadline is None or result.get("status") != "retained_limit":
+            if result.get("status") != "retained_limit":
                 return result
-            remaining = cleanup_deadline - time.monotonic()
-            if remaining <= 0:
+            if retry_until is None:
+                horizon = int(request.get("deadline_unix_ms", admission_deadline_unix_ms))
+                if self.foreground_deadline_unix_ms is not None:
+                    horizon = min(horizon, self.foreground_deadline_unix_ms)
+                retry_until = monotonic_deadline(horizon)
+            if (remaining := retry_until - time.monotonic()) <= 0:
                 return result
             time.sleep(min(retry_delay, remaining))
             retry_delay = min(retry_delay * 2, 0.1)

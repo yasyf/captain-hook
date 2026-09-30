@@ -6,6 +6,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **One hook's incomplete evidence leaves the other hooks running.** A
+  condition or handler that raises `EvidenceIncomplete` with a fail-open
+  status now skips only that hook, including in background work. Siblings'
+  verdicts stand, including a deny or a `Stop` block. Invalid statuses such
+  as `invalid_request` still fail the dispatch.
+- **Skipped hooks count toward the session's fail-open warning.** A dispatch
+  that skips a hook now counts even when other hooks ran. The warning joins
+  the dispatch's own output, after any existing `systemMessage`, preserving
+  its verdict. It now says dispatches "ran without some or all of their
+  hooks" because transcript evidence was incomplete, and "Those hooks'
+  guards were not enforced for those events." The count, latest cause, and
+  `capt-hook logs --session <id>` command remain in the message. Warnings
+  still start on the third dispatch, then each doubling;
+  `CAPT_HOOK_FAIL_OPEN_WARN_AFTER` sets the first threshold. A hook skipped
+  after the reply, in async work, also counts, and a warning it makes due
+  waits for the next dispatch that can carry it.
+- **A busy snapshot owner gives requests time to wait for a slot.** On
+  `retained_limit`, snapshot operations retry with backoff from 10 ms to
+  100 ms until the first request's deadline. Previously only `release`
+  retried; other operations failed open at once. Operations with no deadline
+  of their own, such as `retain`, wait until the foreground deadline. Retries
+  carry the first request's deadline, so a background retry cannot extend it,
+  and `release` keeps its 5 s cleanup window.
+- **A transcript that changes during acquire gets one retry.**
+  `load_transcript` retries acquire and classification once on `changed`.
+  This does not cover a prepared root changing between graph preparation
+  and a later query.
+
+### Changed
+
+- **Turn-level hooks get more time and bytes for transcript evidence.**
+  `Stop`, `SubagentStop` and `UserPromptSubmit` now get `5 s` and `8 MiB` of
+  foreground evidence work per dispatch, up from `0.75 s` and `1 MiB`.
+  Per-tool events keep the smaller allowance.
+
 ## [12.63.0] - 2026-09-30
 
 ### Added

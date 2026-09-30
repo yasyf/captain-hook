@@ -20,7 +20,8 @@ class RequestOverrides:
     client_ppid: int
     session_id: str
     deadline_unix_ms: int = 0
-    abandoned: list[str] = field(default_factory=list)
+    abandoned: list[str] = field(default_factory=list[str])
+    evidence_gaps: list[str] = field(default_factory=list[str])
 
 
 class Abandoned(BaseException):
@@ -100,6 +101,11 @@ def deadline_in(seconds: float) -> Generator[None]:
 def abandoned() -> list[str]:
     """The hooks whose verdicts the bound request's dispatch gave up on; a scratch list for the cold CLI."""
     return [] if (ov := _OVERRIDES.get()) is None else ov.abandoned
+
+
+def evidence_gaps() -> list[str]:
+    """The hooks the bound request skipped for incomplete transcript evidence; a scratch list for the cold CLI."""
+    return [] if (ov := _OVERRIDES.get()) is None else ov.evidence_gaps
 
 
 @contextmanager

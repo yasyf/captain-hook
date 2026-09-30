@@ -11,6 +11,10 @@ import pytest
 
 from captain_hook.snapshots.client import (
     CORE_SCHEMA,
+    GATE_READ_BYTES,
+    GATE_WORK_SECONDS,
+    GRAPH_READ_BYTES,
+    GRAPH_WORK_SECONDS,
     HOST_SCHEMA,
     MAX_VIEW_ATTACHMENTS,
     AttachmentLimit,
@@ -22,6 +26,7 @@ from captain_hook.snapshots.client import (
     RemoteSession,
     RootWarmState,
     SnapshotClient,
+    foreground_allowance,
 )
 from captain_hook.snapshots.worker import empty_usage, failure
 
@@ -619,6 +624,78 @@ def test_exhausted_release_capacity_preserves_original_error(monkeypatch):
     client.close()
     assert lease.released
     assert len(requests) == 2
+
+
+def test_acquire_queues_for_admission_until_a_slot_frees():
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if len(requests) < 3:
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+        return response(request, {"kind": "acquired", "description": description()})
+
+    client = SnapshotClient(exchange, foreground_seconds=5)
+    client.bind_tool_registry({})
+
+    result = client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
+
+    assert result["data"]["kind"] == "acquired"
+    assert len({request["id"] for request in requests}) == 3
+
+
+@pytest.mark.parametrize("client_options", [{"foreground_seconds": 0.05}, {"preparation_seconds": 0.05}])
+def test_admission_queueing_stops_at_the_first_request_deadline(client_options):
+    requests = []
+
+    def exchange(wrapper):
+        requests.append(wrapper["request"])
+        return {"schema": HOST_SCHEMA, "response": failure(wrapper["request"]["id"], "retained_limit", "busy")}
+
+    client = SnapshotClient(exchange, **client_options)
+    client.bind_tool_registry({})
+
+    started = time.monotonic()
+    try:
+        result = client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
+    except EvidenceIncomplete as exc:
+        assert exc.status == "deadline"
+    else:
+        assert result["status"] == "retained_limit"
+    assert time.monotonic() - started < 1
+    assert len(requests) > 1
+    assert len({request["deadline_unix_ms"] for request in requests}) == 1
+
+
+def test_retain_queues_for_admission_within_the_foreground_deadline():
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if len(requests) < 3:
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+        return response(request, {"kind": "acquired", "description": description()})
+
+    client = SnapshotClient(exchange, foreground_seconds=5)
+    client.bind_tool_registry({})
+
+    assert client.call("retain", handle={"owner_epoch": "owner", "lease_id": "lease"})["status"] == "ok"
+    assert len(requests) == 3
+
+
+@pytest.mark.parametrize(
+    ("event", "allowance"),
+    [
+        ("Stop", (GATE_WORK_SECONDS, GATE_READ_BYTES)),
+        ("SubagentStop", (GATE_WORK_SECONDS, GATE_READ_BYTES)),
+        ("UserPromptSubmit", (GATE_WORK_SECONDS, GATE_READ_BYTES)),
+        ("PreToolUse", (GRAPH_WORK_SECONDS, GRAPH_READ_BYTES)),
+    ],
+)
+def test_turn_level_gates_get_the_larger_foreground_allowance(event, allowance):
+    assert foreground_allowance(event) == allowance
 
 
 def test_release_does_not_retry_other_failures():

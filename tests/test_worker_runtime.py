@@ -368,7 +368,6 @@ def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
     after()
 
 
-
 def spawn_refused(*_: object, **__: object) -> tuple[None, object]:
     raise EvidenceIncomplete("cancelled", "posix_spawn python: resource temporarily unavailable")
 
@@ -392,7 +391,10 @@ def session_request(state_dir: Path, *, event: str = "PreToolUse", warn_after: s
 
 def fail_open_runtime() -> ProductRuntime:
     return ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=spawn_refused, install_writer=False, nlp_warmer=lambda: None
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=spawn_refused,
+        install_writer=False,
+        nlp_warmer=lambda: None,
     )
 
 
@@ -408,9 +410,12 @@ def test_fail_opens_warn_at_the_threshold_and_each_doubling_across_workers(tmp_p
 
     assert [count for count, _ in warned] == [2, 4, 8]
     count, envelope = warned[-1]
-    assert envelope["systemMessage"].startswith("capt-hook: 8 hook dispatches in this session failed open")
+    assert envelope["systemMessage"].startswith("capt-hook: 8 hook dispatches in this session ran without")
     assert "cancelled: posix_spawn python: resource temporarily unavailable" in envelope["systemMessage"]
-    assert envelope["hookSpecificOutput"] == {"hookEventName": "PreToolUse", "additionalContext": envelope["systemMessage"]}
+    assert envelope["hookSpecificOutput"] == {
+        "hookEventName": "PreToolUse",
+        "additionalContext": envelope["systemMessage"],
+    }
 
 
 def test_fail_open_warning_defaults_to_the_third_dispatch(tmp_path: Path) -> None:
@@ -442,6 +447,48 @@ def test_fail_open_warning_waits_for_an_event_whose_output_is_read(tmp_path: Pat
 
     assert silent == ["", "", ""]
     assert "4 hook dispatches" in json.loads(prompt.stdout)["systemMessage"]
+
+
+def skipped_one_hook(*_: object, **__: object) -> tuple[dict[str, object], None]:
+    reqenv.evidence_gaps().append("guard: entry_limit: condition incomplete")
+    return {"systemMessage": "sibling ran"}, None
+
+
+def test_a_skipped_hook_counts_and_joins_the_sibling_output(tmp_path: Path) -> None:
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=skipped_one_hook,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+
+    response, after = runtime.dispatch(session_request(tmp_path, event="Stop", warn_after="1"))
+
+    assert after is not None
+    message = json.loads(response.stdout.splitlines()[-1])["systemMessage"]
+    assert message.startswith("sibling ran\n\ncapt-hook: 1 hook dispatches in this session ran without")
+    assert "guard: entry_limit: condition incomplete" in message
+
+
+def skipped_one_async_hook(*_: object, **__: object) -> tuple[None, object]:
+    return None, lambda: reqenv.evidence_gaps().append("async guard: read_limit: incomplete")
+
+
+def test_a_hook_skipped_after_the_reply_counts_toward_the_next_warning(tmp_path: Path) -> None:
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=skipped_one_async_hook,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+
+    response, after = runtime.dispatch(session_request(tmp_path, warn_after="2"))
+    assert after is not None
+    after()
+    warned, _ = fail_open_runtime().dispatch(session_request(tmp_path, warn_after="2"))
+
+    assert "{" not in response.stdout
+    assert "capt-hook: 2 hook dispatches" in json.loads(warned.stdout)["systemMessage"]
 
 
 def test_a_contended_tally_still_fails_open(tmp_path: Path) -> None:
