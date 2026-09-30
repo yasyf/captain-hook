@@ -79,39 +79,44 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err := linkExecutable(installed.host, installed.link); err != nil {
 		return err
 	}
-	if err := ensureSupervisedHost(ctx, installed); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
+	client, err := openSupervisedHost()
+	if err != nil {
+		return err
+	}
+	if err := ensureSupervisedHost(ctx, client); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
 		return err
 	}
 	return nil
 }
 
-// supervisedHostDaemon is hostDaemon with the program the workspace's
-// supervisor runs: the installed host, served in place.
-func supervisedHostDaemon(installed installedPaths) (daemonkit.Daemon, error) {
+// openSupervisedHost is hostDaemon with the program the workspace's supervisor
+// runs: daemonkit's stable copy of this executable, never the installed host
+// every hook client execs, so a client in flight is never mistaken for an
+// incumbent that refused to leave.
+func openSupervisedHost() (*daemonkit.Client, error) {
 	resolved, err := resolvePaths()
 	if err != nil {
-		return daemonkit.Daemon{}, err
+		return nil, err
 	}
-	program, err := daemonkit.InBundle(installed.dir, installedHostName)
+	if err := resolved.ensure(); err != nil {
+		return nil, err
+	}
+	program, err := daemonkit.Stable()
 	if err != nil {
-		return daemonkit.Daemon{}, err
+		return nil, err
 	}
 	d := hostDaemon()
 	d.Program, d.Args, d.Log = program, []string{"serve"}, resolved.log
-	return d, nil
-}
-
-// ensureSupervisedHost converges the label's supervisor on the installed host,
-// draining an incumbent of any other build first.
-func ensureSupervisedHost(ctx context.Context, installed installedPaths) error {
-	d, err := supervisedHostDaemon(installed)
-	if err != nil {
-		return err
-	}
 	client, err := daemonkit.Open(d)
 	if err != nil {
-		return fmt.Errorf("captain package: open host: %w", err)
+		return nil, fmt.Errorf("captain package: open host: %w", err)
 	}
+	return client, nil
+}
+
+// ensureSupervisedHost converges the label's supervisor on this build,
+// draining an incumbent of any other build first.
+func ensureSupervisedHost(ctx context.Context, client *daemonkit.Client) error {
 	ensureCtx, cancel := context.WithTimeout(ctx, hostStopTimeout)
 	defer cancel()
 	if _, err := client.Ensure(ensureCtx); err != nil {

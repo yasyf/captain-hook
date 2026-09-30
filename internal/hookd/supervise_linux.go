@@ -12,11 +12,11 @@ import (
 const supervisorAnswerInterval = 100 * time.Millisecond
 
 // superviseHost is the workspace-owned foreground supervisor for the host. It
-// converges its own label on the installed host once the supervisor answers,
+// converges its own label on this build once the supervisor answers,
 // so starting it is the whole deployment, and it returns when a drain signal
 // or ctx ends it.
 func superviseHost(ctx context.Context) error {
-	installed, err := resolveInstalledPaths()
+	client, err := openSupervisedHost()
 	if err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func superviseHost(ctx context.Context) error {
 		cancel()
 	}()
 	for {
-		err := ensureSupervisedHost(ctx, installed)
+		err := ensureSupervisedHost(ctx, client)
 		switch {
 		case err == nil, ctx.Err() != nil:
 			return <-supervised
