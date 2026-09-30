@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.65.0] - 2026-09-30
+
+### Fixed
+
+- **Classifier selection accepts an appended transcript.** Claude Code
+  appends to the live transcript on every tool call. An append between
+  acquire and classifier selection no longer raises `changed` and skips
+  the hook. The classified lease must keep the same source and at least
+  as many committed bytes; a different file or a truncation still raises
+  `changed`. The one-shot transcript retry added in 12.64.0 is removed.
+- **The `cc-transcript` 14.28.5 pin fixes more causes of skipped hooks.**
+  Appends to the live root keep prepared graphs valid, and acquire joins
+  an in-flight load when the file has only grown. Classifier batches fit
+  the remaining read budget and resume from a cursor. User-text queries
+  no longer hit `read_limit` because of large early tool payloads. Failed,
+  canceled, or released classifier stages free their admission slots at
+  once, instead of holding them for 120 s, so `retained_limit` means real
+  contention.
+
 ## [12.64.0] - 2026-09-30
 
 ### Fixed
