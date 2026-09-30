@@ -106,7 +106,7 @@ def test_reverse_foreground_and_explicit_background_use_separate_admission(trans
             observed.append(CURRENT_CLIENT.get().call("stats"))
             background_done.set()
 
-        return EventResponse(), lambda: context.run(_run_detached, background)
+        return EventResponse(), lambda: context.run(_run_detached, background, None)
 
     service, _, incoming, outgoing, _ = transport(dispatch)
     write_message(outgoing, event(41))

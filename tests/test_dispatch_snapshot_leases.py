@@ -11,10 +11,11 @@ from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.transcripts import lazy_transcript
 from captain_hook.types import CustomCondition, Event
+from captain_hook.util import reqenv
 
 
 class LeasedFixture:
-    def __init__(self, released, name='source'):
+    def __init__(self, released, name="source"):
         self.released = released
         self.name = name
         self.closed = False
@@ -39,14 +40,14 @@ class LeasedFixture:
 def leased_event(tmp_path, monkeypatch):
     released = []
     loaded = []
-    monkeypatch.setattr('captain_hook.snapshots.client.RemoteSession', LeasedFixture)
+    monkeypatch.setattr("captain_hook.snapshots.client.RemoteSession", LeasedFixture)
 
     def load(path):
         loaded.append(path)
         return LeasedFixture(released)
 
-    source = lazy_transcript('/fixture.jsonl', loader=load)
-    evt = PostToolUseEvent(_raw={'tool_name': 'Bash'}, ctx=HookContext(SessionStore(tmp_path), source, None))
+    source = lazy_transcript("/fixture.jsonl", loader=load)
+    evt = PostToolUseEvent(_raw={"tool_name": "Bash"}, ctx=HookContext(SessionStore(tmp_path), source, None))
     return evt, loaded, released
 
 
@@ -83,44 +84,65 @@ def test_reading_hooks_have_independent_leases_on_one_lazy_load(leased_event):
         assert len(evt.ctx.t) == 42
 
     assert dispatch(Event.PostToolUse, evt) is None
-    assert loaded == ['/fixture.jsonl']
-    assert sorted(released) == ['1', '2', 'source']
+    assert loaded == ["/fixture.jsonl"]
+    assert sorted(released) == ["1", "2", "source"]
     assert evt.ctx.transcript.pins.pending == 0
 
 
-def test_condition_failure_releases_every_preparation_branch(leased_event):
+def test_condition_evidence_failure_skips_only_that_hook(leased_event):
     evt, loaded, released = leased_event
 
     class Incomplete(CustomCondition):
         def check(self, evt):
             assert len(evt.ctx.t) == 42
-            raise EvidenceIncomplete('entry_limit', 'condition incomplete')
+            raise EvidenceIncomplete("entry_limit", "condition incomplete")
 
     @on(Event.PostToolUse, only_if=[Incomplete()])
     def first(evt):
-        raise AssertionError('handler must not run')
+        raise AssertionError("handler must not run")
 
     @on(Event.PostToolUse)
     def second(evt):
-        raise AssertionError('handler must not run')
+        return evt.warn("second still runs")
 
-    with pytest.raises(EvidenceIncomplete, match='condition incomplete'):
-        dispatch(Event.PostToolUse, evt)
-    assert sorted(released) == ['1', 'source']
+    overrides = reqenv.RequestOverrides(env={}, cwd="/tmp", client_ppid=1, session_id="s")
+    with reqenv.use_request(overrides):
+        envelope = dispatch(Event.PostToolUse, evt)
+    assert envelope["hookSpecificOutput"]["additionalContext"] == "second still runs"
+    assert overrides.evidence_gaps == ["first: entry_limit: condition incomplete"]
+    assert sorted(released) == ["1", "source"]
     assert evt.ctx.transcript.pins.pending == 0
 
 
-def test_handler_incomplete_propagates_and_releases(leased_event):
+def test_handler_evidence_failure_skips_only_that_hook(leased_event):
     evt, loaded, released = leased_event
 
     @on(Event.PostToolUse)
     def first(evt):
         assert len(evt.ctx.t) == 42
-        raise EvidenceIncomplete('output_limit', 'handler incomplete')
+        raise EvidenceIncomplete("output_limit", "handler incomplete")
 
-    with pytest.raises(EvidenceIncomplete, match='handler incomplete'):
+    @on(Event.PostToolUse)
+    def second(evt):
+        return evt.warn("second still runs")
+
+    overrides = reqenv.RequestOverrides(env={}, cwd="/tmp", client_ppid=1, session_id="s")
+    with reqenv.use_request(overrides):
+        envelope = dispatch(Event.PostToolUse, evt)
+    assert envelope["hookSpecificOutput"]["additionalContext"] == "second still runs"
+    assert overrides.evidence_gaps == ["first: output_limit: handler incomplete"]
+    assert evt.ctx.transcript.pins.pending == 0
+
+
+def test_invalid_evidence_still_fails_the_dispatch(leased_event):
+    evt, _, _ = leased_event
+
+    @on(Event.PostToolUse)
+    def first(evt):
+        raise EvidenceIncomplete("invalid_request", "handler evidence is invalid")
+
+    with pytest.raises(EvidenceIncomplete, match="handler evidence is invalid"):
         dispatch(Event.PostToolUse, evt)
-    assert sorted(released) == ['1', 'source']
     assert evt.ctx.transcript.pins.pending == 0
 
 
@@ -128,16 +150,16 @@ def test_context_fork_preserves_model_stub_and_clears_source_caches(leased_event
     evt, _, _ = leased_event
     model = Mock()
     evt.ctx.call_llm = model
-    evt.ctx.__dict__.update(event_count=999, current_turn_event_count=88, turn='old', prior='old', transcript_ref='old')
-    evt.ctx.signal_evidence[(5, 'any')] = ('old',)
+    evt.ctx.__dict__.update(event_count=999, current_turn_event_count=88, turn="old", prior="old", transcript_ref="old")
+    evt.ctx.signal_evidence[(5, "any")] = ("old",)
     fork = evt.ctx.fork(evt.ctx.transcript.fork())
     assert fork.call_llm is model
     assert fork.signal_evidence == {}
     assert fork.prepared_evidence is None
-    assert 'event_count' not in fork.__dict__
-    assert 'current_turn_event_count' not in fork.__dict__
-    assert 'turn' not in fork.__dict__
-    assert 'prior' not in fork.__dict__
-    assert 'transcript_ref' not in fork.__dict__
+    assert "event_count" not in fork.__dict__
+    assert "current_turn_event_count" not in fork.__dict__
+    assert "turn" not in fork.__dict__
+    assert "prior" not in fork.__dict__
+    assert "transcript_ref" not in fork.__dict__
     fork.transcript.release()
     evt.ctx.transcript.release()

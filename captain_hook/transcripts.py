@@ -84,13 +84,23 @@ def load_transcript(path: None) -> Session: ...
 def load_transcript(path: str | Path | None) -> Session | RemoteSession:
     from cc_transcript.query import Session
 
-    from captain_hook.snapshots.client import CURRENT_CLIENT, NATIVE_CLASSIFIER, EvidenceIncomplete
+    from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
 
     if not path:
         return Session(())
     if (client := CURRENT_CLIENT.get()) is None:
         raise EvidenceIncomplete("invalid_request", "transcript loading requires an admitted snapshot client")
+    try:
+        return load_classified(client, path)
+    except EvidenceIncomplete as exc:
+        if exc.status != "changed":
+            raise
+        return load_classified(client, path)
+
+
+def load_classified(client: SnapshotClient, path: str | Path) -> RemoteSession:
     from captain_hook.app import _state
+    from captain_hook.snapshots.client import NATIVE_CLASSIFIER, EvidenceIncomplete
 
     try:
         session = client.acquire(path)

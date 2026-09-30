@@ -17,7 +17,7 @@ from loguru import logger
 from captain_hook.app import get_hook_candidates
 from captain_hook.conditions import matches_conditions
 from captain_hook.session import SessionStore
-from captain_hook.snapshots.client import EvidenceIncomplete
+from captain_hook.snapshots.client import EvidenceIncomplete, fails_open
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -136,6 +136,12 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
         logger.bind(hook=entry.name).exception("hook handler failed")
         faults.record(f"hook {entry.name}", exc, str(evt.cwd) if evt.cwd else None)
         return None
+
+
+def note_evidence_gap(entry: RegisteredHook, exc: EvidenceIncomplete) -> None:
+    """Record that *entry* was skipped for incomplete evidence, so its siblings still decide the event."""
+    logger.bind(hook=entry.name, status=exc.status, reason=exc.reason).warning("hook skipped: evidence incomplete")
+    reqenv.evidence_gaps().append(f"{entry.name}: {exc.status}: {exc.reason}")
 
 
 def record_fire(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult) -> None:
@@ -265,6 +271,11 @@ def run_scheduled(
     except reqenv.Abandoned:
         logger.bind(hook=entry.name).info("verdict no longer wanted; hook stopped at a checkpoint")
         return None
+    except EvidenceIncomplete as exc:
+        if not fails_open(exc):
+            raise
+        note_evidence_gap(entry, exc)
+        return None
     if result is not None and result.action is Action.block:
         blocked.record(index)
     return result
@@ -339,7 +350,10 @@ def start_hooks(
 
 
 def cancel_unstarted_group(
-    submitted: Future[None], group: Sequence[int], futures: Sequence[Future[HookResult | None]], fanout: Fanout,
+    submitted: Future[None],
+    group: Sequence[int],
+    futures: Sequence[Future[HookResult | None]],
+    fanout: Fanout,
 ) -> None:
     if submitted.cancelled():
         for index in group:
@@ -527,12 +541,14 @@ def combine(
 
 
 def prepare_hook_events(
-    evt: BaseHookEvent, *, async_: bool,
+    evt: BaseHookEvent,
+    *,
+    async_: bool,
 ) -> tuple[list[RegisteredHook], list[BaseHookEvent]]:
     from captain_hook.transcripts import fork_transcript, release_transcript
 
     entries = get_hook_candidates(evt, async_=async_)
-    forks = []
+    forks: list[BaseHookEvent] = []
     try:
         for entry in entries:
             transcript = fork_transcript(evt.ctx.transcript)
@@ -546,11 +562,18 @@ def prepare_hook_events(
         raise
     finally:
         release_transcript(evt.ctx.transcript)
-    matching = []
-    events = []
+    matching: list[RegisteredHook] = []
+    events: list[BaseHookEvent] = []
     try:
         for entry, fork in zip(entries, forks, strict=True):
-            if matches_conditions(entry.spec, fork):
+            try:
+                matched = matches_conditions(entry.spec, fork)
+            except EvidenceIncomplete as exc:
+                if not fails_open(exc):
+                    raise
+                note_evidence_gap(entry, exc)
+                matched = False
+            if matched:
                 matching.append(entry)
                 events.append(fork)
             else:
@@ -627,7 +650,12 @@ def run_background_group(
     try:
         for index in group:
             with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
-                execute_hook(entries[index], events[index], session_dir)
+                try:
+                    execute_hook(entries[index], events[index], session_dir)
+                except EvidenceIncomplete as exc:
+                    if not fails_open(exc):
+                        raise
+                    note_evidence_gap(entries[index], exc)
     finally:
         for index in group:
             release_transcript(events[index].ctx.transcript)
