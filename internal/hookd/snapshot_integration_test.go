@@ -128,7 +128,7 @@ func TestSnapshotRealPythonOwnerSharesLoadsAcrossClients(t *testing.T) {
 	}
 	acquire := map[string]any{
 		"path": source, "classifier": map[string]string{"id": "native", "version": "1"}, "deadline_unix_ms": time.Now().Add(40 * time.Second).UnixMilli(),
-		"limits": map[string]int{"max_read_bytes": 1 << 20, "max_events": 1000, "max_items": 1000, "max_output_bytes": 1 << 20, "max_discovery_entries": 100, "max_sources": 10},
+		"limits": map[string]int{"max_read_bytes": 1 << 20, "max_source_read_bytes": 1 << 20, "max_events": 1000, "max_items": 1000, "max_output_bytes": 1 << 20, "max_discovery_entries": 100, "max_sources": 10},
 	}
 	abandoned, err := call("worker:cancelled", "hook", "acquire", acquire)
 	if err != nil || abandoned["status"] != "incomplete" {

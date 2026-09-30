@@ -174,7 +174,7 @@ def test_warm_step_has_small_independent_budget_and_progress():
         assert worker._warm_step(job) is False
         operation, arguments = calls[0]
         assert operation == "warm_registered"
-        assert arguments["limits"]["max_read_bytes"] == 8 * 1024 * 1024
+        assert arguments["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024
         assert started < arguments["deadline_unix_ms"] <= started + 3000
         assert job.state.start_index == 3
         assert job.state.fact_cache_write_bytes == 200
@@ -262,7 +262,7 @@ def test_root_warmer_advances_bounded_source_without_restarting():
     assert state.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is False
     assert state.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is True
     assert all(operation == "warm_root" for operation, _ in calls)
-    assert all(arguments["limits"]["max_read_bytes"] == 8 * 1024 * 1024 for _, arguments in calls)
+    assert all(arguments["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024 for _, arguments in calls)
     assert state.stalled_steps == 0
 
 

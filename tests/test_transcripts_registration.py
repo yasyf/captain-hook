@@ -223,7 +223,7 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
     }
     assert [operation for operation, _ in calls] == ["warm_root", "warm_root", "warm_registered", "warm_registered"]
     assert calls[2][1]["thread_ids"] == ["thread-1"]
-    assert calls[2][1]["limits"]["max_read_bytes"] == 8 * 1024 * 1024
+    assert calls[2][1]["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024
 
 
 def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):

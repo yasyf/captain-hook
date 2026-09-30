@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Transcript queries and classification get a separate work budget.**
+  `max_source_read_bytes` bounds physical reads to the remaining per-dispatch
+  allowance of `1 MiB` for tool events, or `8 MiB` for `Stop`, `SubagentStop`, and
+  `UserPromptSubmit`. Foreground work over snapshots in memory gets its own
+  `64 MiB` `max_read_bytes` cap, so reading the transcript no longer shrinks
+  that cap. Background work keeps its `512 MiB` logical cap.
+
 ## [12.65.0] - 2026-09-30
 
 ### Fixed

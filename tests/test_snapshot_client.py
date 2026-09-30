@@ -11,9 +11,10 @@ import pytest
 
 from captain_hook.snapshots.client import (
     CORE_SCHEMA,
-    GATE_READ_BYTES,
+    FOREGROUND_READ_BYTES,
+    GATE_SOURCE_READ_BYTES,
     GATE_WORK_SECONDS,
-    GRAPH_READ_BYTES,
+    GRAPH_SOURCE_READ_BYTES,
     GRAPH_WORK_SECONDS,
     HOST_SCHEMA,
     MAX_VIEW_ATTACHMENTS,
@@ -521,7 +522,7 @@ def test_foreground_budget_covers_root_acquire_and_classifier():
         result["response"]["usage"]["source_bytes_read"] = 24 * 1024
         return result
 
-    client = SnapshotClient(exchange, foreground_seconds=0.75, foreground_read_bytes=1024 * 1024)
+    client = SnapshotClient(exchange, foreground_seconds=0.75, foreground_source_read_bytes=1024 * 1024)
     client.bind_tool_registry({})
     session = client.acquire("/tmp/fixture.jsonl")
     list(client.pages("prepare_hook_view", domain=True, view=session.view(), cwd="/tmp", droid=False))
@@ -530,11 +531,12 @@ def test_foreground_budget_covers_root_acquire_and_classifier():
         client.call("stats")
 
     assert [request["operation"] for request in requests] == ["acquire", "prepare_hook_view", "query"]
-    assert [request["limits"]["max_read_bytes"] for request in requests] == [
+    assert [request["limits"]["max_source_read_bytes"] for request in requests] == [
         1024 * 1024,
         324 * 1024,
         24 * 1024,
     ]
+    assert all(request["limits"]["max_read_bytes"] == FOREGROUND_READ_BYTES for request in requests)
     assert len({request["deadline_unix_ms"] for request in requests}) == 1
     assert requests[0]["deadline_unix_ms"] <= int(time.time() * 1000) + 750
 
@@ -557,7 +559,7 @@ def test_foreground_root_cursor_stops_before_a_second_read_step():
         cleanup_exchange=cleanup,
         defer_cleanup=True,
         foreground_seconds=0.75,
-        foreground_read_bytes=1024 * 1024,
+        foreground_source_read_bytes=1024 * 1024,
     )
     client.bind_tool_registry({})
 
@@ -699,10 +701,10 @@ def test_retain_queues_for_admission_within_the_foreground_deadline():
 @pytest.mark.parametrize(
     ("event", "allowance"),
     [
-        ("Stop", (GATE_WORK_SECONDS, GATE_READ_BYTES)),
-        ("SubagentStop", (GATE_WORK_SECONDS, GATE_READ_BYTES)),
-        ("UserPromptSubmit", (GATE_WORK_SECONDS, GATE_READ_BYTES)),
-        ("PreToolUse", (GRAPH_WORK_SECONDS, GRAPH_READ_BYTES)),
+        ("Stop", (GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES)),
+        ("SubagentStop", (GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES)),
+        ("UserPromptSubmit", (GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES)),
+        ("PreToolUse", (GRAPH_WORK_SECONDS, GRAPH_SOURCE_READ_BYTES)),
     ],
 )
 def test_turn_level_gates_get_the_larger_foreground_allowance(event, allowance):
@@ -1026,7 +1028,7 @@ def test_graph_query_budget_bounds_each_partial_step(tmp_path, monkeypatch):
     fixture = FixtureOwner()
     try:
         session = fixture.load(source).with_registered_sources(GraphSources(direct_paths=(attachment,)))
-        monkeypatch.setitem(DEFAULT_LIMITS, "max_read_bytes", 256)
+        monkeypatch.setitem(DEFAULT_LIMITS, "max_source_read_bytes", 256)
         before = fixture.client.call("stats")["data"]["counters"]
         with pytest.raises(EvidenceIncomplete) as first:
             session.has_edit_to("src/**")
