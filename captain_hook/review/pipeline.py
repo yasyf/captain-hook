@@ -69,6 +69,7 @@ class SpawnReport:
         watching: Whether the repo is watched (nothing runs when it is not).
         scanned: How many transcripts the incremental scan parsed.
         inserted: How many new feedback events the scan recorded.
+        refused: How many transcripts and correction anchors the scan refused because their evidence exceeds its bound.
         triaged: How many surviving create events the junk pre-screen classified.
         triage_junk: How many of those the pre-screen marked junk.
         triage_rejected: How many candidates the pre-screen retired without a judge call.
@@ -91,6 +92,7 @@ class SpawnReport:
     watching: bool = False
     scanned: int = 0
     inserted: int = 0
+    refused: int = 0
     triaged: int = 0
     triage_junk: int = 0
     triage_rejected: int = 0
@@ -575,7 +577,12 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
             return SpawnReport(repo=repo, sweep=sweep)
         scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
         report = SpawnReport(
-            repo=repo, watching=True, scanned=scan_report.scanned, inserted=scan_report.inserted, sweep=sweep
+            repo=repo,
+            watching=True,
+            scanned=scan_report.scanned,
+            inserted=scan_report.inserted,
+            refused=scan_report.refused,
+            sweep=sweep,
         )
         with judge_lock(settings) as claimed:
             if claimed:
