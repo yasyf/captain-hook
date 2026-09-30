@@ -5,7 +5,7 @@ import json
 import threading
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -77,8 +77,10 @@ class ProductRuntime:
     def dispatch(self, request: EventRequest) -> tuple[EventResponse, Background | None]:
         started = time.perf_counter()
         abandoned: list[str] = []
+        warmups: list[str] = []
         try:
-            return self._respond(request, abandoned)
+            response, background = self._respond(request, abandoned, warmups)
+            return replace(response, warmup=bool(warmups)), background
         finally:
             logger.bind(
                 event=request.event,
@@ -87,9 +89,12 @@ class ProductRuntime:
                 queue_ms=round((started - request.received) * 1000, 1),
                 elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
                 abandoned=abandoned,
+                warmups=warmups,
             ).info("dispatch")
 
-    def _respond(self, request: EventRequest, abandoned: list[str]) -> tuple[EventResponse, Background | None]:
+    def _respond(
+        self, request: EventRequest, abandoned: list[str], warmups: list[str]
+    ) -> tuple[EventResponse, Background | None]:
         try:
             event = Event[request.event]
         except KeyError:
@@ -135,6 +140,7 @@ class ProductRuntime:
                 return self._response(buffers, status="error", exit_code=1), None
             finally:
                 abandoned.extend(reqenv.abandoned())
+                warmups.extend(reqenv.warmups())
             return self._response(buffers), background
 
     def close(self) -> None:

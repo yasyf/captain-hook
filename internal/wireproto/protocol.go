@@ -72,6 +72,8 @@ type EventRequest struct {
 }
 
 // EventResponse is the byte-shaped product result returned by the Python worker.
+// Warmup reports that the dispatch paid a one-time load — a pack registry
+// build, an NLP resource — so its timing is not the worker's service time.
 type EventResponse struct {
 	Schema    int     `json:"schema"`
 	Status    string  `json:"status"`
@@ -79,6 +81,7 @@ type EventResponse struct {
 	Stderr    string  `json:"stderr"`
 	Exit      int     `json:"exit"`
 	ElapsedMS float64 `json:"elapsed_ms"`
+	Warmup    bool    `json:"warmup"`
 }
 
 // AdoptRequest hands the host a process the worker started in a session of its

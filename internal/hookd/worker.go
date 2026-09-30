@@ -140,11 +140,8 @@ func (w *workerClient) notifySettled(n int) {
 }
 
 func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerClient, error) {
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, err
-		}
-	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	if err := wireproto.EncodeFrame(conn, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: build}); err != nil {
 		return nil, err
 	}
@@ -156,8 +153,8 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 		response.Response != nil || response.Error != "" || response.Adopt != nil || response.ParentID != 0 || len(response.Snapshot)+len(response.SnapshotContext)+len(response.SnapshotConfig) != 0 {
 		return nil, errors.New("captain: Python worker rejected the exact build handshake")
 	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return nil, err
+	if !stop() {
+		return nil, ctx.Err()
 	}
 	w := &workerClient{snapshotNamespace: workerNamespace.Add(1), snapshotEvents: make(map[uint64]snapshotEvent), reverseSnapshots: make(map[uint64]reverseSnapshot), conn: conn, build: build, slots: make(chan struct{}, workerSlots), pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
 	go w.readLoop()

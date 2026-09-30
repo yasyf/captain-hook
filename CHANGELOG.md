@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A worker's one-time loads no longer count as its service time.** On an
+  8-CPU Sprite, a cold worker's first event carried its imports and pack
+  discovery, its second the NLP load, and the smoothed service time read
+  13.9 s; the fourth of eight concurrent `PreToolUse` events on that member
+  was shed with `3 events ahead on this worker take 41.816s, past the 29.996s
+  left; no verdict` while its siblings answered in about a second. The host
+  now samples a dispatch only when the member had already completed one, no
+  snapshot-owner startup overlapped it, and the worker did not report
+  `warmup` on the response, which it does for a request that built the pack
+  registry or loaded spaCy or WordNet. The deadline-bounded shed is unchanged
+  once a warm sample exists.
+- **A worker startup is bounded by the hooks waiting on it, not by the
+  readiness timer alone.** After three back-to-back host restarts on a
+  Sprite, the worker's hello took longer than `workerReadinessTimeout`; the
+  stdio channel's read deadline closes the pipe, so the handshake failed with
+  `captain: handshake Python product worker: captain: read worker frame
+  header: read |0: file already closed`, the half-started child was torn
+  down, and a hook with 17 s of deadline left exited 1. A startup now stays
+  open until the latest deadline among the callers waiting on it, and ends
+  at `workerReadinessTimeout` only when nobody holds one; the spawn record
+  keeps that budget, and the handshake is closed when the startup bound
+  ends. The snapshot owner's startup gets the same bound from its waiters.
 - **Transcript queries and classification get a separate work budget.**
   `max_source_read_bytes` bounds physical reads to the remaining per-dispatch
   allowance of `1 MiB` for tool events, or `8 MiB` for `Stop`, `SubagentStop`, and

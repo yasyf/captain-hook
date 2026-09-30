@@ -165,6 +165,20 @@ def test_service_nested_result_and_graceful_eof() -> None:
     assert nested["status"] == "ok"
     assert nested["stdout"] == "ok\n"
     assert isinstance(nested["elapsed_ms"], float)
+    assert nested["warmup"] is False
+
+
+def test_service_result_carries_the_warm_up_flag() -> None:
+    output_stream = io.BytesIO()
+
+    WorkerService(
+        io.BytesIO(frame(event(1))), output_stream, dispatch=lambda _: served(EventResponse(warmup=True))
+    ).run()
+
+    (received,) = responses(output_stream.getvalue())
+    nested = received["response"]
+    assert isinstance(nested, dict)
+    assert nested["warmup"] is True
 
 
 def test_service_announces_an_adopted_process_in_one_exact_frame() -> None:
@@ -205,7 +219,9 @@ def test_background_work_runs_after_the_reply_is_written() -> None:
     assert "reply" in output_stream.events[:index]
     assert "reply" in output_stream.events[index + 1 :]
     assert [message["op"] for message in responses(output_stream.getvalue())] == [
-        "background_begin", "result", "background_end",
+        "background_begin",
+        "result",
+        "background_end",
     ]
 
 
@@ -231,7 +247,8 @@ def test_slow_background_work_does_not_hold_the_reply() -> None:
     runner.start()
     assert replied.wait(timeout=5)
     assert [(message["op"], message["id"]) for message in responses(output_stream.getvalue())] == [
-        ("background_begin", 1), ("result", 1),
+        ("background_begin", 1),
+        ("result", 1),
     ]
     release.set()
     runner.join(timeout=5)

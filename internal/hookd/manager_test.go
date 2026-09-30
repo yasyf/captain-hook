@@ -807,7 +807,7 @@ func TestAGrownMemberSurvivesAnImmediateSweep(t *testing.T) {
 	manager.start = func(context.Context, workerKey) (*workerClient, error) { return worker, nil }
 
 	manager.mu.Lock()
-	entry := manager.startMemberLocked(workerKey{id: "pool", root: root}, 0)
+	entry := manager.startMemberLocked(workerKey{id: "pool", root: root}, 0, time.Time{})
 	manager.mu.Unlock()
 	<-entry.ready
 	manager.wg.Wait()
@@ -820,5 +820,163 @@ func TestAGrownMemberSurvivesAnImmediateSweep(t *testing.T) {
 	}
 	if cachedEntry(manager, entry.key.member()) == nil {
 		t.Fatal("the idle sweep retired a freshly grown member before its first request")
+	}
+}
+
+type scriptedReply struct {
+	advance  time.Duration
+	before   func()
+	response wireproto.EventResponse
+}
+
+func coldMember(t *testing.T, manager *workerManager, clock *fakeClock) (*workerEntry, wireproto.EventRequest, chan scriptedReply) {
+	t.Helper()
+	request := testEventRequest("PreToolUse")
+	request.Root = "/live"
+	key, err := makeWorkerKey(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := &workerEntry{ready: make(chan struct{}), key: key}
+	worker, serverConn := silentWorker(t)
+	worker.setOnSettle(func() { manager.settleLoad(entry) })
+	entry.worker = worker
+	close(entry.ready)
+	manager.entries[key.member()] = entry
+	replies := make(chan scriptedReply, 8)
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(serverConn)
+			if err != nil {
+				return
+			}
+			reply := <-replies
+			if reply.before != nil {
+				reply.before()
+			}
+			clock.Advance(reply.advance)
+			_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+				Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID, Response: &reply.response,
+			})
+		}
+	}()
+	return entry, request, replies
+}
+
+func serviceOf(manager *workerManager, entry *workerEntry) time.Duration {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return entry.service
+}
+
+// TestColdDispatchesDoNotSeedTheServiceTime pins the sprite shed: a member's
+// first dispatch carried 15 s of imports and registry discovery and its second
+// 9 s of NLP loading, the smoothed service time read 13.9 s, and the fourth
+// concurrent event on the member was shed at `3 events ahead ... take 41.816s`
+// while its siblings answered in a second.
+func TestColdDispatchesDoNotSeedTheServiceTime(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	clock := &fakeClock{now: time.Now()}
+	manager.now = clock.Now
+	entry, request, replies := coldMember(t, manager, clock)
+	served := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "served"}
+	dispatch := func(reply scriptedReply) wireproto.EventResponse {
+		t.Helper()
+		ctx, cancel := context.WithDeadline(t.Context(), clock.Now().Add(30*time.Second))
+		defer cancel()
+		replies <- reply
+		response, err := manager.dispatch(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	dispatch(scriptedReply{advance: 15 * time.Second, response: served})
+	if got := serviceOf(manager, entry); got != 0 {
+		t.Fatalf("service after the member's first dispatch = %s, want none: it paid the worker's imports", got)
+	}
+	warmup := served
+	warmup.Warmup = true
+	dispatch(scriptedReply{advance: 9 * time.Second, response: warmup})
+	if got := serviceOf(manager, entry); got != 0 {
+		t.Fatalf("service after a warm-up dispatch = %s, want none: the worker reported a one-time load", got)
+	}
+	dispatch(scriptedReply{advance: time.Second, response: served})
+	if got := serviceOf(manager, entry); got != time.Second {
+		t.Fatalf("service after the first warm dispatch = %s, want 1s", got)
+	}
+
+	manager.mu.Lock()
+	entry.load = 3
+	manager.mu.Unlock()
+	response := dispatch(scriptedReply{advance: time.Second, response: served})
+	if response.Stdout != "served" || strings.Contains(response.Stderr, "no verdict") {
+		t.Fatalf("fourth event on a warm member = %+v, want it admitted behind 3 warm events", response)
+	}
+}
+
+func TestADispatchOverlappingASnapshotOwnerStartupIsNotServiceTime(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	clock := &fakeClock{now: time.Now()}
+	manager.now = clock.Now
+	entry, request, replies := coldMember(t, manager, clock)
+	manager.mu.Lock()
+	entry.served = 1
+	manager.mu.Unlock()
+	served := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"}
+	dispatch := func(reply scriptedReply) {
+		t.Helper()
+		ctx, cancel := context.WithDeadline(t.Context(), clock.Now().Add(30*time.Second))
+		defer cancel()
+		replies <- reply
+		if _, err := manager.dispatch(ctx, request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshotService := func(start func(context.Context) (*snapshotOwner, error)) *snapshotService {
+		service, err := newSnapshotService(manager)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.start = start
+		return service
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	inFlight := snapshotService(func(ctx context.Context) (*snapshotOwner, error) {
+		close(entered)
+		<-release
+		return &snapshotOwner{}, nil
+	})
+	manager.snapshots = inFlight
+	got := make(chan error, 1)
+	go func() { _, err := inFlight.get(context.Background()); got <- err }()
+	<-entered
+	dispatch(scriptedReply{advance: 12 * time.Second, response: served})
+	close(release)
+	if err := <-got; err != nil {
+		t.Fatal(err)
+	}
+	if service := serviceOf(manager, entry); service != 0 {
+		t.Fatalf("service after a dispatch admitted during an owner startup = %s, want none", service)
+	}
+
+	completed := snapshotService(func(context.Context) (*snapshotOwner, error) { return &snapshotOwner{}, nil })
+	manager.snapshots = completed
+	dispatch(scriptedReply{advance: 8 * time.Second, response: served, before: func() {
+		if _, err := completed.get(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}})
+	if service := serviceOf(manager, entry); service != 0 {
+		t.Fatalf("service after a dispatch that saw an owner start and finish = %s, want none", service)
+	}
+
+	dispatch(scriptedReply{advance: time.Second, response: served})
+	if service := serviceOf(manager, entry); service != time.Second {
+		t.Fatalf("service after a dispatch with the owner settled = %s, want 1s", service)
 	}
 }

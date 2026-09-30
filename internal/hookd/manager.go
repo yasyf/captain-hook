@@ -64,10 +64,11 @@ var workerEnvExact = map[string]struct{}{
 }
 
 type workerEntry struct {
-	ready  chan struct{}
-	worker *workerClient
-	err    error
-	key    workerKey
+	ready   chan struct{}
+	startup *startup
+	worker  *workerClient
+	err     error
+	key     workerKey
 
 	// lastUsed and inflight are guarded by workerManager.mu. inflight counts
 	// the holds on this entry — every caller waiting or dispatching on it, and
@@ -80,6 +81,7 @@ type workerEntry struct {
 
 	background int
 	load       int
+	served     int
 	service    time.Duration
 }
 
@@ -160,6 +162,7 @@ type workerManager struct {
 	logWriter io.Writer
 
 	now          func() time.Time
+	readiness    time.Duration
 	start        func(ctx context.Context, key workerKey) (*workerClient, error)
 	adoptProcess func(ctx context.Context, pid int) (detachedProcess, error)
 
@@ -185,7 +188,7 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 	m := &workerManager{
 		owner: owner, logWriter: logWriter,
 		entries: make(map[string]*workerEntry), poolSize: workersPerRoot(),
-		now: time.Now, lifetime: lifetime, end: end, changed: make(chan struct{}),
+		now: time.Now, readiness: workerReadinessTimeout, lifetime: lifetime, end: end, changed: make(chan struct{}),
 	}
 	m.start = m.startWorker
 	m.adoptProcess = func(ctx context.Context, pid int) (detachedProcess, error) {
@@ -218,22 +221,35 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	}
 	defer m.release(entry)
 	admitted := m.now()
+	epoch, starting := m.snapshotStartups()
 	worker := entry.worker
 	response, err := worker.call(ctx, request)
 	if err != nil && worker.broken() {
 		m.forget(worker)
 		return wireproto.EventResponse{}, errors.Join(err, m.settle(worker))
 	}
-	if err == nil {
-		m.mu.Lock()
-		entry.observe(adm.ahead+1, m.now().Sub(admitted))
-		m.mu.Unlock()
+	elapsed := m.now().Sub(admitted)
+	after, _ := m.snapshotStartups()
+	warm := !adm.first && !response.Warmup && !starting && after == epoch
+	m.mu.Lock()
+	entry.served++
+	if err == nil && warm {
+		entry.observe(adm.ahead+1, elapsed)
 	}
+	m.mu.Unlock()
 	return response, err
+}
+
+func (m *workerManager) snapshotStartups() (uint64, bool) {
+	if m.snapshots == nil {
+		return 0, false
+	}
+	return m.snapshots.startups()
 }
 
 type admission struct {
 	shed      bool
+	first     bool
 	ahead     int
 	wait      time.Duration
 	remaining time.Duration
@@ -249,7 +265,7 @@ func (m *workerManager) reserveLocked(ctx context.Context, entry *workerEntry) a
 	}
 	entry.load++
 	entry.lastUsed = m.now()
-	return admission{ahead: ahead}
+	return admission{ahead: ahead, first: entry.served == 0}
 }
 
 func shedResponse(ahead int, wait, remaining time.Duration) wireproto.EventResponse {
@@ -271,6 +287,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		return nil, admission{}, errWorkerAdmissionPaused
 	}
 	var evicted *workerClient
+	deadline, _ := ctx.Deadline()
 	view := m.poolLocked(key.id)
 	entry := view.ready
 	if key.affinity != "" && !ephemeralRoot(key.root) {
@@ -280,7 +297,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		if member := m.entries[target.member()]; member != nil {
 			entry = member
 		} else if view.starting == nil && view.size < m.poolSize && len(m.entries) < maxLiveWorkers {
-			entry = m.startMemberLocked(key, shard)
+			entry = m.startMemberLocked(key, shard, deadline)
 		}
 	}
 	switch {
@@ -296,10 +313,10 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 			}
 			evicted = victim.worker
 		}
-		entry = m.startMemberLocked(key, view.shard)
+		entry = m.startMemberLocked(key, view.shard, deadline)
 	case key.affinity == "" && entry.load > 0 && !entry.ephemeral && view.starting == nil &&
 		view.size < m.poolSize && len(m.entries) < maxLiveWorkers:
-		m.startMemberLocked(key, view.shard)
+		m.startMemberLocked(key, view.shard, time.Time{})
 	}
 	entry.lastUsed = m.now()
 	entry.inflight++
@@ -307,6 +324,8 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 	var adm admission
 	if ready {
 		adm = m.reserveLocked(ctx, entry)
+	} else {
+		entry.startup.extend(deadline)
 	}
 	m.mu.Unlock()
 
@@ -347,10 +366,11 @@ func (m *workerManager) admitted(entry *workerEntry, adm admission) (*workerEntr
 	return entry, adm, nil
 }
 
-func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry {
+func (m *workerManager) startMemberLocked(key workerKey, shard int, deadline time.Time) *workerEntry {
 	key.shard = shard
 	entry := &workerEntry{
-		ready: make(chan struct{}), key: key, inflight: 1, ephemeral: ephemeralRoot(key.root), lastUsed: m.now(),
+		ready: make(chan struct{}), startup: newStartup(m.lifetime, m.now, m.readiness, deadline),
+		key: key, inflight: 1, ephemeral: ephemeralRoot(key.root), lastUsed: m.now(),
 	}
 	m.entries[key.member()] = entry
 	m.wg.Add(1)
@@ -360,7 +380,8 @@ func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry
 
 func (m *workerManager) startEntry(entry *workerEntry) {
 	defer m.wg.Done()
-	worker, err := m.start(m.lifetime, entry.key)
+	worker, err := m.start(entry.startup.ctx, entry.key)
+	entry.startup.end()
 	if worker != nil {
 		worker.setSnapshots(m.snapshots)
 		worker.setOnSettle(func() { m.settleLoad(entry) })
@@ -583,10 +604,10 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
+	spawnCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
 	defer cancel()
-	child, err := spawnPastEAGAIN(ctx, spawnBackoff, func() (*daemonkit.Child, error) {
-		return m.owner.Spawn(ctx, workerCmd(key, python), daemonkit.ChannelStdio, m.logWriter)
+	child, err := spawnPastEAGAIN(spawnCtx, spawnBackoff, func() (*daemonkit.Child, error) {
+		return m.owner.Spawn(spawnCtx, workerCmd(key, python), daemonkit.ChannelStdio, m.logWriter)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("captain: spawn Python product worker: %w", err)

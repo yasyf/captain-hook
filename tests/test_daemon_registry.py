@@ -15,6 +15,7 @@ from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
 from captain_hook.packs import manager, plugins
+from captain_hook.util import reqenv
 from tests.helpers import make_project as scaffold
 from tests.helpers import plant_roster
 
@@ -62,9 +63,17 @@ def test_unchanged_tree_twice_is_equal(project: CliState) -> None:
     assert fp(project).digest == fp(project).digest
 
 
-def test_warm_registry_avoids_hook_directory_enumeration(
-    project: CliState, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_registry_build_marks_the_bound_request_warm_up(project: CliState) -> None:
+    reg = Registry(project)
+    requests = [reqenv.RequestOverrides(env={}, cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(2)]
+    for overrides in requests:
+        with reqenv.use_request(overrides):
+            reg.get()
+
+    assert [overrides.warmups for overrides in requests] == [["registry"], []]
+
+
+def test_warm_registry_avoids_hook_directory_enumeration(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     hooks = Path(project.hooks)
     (hooks / "nested").mkdir()
     (hooks / "nested" / "data.txt").write_text("one")

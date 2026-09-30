@@ -80,6 +80,7 @@ class EventResponse:
     stderr: str = ""
     exit: int = 0
     elapsed_ms: float = 0.0
+    warmup: bool = False
 
     def message(self) -> dict[str, object]:
         return {
@@ -89,6 +90,7 @@ class EventResponse:
             "stderr": self.stderr,
             "exit": self.exit,
             "elapsed_ms": self.elapsed_ms,
+            "warmup": self.warmup,
         }
 
 
