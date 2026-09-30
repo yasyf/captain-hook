@@ -137,8 +137,13 @@ def llm_evaluate[M: BaseModel](
         return None
 
     dispatched = evt.ctx.assemble_prompt(
-        built.context("diff", diff_text), (), {}, transcript=transcript,
-        tool_results=tool_results, budget=budget, diff_text=None,
+        built.context("diff", diff_text),
+        (),
+        {},
+        transcript=transcript,
+        tool_results=tool_results,
+        budget=budget,
+        diff_text=None,
     )
     asked = dispatched
     for attempt in count():
@@ -153,10 +158,12 @@ def llm_evaluate[M: BaseModel](
         except ValidationError as e:
             if attempt >= retries:
                 raise
-            asked = str(Prompt(system_text=dispatched).context(
-                "validation_error",
-                f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
-            ))
+            asked = str(
+                Prompt(system_text=dispatched).context(
+                    "validation_error",
+                    f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
+                )
+            )
             logger.bind(attempt=attempt).opt(exception=True).warning("llm output failed validation; retrying")
         except EvidenceIncomplete:
             raise
@@ -198,6 +205,7 @@ def llm_primitive[M: BaseModel](
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     guards_waiting: bool | None = None,
+    once_per_turn: bool | None = None,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -223,7 +231,9 @@ def llm_primitive[M: BaseModel](
                 prompt,
                 response_model,
                 hook=name,
-                once_per_turn=action is not Action.block or not evt.event & TOOL_EVENTS,
+                once_per_turn=(action is not Action.block or not evt.event & TOOL_EVENTS)
+                if once_per_turn is None
+                else once_per_turn,
                 signals=signals,
                 when=when,
                 contexts=contexts,
@@ -287,6 +297,7 @@ def llm_gate(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     guards_waiting: bool | None = None,
+    once_per_turn: bool | None = None,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -341,6 +352,11 @@ def llm_gate(
             ``None`` keeps the default — a blocking Stop/SubagentStop gate skips, anything
             else does not. Pass ``False`` for a gate whose subject *is* the turn that parks
             on background work rather than finishing.
+        once_per_turn: Whether the gate stays quiet for the rest of the turn once any LLM hook
+            has fired in it. ``None`` keeps the default — on everywhere except tool events.
+            Pass ``False`` for a Stop gate that must judge every closing message: teammate and
+            cross-session messages wake an orchestrator without opening a new turn, so one
+            fire would otherwise silence the gate until the user next types.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -367,6 +383,7 @@ def llm_gate(
         only_if=only_if,
         skip_if=skip_if,
         guards_waiting=guards_waiting,
+        once_per_turn=once_per_turn,
         events=events,
         max_fires=max_fires,
         tests=tests,
@@ -500,7 +517,10 @@ def record_prompt_check_failure(
             argv, exit_code, stdout, stderr = None, None, "", ""
 
     failure_path = (
-        resolve_cache_dir() / "failures" / (p.stem if (p := evt.ctx.transcript_path) else "unknown") / f"{timestamp}.json"
+        resolve_cache_dir()
+        / "failures"
+        / (p.stem if (p := evt.ctx.transcript_path) else "unknown")
+        / f"{timestamp}.json"
     )
     failure_path.parent.mkdir(parents=True, exist_ok=True)
     failure_path.write_text(
