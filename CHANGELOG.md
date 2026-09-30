@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Linux amd64 gains a host with a foreground supervisor.** The plugin's
+  `linux/install.sh` installs `~/.local/share/captain-hook/host/capt-hookd`.
+  Keep `~/.local/bin/capt-hookd supervise` running under the workspace's
+  process manager. Hook events pass through the host to Python workers.
+  This is for private single-user VMs: same-user trust admits a process
+  with the same UID impersonating the host.
+
 - **The graphite pack refuses a push to a PR the merge queue holds.** With
   ccx on PATH, the pack resolves each branch that `git push`, `ccx vcs
   push`, `ccx vcs ship`, `ccx vcs stack submit`, or `gt submit` pushes to its
