@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
+    from captain_hook.snapshots.client import EvidenceIncomplete
 
 REVIEWER_MARKER = "capt-hook-session-reviewer"
 """The token the reviewer's own headless sessions carry in their first user message."""
@@ -220,10 +221,12 @@ class ScanReport:
     Attributes:
         scanned: The number of transcripts parsed and recorded.
         inserted: The number of newly inserted feedback events.
+        refused: The number of transcripts and correction anchors whose evidence exceeds its bound.
     """
 
     scanned: int
     inserted: int
+    refused: int = 0
 
 
 def reason_kept(text: str) -> bool:
@@ -438,9 +441,38 @@ async def ingest(
     return ScanReport(scanned=1, inserted=inserted)
 
 
+def correction_pages(
+    client: Any, session: Any, batch: Sequence[FeedbackCandidate], repo: str | None
+) -> tuple[list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
+    from captain_hook.snapshots.client import EvidenceIncomplete
+    from captain_hook.snapshots.review import REVIEW_POLICY
+
+    try:
+        return list(
+            client.pages(
+                "prepare_corrections",
+                domain=True,
+                view=session.view(),
+                policy=REVIEW_POLICY,
+                anchors=[asdict(candidate.ref) for candidate in batch],
+                feedback=[candidate.text for candidate in batch],
+                repo=repo,
+            )
+        ), []
+    except EvidenceIncomplete as exc:
+        if exc.status != "output_limit":
+            raise
+        if len(batch) == 1:
+            return [], [(batch[0].ref, exc)]
+    middle = len(batch) // 2
+    first, first_refused = correction_pages(client, session, batch[:middle], repo)
+    second, second_refused = correction_pages(client, session, batch[middle:], repo)
+    return first + second, first_refused + second_refused
+
+
 def prepare_source(
     client: Any, path: Path, settings: ReviewSettings, repo_key: RepoKey | None = None
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
     from captain_hook.decisions import decisions_db_path
     from captain_hook.snapshots.review import REVIEW_POLICY, ProjectionBudget, decode_candidate
     from captain_hook.util.paths import resolve_claude_config_dir
@@ -474,20 +506,14 @@ def prepare_source(
             candidate for raw in candidates if (candidate := decode_candidate(raw)[0]).source_kind != HOOK_COMPLAINT
         ]
         corrections: list[dict[str, Any]] = []
+        refused: list[tuple[EventRef, EvidenceIncomplete]] = []
         for offset in range(0, len(eligible), 256):
-            batch = eligible[offset : offset + 256]
-            for page in client.pages(
-                "prepare_corrections",
-                domain=True,
-                view=session.view(),
-                policy=REVIEW_POLICY,
-                anchors=[asdict(candidate.ref) for candidate in batch],
-                feedback=[candidate.text for candidate in batch],
-                repo=prepared["cwd"],
-            ):
+            pages, batch_refused = correction_pages(client, session, eligible[offset : offset + 256], prepared["cwd"])
+            for page in pages:
                 budget.add(page)
                 corrections.extend(page["corrections"])
-        return prepared, corrections
+            refused.extend(batch_refused)
+        return prepared, corrections, refused
     finally:
         session.release()
 
@@ -503,6 +529,8 @@ async def scan(
 ) -> ScanReport:
     import asyncio
 
+    from loguru import logger
+
     from captain_hook.snapshots.review import review_client
 
     roots = sorted({str(path.absolute()) for path in transcripts})
@@ -510,7 +538,7 @@ async def scan(
         return ScanReport(0, 0)
     checkpoint_key = f"snapshot_discovery:{dedup_key(*roots)}"
     checkpoint = await store.meta(checkpoint_key)
-    scanned = inserted = 0
+    scanned = inserted = refused = 0
     next_checkpoint = None
     from captain_hook.snapshots.client import EvidenceIncomplete
 
@@ -528,13 +556,29 @@ async def scan(
                     continue
                 path = entry["path"]
                 revision_key = f"snapshot_revision:{dedup_key(path)}"
-                if await store.meta(revision_key) == entry["revision"]:
+                refused_key = f"snapshot_refused:{dedup_key(path)}"
+                if entry["revision"] in {await store.meta(revision_key), await store.meta(refused_key)}:
                     continue
-                prepared, corrections = await asyncio.to_thread(prepare_source, client, Path(path), settings, repo_key)
+                try:
+                    prepared, corrections, anchors_refused = await asyncio.to_thread(
+                        prepare_source, client, Path(path), settings, repo_key
+                    )
+                except EvidenceIncomplete as exc:
+                    if exc.status != "output_limit":
+                        raise
+                    logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
+                    await store.set_meta(refused_key, entry["revision"])
+                    refused += 1
+                    continue
+                for anchor, refusal in anchors_refused:
+                    logger.bind(transcript=path, session_id=anchor.session_id, event_uuid=anchor.event_uuid).warning(
+                        f"correction evidence refused: {refusal.reason}"
+                    )
                 report = await ingest(store, prepared, corrections=corrections, repo_key=repo_key)
                 await store.set_meta(revision_key, entry["revision"])
                 scanned += report.scanned
                 inserted += report.inserted
+                refused += len(anchors_refused)
     if next_checkpoint is not None:
         await store.set_meta(checkpoint_key, next_checkpoint)
-    return ScanReport(scanned, inserted)
+    return ScanReport(scanned, inserted, refused)
