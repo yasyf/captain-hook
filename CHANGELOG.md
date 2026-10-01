@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tooling refusals no longer block unrelated dispatches or record quoted error text.** Each
+  signature uses the same covered verbs to identify the refusing call and a repeated action, so
+  `ccx vcs worktree add` no longer repeats a GitHub quota refusal. Source and documentation reads,
+  Slack thread reads, and lane reports no longer create deterministic refusal records. Raw
+  fallbacks retain up to three leading verb words, so `gh pr view` no longer repeats `gh pr edit`.
+- **Existing tooling lanes and expired quotas no longer leave dispatches blocked.** Lane markers
+  and recognized Agent names register the fix lane even before a refusal occurs, suppressing both
+  the nudge and repeat block for that key. GitHub quota records expire at ccx's reported RFC 3339
+  reset time or, when absent, one hour after recording; cc-slack and raw records do not expire.
+  The required expiry field clears 12.73 refusal state on upgrade, including false records from
+  source reads.
+
 ## [12.73.0] - 2026-10-01
 
 ### Added
