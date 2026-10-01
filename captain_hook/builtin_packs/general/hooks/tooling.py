@@ -2,23 +2,35 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from pydantic import BaseModel
 
 from captain_hook import (
     Allow,
+    Block,
     Event,
+    FromSubagent,
+    HookResult,
     InlineTests,
     Input,
     OtherCall,
     PostToolUseFailureEvent,
+    SkillCall,
     T,
     TaskCall,
     Tool,
     Warn,
+    WorkflowState,
     llm_nudge,
+    on,
+    workflow_state,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from captain_hook import BaseHookEvent
 
 TOOLING = frozenset({"ccx", "gt", "orca", "ccn", "cc-notes", "cc-slack", "codex-ask", "capt-hook"})
@@ -30,6 +42,12 @@ LANE_REPORT = re.compile(r"(?i)\bccx refusal:|\btooling defect\b")
 EXIT_HEADER = re.compile(r"\A(?:Error: )?Exit code \d+\n")
 REPEATS = 3
 SCOPE = "tooling_nudge"
+EVIDENCE_CHARS = 240
+CC_SLACK_ACTION = re.compile(r"(?i)\bcc-slack\b|\bslack_(?:send|reply|edit|react|watch|dm_status)\b")
+GITHUB_ACTION = re.compile(r"(?i)\bccx vcs\b|\bgh (?:pr|api|run)\b|\bstack-enqueue\b")
+CC_SLACK_COMMANDS = frozenset({"cc-slack"})
+CC_SLACK_MCP = "mcp__plugin_cc-slack_"
+LANE_MARKER = re.compile(r"\btooling-lane:\s*(?P<key>[\w:.-]+)")
 
 PROMPT = """You are a senior engineer watching another engineer ("the agent") mid-task. A
 deterministic scan flagged the tool call that just ran as a possible TOOLING DEFECT or
@@ -97,6 +115,127 @@ MESSAGE = (
 
 
 @dataclass(frozen=True, slots=True)
+class Signature:
+    key: str
+    tool: str
+    text: re.Pattern[str]
+    action: re.Pattern[str]
+    commands: frozenset[str]
+    mcp_prefix: str | None = None
+
+    def sourced(self, evt: BaseHookEvent) -> bool:
+        match evt.input:
+            case TaskCall():
+                return True
+            case OtherCall(name=name) if self.mcp_prefix:
+                return name.startswith(self.mcp_prefix)
+        return bool(evt.command) and any(Path(call.name).name in self.commands for call in evt.command.calls())
+
+
+SIGNATURES = (
+    Signature(
+        "cc-slack-session",
+        "cc-slack",
+        re.compile(r"no cc-slack session for this Claude window"),
+        CC_SLACK_ACTION,
+        CC_SLACK_COMMANDS,
+        CC_SLACK_MCP,
+    ),
+    Signature(
+        "cc-slack-no-watch",
+        "cc-slack",
+        re.compile(r"\bpass `?no_watch\b"),
+        CC_SLACK_ACTION,
+        CC_SLACK_COMMANDS,
+        CC_SLACK_MCP,
+    ),
+    Signature(
+        "github-quota",
+        "ccx",
+        re.compile(
+            r"(?i)rate-limited until|api rate limit exceeded|secondary rate limit"
+            r"|graphql\b[^\n]{0,60}\b(?:quota|rate limit)"
+        ),
+        GITHUB_ACTION,
+        frozenset({"ccx", "gh", "stack-enqueue"}),
+    ),
+)
+
+
+class Refusal(BaseModel):
+    tool: str
+    action: str
+    evidence: str
+    lane: bool = False
+
+
+@workflow_state("tooling_refusals")
+class ToolingRefusals(WorkflowState):
+    refusals: dict[str, Refusal] = {}
+
+
+REFUSAL_MESSAGE = (
+    "{tool} refused: {evidence}\n"
+    "Spawn a tooling lane now that fixes {tool} (PR, merge, release, install), with the line "
+    "`tooling-lane: {key}` in its prompt, and keep going on your task meanwhile. Until that lane exists, "
+    "an Agent or Skill dispatch that repeats this action is blocked. If you cannot spawn agents, report "
+    "the refusal verbatim to your orchestrator."
+)
+REPEAT_MESSAGE = (
+    "This dispatch repeats an action {tool} already refused ({evidence}), and no tooling lane for that "
+    "refusal exists. Spawn the tooling lane first, with the line `tooling-lane: {key}` in its prompt, then "
+    "retry this dispatch."
+)
+
+
+def strings(value: object) -> Iterator[str]:
+    match value:
+        case str():
+            yield value
+        case dict():
+            for item in value.values():
+                yield from strings(item)
+        case list() | tuple():
+            for item in value:
+                yield from strings(item)
+
+
+def result_text(evt: BaseHookEvent) -> str:
+    if isinstance(evt, PostToolUseFailureEvent):
+        return evt.error
+    return "\n".join(strings(getattr(evt, "tool_response", None)))
+
+
+def excerpt(text: str, match: re.Match[str]) -> str:
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    return text[start : end if end >= 0 else None].strip()[:EVIDENCE_CHARS]
+
+
+def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
+    text = result_text(evt)
+    for signature in SIGNATURES:
+        if signature.sourced(evt) and (found := signature.text.search(text)):
+            return signature.key, Refusal(
+                tool=signature.tool, action=signature.action.pattern, evidence=excerpt(text, found)
+            )
+    if evt.command and RAW_FALLBACK.search(raw := evt.command.raw) and (calls := evt.command.calls()):
+        verb = " ".join([calls[0].name, *calls[0].args[:1]])
+        evidence = f"the step ran raw instead: `{raw[:EVIDENCE_CHARS]}`"
+        return f"ccx-raw:{verb}", Refusal(tool="ccx", action=re.escape(verb), evidence=evidence)
+    return None
+
+
+def dispatch_text(evt: BaseHookEvent) -> str:
+    match evt.input:
+        case TaskCall(prompt=prompt):
+            return prompt
+        case SkillCall(skill=skill, args=args):
+            return f"{skill} {args or ''}"
+    return ""
+
+
+@dataclass(frozen=True, slots=True)
 class Detection:
     signal: str
     tool: str
@@ -121,9 +260,6 @@ def detect_bash(evt: BaseHookEvent) -> Detection | None:
     raw = evt.command.raw
     calls = evt.command.calls()
     head = calls[0].name if calls else ""
-    if RAW_FALLBACK.search(raw):
-        verb = " ".join([head, *calls[0].args[:1]]) if calls else "?"
-        return Detection("`# ccx:raw` fallback", verb, raw)
     if any(call.name in {"ccn", "cc-notes"} and call.args[:1] == ("papercut",) for call in calls):
         return Detection("papercut recorded", "cc-notes", raw)
     if isinstance(evt, PostToolUseFailureEvent):
@@ -152,7 +288,7 @@ def detect(evt: BaseHookEvent) -> Detection | None:
 
 
 def claim(evt: BaseHookEvent) -> bool:
-    return (found := detect(evt)) is not None and evt.ctx.s.once(found.key, scope=SCOPE)
+    return refusal(evt) is None and (found := detect(evt)) is not None and evt.ctx.s.once(found.key, scope=SCOPE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +336,7 @@ tooling_nudge(
         Input(
             command="gt track --parent dev  # ccx:raw",
             error="Exit code 1\nERROR: branch already tracked",
-        ): Warn(pattern="tooling lane"),
+        ): Allow(),
         Input(
             command="ccx code read src/mian.py",
             error="Exit code 1\nccx: path not found: src/mian.py",
@@ -219,7 +355,7 @@ tooling_nudge(
     Event.PostToolUse,
     ("Bash", "SendMessage", "Agent", "Task", "papercut"),
     {
-        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Warn(pattern="tooling lane"),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Allow(),
         Input(command="ccn papercut 'ccx ship drops the PR body'"): Warn(pattern="ccn papercut"),
         Input(
             tool="mcp__plugin_cc-notes_cc-notes__papercut",
@@ -250,14 +386,143 @@ tooling_nudge(
         Input(command="git status"): Allow(),
         Input(command="ccx vcs status"): Allow(),
         Input(tool="SendMessage", tool_input={"to": "team-lead", "message": "PR #12 merged."}): Allow(),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw", llm={"fire": False}): Allow(),
         Input(
-            command="gh pr edit 123 --base dev  # ccx:raw",
-            seen={SCOPE: ["`# ccx:raw` fallback:gh pr"]},
+            tool="Agent",
+            tool_input={"prompt": "reply in the thread", "subagent_type": "lane"},
+            output="Blocked: no cc-slack session for this Claude window.",
         ): Allow(),
-        Input(
-            command="gh pr edit 77 --base dev  # ccx:raw",
-            seen={SCOPE: ["`# ccx:raw` fallback:gt track"]},
-        ): Warn(pattern="tooling lane"),
     },
 )
+
+
+@on(
+    Event.PostToolUse | Event.PostToolUseFailure,
+    tests={
+        Input(
+            tool="mcp__plugin_cc-slack_cc-slack__slack_reply",
+            tool_input={"channel_id": "C1", "thread_ts": "1.2", "text": "hi"},
+            output="no cc-slack session for this Claude window; run cc-slack login",
+        ): Warn(pattern=r"^cc-slack refused: no cc-slack session.*\n.*`tooling-lane: cc-slack-session`"),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "reply in the thread", "subagent_type": "lane"},
+            output="Could not post: cc-slack says to pass no_watch when the thread is already watched.",
+        ): Warn(pattern=r"`tooling-lane: cc-slack-no-watch`"),
+        Input(
+            command="ccx vcs pr status 12",
+            output="ccx: GitHub GraphQL quota exhausted; rate-limited until 14:05",
+        ): Warn(pattern=r"^ccx refused: ccx: GitHub GraphQL quota exhausted"),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Warn(pattern=r"`tooling-lane: ccx-raw:gh pr`"),
+        Input(
+            command="gh pr edit 123 --base dev  # ccx:raw",
+            agent_id="a1b2c3",
+            seen={SCOPE: ["ccx-raw:gh pr:main"]},
+        ): Warn(pattern="report the refusal verbatim"),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw", seen={SCOPE: ["ccx-raw:gh pr:main"]}): Allow(),
+        Input(
+            command="gh pr edit 123 --base dev  # ccx:raw",
+            state=[
+                ToolingRefusals(
+                    refusals={"ccx-raw:gh pr": Refusal(tool="ccx", action="gh\\ pr", evidence="x", lane=True)}
+                )
+            ],
+        ): Allow(),
+        Input(command="ccx vcs status", output="dev · clean"): Allow(),
+        Input(
+            command="cc-slack reply --url C1/p12 --text hi",
+            output="posting\ncc-slack: no cc-slack session for this Claude window\n",
+        ): Warn(pattern=r"^cc-slack refused: cc-slack: no cc-slack session for this Claude window\n"),
+        Input(
+            command="git grep -n 'no cc-slack session' go/cc-slack",
+            output="go/cc-slack/ops.go:651: no cc-slack session for this Claude window",
+        ): Allow(),
+        Input(
+            tool="Read",
+            tool_input={"file_path": "/repo/ops.go"},
+            output="no cc-slack session for this Claude window",
+        ): Allow(),
+    },
+)
+def record_refusal(evt: BaseHookEvent) -> HookResult | None:
+    if (found := refusal(evt)) is None:
+        return None
+    key, record = found
+    with ToolingRefusals.mutate(evt) as state:
+        known = state.refusals.setdefault(key, record)
+    if known.lane or not evt.ctx.s.once(f"{key}:{evt.agent_id or 'main'}", scope=SCOPE):
+        return None
+    return evt.warn(REFUSAL_MESSAGE.format(tool=known.tool, evidence=record.evidence, key=key))
+
+
+SLACK_REFUSED = ToolingRefusals(
+    refusals={
+        "cc-slack-session": Refusal(
+            tool="cc-slack", action=CC_SLACK_ACTION.pattern, evidence="no cc-slack session for this Claude window"
+        )
+    }
+)
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Agent", "Task", "Skill")],
+    skip_if=[FromSubagent()],
+    tests={
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
+            state=[SLACK_REFUSED],
+        ): Block(pattern=r"`tooling-lane: cc-slack-session`"),
+        Input(
+            tool="Skill",
+            tool_input={"skill": "cc-slack:slack", "args": "reply in the incident thread"},
+            state=[SLACK_REFUSED],
+        ): Block(pattern="already refused"),
+        Input(
+            tool="Agent",
+            tool_input={
+                "prompt": "Fix the cc-slack session lookup and release it.\ntooling-lane: cc-slack-session",
+                "subagent_type": "lane",
+            },
+            state=[SLACK_REFUSED],
+        ): Allow(),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
+            state=[
+                ToolingRefusals(
+                    refusals={
+                        "cc-slack-session": SLACK_REFUSED.refusals["cc-slack-session"].model_copy(update={"lane": True})
+                    }
+                )
+            ],
+        ): Allow(),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Land the ledger stack", "subagent_type": "lane"},
+            state=[SLACK_REFUSED],
+        ): Allow(),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
+            agent_id="a1b2c3",
+            state=[SLACK_REFUSED],
+        ): Allow(),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
+        ): Allow(),
+    },
+)
+def block_repeated_dispatch(evt: BaseHookEvent) -> HookResult | None:
+    text = dispatch_text(evt)
+    if not (refusals := ToolingRefusals.load(evt).refusals):
+        return None
+    if marked := {found["key"] for found in LANE_MARKER.finditer(text)} & refusals.keys():
+        with ToolingRefusals.mutate(evt) as state:
+            for key in marked:
+                state.refusals[key].lane = True
+    for key, record in refusals.items():
+        if key not in marked and not record.lane and re.search(record.action, text):
+            return evt.block(REPEAT_MESSAGE.format(tool=record.tool, evidence=record.evidence, key=key))
+    return None
