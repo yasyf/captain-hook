@@ -58,7 +58,9 @@ def directs_plan_mode(text: str) -> bool:
 
 def directs_replanning(prompt: str) -> bool:
     typed = re.sub(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", " ", prompt, flags=re.DOTALL)
-    return directs_plan_mode(typed) or (scan_text(typed, STOP_WORK) and scan_text(typed, (r"(?<![\w./-])plan",)))
+    return directs_plan_mode(typed) or (
+        scan_text(typed, STOP_WORK) and scan_text(typed, (r"(?<![\w./-])(?:re-)?plan",))
+    )
 
 
 hook(
@@ -282,6 +284,12 @@ hook(
             content="x = 1",
             transcript=[T.user("Stop the work on the uploader and push yasyf/v3-l39-plan-text-base.")],
         ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("Stop all work. We need to re-plan the approach.")],
+        ): Block(pattern="plan mode"),
         Input(
             tool="Write",
             file="/x/src/main.py",

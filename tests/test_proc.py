@@ -362,6 +362,7 @@ class TestDisallowedTools:
             pytest.param("claude --disallowedTools Edit --disallowedTools Bash", {"Edit", "Bash"}, id="repeated"),
             pytest.param("claude --allowedTools ExitPlanMode --model x", set(), id="allowed_tools_flag"),
             pytest.param("claude -p ExitPlanMode", set(), id="bare_token"),
+            pytest.param("claude -- --disallowedTools=ExitPlanMode", set(), id="after_end_of_options"),
         ],
     )
     def test_parses_flag_values(self, command: str, expected: set[str]) -> None:

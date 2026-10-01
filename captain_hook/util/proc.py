@@ -177,6 +177,8 @@ def disallowed_tools(argv: Sequence[str]) -> frozenset[str]:
     names: list[str] = []
     taking = False
     for token in argv:
+        if token == "--":
+            break
         flag, eq, inline = token.partition("=")
         if flag in {"--disallowedTools", "--disallowed-tools"}:
             names.extend(inline.split(","))
