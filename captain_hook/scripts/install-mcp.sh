@@ -48,9 +48,10 @@ version_gt() {
   return 1
 }
 
-# Sessions keep a replaced plugin's bin/ on PATH; hand off to the newest version
-# dir Claude Code has not marked .orphaned_at. Hops only go up, so they terminate.
-if [ -e "$ROOT/.orphaned_at" ] && is_version "${ROOT##*/}"; then
+# Sessions keep the plugin bin/ they started with on PATH, orphaned or still in
+# use, so hand off to the newest version dir Claude Code has not marked
+# .orphaned_at. Hops only go up, so they terminate.
+if is_version "${ROOT##*/}"; then
   newest=$ROOT
   for sibling in "${ROOT%/*}"/*/; do
     sibling=${sibling%/}
