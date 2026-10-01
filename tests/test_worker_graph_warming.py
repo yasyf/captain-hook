@@ -140,7 +140,7 @@ def test_full_warm_queue_admits_new_owner_and_evicted_owner_can_return(monkeypat
         close(worker)
 
 
-def test_warm_step_has_small_independent_budget_and_progress():
+def test_warm_step_has_small_independent_budget_and_progress(monkeypatch):
     calls = []
 
     class Client:
@@ -170,12 +170,13 @@ def test_warm_step_has_small_independent_budget_and_progress():
         RegisteredWarmState(GraphSources(thread_ids=("one", "two", "three"), session_key="session"), Client()),
     )
     try:
-        started = int(time.time() * 1000)
-        assert worker._warm_step(job) is False
+        with monkeypatch.context() as clock:
+            clock.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+            assert worker._warm_step(job) is False
         operation, arguments = calls[0]
         assert operation == "warm_registered"
         assert arguments["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024
-        assert started < arguments["deadline_unix_ms"] <= started + 3000
+        assert arguments["deadline_unix_ms"] == 103_000
         assert job.state.start_index == 3
         assert job.state.fact_cache_write_bytes == 200
         assert worker._warm_step(job) is False
