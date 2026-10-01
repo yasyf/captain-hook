@@ -61,7 +61,7 @@ def test_after_reply_reuses_transcript_in_background_client_scope(tmp_path, monk
     def sync(event, evt, **kwargs):
         events.append(evt)
         assert evt.ctx.transcript.path == "/fixture.jsonl"
-        evt.ctx.signal_evidence[(1, "any")] = ("stale",)
+        evt.ctx.signal_evidence[(1, "any", True)] = ("stale",)
         evt.ctx.transcript.release()
 
     def after(event, evt, raw, session_dir):

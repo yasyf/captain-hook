@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.76.0] - 2026-10-01
+
+### Added
+
+- **`Signals(thinking=False)` scores only what the agent wrote.** The agent's thinking blocks
+  drop out of the candidate texts, on the snapshot path through cc-transcript 14.33.0's
+  `signal_texts` query and on the local transcript path alike. The default keeps them.
+
+### Fixed
+
+- **The pre-existing-issue nudge no longer fires on the agent's private deliberation.** It
+  scores prose only, so weighing whether to leave a value unset or describing a bug's mechanism
+  in thinking does not read as dismissing an issue. A dismissal written in prose still fires.
+
 ## [12.75.1] - 2026-10-01
 
 ### Fixed

@@ -988,9 +988,16 @@ class RemoteSession:
     def assistant_text(self, n: int = 10, *, max_per_msg: int = 500) -> str:
         return "\n---\n".join(self.query({"kind": "assistant_text", "count": n, "max_per_message": max_per_msg}))
 
-    def signal_texts(self, window: int | Literal["turn"], origin: Literal["assistant", "any"]) -> list[str]:
+    def signal_texts(
+        self, window: int | Literal["turn"], origin: Literal["assistant", "any"], thinking: bool
+    ) -> list[str]:
         return self.query(
-            {"kind": "signal_texts", "window": "current_turn" if window == "turn" else window, "origin": origin}
+            {
+                "kind": "signal_texts",
+                "window": "current_turn" if window == "turn" else window,
+                "origin": origin,
+                "thinking": thinking,
+            }
         )
 
     def render(self, *, budget: Budget, tool_results: bool = False) -> str:

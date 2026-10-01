@@ -151,7 +151,7 @@ def test_context_fork_preserves_model_stub_and_clears_source_caches(leased_event
     model = Mock()
     evt.ctx.call_llm = model
     evt.ctx.__dict__.update(event_count=999, current_turn_event_count=88, turn="old", prior="old", transcript_ref="old")
-    evt.ctx.signal_evidence[(5, "any")] = ("old",)
+    evt.ctx.signal_evidence[(5, "any", True)] = ("old",)
     fork = evt.ctx.fork(evt.ctx.transcript.fork())
     assert fork.call_llm is model
     assert fork.signal_evidence == {}
