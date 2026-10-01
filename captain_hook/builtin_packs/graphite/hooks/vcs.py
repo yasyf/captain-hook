@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, BaseHookEvent, Event, HookResult, Input, RanCommand, Tool, UserSaid, hook, on
+from captain_hook.app import MAX_TRANSCRIPT_EVENTS
 from captain_hook.builtin_packs.graphite.hooks._lib import (
     CcxInstalled,
     GraphiteRuns,
@@ -317,6 +318,7 @@ def landing_fields(call: Call) -> frozenset[str]:
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled()],
     skip_if=[RanCommand("ccx", "vcs", "pr", "status"), RanCommand("ccx", "vcs", "status")],
+    transcript_events=MAX_TRANSCRIPT_EVENTS,
     tests={
         Input(command="gh pr view 42 --json state,mergedAt", cwd="/"): Allow(),
         Input(command="gh pr view 42 --json title", cwd="/"): Allow(),

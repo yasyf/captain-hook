@@ -556,7 +556,7 @@ def prepare_hook_events(
     forks: list[BaseHookEvent] = []
     try:
         for entry in entries:
-            transcript = fork_transcript(evt.ctx.transcript)
+            transcript = fork_transcript(evt.ctx.transcript, entry.spec.transcript_events)
             fork = copy(evt)
             fork.ctx = evt.ctx.fork(transcript)
             fork.__dict__.pop("cmd", None)
@@ -612,7 +612,7 @@ def dispatch_mandatory(
     futures: list[Future[HookResult | None]] = []
     for entry in entries:
         fork = copy(evt)
-        fork.ctx = evt.ctx.fork(fork_transcript(evt.ctx.transcript))
+        fork.ctx = evt.ctx.fork(fork_transcript(evt.ctx.transcript, entry.spec.transcript_events))
         fork.__dict__.pop("cmd", None)
         try:
             with surfacing_handler_errors():

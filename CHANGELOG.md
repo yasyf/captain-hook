@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.69.0] - 2026-10-01
+
+### Changed
+
+- **Each hook reads its own transcript window.** A hook that declares
+  `transcript_events=N` gets the newest N events through the `tail` read even
+  when other hooks on the same event declare none; those hooks still load the
+  full transcript. `nudge()` and `gate()` accept `transcript_events`.
+- **The graphite pack's `landing_state_through_ccx` reads the last 256
+  events.** Its `ccx vcs status` skip looks back that far, so it fires on
+  transcripts too large to load in a tool event's deadline.
+
+### Fixed
+
+- **`capt-hook logs --session` lists every skip.** Each skipped hook is
+  logged on every dispatch; the context line still names each hook once per
+  session.
+
 ## [12.68.0] - 2026-10-01
 
 ### Added
