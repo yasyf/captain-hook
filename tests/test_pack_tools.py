@@ -247,3 +247,24 @@ def test_doomed_builtin_edit_stays_out_of_span_fallback(tmp_path: Path) -> None:
     assert evt.post_image is None
     assert evt.replaced == "not in the file"
     assert VerboseComment().check(evt) is False
+
+
+def test_tooling_refusal_reads_structured_tool_responses(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import refusal
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    response = {"stdout": "", "stderr": "cc-slack: no cc-slack session for this Claude window\n", "interrupted": False}
+    evt = PostToolUseEvent(
+        _raw={
+            "tool_name": "Bash",
+            "tool_input": {"command": "cc-slack reply --url C1/p12 --text hi"},
+            "tool_response": response,
+        },
+        ctx=HookContext(SessionStore(tmp_path), None, None),
+    )
+    found = refusal(evt)
+    assert found is not None
+    key, record = found
+    assert key == "cc-slack-session"
+    assert record.evidence == "cc-slack: no cc-slack session for this Claude window"

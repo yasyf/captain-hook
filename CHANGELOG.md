@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.73.0] - 2026-10-01
+
+### Added
+
+- **The general pack's tooling nudge bites on refusal text deterministically.** A cc-slack
+  session refusal (`no cc-slack session for this Claude window`), a cc-slack `pass no_watch`
+  refusal, a GitHub quota refusal from ccx, gh or stack-enqueue (`rate-limited until`,
+  `API rate limit exceeded`), and a `# ccx:raw` fallback are recognized from the tool result
+  itself, with no LLM judge and no transcript read, so a session whose transcript evidence
+  times out still gets the nudge. Only output from the tool that refused counts — a Bash call
+  to that tool, its MCP tools, or a lane's report — so reading the source that prints the text
+  does not. The nudge names the `tooling-lane: <key>` line to put in the fix lane's prompt.
+- **A main session cannot re-dispatch a refused action before a tooling lane exists.** After a
+  recorded refusal, an Agent, Task or Skill dispatch from the main session whose prompt repeats
+  the refused action (a cc-slack write, a GitHub-bound ccx/gh verb, the raw-fallback verb) is
+  blocked until a dispatch carrying `tooling-lane: <key>` records the fix lane.
+
 ## [12.72.0] - 2026-10-01
 
 ### Added
