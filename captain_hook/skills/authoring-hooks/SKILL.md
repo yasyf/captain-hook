@@ -1,6 +1,6 @@
 ---
 name: authoring-hooks
-description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire, or (EXTEND mode) broadens an existing hook to cover a newly mined rule without weakening its existing tests. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx --isolated capt-hook test before it goes live. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", "broaden this hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
+description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends a misfiring hook with a regression test reproducing the misfire, or (EXTEND mode) broadens a hook to a newly mined rule without weakening its tests. Picks the primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for enforcement), writes the narrowest condition, a message that states the rule then the remediation, and inline tests (one Input that fires, one Allow() on a benign neighbor), then proves the file with uvx --isolated capt-hook lint and test. Every hook change in any repo or plugin pack goes through this skill. Use when the user says "author a hook", "write a hook", "clean up this hook", "encode this correction as a hook", "fix this misfiring hook", "broaden this hook", or when bootstrapping-hooks or scanning-sessions delegates a hook.
 argument-hint: "[the correction to encode — verbatim user text + context]"
 allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, uvx --isolated capt-hook:*, capt-hook:*, ls:*, git log:*)
 ---
@@ -32,7 +32,45 @@ fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
   fires on the offending shape, one asserting it stays silent on a benign neighbor.
 - **`uvx --isolated capt-hook test` must be green before the hook goes live.** Every event is
   already registered, so a hook file that fails at dispatch blocks the user's session;
-  ship only what is proven to run.
+  ship only what is proven to run. `test` and `pack test` also run `capt-hook lint` over
+  the hook files, so a message or code shape that misses the bar below fails the run.
+- **Every hook change goes through this skill**, whoever writes it and whichever repo or
+  plugin pack it lands in. The finish step is the lint, and a hook that skips it fails
+  the repo's `capt-hook test` or `pack test` in CI.
+
+## The Bar
+
+Copy both checklists into your response and tick each item for every message and
+registration you write or touch.
+
+```
+Copy bar (every message, reason, hint, and rewrite note):
+- [ ] At most two sentences: the rule, then the remediation
+- [ ] At most 300 characters
+- [ ] A block names the exact command or action to run instead; a nudge names the one verb to run
+- [ ] Commands, paths, and flags sit in `backticks`
+- [ ] No quoted user or owner messages, and no "User feedback <date>: '...'" citations
+- [ ] No ruling, inbox, record, PR, issue, session, or commit ids (R624, ruling 8B, #24918, 37768ef4)
+- [ ] No dates, times, token counts, or narrative (first seen, has not replied, what went wrong last time)
+- [ ] No interpolated prompt text or LLM-judge `{reasoning}`
+- [ ] A time that cannot be avoided is Pacific
+
+Code bar (every registration):
+- [ ] One hook enforces one rule
+- [ ] A declarative primitive (rewrite_command, block_command, warn_command, nudge, gate,
+      llm_gate, llm_nudge, lint, approve, deny) where one fits; `@on` only for runtime logic
+- [ ] Commands matched structurally (Runs(...), evt.command.q, an ast-grep rewrite_command
+      pattern); never a regex or shlex.split over the raw command line
+- [ ] Session history read through evt.ctx.t, RanCommand, UsedTool, UsedSkill, ReadFile,
+      or TouchedFile; never by opening the transcript file
+- [ ] No try/except fallbacks or broad `except`; the dispatcher records a raising hook's fault
+- [ ] Zero comments; `TODO` and `WORKAROUND:` are the only exceptions
+- [ ] Inline tests: one input that fires, one benign neighbor that stays silent
+```
+
+The history behind a rule (who asked for it, when, after which incident) belongs in the
+PR body and the commit message. The agent reading a hook message needs the rule and the
+next action, nothing else.
 
 ## Workflow
 
@@ -43,7 +81,7 @@ Authoring Progress:
 - [ ] Step 1: Restate the correction as a rule
 - [ ] Step 2: Pick the primitive (per references/pitfalls.md)
 - [ ] Step 3: Write the hook — condition, message, inline tests
-- [ ] Step 4: Verify (uvx --isolated capt-hook test, fix until green)
+- [ ] Step 4: Verify (uvx --isolated capt-hook lint, then test, fix until clean and green)
 ```
 
 ### 1. Restate the correction as a rule
@@ -96,9 +134,8 @@ registration gets:
   Reserve regexes for textual conditions. The regex condition is
   `from captain_hook.types import Command`; top-level `captain_hook.Command` is the
   parsed-command class.
-- The **verbatim correction quoted inside the message** with its source ("user
-  feedback 2026-06-09: 'never force-push to main'") — the agent being blocked learns
-  *why*.
+- A **message that meets the copy bar**: the rule in one sentence, then the remediation
+  naming the exact command or action. The verbatim correction goes in the PR body.
 - Inline `tests = {...}` from Step 1: the offending shape expecting `Block(...)` or
   `Warn(...)` (match the chosen severity), the benign neighbor expecting `Allow()`.
   LLM hooks (`llm_gate`, `llm_nudge`) ship without `tests=` — their inline tests would
@@ -111,14 +148,18 @@ registration gets:
 Run:
 
 ```bash
+uvx --isolated capt-hook lint .claude/hooks/<slug>.py
 uvx --isolated capt-hook test
 ```
 
-Add `--json` when parsing results. Fix failures until green — debugging recipes in
+A hook in a plugin pack runs `uvx --isolated capt-hook pack test <plugin root>` instead of
+`test`. Each lint finding names its rule: rewrite the message to the copy bar, or replace
+the hand-rolled code with the primitive the finding names. Add `--json` when parsing
+results. Fix failures until green — debugging recipes in
 [testing hooks](references/testing-hooks.md). Never weaken a test to pass; fix the
 hook.
 
-Green is the finish line. The captain-hook plugin already registers every event, so
+Lint clean and tests green is the finish line. The captain-hook plugin already registers every event, so
 the new file is picked up on the next session — there is no settings step, whatever
 event the hook targets.
 
@@ -141,15 +182,16 @@ from captain_hook import Allow, Event, Input, Runs, Warn, hook
 hook(
     Event.PostToolUse,
     only_if=[Runs("pip", "install")],
-    message="User feedback: 'stop using pip -- this repo is uv-only'. Run `uv add <pkg>`.",
+    message="This repo installs packages with uv. Run `uv add <pkg>`.",
     tests={
-        Input(command="pip install requests"): Warn(pattern="uv-only"),
+        Input(command="pip install requests"): Warn(pattern="uv add"),
         Input(command="uv add requests"): Allow(),
     },
 )
 ```
 
-`uvx --isolated capt-hook test` → 2 passed; the hook is live from the next session — nothing to wire.
+`uvx --isolated capt-hook lint` is clean and `uvx --isolated capt-hook test` passes 2; the hook is
+live from the next session — nothing to wire.
 
 ## FIX mode — amending a misfiring hook
 
@@ -159,10 +201,11 @@ name, the misfire class, and Claude's verbatim complaint — you **amend the exi
 hook file**, never write a new one.
 
 A pack hook is amended in the **pack's own repo**: the invoking skill hands you a
-clone and the hook file's path there (`captain_hook/packs/<pack>/…` for a builtin
+clone and the hook file's path there (`captain_hook/builtin_packs/<pack>/hooks/…` for a builtin
 pack), never a copy under the watched repo's `.claude/hooks/`. Keep the hook's message
-string **byte-identical** unless the amendment is the message itself — fire history
-and complaint attribution key on a hash of the message, so a reword orphans both. The
+string **byte-identical** unless the amendment is the message itself or the message misses
+the copy bar — fire history and complaint attribution key on a hash of the message, so a
+reword orphans both, but a message that fails the lint is rewritten in the same change. The
 regression matrix lives inline on the hook: the amended file's `tests = {...}` is
 where the misfire and genuine-case pairs go, never a separate test file.
 
@@ -202,7 +245,7 @@ same complaint from being mined again next session.
 
 ### 4. Verify
 
-`uvx --isolated capt-hook test` must be green, existing tests included. Never delete or weaken
+`uvx --isolated capt-hook lint` must be clean and `uvx --isolated capt-hook test` green, existing tests included. Never delete or weaken
 the hook's existing tests to make the amendment pass; if the genuine-case test now
 fails, the amendment is too broad — go back to Step 2. No settings wiring changes:
 the file is already dispatched.
@@ -219,7 +262,7 @@ hook), the mined rule, and the verbatim correction.
   except the offending shape is the case the hook currently **misses**.
 - FIX mode's location and identity rules apply unchanged: a pack hook is amended in
   the pack's own repo, and the message string stays **byte-identical** unless the
-  broadening is the message itself.
+  broadening is the message itself or the message misses the copy bar.
 - Tests, inside the hook's `tests = {...}`: one `Input` built from the newly covered
   shape, asserting the hook now fires (`Block(...)`/`Warn(...)` matching its
   severity); one `Allow()` on a benign neighbor of the new case. Every pre-existing

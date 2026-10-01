@@ -26,6 +26,7 @@ GENERAL_HOOKS = {
     "deletions",
     "detours",
     "docs",
+    "hook_files",
     "models",
     "plain_english",
     "plans",

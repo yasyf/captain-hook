@@ -610,7 +610,7 @@ class TestComplexInlineTests:
                 )
 
                 warn_command(
-                    r"docker\\s+build",
+                    ["docker", "build"],
                     message="Consider using docker compose instead",
                     tests={
                         Input(tool="Bash", command="docker build ."): Warn(pattern="compose"),

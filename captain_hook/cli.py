@@ -18,7 +18,7 @@ from cc_transcript.ids import SessionId
 from cc_transcript.tools import register_mcp_tool, unregister_mcp_tool
 from loguru import logger
 
-from captain_hook import faults
+from captain_hook import faults, hook_lint
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.desktop.cli import helper
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch, dispatch_async, envelope_text
@@ -482,11 +482,25 @@ def run_tests(json_output: bool = False) -> None:
         else:
             print(f"  ERROR {f'[{error.pack}] ' if error.pack else ''}{error.source} failed to import: {line}")
 
+    package_root = Path(__file__).resolve().parent
+    findings = hook_lint.lint_paths(
+        {
+            source.parent
+            for entry in _state.hooks
+            if not (source := Path(entry.source_file).resolve()).is_relative_to(package_root)
+        }
+    )
+    for finding in findings:
+        if json_output:
+            print(json.dumps({"id": f"{finding.path}:{finding.line}", "status": "lint", "reason": str(finding)}))
+        else:
+            print(f"  LINT  {finding}")
+
     results = run_inline_tests()
     if not results:
-        if load_errors:
+        if load_errors or findings:
             if not json_output:
-                print(f"\n{len(load_errors)} hook file(s) failed to import.")
+                print(f"\n{len(load_errors)} hook file(s) failed to import, {len(findings)} lint findings.")
             sys.exit(1)
         if json_output:
             print(json.dumps({"status": "empty", "reason": "no inline tests"}))
@@ -533,8 +547,10 @@ def run_tests(json_output: bool = False) -> None:
         summary = f"\n{total} tests: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped"
         if load_errors:
             summary += f", {len(load_errors)} import errors"
+        if findings:
+            summary += f", {len(findings)} lint findings"
         print(summary)
-    if failed or errors or load_errors:
+    if failed or errors or load_errors or findings:
         sys.exit(1)
 
 
@@ -576,6 +592,32 @@ def test(state: CliState, json_output: bool) -> None:
     """
     state.discover(scope="hooks")
     run_tests(json_output=json_output)
+
+
+@cli.command(name="lint")
+@click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
+@click.option("--json", "json_output", is_flag=True, default=False, help="Emit one JSON record per finding (CI mode)")
+@click.pass_obj
+def lint_hooks(state: CliState, paths: tuple[Path, ...], json_output: bool) -> None:
+    """Lint hook files against the authoring bar without running them.
+
+    A message states the rule, then the remediation, in at most two sentences, with no quoted
+    messages, record ids, dates, session ids, token counts, or narrative. Hook code matches commands
+    with parsed conditions, reads the session through ``evt.ctx``, lets failures raise, and carries
+    no comments. PATHS default to the hooks directory; test files are skipped. ``test`` and
+    ``pack test`` run the same lint. Exits non-zero on any finding.
+    """
+    findings = hook_lint.lint_paths(paths or (Path(state.hooks_dir),))
+    for finding in findings:
+        click.echo(
+            json.dumps(
+                {"path": str(finding.path), "line": finding.line, "rule": finding.rule, "detail": finding.detail}
+            )
+            if json_output
+            else str(finding)
+        )
+    if findings:
+        sys.exit(1)
 
 
 @cli.command()

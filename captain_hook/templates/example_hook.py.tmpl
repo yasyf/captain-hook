@@ -22,19 +22,12 @@ from captain_hook import (
     prompt_check,
 )
 
-# This file is an example. Replace these hooks with rules that fit your project.
-
-# 0. gate — block the agent from finishing a UI change it never reviewed.
-#    Adapt the globs and the skill name to your repo.
-# see https://yasyf.github.io/captain-hook/docs/guide/primitives.html
 gate(
     "You edited UI files. Open them with agent-browser and verify they render before finishing.",
     only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
     skip_if=[UsedSkill("agent-browser")],
 )
 
-# 1. block_command — refuse a dangerous shell command before it runs.
-# see https://yasyf.github.io/captain-hook/docs/guide/primitives.html
 block_command(
     ["rm", "-rf", "*"],
     reason="rm -rf is unrecoverable on this machine",
@@ -46,8 +39,6 @@ block_command(
     },
 )
 
-# 2. nudge — fire on Stop when retry-language piles up in the transcript.
-# see https://yasyf.github.io/captain-hook/docs/examples/failure-recovery.html
 RETRY_SIGNALS = Signals(
     patterns=[
         Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
@@ -64,8 +55,6 @@ nudge(
     max_fires=1,
 )
 
-# 3. prompt_check — LLM gate on Python edits that smell like unfinished work.
-# see https://yasyf.github.io/captain-hook/docs/examples/test-integrity.html
 PLACEHOLDER_TEMPLATE = """
 The agent just edited {fp}. Flag the change if the new content contains
 placeholder text the agent forgot to replace — `TODO: replace`, `FILLME`,

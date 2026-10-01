@@ -115,8 +115,9 @@ Notes:
   list[str]` is string mode; `(node: ast.AST) -> Iterator[str]` is AST mode (called per node
   of `ast.walk`). `{violations}` in `message` is replaced with the joined findings. `trigger`
   is a cheap substring pre-filter on the source.
-- `message` on `llm_gate`/`llm_nudge` may be a callable receiving the verdict:
-  `message=lambda r: f"...: {r.reasoning}"`.
+- `message` on `llm_gate`/`llm_nudge` is a fixed string stating the rule and the
+  remediation. The judge's `reasoning` decides whether the hook fires; it never goes into
+  the message (`capt-hook lint` flags `{reasoning}`).
 - `contexts=` on `llm_gate`/`llm_nudge` attaches declarative evidence blocks — any
   `PromptContext` (importable from `captain_hook`), each rendered as a named XML block in
   array order. Built-ins: `BeforeEdit`/`AfterEdit` (ambient defaults on every LLM primitive:

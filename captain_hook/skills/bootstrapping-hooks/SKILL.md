@@ -118,8 +118,8 @@ One file per approved category: `safety.py`, `quality.py`, `testing.py`, `workfl
 (+ `style.py`, owned end-to-end by `translating-styleguides`). Drafting is delegated:
 for each approved hook, invoke the `captain-hook:authoring-hooks` skill via the Skill tool, passing
 
-- the **source quote, verbatim** (it becomes the citation inside the message — the
-  agent being blocked learns *why*),
+- the **source quote, verbatim** (it grounds the rule and goes in the PR body; the hook
+  message itself states only the rule and the remediation),
 - the approved **primitive and severity** from Step 4,
 - the surveyed repo's *exact* commands (e.g. `make test` vs `uv run pytest` vs
   `npm test`) for messages and `RanCommand` argv tokens,
