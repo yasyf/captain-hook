@@ -232,6 +232,7 @@ For an "or" inside one condition, use pipe-alternation instead of separate entri
 | Command text no argv prefix names | `Command(r"curl.*\|\s*sh")` — a pipeline, redirect, or flag |
 | An edit to a source file in a language | `SourceEdits(lang="ts")` |
 | The current tool | `Tool("Bash")` |
+| An escape or intent annotation | `Annotated("raw")` or `Annotated("role", "fix", scope="session")` |
 | A file edited earlier this session | `TouchedFile("**/*.py")` |
 | A command run earlier this session | `RanCommand("uv", "run", "mtest")` |
 | A typed tool call's fields | `CustomInputTypeCondition[ReadCall]` |
@@ -256,6 +257,59 @@ instead. `RanCommand` matching is wrapper-transparent (`sudo`/`env`/`timeout` ar
 but launcher-literal, so list `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")`
 as separate entries.
 :::
+
+### Honor an escape or intent annotation {#annotations}
+
+Use `Annotated` in `skip_if` to honor an explicit escape, or in `only_if` to target a declared
+intent. An annotation token is `ccx:<key>[=<value>]`; keys and values match
+`[a-z0-9][a-z0-9:._-]*`. A bare key is a flag.
+
+Choose the carrier for the call:
+
+| Carrier | Example |
+|---|---|
+| A real shell comment in a Bash command | `gt submit  # ccx:raw` |
+| A whole line in an Agent/Task prompt or Skill args | `ccx: tooling-lane=github-quota role=evidence` |
+| The hook process's environment | `export CAPT_HOOK_CCX_RAW=1` |
+
+Bash annotations come from the shell parse. Comments inside nested `sh -c`, `bash -c`, and
+`eval` payloads count; quoted text such as `echo '# ccx:raw'` and heredoc bodies do not.
+Dispatch lines must occupy the whole line and use lowercase keys and values; leading and
+trailing whitespace is allowed. The environment contributes `raw` only for `1`, `true`, or
+`yes`. Matching ignores case and surrounding whitespace. `0` and `false` do not count.
+
+Skip a submit reminder for an explicit escape or a dispatched session whose parent owns
+the review pass:
+
+```python
+from captain_hook import Annotated, Event, Runs, hook
+
+hook(
+    Event.PreToolUse,
+    message="Run a review pass before submitting.",
+    only_if=[Runs("gt", "submit")],
+    skip_if=[Annotated("raw"), Annotated("role", scope="session")],
+)
+```
+
+`Annotated("role")` accepts any value, including a bare flag; `Annotated("role", "fix")`
+requires that value. The default `scope="event"` reads the current call. With
+`scope="session"`, the condition also reads the session's first prompt, so a lane briefed
+with a whole `ccx: role=fix` line matches on every call.
+
+In a handler, read `evt.annotations` directly. It parses once per event and maps each key
+to its value, or `None` for a bare flag; session-prompt annotations belong to the condition's
+session scope. Check membership to recognize a flag:
+
+```python
+from captain_hook import BaseHookEvent, Event, HookResult, Runs, on
+
+@on(Event.PreToolUse, only_if=[Runs("gt", "submit")])
+def review_reminder(evt: BaseHookEvent) -> HookResult | None:
+    if "raw" in evt.annotations:
+        return None
+    return evt.warn("Run a review pass before submitting.")
+```
 
 ### Write a custom condition {#write-a-custom-condition}
 
