@@ -760,7 +760,7 @@ def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_p
             source["classifier"],
         )
 
-    def observe(_event, evt, session_dir):
+    def observe(_event, evt, session_dir, advisory=True):
         seen.append(evt.ctx.t.graph.sources.thread_ids)
         release_transcript(evt.ctx.transcript)
         return None

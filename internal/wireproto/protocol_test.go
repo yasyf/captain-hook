@@ -3,6 +3,7 @@ package wireproto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"testing"
 )
@@ -62,6 +63,126 @@ func TestDecodeWorkerFrameRejectsInvalidSize(t *testing.T) {
 	binary.BigEndian.PutUint32(frame[:], MaxWorkerFrame+1)
 	if _, err := DecodeFrame(bytes.NewReader(frame[:])); err == nil {
 		t.Fatal("DecodeFrame accepted oversized frame")
+	}
+}
+
+func TestGuardFieldsRoundTripAndDefaultWhenAbsent(t *testing.T) {
+	t.Parallel()
+	request := EventRequest{
+		Schema: Schema, Event: "PreToolUse", Root: "/r", CWD: "/r", Env: map[string]string{},
+		ClientPID: 10, ClientPPID: 9, Mandatory: true,
+	}
+	response := EventResponse{Schema: Schema, Status: "ok", Guard: GuardCompleted}
+	var encoded bytes.Buffer
+	for _, frame := range []Frame{
+		{Protocol: Schema, Op: OpEvent, ID: 1, Request: &request},
+		{Protocol: Schema, Op: OpResult, ID: 1, Response: &response},
+	} {
+		if err := EncodeFrame(&encoded, frame); err != nil {
+			t.Fatalf("EncodeFrame: %v", err)
+		}
+	}
+	event, err := DecodeFrame(&encoded)
+	if err != nil || event.Request == nil || !event.Request.Mandatory {
+		t.Fatalf("event round trip = %+v, %v; want the mandatory flag", event.Request, err)
+	}
+	result, err := DecodeFrame(&encoded)
+	if err != nil || result.Response == nil || result.Response.Guard != GuardCompleted {
+		t.Fatalf("result round trip = %+v, %v; want the guard completion", result.Response, err)
+	}
+	for name, payload := range map[string][]byte{
+		"request": []byte(`{"protocol":1,"op":"event","id":2,"request":{"schema":1,"event":"PreToolUse","root":"/r",` +
+			`"cwd":"/r","env":{},"payload_raw":"","client_pid":10,"client_ppid":9,"deadline_unix_ms":0}}`),
+		"response": []byte(`{"protocol":1,"op":"result","id":2,"response":{"schema":1,"status":"ok","stdout":"",` +
+			`"stderr":"","exit":0,"elapsed_ms":0}}`),
+	} {
+		absent, err := DecodeFrame(bytes.NewReader(framedJSON(payload)))
+		if err != nil {
+			t.Fatalf("%s without the guard fields: %v", name, err)
+		}
+		switch name {
+		case "request":
+			if absent.Request.Mandatory || absent.Request.Validate() != nil {
+				t.Fatalf("absent mandatory decoded as %+v", absent.Request)
+			}
+		case "response":
+			if absent.Response.Guard != "" || absent.Response.Validate() != nil {
+				t.Fatalf("absent guard decoded as %+v", absent.Response)
+			}
+		}
+	}
+}
+
+func TestNonMandatoryBodiesKeepThePreGuardEncoding(t *testing.T) {
+	t.Parallel()
+	request := EventRequest{
+		Schema: Schema, Event: "PreToolUse", Root: "/r", CWD: "/r", Env: map[string]string{}, ClientPID: 10, ClientPPID: 9,
+	}
+	response := EventResponse{Schema: Schema, Status: "ok"}
+	type preGuardRequest struct {
+		Schema         int               `json:"schema"`
+		Event          string            `json:"event"`
+		Root           string            `json:"root"`
+		CWD            string            `json:"cwd"`
+		Env            map[string]string `json:"env"`
+		PayloadRaw     string            `json:"payload_raw"`
+		ClientPID      int               `json:"client_pid"`
+		ClientPPID     int               `json:"client_ppid"`
+		DeadlineUnixMS int64             `json:"deadline_unix_ms"`
+	}
+	type preGuardResponse struct {
+		Schema    int     `json:"schema"`
+		Status    string  `json:"status"`
+		Stdout    string  `json:"stdout"`
+		Stderr    string  `json:"stderr"`
+		Exit      int     `json:"exit"`
+		ElapsedMS float64 `json:"elapsed_ms"`
+	}
+	for name, tc := range map[string]struct {
+		value any
+		want  string
+		peer  any
+	}{
+		"request": {request, `{"schema":1,"event":"PreToolUse","root":"/r","cwd":"/r","env":{},"payload_raw":"",` +
+			`"client_pid":10,"client_ppid":9,"deadline_unix_ms":0}`, &preGuardRequest{}},
+		"reply": {response.Reply(), `{"schema":1,"status":"ok","stdout":"","stderr":"","exit":0,"elapsed_ms":0}`,
+			&preGuardResponse{}},
+	} {
+		encoded, err := Marshal(tc.value)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if string(encoded) != tc.want {
+			t.Fatalf("%s encodes as %s, want the pre-guard bytes %s", name, encoded, tc.want)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(tc.peer); err != nil {
+			t.Fatalf("a pre-guard peer refuses the %s: %v", name, err)
+		}
+	}
+	request.Mandatory = true
+	response.Guard = GuardCompleted
+	for name, tc := range map[string]struct {
+		value any
+		field string
+	}{
+		"mandatory request":  {request, `"mandatory":true`},
+		"completed response": {response, `"guard":"completed"`},
+		"completed reply":    {response.Reply(), `"guard":"completed"`},
+	} {
+		encoded, err := Marshal(tc.value)
+		if err != nil || !bytes.Contains(encoded, []byte(tc.field)) {
+			t.Fatalf("%s encodes as %s, %v; want %s", name, encoded, err, tc.field)
+		}
+	}
+}
+
+func TestResponseValidateRefusesAnUnknownGuardCompletion(t *testing.T) {
+	t.Parallel()
+	response := EventResponse{Schema: Schema, Status: "ok", Guard: "partial"}
+	if err := response.Validate(); err == nil {
+		t.Fatal("Validate accepted a guard completion the protocol does not name")
 	}
 }
 

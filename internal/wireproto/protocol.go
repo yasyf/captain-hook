@@ -58,7 +58,9 @@ const (
 // EventRequest is one exact hook dispatch admitted by the Go host.
 // DeadlineUnixMS is the caller's deadline as Unix milliseconds, zero when it
 // set none; the worker refuses to start a dispatch whose deadline has passed
-// and stops between hooks once it does.
+// and stops between hooks once it does. Mandatory marks an event the session
+// guard prefilters: never shed, denied unless the guard completes, and omitted
+// when false so the request stays the pre-guard encoding an older host reads.
 type EventRequest struct {
 	Schema         int               `json:"schema"`
 	Event          string            `json:"event"`
@@ -69,11 +71,20 @@ type EventRequest struct {
 	ClientPID      int               `json:"client_pid"`
 	ClientPPID     int               `json:"client_ppid"`
 	DeadlineUnixMS int64             `json:"deadline_unix_ms"`
+	Mandatory      bool              `json:"mandatory,omitempty"`
 }
+
+// GuardCompleted is the EventResponse.Guard value reporting that every
+// mandatory hook registered for the event ran to its verdict.
+const GuardCompleted = "completed"
 
 // EventResponse is the byte-shaped product result returned by the Python worker.
 // Warmup reports that the dispatch paid a one-time load — a pack registry
 // build, an NLP resource — so its timing is not the worker's service time.
+// Guard is GuardCompleted once every mandatory hook registered for the event
+// reached a verdict, out of band from the stdout verdict; set only in reply to
+// a mandatory request and omitted otherwise, so every other reply stays the
+// pre-guard encoding an older client reads.
 type EventResponse struct {
 	Schema    int     `json:"schema"`
 	Status    string  `json:"status"`
@@ -82,6 +93,7 @@ type EventResponse struct {
 	Exit      int     `json:"exit"`
 	ElapsedMS float64 `json:"elapsed_ms"`
 	Warmup    bool    `json:"warmup"`
+	Guard     string  `json:"guard,omitempty"`
 }
 
 // EventReply is the host's reply to a client: the response without the
@@ -94,12 +106,13 @@ type EventReply struct {
 	Stderr    string  `json:"stderr"`
 	Exit      int     `json:"exit"`
 	ElapsedMS float64 `json:"elapsed_ms"`
+	Guard     string  `json:"guard,omitempty"`
 }
 
 func (response EventResponse) Reply() EventReply {
 	return EventReply{
 		Schema: response.Schema, Status: response.Status, Stdout: response.Stdout, Stderr: response.Stderr,
-		Exit: response.Exit, ElapsedMS: response.ElapsedMS,
+		Exit: response.Exit, ElapsedMS: response.ElapsedMS, Guard: response.Guard,
 	}
 }
 
@@ -168,9 +181,14 @@ func (response EventResponse) Validate() error {
 	}
 	switch response.Status {
 	case "ok", "error":
-		return nil
 	default:
 		return fmt.Errorf("captain: invalid worker status %q", response.Status)
+	}
+	switch response.Guard {
+	case "", GuardCompleted:
+		return nil
+	default:
+		return fmt.Errorf("captain: invalid guard completion %q", response.Guard)
 	}
 }
 

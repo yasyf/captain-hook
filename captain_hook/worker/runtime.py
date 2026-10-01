@@ -24,7 +24,7 @@ from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
 from captain_hook.util import reqenv
 from captain_hook.worker.fail_open import fail_open_envelope, tally_fail_open, with_warning
-from captain_hook.worker.protocol import EventRequest, EventResponse
+from captain_hook.worker.protocol import GUARD_COMPLETED, EventRequest, EventResponse, GuardCompletion
 from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ class ProductRuntime:
                 buffers.stderr.write(f"Malformed stdin: {parse_error}\n")
                 return self._response(buffers), None
             try:
-                background = self._dispatch(request, event, raw, session_id, buffers)
+                background, guard = self._dispatch(request, event, raw, session_id, buffers)
             except SystemExit as exc:
                 return self._response(buffers, exit_code=_exit_code(exc.code)), None
             except EvidenceIncomplete as exc:
@@ -141,7 +141,7 @@ class ProductRuntime:
             finally:
                 abandoned.extend(reqenv.abandoned())
                 warmups.extend(reqenv.warmups())
-            return self._response(buffers), background
+            return self._response(buffers, guard=guard), background
 
     def close(self) -> None:
         if self._writer is None:
@@ -156,7 +156,7 @@ class ProductRuntime:
         raw: Any,
         session_id: str | None,
         buffers: RequestBuffers,
-    ) -> Background:
+    ) -> tuple[Background, GuardCompletion]:
         session_dir = ensure_session(_session(session_id)) if session_id else None
         snapshot = self._registry(request.root).get()
         if (foreground := CURRENT_CLIENT.get()) is not None:
@@ -174,6 +174,7 @@ class ProductRuntime:
                 transcript_loader=self._transcript_loader,
             )
             context = contextvars.copy_context()
+            guard = _guard_completion(event) if request.mandatory else ""
         if (
             session_id
             and (gaps := reqenv.evidence_gaps())
@@ -182,7 +183,7 @@ class ProductRuntime:
             output = with_warning(event, output, warning)
         if output:
             buffers.stdout.write(envelope_text(output) + "\n")
-        return lambda: self._after_reply(context, background, session_id)
+        return lambda: self._after_reply(context, background, session_id), guard
 
     def _after_reply(self, context: contextvars.Context, background: Background, session_id: str | None) -> None:
         with self._nlp_warmup_guard:
@@ -205,13 +206,21 @@ class ProductRuntime:
         *,
         status: Literal["ok", "error"] = "ok",
         exit_code: int = 0,
+        guard: GuardCompletion = "",
     ) -> EventResponse:
         return EventResponse(
             status=status,
             stdout=buffers.stdout.getvalue(),
             stderr=buffers.stderr.getvalue(),
             exit=exit_code,
+            guard=guard,
         )
+
+
+def _guard_completion(event: Event) -> GuardCompletion:
+    required = [hook.state_key for hook in app.get_mandatory_hooks(event)]
+    completed = reqenv.mandatory_completed()
+    return GUARD_COMPLETED if required and all(key in completed for key in required) else ""
 
 
 def _run_detached(background: Background, session_id: str | None) -> None:

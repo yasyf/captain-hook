@@ -16,6 +16,8 @@ import pytest
 from captain_hook.worker.protocol import (
     EVENT_FRAME_KEYS,
     EVENT_REQUEST_KEYS,
+    EVENT_REQUEST_OPTIONAL_KEYS,
+    GUARD_COMPLETED,
     HELLO_KEYS,
     MAX_EVENT_ENVELOPE,
     MAX_EVENT_INPUT,
@@ -88,8 +90,8 @@ def python_descriptor() -> dict[str, object]:
                 | set(error_response(1, "boom"))
                 | set(adopt_message(4242, 1))
             ),
-            "event_request": sorted(EVENT_REQUEST_KEYS),
-            "event_response": sorted(EventResponse().message()),
+            "event_request": sorted(EVENT_REQUEST_KEYS | EVENT_REQUEST_OPTIONAL_KEYS),
+            "event_response": sorted(EventResponse(guard=GUARD_COMPLETED).message()),
             "adopt_request": sorted(cast(dict[str, object], adopt_message(4242, 1)["adopt"])),
         },
     }
@@ -124,6 +126,7 @@ def event_frame(request: EventRequest) -> dict[str, object]:
             "client_pid": request.client_pid,
             "client_ppid": request.client_ppid,
             "deadline_unix_ms": request.deadline_unix_ms,
+            **({"mandatory": True} if request.mandatory else {}),
         },
     }
 

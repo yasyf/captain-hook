@@ -90,11 +90,11 @@ path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["captain_hook", "capt_hook_client"]
-artifacts = ["captain_hook/langs.py"]
+artifacts = ["captain_hook/langs.py", "captain_hook/guard_literal.py", "capt_hook_client/guard_literal.py"]
 exclude = ["captain_hook/bin", "captain_hook/linux"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["captain_hook", "capt_hook_client", "hatch_build.py"]
+only-include = ["captain_hook", "capt_hook_client", "hatch_build.py", "internal/wireproto/guard.json"]
 exclude = ["captain_hook/bin", "captain_hook/linux"]
 
 [tool.pytest.ini_options]

@@ -45,6 +45,9 @@ EVENT_REQUEST_KEYS = frozenset(
         "deadline_unix_ms",
     }
 )
+EVENT_REQUEST_OPTIONAL_KEYS = frozenset({"mandatory"})
+GUARD_COMPLETED: Literal["completed"] = "completed"
+type GuardCompletion = Literal["", "completed"]
 
 
 class ProtocolError(Exception):
@@ -67,6 +70,7 @@ class EventRequest:
     client_pid: int
     client_ppid: int
     deadline_unix_ms: int
+    mandatory: bool = False
     received: float = field(default_factory=time.perf_counter, compare=False)
 
     def deadline_passed(self) -> bool:
@@ -81,6 +85,7 @@ class EventResponse:
     exit: int = 0
     elapsed_ms: float = 0.0
     warmup: bool = False
+    guard: GuardCompletion = ""
 
     def message(self) -> dict[str, object]:
         return {
@@ -91,6 +96,7 @@ class EventResponse:
             "exit": self.exit,
             "elapsed_ms": self.elapsed_ms,
             "warmup": self.warmup,
+            **({"guard": self.guard} if self.guard else {}),
         }
 
 
@@ -155,7 +161,7 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
     request = cast(dict[str, object], message["request"])
     env = request.get("env")
     if (
-        set(request) != EVENT_REQUEST_KEYS
+        not EVENT_REQUEST_KEYS <= set(request) <= EVENT_REQUEST_KEYS | EVENT_REQUEST_OPTIONAL_KEYS
         or type(request["schema"]) is not int
         or request["schema"] != PROTOCOL
         or type(request["event"]) is not str
@@ -174,6 +180,7 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         or request["client_ppid"] <= 0
         or type(request["deadline_unix_ms"]) is not int
         or request["deadline_unix_ms"] < 0
+        or type(request.get("mandatory", False)) is not bool
     ):
         raise ProtocolError(f"invalid event request: {request!r}")
     return EventRequest(
@@ -186,6 +193,7 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         client_pid=request["client_pid"],
         client_ppid=request["client_ppid"],
         deadline_unix_ms=request["deadline_unix_ms"],
+        mandatory=request.get("mandatory", False),
     )
 
 

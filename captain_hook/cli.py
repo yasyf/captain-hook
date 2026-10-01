@@ -300,9 +300,7 @@ def dispatch_event(
     evt = event.event_class(_raw=raw, ctx=ctx)
     within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)
     try:
-        envelope = None if within_margin else dispatch(event, evt, session_dir=session_dir)
-        if within_margin:
-            transcript.release()
+        envelope = dispatch(event, evt, session_dir=session_dir, advisory=not within_margin)
     except BaseException:
         transcript.release()
         background_transcript.release()
