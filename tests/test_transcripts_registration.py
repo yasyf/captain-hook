@@ -796,3 +796,25 @@ def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_p
     ]
     assert len(reads) == 2
     assert len(loads) == 2
+
+
+def test_dispatch_requests_the_window_its_hooks_declare(tmp_path):
+    from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient
+
+    @on(Event.Stop, transcript_events=30)
+    def recent_gate(evt):
+        return None
+
+    client = SnapshotClient(lambda _: pytest.fail("a hook that never reads the transcript loaded it"))
+    token = CURRENT_CLIENT.set(client)
+    try:
+        dispatch_event(
+            tmp_path,
+            Event.Stop,
+            {"session_id": "s-window", "transcript_path": str(tmp_path / "main.jsonl")},
+            session_dir=ensure_session(SessionId("s-window")),
+        )
+    finally:
+        CURRENT_CLIENT.reset(token)
+
+    assert client.tail_events == 30

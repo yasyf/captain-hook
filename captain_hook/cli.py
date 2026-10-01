@@ -276,12 +276,16 @@ def dispatch_event(
     event's reviewer and updater dispatch, stale-session cleanup, and ``async_=True`` hooks; the
     caller invokes it once the envelope has been delivered.
     """
+    from captain_hook.app import transcript_events_window
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
+    from captain_hook.snapshots.client import CURRENT_CLIENT
     from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_sources
     from captain_hook.util import reqenv
 
     record_heartbeat(event, raw)
+    if (client := CURRENT_CLIENT.get()) is not None:
+        client.tail_events = transcript_events_window(event)
     resolved_path = raw.get("agent_transcript_path") or (
         lane_transcript_path(parent, agent_id)
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))

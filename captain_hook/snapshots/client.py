@@ -217,6 +217,7 @@ class SnapshotClient:
         self._deferred_cursors: set[tuple[str, str | None]] = set()
         self._foreground_seconds = foreground_seconds
         self.tail_bytes = tail_bytes
+        self.tail_events: int | None = None
         self.foreground_deadline_unix_ms: int | None = None
         self._prefix = uuid.uuid4().hex
         self._counter = 0
@@ -307,6 +308,8 @@ class SnapshotClient:
                 request["deadline_unix_ms"] = min(int(request["deadline_unix_ms"]), self.foreground_deadline_unix_ms)
             if self.tail_bytes is not None and operation in WINDOWED_OPERATIONS:
                 request["tail_bytes"] = self.tail_bytes
+                if self.tail_events is not None and operation == "acquire":
+                    request["tail_events"] = self.tail_events
             exchange = self._cleanup_exchange if operation == "release" else self._exchange
             try:
                 response = exchange({"schema": HOST_SCHEMA, "request": request, "tool_registry": self.tool_registry()})

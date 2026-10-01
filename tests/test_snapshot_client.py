@@ -530,6 +530,23 @@ def test_hook_client_windows_source_reads_without_a_byte_budget():
     assert requests[0]["deadline_unix_ms"] <= int(time.time() * 1000) + 750
 
 
+def test_declared_events_narrow_only_the_hook_acquire():
+    requests = []
+
+    def exchange(wrapper):
+        requests.append(wrapper["request"])
+        return response(wrapper["request"], {"kind": "acquired", "description": description()})
+
+    client = SnapshotClient(exchange, tail_bytes=HOOK_WINDOW_BYTES)
+    client.tail_events = 40
+    client.bind_tool_registry({})
+    client.acquire("/tmp/fixture.jsonl")
+    client.call("retain", handle={"owner_epoch": "owner", "lease_id": "lease"})
+
+    assert (requests[0]["tail_bytes"], requests[0]["tail_events"]) == (HOOK_WINDOW_BYTES, 40)
+    assert "tail_events" not in requests[1]
+
+
 def test_whole_file_clients_send_no_window():
     requests = []
 

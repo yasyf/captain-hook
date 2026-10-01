@@ -208,6 +208,7 @@ def hook(
     async_: bool = False,
     skip_planning_agents: bool | None = None,
     mandatory: bool = False,
+    transcript_events: int | None = None,
 ) -> None:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
@@ -228,6 +229,7 @@ def hook(
                 async_=async_,
                 skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
                 mandatory=mandatory,
+                transcript_events=transcript_events,
             ),
             name=hook_name("hook", None, message),
             source_file=caller_file(),
@@ -247,6 +249,7 @@ def on(
     skip_planning_agents: bool = True,
     advisory_on_deny: bool = False,
     mandatory: bool = False,
+    transcript_events: int | None = None,
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
@@ -263,6 +266,7 @@ def on(
         skip_planning_agents=skip_planning_agents,
         advisory_on_deny=advisory_on_deny,
         mandatory=mandatory,
+        transcript_events=transcript_events,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:
@@ -314,6 +318,12 @@ def get_hook_candidates(
 def get_mandatory_hooks(event: Event) -> list[RegisteredHook]:
     """Every ``mandatory=True`` registration for *event*, before any per-event opt-out, in registration order."""
     return [h for h in _state.hooks if h.spec.mandatory and event in h.spec.events]
+
+
+def transcript_events_window(event: Event) -> int | None:
+    """The most recent transcript events *event*'s hooks read, or None when any of them reads further back."""
+    windows = [h.spec.transcript_events for h in _state.hooks if event in h.spec.events]
+    return None if not windows or None in windows else max(w for w in windows if w is not None)
 
 
 def registration_ranks() -> dict[int, int]:
