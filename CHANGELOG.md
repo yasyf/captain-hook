@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.67.0] - 2026-10-01
+
 ### Added
 
 - **The general pack nudges toward fixing broken tooling.** The `tooling_nudge`
