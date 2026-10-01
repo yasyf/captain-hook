@@ -20,6 +20,7 @@ class SnapshotFixture:
         self.length_reads = 0
         self.path = Path('/fixture/session.jsonl')
         self.evidence_ref = 'owner:snapshot:generation'
+        self.window_start = 0
 
     def __len__(self):
         assert not self.released

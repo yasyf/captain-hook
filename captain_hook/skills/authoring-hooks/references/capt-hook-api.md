@@ -98,8 +98,9 @@ Notes:
 
 - `transcript_events=N` (1-256) on `hook()`, `@on`, `nudge()` or `gate()` declares that the hook
   reads only the last `N` transcript events. That hook's conditions and handler see those events,
-  read backwards from the end of the transcript; hooks without a window on the same event still
-  load it whole. A windowed `evt.ctx.t` is a `cc_transcript.query.Session` over those events, so
+  read backwards from the end of the transcript. Hooks without a window read the newest 4-6 MiB of
+  the transcript (`HOOK_TAIL_BYTES`), so `evt.ctx.event_count` and event positions count from the
+  start of that window. A windowed `evt.ctx.t` is a `cc_transcript.query.Session` over those events, so
   snapshot-only methods (`prompts`, `signal_texts`, `render`, `matches`) are absent.
 
 - `advisory_on_deny=True` keeps a warning after another matching hook denies the event, whether the

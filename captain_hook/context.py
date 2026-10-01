@@ -99,6 +99,7 @@ class HookEvidence:
     source_ref: str | None
     source_path: Path | None
     event_count: int
+    window_start: int
     current_turn_event_count: int
     signal_texts: tuple[tuple[tuple[int | Literal["turn"], str], tuple[str, ...]], ...]
     prompt: str
@@ -123,13 +124,25 @@ class HookContext:
         context.transcript = transcript
         context.signal_evidence = {}
         context.prepared_evidence = None
-        for name in ("event_count", "current_turn_event_count", "transcript_path", "transcript_ref", "turn", "prior"):
+        for name in (
+            "event_count",
+            "window_start",
+            "current_turn_event_count",
+            "transcript_path",
+            "transcript_ref",
+            "turn",
+            "prior",
+        ):
             context.__dict__.pop(name, None)
         return context
 
     @cached_property
     def event_count(self) -> int:
         return len(self.transcript)
+
+    @cached_property
+    def window_start(self) -> int:
+        return self.t.window_start if isinstance(self.t, RemoteSession) else 0
 
     @cached_property
     def current_turn_event_count(self) -> int:
@@ -150,6 +163,7 @@ class HookContext:
             source_ref=self.transcript_ref,
             source_path=self.transcript_path,
             event_count=self.event_count,
+            window_start=self.window_start,
             current_turn_event_count=self.current_turn_event_count,
             signal_texts=tuple(self.signal_evidence.items()),
             prompt=prompt,

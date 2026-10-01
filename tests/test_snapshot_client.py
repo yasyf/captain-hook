@@ -59,6 +59,7 @@ def description(lease="lease", classifier=None):
         "provider": "claude",
         "parser_version": "1",
         "source_bytes": 100,
+        "window_start": 0,
         "committed_bytes": 100,
         "event_count": 1,
         "turn_count": 1,

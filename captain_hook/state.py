@@ -150,9 +150,11 @@ class PrimitiveState(BaseModel):
     """
 
     last_fired_at: int = 0
+    last_fired_window: int = 0
     consumed: dict[str, set[str]] = Field(default_factory=dict)
     echo_lemmas: set[str] = Field(default_factory=set)
     echo_window_end: int = 0
+    echo_window_base: int = 0
     echo_verbatim: list[str] = Field(default_factory=list)
 
     @staticmethod
@@ -311,13 +313,20 @@ def hook_name(prefix: str, label: str | None, message: str) -> str:
 
 def record_fire(evt: BaseHookEvent) -> None:
     with evt.ctx.s[PrimitiveState].mutate() as ps:
-        ps.last_fired_at = evt.ctx.event_count
+        mark_fired(ps, evt)
+
+
+def mark_fired(ps: PrimitiveState, evt: BaseHookEvent) -> None:
+    ps.last_fired_at = evt.ctx.event_count
+    ps.last_fired_window = evt.ctx.window_start
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
     return (
-        ps := evt.ctx.s[PrimitiveState].get()
-    ) is not None and ps.last_fired_at > evt.ctx.event_count - evt.ctx.current_turn_event_count
+        (ps := evt.ctx.s[PrimitiveState].get()) is not None
+        and ps.last_fired_window == evt.ctx.window_start
+        and ps.last_fired_at > evt.ctx.event_count - evt.ctx.current_turn_event_count
+    )
 
 
 from captain_hook.session import SessionStore  # noqa: E402
@@ -339,7 +348,9 @@ class EchoTracker:
         ps = evt.ctx.s[PrimitiveState].get()
         if ps is None:
             return texts
-        check_echo = ps.echo_lemmas and evt.ctx.event_count < ps.echo_window_end
+        check_echo = (
+            ps.echo_lemmas and ps.echo_window_base == evt.ctx.window_start and evt.ctx.event_count < ps.echo_window_end
+        )
         return [
             remainder
             for text in texts
@@ -350,6 +361,7 @@ class EchoTracker:
         with evt.ctx.s[PrimitiveState].mutate() as ps:
             ps.echo_lemmas = PrimitiveState.content_lemmas(" ".join(triggering)) | PrimitiveState.content_lemmas(text)
             ps.echo_window_end = evt.ctx.event_count + self.window
+            ps.echo_window_base = evt.ctx.window_start
             ps.seed_echo_verbatim(text)
 
 

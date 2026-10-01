@@ -14,7 +14,7 @@ from captain_hook.app import _state, on
 from captain_hook.cli import dispatch_event
 from captain_hook.events import BaseHookEvent
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_seconds
+from captain_hook.snapshots.client import CURRENT_CLIENT, HOOK_TAIL_BYTES, SnapshotClient, foreground_seconds
 from captain_hook.testing.helpers import fixture_line
 from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.types import Event, HookResult, RanCommand
@@ -307,3 +307,34 @@ def test_a_declared_window_answers_while_a_full_load_runs_out_the_deadline(
     assert fired == ["recent"]
     assert [gap.partition(":")[0] for gap in gaps] == ["history"]
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class Requests:
+    def __init__(self, owner: FixtureOwner) -> None:
+        self.owner = owner
+        self.seen: list[dict[str, Any]] = []
+
+    def __call__(self, wrapper: dict[str, object]) -> dict[str, Any]:
+        request = wrapper["request"]
+        assert isinstance(request, dict)
+        self.seen.append(request)
+        return self.owner.exchange(wrapper)
+
+
+def test_an_undeclared_hook_acquires_only_the_transcript_tail(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript
+) -> None:
+    transcript.write("alpha", TURNS * 12)
+    transcript.append("bravo")
+    assert transcript.path.stat().st_size > HOOK_TAIL_BYTES
+    denied = register(Event.Stop, transcript, "user_text")
+    requests = Requests(owner)
+
+    envelope, gaps = dispatch(owner, tmp_path, Event.Stop, transcript, requests)
+
+    acquires = [request for request in requests.seen if request["operation"] == "acquire"]
+    assert gaps == []
+    assert denied == ["user_text"]
+    assert envelope is not None
+    assert acquires
+    assert {request["tail_bytes"] for request in acquires} == {HOOK_TAIL_BYTES}

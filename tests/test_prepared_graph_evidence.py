@@ -5,6 +5,7 @@ import pytest
 
 from captain_hook.snapshots.client import (
     DEFAULT_LIMITS,
+    HOOK_TAIL_BYTES,
     EvidenceIncomplete,
     GraphSources,
     Lease,
@@ -114,11 +115,11 @@ def test_cold_root_schedules_background_progress_and_fails_open(tmp_path):
     scheduled = []
     client = SnapshotClient(
         lambda _: pytest.fail("cold root should not complete in foreground"),
-        root_warm_scheduler=lambda source_client, source_path, classifier: scheduled.append(
-            (source_client, source_path, classifier)
+        root_warm_scheduler=lambda source_client, source_path, classifier, tail_bytes: scheduled.append(
+            (source_client, source_path, classifier, tail_bytes)
         ),
     )
-    client.acquire = lambda _: (_ for _ in ()).throw(EvidenceIncomplete("incomplete", "foreground byte budget"))
+    client.acquire = lambda _, **__: (_ for _ in ()).throw(EvidenceIncomplete("incomplete", "foreground byte budget"))
     token = CURRENT_CLIENT.set(client)
     try:
         with pytest.raises(EvidenceIncomplete, match="foreground byte budget"):
@@ -126,7 +127,7 @@ def test_cold_root_schedules_background_progress_and_fails_open(tmp_path):
     finally:
         CURRENT_CLIENT.reset(token)
 
-    assert scheduled == [(client, path, {"id": "native", "version": "1"})]
+    assert scheduled == [(client, path, {"id": "native", "version": "1"}, HOOK_TAIL_BYTES)]
 
 
 def test_graph_work_stays_inside_the_hook_deadline():
@@ -264,7 +265,7 @@ def test_classifier_change_preserves_prepared_graph_sources(monkeypatch):
     session = session_with_sources(client, 918)
     classifier = {"id": "configured", "version": "1"}
 
-    def acquire(path, *, classifier):
+    def acquire(path, *, classifier, tail_bytes):
         changed = description(lease="classified", classifier=classifier)
         return RemoteSession(client, Lease(client, changed), path, classifier)
 

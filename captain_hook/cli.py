@@ -841,6 +841,7 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
 
     from captain_hook.session import state_root
     from captain_hook.snapshots.client import (
+        HOOK_TAIL_BYTES,
         NATIVE_CLASSIFIER,
         EvidenceIncomplete,
         RegisteredWarmState,
@@ -897,14 +898,14 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
             raise click.ClickException(f"root transcript location {exc.status}") from exc
         if root_path is None:
             raise click.ClickException("root transcript is unavailable")
-        root_warmer = RootWarmState(root_path, NATIVE_CLASSIFIER, client)
+        root_warmer = RootWarmState(root_path, NATIVE_CLASSIFIER, client, HOOK_TAIL_BYTES)
         root_warmed, root_steps, root_failure, root_reads, _ = advance(root_warmer)
         root_verified = False
         root_verify_reads = 0
         classifier = NATIVE_CLASSIFIER
         if root_warmed:
             root_verified, _, verify_failure, root_verify_reads, _ = advance(
-                RootWarmState(root_path, NATIVE_CLASSIFIER, client)
+                RootWarmState(root_path, NATIVE_CLASSIFIER, client, HOOK_TAIL_BYTES)
             )
             root_failure = root_failure or verify_failure
         classifier_ready = False
@@ -914,7 +915,7 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
             root_failure = "classifier_unavailable"
         elif root_verified:
             try:
-                session = client.acquire(root_path)
+                session = client.acquire(root_path, tail_bytes=HOOK_TAIL_BYTES)
                 try:
                     prepared = list(
                         client.pages(

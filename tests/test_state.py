@@ -212,7 +212,7 @@ class TestFireCounting:
 
     def test_record_fire_increments_last_fired_at(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        evt = mock_edit_event(MagicMock(s=store, event_count=10, current_turn_event_count=5))
+        evt = mock_edit_event(MagicMock(s=store, window_start=0, event_count=10, current_turn_event_count=5))
         record_fire(evt)
         ps = store[PrimitiveState].get()
         assert ps is not None
@@ -220,26 +220,35 @@ class TestFireCounting:
 
     def test_fired_this_turn_true_after_fire(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        evt = mock_edit_event(MagicMock(s=store, event_count=15, current_turn_event_count=5))
+        evt = mock_edit_event(MagicMock(s=store, window_start=0, event_count=15, current_turn_event_count=5))
         record_fire(evt)
         assert fired_this_turn(evt) is True
 
     def test_fired_this_turn_false_fresh(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        evt = mock_edit_event(MagicMock(s=store, event_count=15, current_turn_event_count=5))
+        evt = mock_edit_event(MagicMock(s=store, window_start=0, event_count=15, current_turn_event_count=5))
         assert fired_this_turn(evt) is False
 
     def test_fired_this_turn_false_prior_turn(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        ctx = MagicMock(s=store, event_count=5, current_turn_event_count=5)
+        ctx = MagicMock(s=store, window_start=0, event_count=5, current_turn_event_count=5)
         evt = mock_edit_event(ctx)
         record_fire(evt)
         ctx.event_count = 15
         assert fired_this_turn(evt) is False
 
+    def test_fired_this_turn_false_after_the_window_moves(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        ctx = MagicMock(s=store, window_start=0, event_count=15, current_turn_event_count=5)
+        evt = mock_edit_event(ctx)
+        record_fire(evt)
+        ctx.window_start = 2 * 1024 * 1024
+        ctx.event_count = 20
+        assert fired_this_turn(evt) is False
+
     def test_gate_double_fire_prevention(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        evt = mock_edit_event(MagicMock(s=store, event_count=15, current_turn_event_count=5))
+        evt = mock_edit_event(MagicMock(s=store, window_start=0, event_count=15, current_turn_event_count=5))
         assert fired_this_turn(evt) is False
         record_fire(evt)
         assert fired_this_turn(evt) is True

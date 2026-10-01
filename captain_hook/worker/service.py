@@ -268,18 +268,21 @@ class WorkerService:
         warm_client = client.clone_for_exchange(lambda value: self.snapshot_exchange(0, value))
         self._schedule_warm_job(owner_key, fingerprint, RegisteredWarmState(sources, warm_client))
 
-    def schedule_root_warm(self, client: SnapshotClient, path: Path, classifier: Mapping[str, str]) -> None:
+    def schedule_root_warm(
+        self, client: SnapshotClient, path: Path, classifier: Mapping[str, str], tail_bytes: int | None
+    ) -> None:
         from captain_hook.snapshots.client import RootWarmState
 
         descriptor = {
             "path": str(path.absolute()),
             "classifier": dict(classifier),
+            "tail_bytes": tail_bytes,
             "tool_registry": client.tool_registry(),
         }
         fingerprint = hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        owner_key = f"root:{descriptor['path']}:{classifier['id']}:{classifier['version']}"
+        owner_key = f"root:{descriptor['path']}:{classifier['id']}:{classifier['version']}:{tail_bytes}"
         warm_client = client.clone_for_exchange(lambda value: self.snapshot_exchange(0, value))
-        self._schedule_warm_job(owner_key, fingerprint, RootWarmState(path, dict(classifier), warm_client))
+        self._schedule_warm_job(owner_key, fingerprint, RootWarmState(path, dict(classifier), warm_client, tail_bytes))
 
     def _schedule_warm_job(self, owner_key: str, fingerprint: str, state: RegisteredWarmState | RootWarmState) -> None:
         with self._warm_guard:

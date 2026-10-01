@@ -187,7 +187,7 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
         yield client
 
     monkeypatch.setattr(client, "call", warm)
-    monkeypatch.setattr(client, "acquire", lambda _: RootSession())
+    monkeypatch.setattr(client, "acquire", lambda _, tail_bytes: RootSession())
     monkeypatch.setattr(
         client,
         "pages",
@@ -280,7 +280,7 @@ def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
         yield client
 
     monkeypatch.setattr(client, "call", warm)
-    monkeypatch.setattr(client, "acquire", lambda _: RootSession())
+    monkeypatch.setattr(client, "acquire", lambda _, tail_bytes: RootSession())
     monkeypatch.setattr(
         client,
         "pages",
@@ -337,7 +337,7 @@ def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_pa
         yield client
 
     monkeypatch.setattr(client, "call", warm)
-    monkeypatch.setattr(client, "acquire", lambda _: RootSession())
+    monkeypatch.setattr(client, "acquire", lambda _, tail_bytes: RootSession())
     monkeypatch.setattr(
         client,
         "pages",
@@ -390,7 +390,7 @@ def test_warm_command_reports_unavailable_configured_classifier(tmp_path, monkey
         yield client
 
     monkeypatch.setattr(client, "call", warm)
-    monkeypatch.setattr(client, "acquire", lambda _: pytest.fail("configured callback ran in operator"))
+    monkeypatch.setattr(client, "acquire", lambda _, tail_bytes: pytest.fail("configured callback ran in operator"))
     monkeypatch.setattr(
         "captain_hook.transcripts.resolved_transcript_paths",
         lambda *_args, **_kwargs: {SessionId("configured"): tmp_path / "root.jsonl"},

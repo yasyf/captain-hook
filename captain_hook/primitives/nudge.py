@@ -12,6 +12,7 @@ from captain_hook.state import (
     PrimitiveState,
     fired_this_turn,
     hook_name,
+    mark_fired,
     record_fire,
 )
 from captain_hook.types import (
@@ -98,7 +99,7 @@ def nudge(
             with evt.ctx.s[PrimitiveState].mutate() as ps:
                 if not (triggering := ps.consume_matches(sig, matches, name)):
                     return None
-                ps.last_fired_at = evt.ctx.event_count
+                mark_fired(ps, evt)
             tracker.record(message, triggering=triggering, evt=evt)
             cited = cite_message(sig, triggering, message)
         else:
