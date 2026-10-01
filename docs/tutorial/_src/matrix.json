@@ -189,7 +189,7 @@
           "input": { "tool": "Bash", "command": "psql -f migrations/0007_drop_orders.sql" },
           "verdict": {
             "action": "block",
-            "message": "This migration drops the orders table with no backup or guard — irreversible in production. Snapshot the table first, or gate the drop behind an explicit confirmation.",
+            "message": "This migration is irreversibly destructive against production data. Snapshot the table, or add a reversible down-migration, before running it.",
             "rewritten": null
           }
         }

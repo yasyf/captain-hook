@@ -34,10 +34,6 @@ TARGET_FLAGS = ("--branch", "--bookmark")
 GT_SUBMIT_VERBS = frozenset({"submit", "s", "ss"})
 PR_LOOKUP = "query($owner: String!, $repo: String!) {{ repository(owner: $owner, name: $repo) {{ {fields} }} }}"
 PR_FIELD = "b{index}: pullRequests(headRefName: {branch}, states: OPEN, first: 1) {{ nodes {{ number }} }}"
-INCIDENT = (
-    "Incident 2026-09-26: a lane pushed the release-311 fix onto #26315 while the queue held 37768ef4, "
-    "and the fix was silently left out."
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,30 +42,16 @@ class Push:
     head: str | None
 
 
-@dataclass(frozen=True, slots=True)
-class Hold:
-    push: Push
-    number: int
-    enqueued: str | None
-
-    def render(self) -> str:
-        return f"#{self.number} (`{self.push.branch}`) at `{self.enqueued or 'an unrecorded commit'}`"
-
-
 def run(argv: list[str], cwd: Path) -> str | None:
-    try:
-        done = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=reqenv.clamp_timeout(CHECK_TIMEOUT),
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        logger.bind(argv=" ".join(argv)).warning(f"queued-push check skipped: {error}")
-        return None
+    done = subprocess.run(
+        argv,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=reqenv.clamp_timeout(CHECK_TIMEOUT),
+        check=False,
+    )
     if done.returncode != 0:
         logger.bind(argv=" ".join(argv), stderr=done.stderr.strip()).warning(
             f"queued-push check skipped: exit {done.returncode}"
@@ -79,13 +61,7 @@ def run(argv: list[str], cwd: Path) -> str | None:
 
 
 def parsed(argv: list[str], cwd: Path) -> object | None:
-    if (out := run(argv, cwd)) is None:
-        return None
-    try:
-        return json.loads(out)
-    except ValueError:
-        logger.bind(argv=" ".join(argv), stdout=out).warning("queued-push check skipped: unparseable output")
-        return None
+    return None if (out := run(argv, cwd)) is None else json.loads(out)
 
 
 def option(args: tuple[str, ...], names: tuple[str, ...]) -> str | None:
@@ -235,13 +211,13 @@ def already_enqueued(push: Push, report: dict[str, str]) -> bool:
     return bool(push.head and (enqueued := report.get("enqueued")) and push.head.startswith(enqueued))
 
 
-def holds(cwd: Path, planned: list[Push]) -> list[Hold]:
+def holds(cwd: Path, planned: list[Push]) -> list[Push]:
     if not (prs := open_prs(sorted({push.branch for push in planned}), cwd)):
         return []
     if (reports := queue_reports(sorted(set(prs.values())), cwd)) is None:
         return []
     return [
-        Hold(push, number, reports[number].get("enqueued"))
+        push
         for push in planned
         if (number := prs.get(push.branch)) is not None
         and reports[number]["queue"] == "queued"
@@ -263,7 +239,7 @@ def holds(cwd: Path, planned: list[Push]) -> list[Hold]:
     },
 )
 def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
-    held: list[Hold] = []
+    held: list[Push] = []
     moved = False
     for call in evt.cmd.calls():
         if (
@@ -276,10 +252,8 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
         moved = moved or moves_heads(call)
     if not held:
         return None
+    branches = ", ".join(dict.fromkeys(f"`{push.branch}`" for push in held))
     return evt.block(
-        f"This pushes to {', '.join(hold.render() for hold in held)}, which the Graphite merge queue holds, "
-        "per `ccx vcs pr status`. The queue lands the commit it admitted and silently drops anything pushed "
-        "after it, with every check still green. Ship the change as a new PR stacked on it: "
-        '`ccx vcs stack new <name>` from that branch, then `ccx vcs ship -m "<msg>"` in the new working copy. '
-        "`# ccx:raw` at the end of the command, or `CAPT_HOOK_CCX_RAW=1` for the session, pushes anyway. " + INCIDENT
+        f"The Graphite merge queue holds {branches} and drops anything pushed after admission. "
+        "Ship the change as a stacked PR: run `ccx vcs stack new <name>` from that branch."
     )

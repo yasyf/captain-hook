@@ -144,8 +144,8 @@ context, so the main agent and each subagent get the full allowance. `prompt_che
 from a handler and returns a `HookResult` (or `None`). `max_fires`, a narrow `only_if`, and
 `model="small"` bound the cost.
 
-The `str` form of `message` is a `{field}` template over the verdict's fields (e.g. `{reasoning}`),
-following `Prompt.from_template`'s placeholder rules — every other brace stays literal. `label`
+`message` is a fixed string stating the rule and its remediation. A callable `message` receives the verdict
+model and should read structured fields only, never the free-text `reasoning`. `label`
 gives a gate a stable identity so its review verdicts and fire state survive prompt edits;
 otherwise the hook name derives from the prompt hash. `contexts` attaches declarative evidence
 blocks — `BeforeEdit`/`AfterEdit`/`Introduced` and other `PromptContext`s — each rendered as an

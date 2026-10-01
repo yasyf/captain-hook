@@ -42,13 +42,8 @@ hook(
         ),
     ],
     message=(
-        "BLOCKED: broad filesystem search. Searching from /, a home directory, or the entire "
-        "worktree pool traverses dependency and build trees and slows terminal commands and file "
-        "operations. A head pipeline, name filter, or hidden stderr does not bound the traversal. "
-        "Use `ccx repo locate <name>` for a repository or dependency, package-manager metadata "
-        "for an installed module, or search an explicit repository or directory. Unknown shell "
-        "expansions cannot establish a scoped root. Use `-maxdepth 1` or `-maxdepth 2` for a shallow listing. "
-        "User feedback 2026-09-17: 'and kill the finds'."
+        "A `find` rooted at /, a home directory, or the worktree pool is a broad filesystem search that walks "
+        "every dependency tree. Run `ccx repo locate <name>` instead, or bound the listing with `-maxdepth 2`."
     ),
     block=True,
     tests={

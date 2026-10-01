@@ -1,25 +1,23 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
+from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition, FileFixture, Input
 from captain_hook.util import reqenv
-from captain_hook.util.vcs import graphite_lane, graphite_lane_of_git_dir
+from captain_hook.util.vcs import ccx_raw_marked, graphite_lane, graphite_lane_of_git_dir
 
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
 
     from captain_hook.cmd import Call
 
-REVIEW_SKILL_PREFIX = "cc-review"
-RAW_MARKER = re.compile(r"#\s*ccx:raw\b")
 RAW_ENV = "CAPT_HOOK_CCX_RAW"
+FIXTURE_GITDIR = Path(__file__).parents[1] / "gitdir"
 
 JJ_READS = frozenset(
     {
@@ -52,10 +50,6 @@ JJ_READS = frozenset(
         ("sparse", "list"),
     }
 )
-
-
-def is_review_skill(skill: str) -> bool:
-    return skill.startswith(REVIEW_SKILL_PREFIX) or skill.split(":", 1)[-1].startswith(REVIEW_SKILL_PREFIX)
 
 
 def jj_read(call: Call) -> bool:
@@ -166,13 +160,6 @@ class PushesTagRef(CustomCommandLineCondition):
         )
 
 
-class ReviewPassRan(CustomCondition):
-    """Matches when a cc-review skill ran this session."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return any(is_review_skill(skill) for window in evt.ctx.transcript.deep_inputs() for skill in window.skills)
-
-
 class CcxInstalled(CustomCondition):
     """Matches when ``ccx`` is on PATH, so its stack verbs are there to route raw gt and git writes to."""
 
@@ -185,26 +172,23 @@ class RawRequested(CustomCommandLineCondition):
     ``CAPT_HOOK_CCX_RAW`` set for the session. Either runs the raw command as written."""
 
     def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
-        return RAW_MARKER.search(evt.cmd.raw) is not None or bool(reqenv.getenv(RAW_ENV))
+        return bool(reqenv.getenv(RAW_ENV)) or ccx_raw_marked(evt.cmd.raw)
 
 
 def git_probe(call: Call, session_cwd: Path | None, *args: str) -> str | None:
-    """Run a read-only ``git`` query against the repository ``call`` targets; ``None`` when it fails."""
+    """Run a read-only ``git`` query against the repository ``call`` targets; ``None`` when git exits non-zero."""
     cwd, git_dir = git_location(call, session_cwd)
     if cwd is None:
         return None
     location = ["--git-dir", str(git_dir)] if git_dir is not None else []
-    try:
-        probe = subprocess.run(
-            ["git", "-C", str(cwd), *location, *args],
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    probe = subprocess.run(
+        ["git", "-C", str(cwd), *location, *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
     return probe.stdout.strip() if probe.returncode == 0 else None
 
 
@@ -244,3 +228,13 @@ def force_pushes(call: Call) -> bool:
         if name.startswith("-") and not name.startswith("--") and short_force(name):
             return True
     return any((target.value or "").startswith("+") for target in call.targets.targets[1:])
+
+
+def in_graphite_repo(command: str, **fields: Any) -> Input:
+    """An inline-test input that runs ``command`` from a home directory whose ``.git`` points at a Graphite git dir."""
+    return Input(
+        command=f"cd ~ && {command}",
+        file=FileFixture(name=".git", content=f"gitdir: {FIXTURE_GITDIR}\n", home=True),
+        commands={"ccx vcs lane": '{"lane": "gt"}'},
+        **fields,
+    )

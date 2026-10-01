@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import re
 
-from captain_hook import Event, Tool, nudge
+from captain_hook import Allow, Event, Input, Tool, Warn, nudge
 from captain_hook.events import PostToolUseFailureEvent
 
 nudge(
-    "MISSING DEPENDENCY: Run `uv sync --extra dev` (or `uv pip install <package>`) to fix this. "
-    "Do NOT make imports lazy, remove the importing code, or restructure "
-    "code to avoid the import.",
+    "A Python dependency is missing. Run `uv sync --extra dev`.",
     events=Event.PostToolUseFailure,
     only_if=[Tool("Bash")],
     when=lambda evt: (
@@ -16,4 +14,8 @@ nudge(
         and bool(re.search(r"ModuleNotFoundError|ImportError: (?:cannot import|No module named)", evt.error))
     ),
     max_fires=2,
+    tests={
+        Input(command="uv run pytest", error="ModuleNotFoundError: No module named 'yaml'"): Warn(),
+        Input(command="uv run pytest", error="AssertionError: 1 != 2"): Allow(),
+    },
 )

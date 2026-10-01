@@ -11,12 +11,7 @@ from captain_hook.style import matchers as M
 NoPrint = ast_grep_rule(
     "NoPrint",
     pattern="print($$$)",
-    message="""
-    print() calls don't belong in committed code:
-      - {violations}
-
-    Use a logger (logger.info(...)) instead.
-    """,
+    message="print() calls don't belong in committed code; use `logger.info(...)` instead: {violations}",
     label="print() call",
     tests={
         Input(file="app.py", content="def f():\n    print('debug')\n"): Warn(),
@@ -28,12 +23,7 @@ NoPrint = ast_grep_rule(
 NoNewWildcardImport = ast_grep_diff_rule(
     "NoNewWildcardImport",
     pattern="from $MOD import *",
-    message="""
-    Wildcard import added by this edit:
-      - {violations}
-
-    Import the names you use explicitly instead of `import *`.
-    """,
+    message="This edit adds a wildcard import; import the names you use explicitly: {violations}",
     tests={
         Input(file="m.py", old="import os\n", content="from os import *\n"): Warn(),
         Input(file="m.py", old="from os import *\n", content="from os import *\nx = 1\n"): Allow(),
@@ -42,12 +32,7 @@ NoNewWildcardImport = ast_grep_diff_rule(
 
 
 class NoBareExcept(StyleRule):
-    """
-    Bare `except:` swallows every error, including KeyboardInterrupt:
-      - {violations}
-
-    Catch a specific exception type instead.
-    """
+    """Bare `except:` swallows every error; catch a specific exception type instead: {violations}"""
 
     tests = {
         Input(file="app.py", content="try:\n    f()\nexcept:\n    pass\n"): Warn(),

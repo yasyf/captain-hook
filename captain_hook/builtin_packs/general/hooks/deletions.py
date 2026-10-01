@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, Block, Event, HookResult, Input, Rewrite, Tool, on
+from captain_hook import Allow, Block, CommandMatches, CommandSchema, Event, HookResult, Input, Rewrite, Tool, on
 from captain_hook.cmd import Target
-from captain_hook.types import Command as CommandCondition
 from captain_hook.util import fs
 from captain_hook.util.globbing import GLOB_LIMIT
 from captain_hook.util.shell import emit_token, unescape_shell
@@ -30,16 +29,11 @@ def trash_binary() -> str | None:
     return fs.resolve_binary("trash") if sys.platform == "darwin" else None
 
 
-def unrecoverable(evt: PreToolUseEvent, token: str) -> Recoverable:
+def unrecoverable(evt: PreToolUseEvent) -> Recoverable:
     return Recoverable(
-        evt.block(
-            f"BLOCKED: rm target '{token}' resolves outside any git/jj repository, so nothing can restore it "
-            "after deletion. Move it to the trash instead, or stop and ask the user to confirm this deletion. "
-            "(Temp and scratch paths are exempt.)"
-        ),
-        f"Rewrote rm to trash: '{token}' resolves outside any git/jj repository, so rm would be "
-        "unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). "
-        "If permanent deletion is truly intended, ask the user to run the rm themselves.",
+        evt.block("`rm` cannot be undone outside a git/jj repository. Run `trash <path>` instead."),
+        "Rewrote `rm` to `trash` because the target is outside any git/jj repository. "
+        "Restore it from the Trash in Finder.",
     )
 
 
@@ -49,54 +43,51 @@ def check_resolved(evt: PreToolUseEvent, target: Target, *, rewritable: bool) ->
     token = target.value or target.raw
     if target.is_repo_root:
         return evt.block(
-            f"BLOCKED: '{token}' is a git/jj repository root — deleting it destroys the repo and its entire "
-            "history. If this is really intended, ask the user to run it themselves."
+            f"'{token}' is a git/jj repository root, and deleting it destroys the repo and its history. "
+            "Delete a path inside it, or ask the user to run the `rm` themselves."
         )
     if target.in_repo:
         return None
     if rewritable:
         if target.is_fs_root:
             return evt.block(
-                f"BLOCKED: '{token}' is the filesystem root — deleting it destroys the entire "
-                "system. If this is really intended, ask the user to run it themselves."
+                f"'{token}' is the filesystem root, and deleting it destroys the system. "
+                "Ask the user to run the `rm` themselves."
             )
         if target.is_home:
             return evt.block(
-                f"BLOCKED: '{token}' is a home directory — deleting it destroys every file the "
-                "user owns. If this is really intended, ask the user to run it themselves."
+                f"'{token}' is a home directory, and deleting it destroys every file the user owns. "
+                "Ask the user to run the `rm` themselves."
             )
-        # A module-level contains_repo call, not target.contains_repo, so the no-scan guard tests
-        # can monkeypatch this exact seam and assert the directory walk stays unentered.
         if (scan := Path(os.path.normpath(path))).is_dir(follow_symlinks=False) and contains_repo(scan):
             return evt.block(
-                f"BLOCKED: '{token}' contains git/jj repositories — deleting it would destroy "
-                "them and their entire history. Delete a narrower path instead, or ask the user "
-                "to run it themselves."
+                f"'{token}' contains git/jj repositories, and deleting it destroys them with their history. "
+                "Delete a narrower path instead."
             )
-    return unrecoverable(evt, token)
+    return unrecoverable(evt)
+
+
+def literal_spelling(target: Target, cwd: Path | None) -> Target:
+    return target if target.verified else Target(unescape_shell(target.raw), target.raw, cwd)
 
 
 def check_target(
     evt: PreToolUseEvent, target: Target, cwd: Path | None, *, rewritable: bool
 ) -> HookResult | Recoverable | None:
-    if not target.verified:
-        # Classify the unverified spelling as a literal path (a `$FOO` file under cwd), so a
-        # scratch or in-repo cwd stays allowed; emittable() keeps the target out of any rewrite.
-        target = Target(unescape_shell(target.raw), target.raw, cwd)
+    target = literal_spelling(target, cwd)
     if not target.has_glob:
         return check_resolved(evt, target, rewritable=rewritable)
     expansion = target.expand()
     token = target.value or target.raw
     if expansion.exhausted:
         return evt.block(
-            f"BLOCKED: the glob '{token}' is too broad to verify safely (the scan budget was exhausted "
-            "before it completed). Narrow the pattern or delete a specific directory with rm -r <dir>."
+            f"The glob '{token}' is too broad to verify before deleting. "
+            "Narrow the pattern or run `rm -r <dir>` on a specific directory."
         )
     if len(expansion) > GLOB_LIMIT:
         return evt.block(
-            f"BLOCKED: the glob '{token}' matches more than {GLOB_LIMIT} files — an easy way to delete far "
-            f"more than intended. List the matches first (ls {token}), narrow the pattern, or name a "
-            "directory explicitly with rm -r <dir>."
+            f"The glob '{token}' matches more than {GLOB_LIMIT} files. "
+            f"Run `ls {token}`, then narrow the pattern or run `rm -r <dir>` on a named directory."
         )
     recovery: Recoverable | None = None
     for match in expansion:
@@ -109,12 +100,15 @@ def check_target(
     return recovery
 
 
+def splits_a_word(call: Call) -> bool:
+    return "\\\n" in call.source.raw
+
+
 def check_call(evt: PreToolUseEvent, call: Call, *, rewritable: bool) -> HookResult | Recoverable | None:
     if not call.targets.complete:
         return evt.block(
-            f"BLOCKED: a command substitution supplies rm targets in '{call.source.raw}', so they cannot be "
-            "verified against any git/jj repository or scratch exemption. Expand the substitution to explicit "
-            "paths first, or ask the user to run it themselves."
+            "A command substitution supplies the `rm` targets, so no git/jj repository check can verify them. "
+            "Expand it to explicit paths first."
         )
     recovery: Recoverable | None = None
     for target in call.targets:
@@ -126,9 +120,7 @@ def check_call(evt: PreToolUseEvent, call: Call, *, rewritable: bool) -> HookRes
     return recovery
 
 
-def emittable(target: Target) -> bool:
-    # Safe to trash-rewrite only when re-emission matches what the classification assumed —
-    # quoted glob/tilde/backslash and unexpanded $/`/{} spellings diverge, so they refuse.
+def reemits_as_classified(target: Target) -> bool:
     token = target.value if target.value is not None else target.raw
     return emit_token(token, plain_words=target.raw == target.value) is not None
 
@@ -139,11 +131,11 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
 
 @on(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), CommandCondition(r"(?i)\brm\b")],
+    only_if=[Tool("Bash"), CommandMatches(CommandSchema("rm"))],
     tests={
         Input(command="rm foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="rm -rf /", cwd="/"): ROOT_RM,
-        Input(command="''rm -rf /", cwd="/"): ROOT_RM,  # empty-quote concat still names rm in command position
+        Input(command="''rm -rf /", cwd="/"): ROOT_RM,
         Input(command="bash -c 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="bash -lc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="sh -xc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
@@ -172,16 +164,14 @@ def guard_rm(evt: PreToolUseEvent) -> HookResult | None:
     trash = trash_binary()
     result: HookResult | None = None
     for call in evt.cmd.calls("rm"):
-        # A backslash-newline continuation splits the continued word in the parse, so neither
-        # classification nor re-emission can be trusted with a rewrite.
-        rewritable = trash is not None and call.spliceable and not call.nested and "\\\n" not in call.source.raw
+        rewritable = trash is not None and call.spliceable and not call.nested and not splits_a_word(call)
         match check_call(evt, call, rewritable=rewritable):
             case HookResult() as blocked:
                 return blocked
             case Recoverable() as recovery:
                 if (
                     rewritable
-                    and all(emittable(target) for target in call.targets)
+                    and all(reemits_as_classified(target) for target in call.targets)
                     and (rewritten := call.sub("rm", shlex.quote(trash), args=call.targets, note=recovery.note))
                     is not None
                 ):

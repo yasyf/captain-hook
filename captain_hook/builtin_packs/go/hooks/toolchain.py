@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import re
 
-from captain_hook import Event, Tool, nudge
+from captain_hook import Allow, Event, Input, Tool, Warn, nudge
 from captain_hook.events import PostToolUseFailureEvent
 
 nudge(
-    "MISSING DEPENDENCY: run `go mod tidy` (or `go get <module>`) to resolve it. "
-    "Do NOT make the import lazy, delete the importing code, or vendor by hand.",
+    "A Go module is missing. Run `go mod tidy`.",
     events=Event.PostToolUseFailure,
     only_if=[Tool("Bash")],
     when=lambda evt: (
@@ -21,4 +20,11 @@ nudge(
         )
     ),
     max_fires=2,
+    tests={
+        Input(
+            command="go build ./...",
+            error="no required module provides package github.com/x/y; to add it:\n\tgo get github.com/x/y",
+        ): Warn(),
+        Input(command="go build ./...", error="undefined: foo"): Allow(),
+    },
 )

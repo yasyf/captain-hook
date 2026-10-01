@@ -11,10 +11,8 @@ from captain_hook import (
 )
 
 nudge(
-    """You are a teammate in a shared session: every message you send re-reads and
-re-caches the entire main context. Return tight digests — final answers and
-decisions only. Keep raw file contents, logs, command output, and intermediate
-findings in your own context; if they matter, summarize them in a few sentences.""",
+    "A teammate message re-reads and re-caches the whole main context. "
+    "Return only a tight digest of final answers and decisions, and keep raw output in your own context.",
     only_if=[FromTeammate()],
     events=Event.SubagentStart,
     max_fires=None,
@@ -26,7 +24,7 @@ findings in your own context; if they matter, summarize them in a few sentences.
                 T.user("go research the API"),
                 T.assistant(T.tool("Agent", prompt="dig in", subagent_type="general-purpose", name="researcher")),
             ],
-        ): Warn(pattern="tight digests"),
+        ): Warn(pattern="tight digest"),
         Input(
             agent_type="general-purpose",
             transcript=[

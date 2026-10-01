@@ -16,38 +16,31 @@ const SCRATCH_DIR_NAMES = new Set(["tmp", "temp", "scratch", "scratchpad", "scra
 
 // --- verbatim message strings (captain_hook/builtin_packs/general/hooks/deletions.py) ----------
 
-const commandSubBlock = (raw: string): string =>
-  `BLOCKED: a command substitution supplies rm targets in '${raw}', so they cannot be verified ` +
-  `against any git/jj repository or scratch exemption. Expand the substitution to explicit ` +
-  `paths first, or ask the user to run it themselves.`;
+const COMMAND_SUB_BLOCK =
+  "A command substitution supplies the `rm` targets, so no git/jj repository check can verify them. " +
+  "Expand it to explicit paths first.";
 
 const globOverLimitBlock = (token: string): string =>
-  `BLOCKED: the glob '${token}' matches more than ${GLOB_LIMIT} files — an easy way to delete far ` +
-  `more than intended. List the matches first (ls ${token}), narrow the pattern, or name a ` +
-  `directory explicitly with rm -r <dir>.`;
+  `The glob '${token}' matches more than ${GLOB_LIMIT} files. ` +
+  `Run \`ls ${token}\`, then narrow the pattern or run \`rm -r <dir>\` on a named directory.`;
 
 const repoRootBlock = (token: string): string =>
-  `BLOCKED: '${token}' is a git/jj repository root — deleting it destroys the repo and its entire ` +
-  `history. If this is really intended, ask the user to run it themselves.`;
+  `'${token}' is a git/jj repository root, and deleting it destroys the repo and its history. ` +
+  "Delete a path inside it, or ask the user to run the `rm` themselves.";
 
 const fsRootBlock = (token: string): string =>
-  `BLOCKED: '${token}' is the filesystem root — deleting it destroys the entire ` +
-  `system. If this is really intended, ask the user to run it themselves.`;
+  `'${token}' is the filesystem root, and deleting it destroys the system. ` +
+  "Ask the user to run the `rm` themselves.";
 
 const containsRepoBlock = (token: string): string =>
-  `BLOCKED: '${token}' contains git/jj repositories — deleting it would destroy ` +
-  `them and their entire history. Delete a narrower path instead, or ask the user ` +
-  `to run it themselves.`;
+  `'${token}' contains git/jj repositories, and deleting it destroys them with their history. ` +
+  "Delete a narrower path instead.";
 
-const unrecoverableBlock = (token: string): string =>
-  `BLOCKED: rm target '${token}' resolves outside any git/jj repository, so nothing can restore it ` +
-  `after deletion. Move it to the trash instead, or stop and ask the user to confirm this deletion. ` +
-  `(Temp and scratch paths are exempt.)`;
+const UNRECOVERABLE_BLOCK = "`rm` cannot be undone outside a git/jj repository. Run `trash <path>` instead.";
 
-const recoverableNote = (token: string): string =>
-  `Rewrote rm to trash: '${token}' resolves outside any git/jj repository, so rm would be ` +
-  `unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). ` +
-  `If permanent deletion is truly intended, ask the user to run the rm themselves.`;
+const RECOVERABLE_NOTE =
+  "Rewrote `rm` to `trash` because the target is outside any git/jj repository. " +
+  "Restore it from the Trash in Finder.";
 
 // --- posix path helpers (the world is posix, no symlinks) --------------------------------------
 
@@ -526,7 +519,7 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
       else if (cls.kind === "target") targets.push(cls.target);
     }
     // check_call: an incomplete operand list (a lifted command substitution) blocks first.
-    if (substitution) return block(commandSubBlock(call.segment.text));
+    if (substitution) return block(COMMAND_SUB_BLOCK);
     if (honest) return honesty();
 
     let recovery: string | null = null;
@@ -541,7 +534,7 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
     if (rewritable && targets.every((t) => t.emittable)) {
       const args = targets.map((t) => (t.raw.startsWith("-") ? `./${t.raw}` : t.raw));
       edits.push({ ...call.segment, text: [world.trash, ...args].join(" ") });
-      notes.push(recoverableNote(recovery));
+      notes.push(RECOVERABLE_NOTE);
       result = {
         action: "rewrite",
         message: [...new Set(notes)].join("\n") || null,
@@ -549,7 +542,7 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
       };
       continue;
     }
-    return block(unrecoverableBlock(recovery));
+    return block(UNRECOVERABLE_BLOCK);
   }
   return result ?? { action: "pass", message: null, rewritten: null };
 }

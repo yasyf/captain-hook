@@ -257,7 +257,7 @@ class TestRelayBannerE2E:
         from captain_hook.packs import manager
 
         discover_pack("steering", manager.resolve_builtin("steering").path)
-        steward = next(h for h in app._state.hooks if h.name == "steering.steering:nudge_1ebed8c4")
+        steward = next(h for h in app._state.hooks if h.name == "steering.steering:nudge_6933e949")
         ctx = banner_ctx(tmp_path, [("user", self.banner_line()), ("assistant", "ok, continuing")], n_pad=6)
         evt = PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=ctx)
         assert steward.handler(evt) is None

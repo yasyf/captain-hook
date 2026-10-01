@@ -368,9 +368,8 @@ class TestRmTrashRewrite:
             f"/opt/fake/trash {victim}",
         )
         assert output["additionalContext"] == (
-            f"Rewrote rm to trash: '{victim}' resolves outside any git/jj repository, so rm would be "
-            "unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). "
-            "If permanent deletion is truly intended, ask the user to run the rm themselves."
+            "Rewrote `rm` to `trash` because the target is outside any git/jj repository. "
+            "Restore it from the Trash in Finder."
         )
 
     def test_flags_dropped(
@@ -439,8 +438,8 @@ class TestRmTrashRewrite:
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
         assert output["permissionDecisionReason"] == (
-            "BLOCKED: the glob '*.txt' matches more than 10 files — an easy way to delete far more than intended. "
-            "List the matches first (ls *.txt), narrow the pattern, or name a directory explicitly with rm -r <dir>."
+            "The glob '*.txt' matches more than 10 files. "
+            "Run `ls *.txt`, then narrow the pattern or run `rm -r <dir>` on a named directory."
         )
         assert "updatedInput" not in output
 
@@ -535,8 +534,8 @@ class TestRmTrashRewrite:
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
         assert output["permissionDecisionReason"] == (
-            "BLOCKED: the glob '*' matches more than 10 files — an easy way to delete far more than intended. "
-            "List the matches first (ls *), narrow the pattern, or name a directory explicitly with rm -r <dir>."
+            "The glob '*' matches more than 10 files. "
+            "Run `ls *`, then narrow the pattern or run `rm -r <dir>` on a named directory."
         )
         assert "updatedInput" not in output
 
@@ -558,8 +557,8 @@ class TestRmTrashRewrite:
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
         assert output["permissionDecisionReason"] == (
-            "BLOCKED: the glob '**/*.zzz' is too broad to verify safely (the scan budget was exhausted before it "
-            "completed). Narrow the pattern or delete a specific directory with rm -r <dir>."
+            "The glob '**/*.zzz' is too broad to verify before deleting. "
+            "Narrow the pattern or run `rm -r <dir>` on a specific directory."
         )
         assert "updatedInput" not in output
 

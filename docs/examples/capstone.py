@@ -12,23 +12,16 @@ from captain_hook import (
     gate,
 )
 
-# A complete .claude/hooks/ file: a safety block and a workflow gate composing in one
-# place.
-
-# 1. Safety: never let the agent force-push.
 block_command(
     r"git\s+push\s+--force(?!-)",
     reason="Force-push rewrites shared history",
-    hint="Use --force-with-lease",
+    hint="Run `git push --force-with-lease` instead",
     tests={
         Input(command="git push --force origin main"): Block(),
         Input(command="git push --force-with-lease"): Allow(),
     },
 )
 
-# 2. Workflow: don't finish a Python change without running the tests.
-# RanCommand matches parsed argv prefixes (launcher-literal), so each spelling
-# of the test runner gets its own entry — skip_if is OR.
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],

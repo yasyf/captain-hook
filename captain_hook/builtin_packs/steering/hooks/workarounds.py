@@ -62,7 +62,7 @@ first-party dependency — consumer-side code accommodating a gap, quirk, or bre
 change in a sibling repo this ecosystem owns (cc-transcript, cc-context/ccx, cc-notes,
 spawnllm, and the other cc-family repos) instead of fixing that dependency.
 
-First-party dependencies live as sibling repos under ~/Code with tag-driven releases,
+First-party dependencies live as sibling repos with tag-driven releases,
 so "fix it upstream" is routine work, not a blocker: the right move is a change in the
 dependency plus a version bump, and the workaround never gets written.
 
@@ -104,11 +104,8 @@ When uncertain whether the subject is first-party or the accommodation is delibe
 return fire=false. Put your reasoning (under 40 words, naming the dependency and the
 gap) in `reasoning`.""",
     message=(
-        "This edit works around a first-party dependency instead of fixing it. "
-        "Why: {reasoning} "
-        "The dependency is a sibling repo with tag-driven releases — fix the primitive "
-        "there: add the missing surface upstream, bump the pin, and skip the accommodation. "
-        "If a local workaround is genuinely correct here, say why in your reply and proceed."
+        "This edit works around a gap in a first-party dependency instead of fixing it. "
+        "Add the missing surface in the dependency's own repo and bump the pin instead of writing the accommodation."
     ),
     label="upstream_workaround_edit",
     contexts=[WorkaroundComments()],
@@ -190,12 +187,8 @@ tell is clearly present and no do-not-fire condition applies. Put your reasoning
 (under 60 words, naming the dependency and the primitive it should grow) in
 `reasoning`.""",
     message=(
-        "This turn lands a consumer-side workaround for a first-party dependency instead of "
-        "fixing the dependency. Why: {reasoning} "
-        "The dependency is a sibling repo with tag-driven releases — fix the primitive "
-        "there: add the missing surface upstream, bump the pin, and delete the local "
-        "accommodation. If a local workaround is genuinely correct, say why in your reply "
-        "and proceed."
+        "This turn lands a consumer-side workaround for a first-party dependency instead of fixing it. "
+        "Add the missing surface in the dependency's own repo, bump the pin, and delete the local accommodation."
     ),
     label="upstream_workaround_turn",
     signals=Signals(

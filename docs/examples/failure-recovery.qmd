@@ -2,9 +2,9 @@
 title: "Failure recovery"
 ---
 
-> Nudge the agent toward a debug tool when the recent transcript looks like a retry loop or the turn has stacked up failures.
+> Nudge the agent toward `/codex` and `DEBUGGING.md` when the recent transcript looks like a retry loop or the turn has stacked up failures.
 
-After two or three back-to-back failures the agent often spirals. It retries the same approach, restates the same error, and never reaches for a debug tool. You want a Stop-event nudge that fires only when the recent narration reads like a retry loop, plus a separate per-failure nudge that points at the project's debugging playbook. Both silence themselves once the agent has already done the thing you'd suggest.
+After two or three back-to-back failures the agent often spirals. It retries the same approach, restates the same error, and never reaches for a second opinion. You want a Stop-event nudge that fires only when the recent narration reads like a retry loop, plus a separate per-failure nudge that points at the project's debugging playbook. Both silence themselves once the agent has already done the thing you'd suggest.
 
 <!-- gd-embed: failure_recovery.py -->
 

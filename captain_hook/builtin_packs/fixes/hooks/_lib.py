@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
     from captain_hook.cmd import Call
 
+MAX_PAYLOAD_COMMAND_CHARS = 8192
+
 DANGEROUS_MCP_VERBS = frozenset(
     {
         "delete",
@@ -68,6 +70,10 @@ def is_dangerous_call(call: Call) -> bool:
     return False
 
 
+def parser_safe(text: str) -> str:
+    return text[:MAX_PAYLOAD_COMMAND_CHARS].encode(errors="replace").decode()
+
+
 def pipes_into_shell(cmd: Cmd) -> bool:
     return any(
         call.occurrence.next_op == "|" and call.name in {"curl", "wget"} and nxt.name in SHELLS
@@ -77,6 +83,13 @@ def pipes_into_shell(cmd: Cmd) -> bool:
 
 def is_dangerous_cmd(cmd: Cmd) -> bool:
     return any(is_dangerous_call(call) for call in cmd.calls()) or pipes_into_shell(cmd)
+
+
+class HasCommand(CustomCondition):
+    """Matches a Bash call whose command text is non-empty."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return bool(evt.command.raw)
 
 
 class McpTool(CustomCondition):
@@ -124,10 +137,8 @@ class DangerousPayloadCommand(CustomCondition):
     """
 
     def check(self, evt: BaseHookEvent) -> bool:
-        # Replace lone surrogates (unencodable, would crash the parser) and cap before Cmd.parse,
-        # which itself falls open (None) on pathological nesting.
         return any(
-            (cmd := Cmd.parse(text[:8192].encode(errors="replace").decode())) is not None and is_dangerous_cmd(cmd)
+            (cmd := Cmd.parse(parser_safe(text))) is not None and is_dangerous_cmd(cmd)
             for text in command_texts(evt.input.raw)
         )
 

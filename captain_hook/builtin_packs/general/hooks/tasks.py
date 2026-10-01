@@ -13,7 +13,6 @@ from captain_hook import (
     FromSubagent,
     InPlanMode,
     Input,
-    LambdaCondition,
     Signal,
     Signals,
     T,
@@ -33,6 +32,21 @@ IMPERATIVES = (
 )
 
 
+class OpenTasks(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        return not evt.tasks.all_completed
+
+
+class Overridden(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        return evt.ctx.t.has_override(OVERRIDE_TOKEN)
+
+
+class IsTaskNotification(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        return (evt.user_prompt or "").strip().startswith(TASK_NOTIFICATION_MARKER)
+
+
 class DriftedFromTasks(CustomCondition):
     """Matches when there are open tasks and many exploration calls since the last task touch."""
 
@@ -45,11 +59,9 @@ class DriftedFromTasks(CustomCondition):
 
 hook(
     Event.Stop,
-    "Open tasks remain. Before stopping, mark each finished task status='completed' via the "
-    "TaskUpdate tool (add a note if you're deliberately deferring one), or output "
-    f"{OVERRIDE_TOKEN} to acknowledge and stop. See: CLAUDE.md § Task Tracking.",
-    only_if=[LambdaCondition(lambda evt: not evt.tasks.all_completed)],
-    skip_if=[Waiting(), FromSubagent(), LambdaCondition(lambda evt: evt.ctx.t.has_override(OVERRIDE_TOKEN))],
+    f"Open tasks remain. Run `TaskUpdate` to complete each finished task, or output {OVERRIDE_TOKEN} to stop anyway.",
+    only_if=[OpenTasks()],
+    skip_if=[Waiting(), FromSubagent(), Overridden()],
     block=True,
     tests={
         Input(tasks=[{"id": "1", "subject": "a", "status": "completed"}]): Allow(),
@@ -63,9 +75,7 @@ hook(
 
 
 nudge(
-    "Many exploration/action calls since you last touched the task list. If you discovered "
-    "new work or changed direction, use the TaskCreate/TaskUpdate tools to update it. "
-    "See: CLAUDE.md § Task Tracking.",
+    "Many calls have passed since the task list changed. Run `TaskUpdate` to record new work or a changed direction.",
     only_if=[Tool("Edit|Write"), DriftedFromTasks()],
     skip_if=[FromSubagent()],
     events=Event.PostToolUse,
@@ -85,8 +95,7 @@ nudge(
 
 
 nudge(
-    "Plan approved. Before implementing, use the TaskCreate tool to break the plan into "
-    "tasks, then TaskUpdate them as you go. See: CLAUDE.md § Task Tracking.",
+    "Plan approved. Run `TaskCreate` for each plan step before implementing.",
     only_if=[Tool("ExitPlanMode")],
     events=Event.PostToolUse,
     tests={
@@ -97,12 +106,8 @@ nudge(
 
 
 nudge(
-    "This message has several distinct requests. Use the TaskCreate tool for each item "
-    "before starting work, so none gets dropped. See: CLAUDE.md § Task Tracking.",
-    skip_if=[
-        InPlanMode(),
-        LambdaCondition(lambda evt: (evt.user_prompt or "").strip().startswith(TASK_NOTIFICATION_MARKER)),
-    ],
+    "This message has several distinct requests. Run `TaskCreate` for each before starting work.",
+    skip_if=[InPlanMode(), IsTaskNotification()],
     events=Event.UserPromptSubmit,
     signals=Signals(
         [

@@ -661,34 +661,6 @@ class TestTranscriptTextsProse:
         assert self.texts_for(messages, "turn") == ["early deferral"]
 
 
-class TestCiteMessage:
-    def test_appends_triggered_by(self) -> None:
-        from captain_hook.signals import cite_message
-
-        sig = Signals(patterns=[Signal(pattern=r"retry", weight=1)], threshold=1, window=5)
-        triggering = ["let me retry this"]
-        result = cite_message(sig, triggering, "Stop retrying")
-        assert "Triggered by:" in result
-        assert "retry" in result
-
-    def test_bare_message_when_no_match(self) -> None:
-        from captain_hook.signals import cite_message
-
-        sig = Signals(patterns=[Signal(pattern=r"impossible", weight=1)], threshold=1, window=5)
-        triggering = ["no matching content here"]
-        result = cite_message(sig, triggering, "Some message")
-        assert result == "Some message"
-        assert "Triggered by:" not in result
-
-    def test_message_preserved(self) -> None:
-        from captain_hook.signals import cite_message
-
-        sig = Signals(patterns=[Signal(pattern=r"retry", weight=1)], threshold=1, window=5)
-        triggering = ["retry this"]
-        result = cite_message(sig, triggering, "Original message")
-        assert result.startswith("Original message")
-
-
 class TestMixedSignalTypes:
     def test_signals_accepts_mixed_signal_and_nlp_signal(self) -> None:
         from captain_hook.signals.nlp import Clause, NlpSignal, Phrase

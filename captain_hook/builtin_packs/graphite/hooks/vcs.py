@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, BaseHookEvent, Event, HookResult, Input, RanCommand, Tool, UserSaid, hook, on
+from captain_hook import (
+    Allow,
+    BaseHookEvent,
+    CommandSchema,
+    CustomCommandLineCondition,
+    Event,
+    HookResult,
+    Input,
+    Operand,
+    Option,
+    RanCommand,
+    T,
+    Tool,
+    UsedSkill,
+    UserSaid,
+    Warn,
+    hook,
+    on,
+)
 from captain_hook.app import MAX_TRANSCRIPT_EVENTS
 from captain_hook.builtin_packs.graphite.hooks._lib import (
     CcxInstalled,
@@ -12,41 +31,53 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     JJReads,
     PushesTagRef,
     RawRequested,
-    ReviewPassRan,
     force_pushes,
     git_location,
     git_probe,
     graphite_owns,
+    in_graphite_repo,
     rebases_onto_own_upstream,
 )
 from captain_hook.cmd import Targets
 
 if TYPE_CHECKING:
+    from cc_transcript.command import CommandLine
+
     from captain_hook.cmd import Call
 
-# Inline tests are Allow-only: a FileFixture can't stage a nested `.git/.graphite_repo_config`, so
-# GraphiteRuns() is always off at cwd="/" and every matcher short-circuits to allow. The fire path
-# (marker present, in a real gt repo/worktree) is covered by tests/test_pack_graphite.py, and so are
-# the two things inline rows cannot see: the ccx.nogt opt-out, and the JJReads carve-out, which
-# matches_conditions collapses into the same allow a failed only_if produces.
+SUBMIT_VERBS = frozenset({"submit", "s", "ss"})
+SUBMIT_FLAGS = frozenset({"--stack", "-s", "--no-edit", "-n", "--publish", "-p", "--no-interactive", "--restack"})
+DRAFT_FLAGS = frozenset({"--draft", "-d"})
+HELP_FLAGS = frozenset({"--help", "-h"})
+REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
+LEASE_FLAGS = frozenset({"--force-with-lease", "--force-if-includes"})
+LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
+GH_PR_VIEW = CommandSchema(
+    "gh",
+    operands=(Operand("words", count="*"),),
+    options=(
+        Option("json", ("--json",)),
+        Option("jq", ("--jq", "-q")),
+        Option("template", ("--template", "-t")),
+        Option("repo", ("--repo", "-R")),
+        Option("mode", ("--comments", "-c", "--web", "-w", "--help", "-h"), bool),
+    ),
+)
 
 hook(
     Event.PreToolUse,
     only_if=[Tool("Bash"), GraphiteRuns(("jj",))],
     skip_if=[JJReads(), RawRequested()],
     message=(
-        "The repository this command targets runs on Graphite (gt), not jj: its stack metadata lives in "
-        "Graphite, and a jj write leaves that metadata stale. `ccx vcs ship` commits and submits, "
-        "`ccx vcs stack new <name>` cuts a stacked branch, and `gt log` or `ccx vcs stack list` inspects the "
-        "stack. To run a jj write as written without this note, end it with `# ccx:raw`."
+        "The repository this command targets keeps its stack in Graphite, which jj writes leave stale. "
+        'Run `ccx vcs ship -m "<msg>"` to commit and submit instead.'
     ),
     tests={
+        in_graphite_repo("jj new"): Warn(pattern="Graphite"),
+        in_graphite_repo("jj log && jj new"): Warn(pattern="Graphite"),
+        in_graphite_repo("jj log"): Allow(),
+        in_graphite_repo("jj new # ccx:raw"): Allow(),
         Input(command="jj new", cwd="/"): Allow(),
-        Input(command="jj commit -m x", cwd="/"): Allow(),
-        Input(command="git status", cwd="/"): Allow(),
-        Input(command="jj log", cwd="/"): Allow(),
-        Input(command="jj bookmark list", cwd="/"): Allow(),
-        Input(command="cd /tmp && jj new", cwd="/"): Allow(),
     },
 )
 
@@ -67,19 +98,15 @@ hook(
     ],
     skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef(), RawRequested()],
     message=(
-        "Committing, branching, and pushing go through ccx vcs in the repository this command targets. "
-        'Use `ccx vcs ship -m "<msg>"` to commit and submit, `ccx vcs stack new <name>` to cut a stacked '
-        "branch, and `ccx vcs stack submit` to restack and resubmit the stack. Raw git writes leave "
-        "Graphite's stack metadata stale."
+        "The repository this command targets keeps its stack in Graphite, so raw git commits, branches, and "
+        'pushes leave it stale. Run `ccx vcs ship -m "<msg>"` instead.'
     ),
     tests={
-        Input(command="git commit -m x", cwd="/"): Allow(),
+        in_graphite_repo("git commit -m x"): Warn(pattern="ccx vcs ship"),
+        in_graphite_repo("git switch -c feature"): Warn(pattern="ccx vcs ship"),
+        in_graphite_repo("git push --tags"): Allow(),
+        in_graphite_repo("git status"): Allow(),
         Input(command="git push", cwd="/"): Allow(),
-        Input(command="git switch -c feature", cwd="/"): Allow(),
-        Input(command="git switch -C main", cwd="/"): Allow(),
-        Input(command="git status", cwd="/"): Allow(),
-        Input(command="cd /tmp && git push", cwd="/"): Allow(),
-        Input(command="git -C /tmp push", cwd="/"): Allow(),
     },
 )
 
@@ -91,22 +118,53 @@ hook(
         GraphiteRuns(("gt", "submit"), ("gt", "s"), ("gt", "ss"), ("ccx", "vcs", "ship")),
     ],
     skip_if=[
-        ReviewPassRan(),
+        UsedSkill("cc-review:start", "cc-review", scope="session"),
         UserSaid(r"<command-name>/?cc-review", scope="session"),
         HasFlag("--dry-run"),
         HasFlag("--no-push"),
         HasFlag("--help", "-h"),
     ],
-    message=(
-        "Before submitting: no review pass has run this session — run one first (`/cc-review:start`), the "
-        "single finder pass over the diff a non-trivial change carries. And PRs are always published, "
-        "never draft: submit without `--draft`/`-d`."
-    ),
+    message="Submit a change only after a review pass over its diff. Run `/cc-review:start` first.",
     tests={
+        in_graphite_repo("gt submit"): Warn(pattern="review pass"),
+        in_graphite_repo("ccx vcs ship -m x"): Warn(pattern="review pass"),
+        in_graphite_repo(
+            "gt submit", transcript=[T.assistant(T.tool("Skill", skill="cc-review:start")), T.user("ship it")]
+        ): Allow(),
+        in_graphite_repo("ccx vcs ship -m x --no-push"): Allow(),
         Input(command="gt submit", cwd="/"): Allow(),
-        Input(command="gt ss", cwd="/"): Allow(),
-        Input(command="ccx vcs ship -m x", cwd="/"): Allow(),
-        Input(command="git status", cwd="/"): Allow(),
+    },
+)
+
+
+def submits_draft(call: Call) -> bool:
+    match call.name, call.verb_argv[1:3]:
+        case "gt", (verb, *_) if verb in SUBMIT_VERBS:
+            return not DRAFT_FLAGS.isdisjoint(call.flags)
+        case "ccx", ("vcs", "ship"):
+            return "--draft" in call.flags
+        case _:
+            return False
+
+
+class DraftSubmit(CustomCommandLineCondition):
+    """Matches a ``gt submit`` or ``ccx vcs ship`` that opens its pull requests as drafts in a Graphite repository."""
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return any(submits_draft(call) and graphite_owns(call, evt.cwd) for call in evt.cmd.calls())
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), DraftSubmit()],
+    skip_if=[HasFlag("--dry-run"), HasFlag("--no-push"), HasFlag("--help", "-h")],
+    message="Pull requests open ready for review, never as drafts. Submit without `--draft`.",
+    tests={
+        in_graphite_repo("gt submit -d"): Warn(pattern="draft"),
+        in_graphite_repo("ccx vcs ship -m x --draft"): Warn(pattern="draft"),
+        in_graphite_repo("ccx vcs ship -m x --no-push --draft"): Allow(),
+        in_graphite_repo("gt submit"): Allow(),
+        Input(command="gt submit --draft", cwd="/"): Allow(),
     },
 )
 
@@ -119,91 +177,21 @@ hook(
     ],
     skip_if=[HasFlag("--abort", "--continue", "--quit"), RawRequested()],
     message=(
-        "Use `ccx vcs stack rebase` (ccx 0.65.0 or newer) to replay the stack, or `ccx vcs stack submit`, "
-        "which fetches trunk, replays every lane, and submits. A raw rebase, merge, or pull leaves "
-        "Graphite's parent revision stale."
+        "A raw `git rebase`, `merge`, or `pull` leaves Graphite's parent records stale. "
+        "Run `ccx vcs stack rebase` to replay the stack instead."
     ),
     tests={
+        in_graphite_repo("git rebase main"): Warn(pattern="ccx vcs stack rebase"),
+        in_graphite_repo("git pull"): Warn(pattern="ccx vcs stack rebase"),
+        in_graphite_repo("git rebase --abort"): Allow(),
         Input(command="git rebase main", cwd="/"): Allow(),
-        Input(command="git pull", cwd="/"): Allow(),
-        Input(command="git status", cwd="/"): Allow(),
     },
 )
-
-
-SUBMIT = (
-    "`ccx vcs stack submit` restacks every lane and submits the whole stack, and `ccx vcs ship --no-commit` "
-    "submits this branch and its downstack. Both fetch the remote trunk first and push each branch under the "
-    "lease of its last submitted version"
-)
-FORCE_PUSH = (
-    "`ccx vcs push` moves this branch's remote to the local head: it fetches, fast-forwards when it can, "
-    "force-pushes under a lease pinned to the head it observed when the branch was rewritten, and refuses a "
-    "remote head this branch never held. `ccx vcs stack submit` restacks and submits the whole stack, but it "
-    "replays a branch from its recorded base, so it is not the route for a branch whose history you rewrote on "
-    "purpose"
-)
-RESTACK = (
-    "`ccx vcs stack restack` fetches the remote trunk and replays every branch of the stack onto its parent, "
-    "across every working copy that holds one"
-)
-REBASE = (
-    "`ccx vcs stack rebase` (ccx 0.65.0 or newer; older releases alias it to `ccx vcs stack restack`) replays "
-    "every branch from its recorded base across every working copy that holds one, and `--parent <b>=<p>` "
-    "moves a branch onto another parent"
-)
-CONFLICT = (
-    "This is a ccx conflict workspace: after `git add`, `ccx vcs stack continue` finishes the stack rebase and "
-    "`ccx vcs stack abort` drops it (ccx 0.65.0 or newer). The raw rebase control runs as written, the "
-    "workaround when `ccx vcs stack continue` itself fails"
-)
-CREATE = (
-    '`ccx vcs ship -m "<msg>" --new-branch=<name>` commits onto a new stacked branch, and '
-    "`ccx vcs stack new <name>` cuts one into a working copy of its own"
-)
-MODIFY = (
-    '`ccx vcs ship -m "<msg>"` commits onto this branch, and `ccx vcs ship --amend` folds the change into its commit'
-)
-HAND_RUN = (
-    "A hand-run stack write works from the local trunk, which lags the remote, and leaves the other working "
-    "copies of the stack and Graphite's parent records behind"
-)
-OVERRIDE = (
-    "`# ccx:raw` at the end of a command, or `CAPT_HOOK_CCX_RAW=1` for the session, runs it as written "
-    "and silences this note."
-)
-GT_ROUTES = {
-    "sync": RESTACK,
-    "create": CREATE,
-    "c": CREATE,
-    "modify": MODIFY,
-    "m": MODIFY,
-}
-SUBMIT_VERBS = frozenset({"submit", "s", "ss"})
-SUBMIT_FLAGS = frozenset({"--stack", "-s", "--no-edit", "-n", "--publish", "-p", "--no-interactive", "--restack"})
-DRAFT_FLAGS = frozenset({"--draft", "-d"})
-REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
-LEASE_FLAGS = frozenset({"--force-with-lease", "--force-if-includes"})
-LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
 
 
 def in_conflict_workspace(call: Call, evt: BaseHookEvent) -> bool:
     cwd, _ = git_location(call, evt.cwd)
     return cwd is not None and "worktrees" in cwd.parts and any(part.startswith("conflict-") for part in cwd.parts)
-
-
-@dataclass(frozen=True, slots=True)
-class Route:
-    """The ccx route for a hand-run stack write, and the ccx command that replaces it when one does the same job.
-
-    ``to`` is set only where the ccx verb covers every flag the call carries, so the rewrite drops nothing
-    the caller asked for. Every other route, a force-push included, allows the command and names the route.
-    """
-
-    advice: str
-    to: str | None = None
-    act: str = "rewrites a Graphite stack by hand"
-    why: str = HAND_RUN
 
 
 def submit_to(call: Call) -> str | None:
@@ -233,37 +221,83 @@ def lease_push_to(call: Call, evt: BaseHookEvent) -> str | None:
     return "ccx vcs push"
 
 
-def ccx_route(call: Call, evt: BaseHookEvent) -> Route | None:
-    argv = call.verb_argv
-    if len(argv) < 2 or "--help" in call.flags or "-h" in call.flags:
+def ccx_twin(call: Call, evt: BaseHookEvent) -> str | None:
+    """The ccx command that does exactly what ``call`` asks, when one covers every flag and the call splices."""
+    if (
+        call.wrappers
+        or call.source.env
+        or call.leading_options
+        or call.substituted
+        or not call.spliceable
+        or not HELP_FLAGS.isdisjoint(call.flags)
+    ):
         return None
-    match call.name, argv[1]:
-        case "gt", "restack" if "--only" in call.flags:
-            return None
-        case "gt", verb if verb in SUBMIT_VERBS:
-            route = Route(SUBMIT, submit_to(call))
-        case "gt", "restack":
-            route = Route(RESTACK, "ccx vcs stack restack" if argv == ("gt", "restack") else None)
-        case "gt", verb if verb in GT_ROUTES:
-            route = Route(GT_ROUTES[verb])
-        case "git", "rebase" if not REBASE_CONTROL.isdisjoint(call.flags):
-            if not in_conflict_workspace(call, evt):
-                return None
-            route = Route(CONFLICT, act="finishes a ccx stack rebase by hand", why="")
-        case "git", "rebase" if not rebases_onto_own_upstream(call, evt.cwd):
-            route = Route(REBASE)
-        case "git", "push" if force_pushes(call):
-            route = Route(FORCE_PUSH, lease_push_to(call, evt), act="overwrites remote history by hand")
+    match call.name, call.verb_argv[1:]:
+        case "gt", (verb, *_) if verb in SUBMIT_VERBS:
+            return submit_to(call)
+        case "gt", ("restack",):
+            return "ccx vcs stack restack"
+        case "git", ("push", *_) if force_pushes(call):
+            return lease_push_to(call, evt)
         case _:
             return None
-    return route if graphite_owns(call, evt.cwd) else None
 
 
-def rewrite(call: Call, route: Route) -> HookResult | None:
-    """Splice ``route.to`` over the call, or ``None`` when a wrapper, env prefix, or global option would be lost."""
-    if route.to is None or call.wrappers or call.source.env or call.leading_options:
-        return None
-    return call.sub(call.name, route.to, args=Targets())
+@dataclass(frozen=True, slots=True)
+class GraphiteCall(CustomCommandLineCondition):
+    """Matches when one call satisfies ``predicate`` inside a repository Graphite owns."""
+
+    predicate: Callable[[Call, BaseHookEvent], bool]
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return any(
+            HELP_FLAGS.isdisjoint(call.flags) and self.predicate(call, evt) and graphite_owns(call, evt.cwd)
+            for call in evt.cmd.calls()
+        )
+
+
+def hand_run_submit(call: Call, evt: BaseHookEvent) -> bool:
+    return call.name == "gt" and call.verb_argv[1:2] in {(verb,) for verb in SUBMIT_VERBS} and not ccx_twin(call, evt)
+
+
+def hand_run_restack(call: Call, evt: BaseHookEvent) -> bool:
+    match call.name, call.verb_argv[1:2]:
+        case "gt", ("sync",):
+            return True
+        case "gt", ("restack",):
+            return "--only" not in call.flags and not ccx_twin(call, evt)
+        case _:
+            return False
+
+
+def hand_run_create(call: Call, evt: BaseHookEvent) -> bool:
+    return call.name == "gt" and call.verb_argv[1:2] in {("create",), ("c",)}
+
+
+def hand_run_modify(call: Call, evt: BaseHookEvent) -> bool:
+    return call.name == "gt" and call.verb_argv[1:2] in {("modify",), ("m",)}
+
+
+def hand_run_rebase(call: Call, evt: BaseHookEvent) -> bool:
+    return (
+        call.name == "git"
+        and call.verb_argv[1:2] == ("rebase",)
+        and REBASE_CONTROL.isdisjoint(call.flags)
+        and not rebases_onto_own_upstream(call, evt.cwd)
+    )
+
+
+def conflict_rebase_control(call: Call, evt: BaseHookEvent) -> bool:
+    return (
+        call.name == "git"
+        and call.verb_argv[1:2] == ("rebase",)
+        and not REBASE_CONTROL.isdisjoint(call.flags)
+        and in_conflict_workspace(call, evt)
+    )
+
+
+def hand_run_force_push(call: Call, evt: BaseHookEvent) -> bool:
+    return call.name == "git" and call.verb_argv[1:2] == ("push",) and force_pushes(call) and not ccx_twin(call, evt)
 
 
 @on(
@@ -273,7 +307,6 @@ def rewrite(call: Call, route: Route) -> HookResult | None:
     tests={
         Input(command="gt submit", cwd="/"): Allow(),
         Input(command="gt restack", cwd="/"): Allow(),
-        Input(command="git rebase --onto main a b", cwd="/"): Allow(),
         Input(command="git push --force-with-lease", cwd="/"): Allow(),
         Input(command="git status", cwd="/"): Allow(),
     },
@@ -281,37 +314,120 @@ def rewrite(call: Call, route: Route) -> HookResult | None:
 def stack_writes_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
     rewritten: HookResult | None = None
     swaps: list[str] = []
-    notes: list[str] = []
     for call in evt.cmd.calls():
-        if (route := ccx_route(call, evt)) is None:
-            continue
-        verb = " ".join(call.verb_argv[:2])
-        if (result := rewrite(call, route)) is not None:
+        if (
+            (twin := ccx_twin(call, evt)) is not None
+            and graphite_owns(call, evt.cwd)
+            and (result := call.sub(call.name, twin, args=Targets())) is not None
+        ):
             rewritten = result
-            swaps.append(f"`{call.source.raw}` → `{route.to}`")
-            notes.append(f"Rewrote `{call.source.raw}` → `{route.to}`: {route.advice}.")
-        else:
-            why = f" {route.why}." if route.why else ""
-            notes.append(f"`{verb}` {route.act}, and ccx is the default route here. {route.advice}.{why}")
-    if not notes:
-        return None
-    note = "\n".join([*notes, OVERRIDE])
+            swaps.append(f"`{call.source.raw}` → `{twin}`")
     if rewritten is None:
-        return evt.context(note)
-    return replace(rewritten, note=note, system_message=f"capt-hook rewrote {', '.join(swaps)}")
+        return None
+    return replace(
+        rewritten,
+        note=(
+            "Rewrote a hand-run Graphite stack write to its ccx twin. "
+            "End a command with `# ccx:raw` to run it as written."
+        ),
+        system_message=f"capt-hook rewrote {', '.join(swaps)}",
+    )
 
 
-def landing_fields(call: Call) -> frozenset[str]:
-    args = call.verb_argv
-    if args[1:3] != ("pr", "view"):
-        return frozenset()
-    requested: set[str] = set()
-    for index, arg in enumerate(args):
-        if arg == "--json" and index + 1 < len(args):
-            requested.update(args[index + 1].split(","))
-        elif arg.startswith("--json="):
-            requested.update(arg.removeprefix("--json=").split(","))
-    return LANDING_FIELDS & requested
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_submit)],
+    skip_if=[RawRequested()],
+    tests={Input(command="gt submit --ai", cwd="/"): Allow(), Input(command="git status", cwd="/"): Allow()},
+)
+def gt_submit_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A hand-run `gt submit` skips the trunk fetch and push lease ccx adds. Run `ccx vcs stack submit` instead."
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_restack)],
+    skip_if=[RawRequested()],
+    tests={Input(command="gt sync", cwd="/"): Allow(), Input(command="gt log", cwd="/"): Allow()},
+)
+def gt_restack_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A hand-run `gt restack` or `gt sync` leaves the stack's other working copies behind. "
+        "Run `ccx vcs stack restack` instead."
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_create)],
+    skip_if=[RawRequested()],
+    tests={Input(command="gt create feat -m x", cwd="/"): Allow(), Input(command="gt log", cwd="/"): Allow()},
+)
+def gt_create_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A hand-run `gt create` bypasses the stack records ccx keeps. "
+        'Run `ccx vcs ship -m "<msg>" --new-branch=<name>` instead.'
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_modify)],
+    skip_if=[RawRequested()],
+    tests={Input(command="gt modify -m x", cwd="/"): Allow(), Input(command="gt log", cwd="/"): Allow()},
+)
+def gt_modify_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A hand-run `gt modify` bypasses the stack records ccx keeps. Run `ccx vcs ship --amend` instead."
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_rebase)],
+    skip_if=[RawRequested()],
+    tests={Input(command="git rebase main", cwd="/"): Allow(), Input(command="git rebase --abort", cwd="/"): Allow()},
+)
+def git_rebase_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A raw `git rebase` leaves Graphite's parent records stale. "
+        "Run `ccx vcs stack rebase` to replay the stack instead."
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(conflict_rebase_control)],
+    skip_if=[RawRequested()],
+    tests={
+        Input(command="git rebase --continue", cwd="/"): Allow(),
+        Input(command="git rebase main", cwd="/"): Allow(),
+    },
+)
+def conflict_workspace_finishes_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A ccx conflict workspace finishes its stack rebase through ccx. After `git add`, run `ccx vcs stack continue`."
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_force_push)],
+    skip_if=[RawRequested()],
+    tests={Input(command="git push -f origin feat", cwd="/"): Allow(), Input(command="git push", cwd="/"): Allow()},
+)
+def force_push_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    return evt.context(
+        "A raw force-push skips the lease ccx pins to the head this branch last held. Run `ccx vcs push` instead."
+    )
+
+
+def requests_landing_fields(call: Call) -> bool:
+    arguments = GH_PR_VIEW.bind(call)
+    requested = {field for value in arguments.values.get("json", ()) for field in str(value or "").split(",")}
+    return arguments.values.get("words", ())[:2] == ("pr", "view") and not LANDING_FIELDS.isdisjoint(requested)
 
 
 @on(
@@ -325,12 +441,9 @@ def landing_fields(call: Call) -> frozenset[str]:
     },
 )
 def landing_state_through_ccx(evt: BaseHookEvent) -> HookResult | None:
-    for call in evt.cmd.calls("gh"):
-        if (fields := landing_fields(call)) and graphite_owns(call, evt.cwd):
-            return evt.warn(
-                f"`{', '.join(sorted(fields))}` misread a Graphite merge-queue landing: the queue closes what it "
-                "merges, so a landed PR reads `state: CLOSED` with a null `mergedAt`, and `mergeable` says nothing "
-                "about the queue. `ccx vcs pr status <n>` (ccx 0.64.1 or newer) answers queued, not queued, or "
-                "landed from Graphite's own record; `ccx vcs status` covers the current stack."
-            )
+    if any(requests_landing_fields(call) and graphite_owns(call, evt.cwd) for call in evt.cmd.calls("gh")):
+        return evt.warn(
+            "Graphite's merge queue closes the pull requests it lands, so `gh pr view` misreports a landing. "
+            "Run `ccx vcs pr status <n>` instead."
+        )
     return None

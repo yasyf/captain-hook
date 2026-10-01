@@ -35,7 +35,7 @@ llm_gate(
     "Is the agent making excuses for not finishing the task? "
     "Look for blame-shifting to external services or claims that something "
     "is impossible without evidence.",
-    message=lambda r: f"Excuse detected: {r.reasoning}",
+    message="Do not excuse unfinished work. Finish the task, or name the exact command that proves it is impossible.",
     signals=Signals(
         patterns=[
             Signal(pattern=r"external.*service", weight=2),
@@ -62,7 +62,7 @@ from captain_hook import Event, Tool, llm_gate
 
 llm_gate(
     "Does this edit add a test that asserts behavior, or only that code exists?",
-    message=lambda r: f"Weak test: {r.reasoning}",
+    message="A test must assert behavior, not that code exists. Add an assertion on the result.",
     only_if=[Tool("Edit")],
     events=Event.PostToolUse,
     verdict=lambda r: r.block,
@@ -76,35 +76,35 @@ from captain_hook import Event, Tool, llm_nudge
 
 llm_nudge(
     "Does this edit add a test that asserts behavior, or only that code exists?",
-    message=lambda r: f"Consider stronger assertions: {r.reasoning}",
+    message="A test must assert behavior, not that code exists. Add an assertion on the result.",
     only_if=[Tool("Edit")],
     events=Event.PostToolUse,
     verdict=lambda r: r.fire,
 )
 ```
 
-`prompt_check` runs inside your own handler when you need to inspect the event first. It returns a `HookResult` to block or warn, or `None` to allow. Build the prompt with `Prompt.from_template` so the placeholders fill from your event data.
+When you need to inspect the event first, ask the model from your own handler with `evt.llm` and return a fixed message. Build the prompt with `Prompt.from_template` so the placeholders fill from your event data.
 
 ```python
-from captain_hook import Event, Prompt, Tool, on, prompt_check
+from captain_hook import Event, Prompt, Tool, on
 
 @on(Event.PostToolUse, only_if=[Tool("Edit")])
 def review_test_quality(evt):
     content = evt.content or ""
     if "def test_" not in content:
         return None
-    return prompt_check(
-        evt,
+    asserts_behavior = evt.llm(
         Prompt.from_template(
             "Evaluate this test:\n{code}\n\nDoes it assert behavior, or only that code exists?",
             code=content,
         ),
-        prefix="Test quality",
-        suffix=" Assert behavior, not that code exists.",
+        bool,
     )
+    if asserts_behavior is False:
+        return evt.warn("A test must assert behavior, not that code exists. Add an assertion on the result.")
 ```
 
-`Prompt.from_template` raises `KeyError` when a placeholder has no matching keyword, so a typo fails loud instead of leaking braces into the prompt. The full `Prompt` builder API lives in [the primitives reference](../reference/primitives.qmd).
+`Prompt.from_template` raises `KeyError` when a placeholder has no matching keyword, so a typo fails loud instead of leaking braces into the prompt. The full `Prompt` builder API lives in [the primitives reference](../reference/primitives.qmd). `prompt_check` packages this pattern but renders the judge's free-text reason into the message, so reach for it only when that text is data the agent needs.
 
 `evt.llm` is the raw form of the same call: ask the model from any handler and get a typed answer back, with no hook registration and no verdict plumbing. The return type follows what you pass — a bare prompt returns `str | None`, `bool` and `int` return the parsed answer, and a Pydantic model class returns a validated instance. `None` always means the call was skipped — already fired this turn, vetoed by `when`, or signals below threshold; a call that still fails after the final retry raises.
 
@@ -140,7 +140,7 @@ from captain_hook import Event, llm_gate
 
 llm_gate(
     "The working-tree diff is in <diff>. Does it introduce a correctness bug?",
-    message=lambda r: f"Fix before stopping: {r.reasoning}",
+    message="The diff introduces a correctness bug. Fix it and rerun the tests before stopping.",
     diff=True,
     events=Event.Stop,
 )
@@ -160,17 +160,16 @@ from captain_hook import llm_gate
 
 class RiskVerdict(BaseModel):
     risk: str
-    reasoning: str
 
 llm_gate(
     "Rate the security risk of this action as low, medium, or high.",
-    message=lambda r: f"Blocked ({r.risk}): {r.reasoning}",
+    message=lambda r: f"This action is {r.risk} risk. Run a narrower command instead.",
     response_model=RiskVerdict,
     verdict=lambda r: r.risk == "high",
 )
 ```
 
-`message` takes the same verdict model when you pass a callable, so you can quote the model's reasoning back to the agent. The verdict types, `GateVerdict`, `NudgeVerdict`, and `PromptCheckVerdict`, are defined in [the primitives reference](../reference/primitives.qmd).
+Write `message` as a fixed rule followed by the remediation, so the agent gets the same instruction on every fire. A callable `message` receives the verdict model and should read only structured fields such as `r.risk`, never the model's free-text `reasoning`. The verdict types, `GateVerdict`, `NudgeVerdict`, and `PromptCheckVerdict`, are defined in [the primitives reference](../reference/primitives.qmd).
 
 ## Test an LLM hook
 
@@ -308,7 +307,7 @@ nudge(
 )
 ```
 
-When a score crosses the threshold, the hook fires and appends a "Triggered by: ..." line naming the text that set it off, so the agent sees why. For the full signal type list and field defaults, see the [conditions reference](../reference/conditions.qmd).
+When a score crosses the threshold, the hook fires with its fixed message. For the full signal type list and field defaults, see the [conditions reference](../reference/conditions.qmd).
 
 ## Query the transcript {#query-the-transcript}
 
@@ -420,4 +419,4 @@ def review(evt):
 - [Writing hooks](primitives.qmd) covers the static primitives and conditions these build on.
 - [Test hooks inline](testing.qmd) covers what the test runner stubs and skips.
 - The [primitives reference](../reference/primitives.qmd) lists the full `llm_gate`, `llm_nudge`, and `prompt_check` option set; the [conditions reference](../reference/conditions.qmd) every signal type.
-- [LLM cost control](../examples/llm-cost-control.qmd) is a runnable cost-bounded gate, and [Test integrity](../examples/test-integrity.qmd) is a runnable `prompt_check` hook.
+- [LLM cost control](../examples/llm-cost-control.qmd) is a runnable cost-bounded gate, and [Test integrity](../examples/test-integrity.qmd) is a runnable `llm_gate` over test edits.

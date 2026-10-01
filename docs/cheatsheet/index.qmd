@@ -104,19 +104,15 @@ styleguide(NoPrint, NoBareExcept)
 **llm_gate** — block on a model's judgment of intent or quality
 ```python
 llm_gate("Is the agent making excuses instead of finishing?",
-         message=lambda r: r.reasoning, max_fires=1)
+         message="Do not excuse unfinished work. Finish the task, or run `pytest` to show it passes.",
+         max_fires=1)
 ```
 
 **llm_nudge** — warn on a model's judgment, without blocking
 ```python
 llm_nudge("Does this edit assert behavior, or only that code exists?",
-          message=lambda r: r.reasoning, only_if=[Tool("Edit")])
-```
-
-**prompt_check** — call the model from inside your own handler
-```python
-prompt_check(evt, Prompt.from_template("Review {code}", code=evt.content),
-             prefix="Test quality")
+          message="A test must assert behavior, not that code exists. Add an assertion on the result.",
+          only_if=[Tool("Edit")])
 ```
 
 **evt.llm** — a typed answer from the model, from inside any handler

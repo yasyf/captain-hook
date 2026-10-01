@@ -16,7 +16,7 @@ from captain_hook.testing.snapshots import FixtureOwner
 from tests.helpers import build_ctx, make_event, raw_text, raw_tool_msg
 
 QUESTIONS = "captain_hook.builtin_packs.general.hooks.questions"
-CLOSING = raw_text("assistant", "Still yours to decide: the api-actions pool PRs, #21840 and #21847.")
+CLOSING = raw_text("assistant", "Still yours to decide: the pool PRs.")
 BOARD = raw_tool_msg("Bash", {"command": "cc-present start --session s --doc d"})
 
 

@@ -7,10 +7,7 @@ import re
 from captain_hook import Allow, Event, Input, ReadFile, Signal, Signals, T, UsedSkill, Warn, nudge
 
 nudge(
-    "Repeated failures detected. Stop retrying and pick a debug tool:\n"
-    "  - run `/codex` for a second opinion on the failing approach\n"
-    "  - open the trace in your observability tool to inspect the failing span\n"
-    "  - isolate the minimum failing case before changing more code",
+    "Repeated failures mean the current approach is wrong. Run `/codex` for a second opinion before retrying.",
     signals=Signals(
         patterns=[
             Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
@@ -25,7 +22,7 @@ nudge(
     skip_if=[UsedSkill("codex", scope="session"), ReadFile("DEBUGGING.md")],
     max_fires=1,
     tests={
-        Input(transcript=[T.assistant("Same error again. Let me try again.")]): Warn(pattern="debug tool"),
+        Input(transcript=[T.assistant("Same error again. Let me try again.")]): Warn(pattern="/codex"),
         Input(transcript=[T.assistant("All checks pass; wrapping up.")]): Allow(),
     },
 )

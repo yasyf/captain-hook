@@ -17,18 +17,18 @@ from captain_hook import (
 from captain_hook.conditions import AllEditsUnder, UserSaid
 
 nudge(
-    """
-    When a test fails, isolate the minimal failing case before retrying. Use a
-    node-id suffix, `-k`, or `--last-failed`. Broad re-runs after a failure waste
-    cycles and hide the real breakage.
-    """,
+    "Verify test edits with the narrowest run, not the whole suite. Run `uv run pytest path/to/test.py::test_name`.",
     only_if=[Tool("Edit|Write"), TestFile()],
+    tests={
+        Input(file="tests/test_mod.py", content="def test_x(): ..."): Warn(),
+        Input(file="pkg/mod.py", content="x = 1"): Allow(),
+    },
 )
 
 
 hook(
     Event.PreToolUse,
-    "No `uv run pytest` execution found. Run tests before committing Python changes.",
+    "No `uv run pytest` run found this session. Run `uv run pytest` before committing Python changes.",
     only_if=[Tool("Bash"), Runs("git", "commit"), Commits(".py")],
     skip_if=[
         RanCommand("uv", "run", "pytest"),
@@ -45,8 +45,7 @@ hook(
 
 
 nudge(
-    "No `uv run pytest` execution detected in this session. If you changed Python files, run "
-    "tests before committing. If this is a docs/config-only change, proceed.",
+    "No pytest run exists and the commit names no paths. Run `uv run pytest` before committing Python changes.",
     only_if=[Tool("Bash"), Runs("git", "commit")],
     skip_if=[
         RanCommand("uv", "run", "pytest"),

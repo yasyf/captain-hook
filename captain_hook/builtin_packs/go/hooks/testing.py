@@ -17,18 +17,18 @@ from captain_hook import (
 from captain_hook.conditions import AllEditsUnder, UserSaid
 
 nudge(
-    """
-    When a test fails, isolate the minimal failing case before retrying. Use a
-    `-run TestName/case` regex or a single package path. Broad `go test ./...`
-    re-runs after a failure waste cycles and hide the real breakage.
-    """,
+    "Verify test edits with the narrowest run, not the whole suite. Run `go test -run TestName ./path/to/pkg`.",
     only_if=[Tool("Edit|Write"), FilePath("*_test.go")],
+    tests={
+        Input(file="internal/cli/root_test.go", content="package cli"): Warn(),
+        Input(file="internal/cli/root.go", content="package cli"): Allow(),
+    },
 )
 
 
 hook(
     Event.PreToolUse,
-    "No `go test` execution found. Run tests before committing Go changes.",
+    "No `go test` run found this session. Run `go test ./...` before committing Go changes.",
     only_if=[Tool("Bash"), Runs("git", "commit"), Commits(".go")],
     skip_if=[
         RanCommand("go", "test"),
@@ -44,8 +44,7 @@ hook(
 
 
 nudge(
-    "No `go test` execution detected in this session. If you changed Go files, run tests "
-    "before committing. If this is a docs/config-only change, proceed.",
+    "No `go test` run exists and the commit names no paths. Run `go test ./...` before committing Go changes.",
     only_if=[Tool("Bash"), Runs("git", "commit")],
     skip_if=[
         RanCommand("go", "test"),

@@ -21,10 +21,8 @@ def any_label(node: ast.AST) -> str:
 
 class NoUnderscorePrefixes(StyleRule):
     """
-    This edit introduces an underscore-prefixed class, constant, or module filename: {violations}
-
-    This project never uses leading underscores on classes, constants, module-level
-    helpers, or module filenames. See STYLEGUIDE.md § Code Organization.
+    Underscore-prefixed class, constant, or module name: {violations}
+    Rename it without the leading underscore.
     """
 
     tests = {
@@ -33,6 +31,7 @@ class NoUnderscorePrefixes(StyleRule):
         Input(file="m.py", content="class Helper:\n    pass\n"): Allow(),
         Input(file="m.py", content="MAX_RETRIES = 3\n"): Allow(),
         Input(file="_common.py", content="value = 1\n"): Warn(),
+        Input(file="pkg/_common.py", content="value = 1\n"): Warn(),
         Input(file="common.py", content="value = 1\n"): Allow(),
         Input(file="__init__.py", content="value = 1\n"): Allow(),
     }
@@ -40,17 +39,14 @@ class NoUnderscorePrefixes(StyleRule):
 
     def check(self, change: Change) -> Iterator[Violation]:
         yield from super().check(change)
-        name = Path(change.path).name
-        if name.startswith("_") and not name.startswith("__"):
-            yield Violation(line=1, label=f"module filename {name!r}")
+        if Path(change.path).match("_[!_]*"):
+            yield Violation(line=1, label=f"module filename {Path(change.path).name!r}")
 
 
 class NoNestedImports(StyleRule):
     """
-    This edit nests import(s) inside control flow.
-
-    Lazy imports go at the TOP of the function body, before any logic — never inside
-    if/for/try/with blocks. Move them up. See STYLEGUIDE.md § Type Annotations.
+    Import nested inside control flow: {violations}
+    Move it to the top of the function body.
     """
 
     tests = {
@@ -63,9 +59,8 @@ class NoNestedImports(StyleRule):
 
 class ZipStrict(StyleRule):
     """
-    This edit uses zip() without strict=True.
-
-    Always use zip(..., strict=True) to catch length mismatches early.
+    `zip()` call without `strict=True`: {violations}
+    Add `strict=True`.
     """
 
     tests = {
@@ -78,10 +73,8 @@ class ZipStrict(StyleRule):
 
 class LateModuleConstants(StyleRule):
     """
-    This edit places module constant(s) after a class or function.
-
-    Module-level UPPER_SNAKE_CASE constants belong immediately after imports, before any
-    class or function. Move them up. See STYLEGUIDE.md § Code Organization.
+    Module constant placed after a class or function: {violations}
+    Move it directly below the imports.
     """
 
     tests = {
@@ -93,10 +86,8 @@ class LateModuleConstants(StyleRule):
 
 class LateClassConstants(StyleRule):
     """
-    This edit places class assignment(s) after a method.
-
-    Within a class body, all assignments (constants, ClassVars, dataclass fields) come
-    before any method. Move them up. See STYLEGUIDE.md § Code Organization.
+    Class assignment placed after a method: {violations}
+    Move it above the first method.
     """
 
     tests = {
@@ -108,10 +99,8 @@ class LateClassConstants(StyleRule):
 
 class NoQuotedAnnotations(StyleRule):
     """
-    This edit has quoted annotation(s) in a file using `from __future__ import annotations`.
-
-    Under PEP 563 every annotation is already deferred, so the quotes are redundant — drop
-    them (e.g. `x: "MyType"` → `x: MyType`). See STYLEGUIDE.md § Type Annotations.
+    Quoted annotation in a file using `from __future__ import annotations`: {violations}
+    Drop the quotes.
     """
 
     tests = {
@@ -123,11 +112,8 @@ class NoQuotedAnnotations(StyleRule):
 
 class NoWeakeningToAny(StyleDiffRule):
     """
-    This edit introduces `Any` annotation(s).
-
-    Don't widen a typed slot to `Any` to silence the type checker. Use the real type
-    (check imports/usage), narrow with isinstance, or split the model.
-    See STYLEGUIDE.md § Type Annotations.
+    Typed slot widened to `Any`: {violations}
+    Use the real type instead.
     """
 
     tests = {

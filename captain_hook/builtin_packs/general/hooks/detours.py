@@ -94,12 +94,8 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
 `reasoning`.""",
     label="detours",
     message=(
-        "This looks like a detour — side work nobody asked for. {reasoning} "
-        "Stop and check in before acting: say what you noticed, then propose 2-4 concrete "
-        "options (finish the task and file this as a follow-up; pause and fix it now; ignore "
-        "it) and let the user pick — or, if you are a delegated agent, stop and return early "
-        "with findings plus options for your orchestrator instead of improvising. "
-        "See: AGENTS.md § Ask Before Assuming."
+        "This looks like a detour: side work nobody asked for. Stop and ask via `AskUserQuestion` with 2-4 options "
+        "(file a follow-up, fix it now, or ignore it); a delegated agent returns early with findings plus options."
     ),
     only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit|Bash")],
     events=Event.PostToolUse,

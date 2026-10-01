@@ -3,14 +3,8 @@ from __future__ import annotations
 from captain_hook import Allow, Event, Input, Tool, ToolInput, Warn, WorkflowScript, nudge
 
 nudge(
-    """
-    This workflow dispatches verification lanes only. If a concrete candidate fix is already in
-    hand, build it concurrently: add an implementation lane with isolation: 'worktree' — never
-    the shared working copy; in-flight verification must not observe a mutating tree — and gate
-    shipping on the verdict: confirmed applies the ready fix, refuted discards the worktree.
-    See CLAUDE.md § Speculate Across Gates (§ Plan Execution & Orchestration in repos not yet
-    re-bootstrapped).
-    """,
+    "This workflow runs verification lanes with no implementation lane for a fix already in hand. "
+    "Add one with `isolation: 'worktree'` and ship it only if the verdict confirms the fix.",
     only_if=[
         WorkflowScript(
             pattern=r"(?i)(\badversar|\brefut|security\s+(review|audit)|ground.?truth|\brepro(duce|duction)?\b|-race\b)"
@@ -36,14 +30,8 @@ nudge(
 
 
 nudge(
-    """
-    This spawn dispatches verification with no implementation lane beside it. If a concrete
-    candidate fix is already in hand, spawn it concurrently in an isolated worktree — never the
-    shared working copy; in-flight verification must not observe a mutating tree — and gate
-    shipping on the verdict: confirmed applies the ready fix, refuted discards the worktree.
-    See CLAUDE.md § Speculate Across Gates (§ Plan Execution & Orchestration in repos not yet
-    re-bootstrapped).
-    """,
+    "This spawn runs verification with no implementation lane beside it for a fix already in hand. "
+    "Spawn one in an isolated worktree and ship it only if the verdict confirms the fix.",
     only_if=[
         Tool("Agent|Task"),
         ToolInput("prompt", r"(?i)(\badversar|\brefut|security\s+(review|audit)|ground.?truth|-race\b)"),

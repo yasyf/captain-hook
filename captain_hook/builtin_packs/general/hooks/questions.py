@@ -5,10 +5,10 @@ from captain_hook import (
     BaseHookEvent,
     Block,
     Budget,
+    CustomCondition,
     Event,
     FromSubagent,
     Input,
-    LambdaCondition,
     RanCommand,
     Regex,
     Signal,
@@ -20,192 +20,114 @@ from captain_hook import (
 from captain_hook.state import PrimitiveState
 
 ASK_TOOLS = "AskUserQuestion|ExitPlanMode"
-CLOSING_CHARS = 8000
 
-O1_PROSE_DECISION = (
-    "One decision for you, O1: the IMDS firewall is what forces three hand-rolled scripts. Keep it, and an "
-    "unconfigured job fails instead of silently writing as the instance role; drop it after the Elastic work "
-    "lands and stock tags replace all three. The lane recommends keep now, drop as a follow-up, and is "
-    "proceeding on keep."
+PROSE_DECISION = (
+    "One decision for you: the firewall rule is what forces three hand-rolled scripts. Keep it, and an "
+    "unconfigured job fails instead of silently writing as the instance role; drop it after the follow-up "
+    "lands and stock tags replace all three. The lane recommends keep now, drop later, and is proceeding on keep."
 )
 
 WAITING_ON_YOU = (
-    "The sand rollback is approved and dispatched but not yet confirmed done. The catch-up lane is "
-    "pointing `sand/latest.json` back at the previous version and will report before and after "
-    "versions.\n"
+    "The rollback is approved and dispatched but not yet confirmed done.\n"
     "\n"
     "**Open problems**\n"
-    "- **sand 0.162.6:** it is live with an unsigned, un-notarized mac `sandsql-server`. The signing "
-    "step crashed and the build still consumed its artifact. One priority PR fixes that, the sparse "
-    "mac checkout that caused the crash, and a missing changelog key that breaks the sand-vscode "
-    "build. Sand, sand-vscode, desktop and iris-desktop wait on it.\n"
-    '- **SoFi alert:** the "Polar AML Enqueuer Failure" monitor fired at 06:46Z. The actor\'s daily '
-    "batch did not run today and it logged nothing for an hour. Its errors started at 00:45Z, before "
-    "any drive write, but the link is not ruled out. A read-only diagnosis lane is on it, and all "
-    "drive writes to the SoFi cluster are frozen until I lift it. "
-    "[Notebook](https://app.datadoghq.com/notebook/15749908).\n"
-    "- **plat prod k8s:** every k8s deploy there is refused until the stack converges on its 32 "
-    'pending changes. Per your "detail first", the lane is gathering the image-versus-config '
-    "breakdown and the same plan for the other clusters. A lane is also adding multi-target deploys "
-    "so one pinned plan can converge it without a whole-stack apply.\n"
+    "- **Release 1.2:** it is live with an unsigned binary. One priority PR fixes the signing step.\n"
     "\n"
     "**Progress**\n"
-    "- **Foundation stack:** #27956, #27994 and #28001 landed on `dev`.\n"
-    "- **Trust:** `identity/core-gbl-identity` is applied, so all four trust stacks admit the "
-    "`deploy` pipeline.\n"
-    "- **Stack-apply proof:** the tunnel-relay sandbox deploy is cleared to run under your ruling. An"
-    " ECS task-definition replace from an image change is now a normal rollout.\n"
-    "- **Mac checkout flake:** a lane is fixing the hook to mint our own GitHub App token. The "
-    "catch-up lane retries meanwhile.\n"
-    "- **`/tenant new`:** Platy triggers a Buildkite scaffold step that runs the existing `env-new` "
-    "and `cli init`, per your pick.\n"
-    "- **PR watch tooling:** the push-based watch is released and installed. Desks and lanes are "
-    "being switched to it.\n"
+    "- **Foundation stack:** the three foundation PRs landed on `dev`.\n"
     "\n"
     "**Waiting on you**\n"
-    "- Read the design in #27868 and lift its hold.\n"
-    "- Read the Flux delete list in #27953.\n"
-    "- The two Vulcan clicks for the escape-hatch cut-over.\n"
+    "- Read the design doc and lift its hold.\n"
+    "- The two console clicks for the cut-over.\n"
     "\n"
-    "The #platform-internal post stays held until every target has deployed green."
+    "The announcement stays held until every target has deployed green."
 )
 
 STILL_WITH_YOU = (
-    "The landing desk confirms what I read on `dev`: #28039 and #28042 landed at 08:39Z, right after "
-    "the rate-limit block lifted. 22 PRs merged in the last hour and 26 are open.\n"
-    "\n"
-    "**Landed this hour, per the desk**\n"
-    "- The rulings PR #28021.\n"
-    "- The move tool, #27979 and #28000.\n"
-    "- The Go ledger, bake and picture stacks, including #27967 to #27973.\n"
-    "- The db-migration Job #28025.\n"
-    "- The mac checkout secret row #28051.\n"
-    "- The `poetic-iris` switch #28040.\n"
+    "The landing desk confirms two PRs landed on `dev` after the rate-limit block lifted.\n"
     "\n"
     "**Problems**\n"
-    '- **Ejection missed for 45 minutes:** the queue ejected #28006, the Go input for "which stacks '
-    'does this PR affect", at 07:59Z on a red merge-group test. The watch had crashed on an over-long'
-    " state filename. It has been running since 08:10Z, and the lane has the fix routed.\n"
-    "- **Another rate-limit cause:** a single-PR ledger refresh was regrading all 89 tracked rows "
-    "each call. That fix goes to the shared-poller lane.\n"
-    "- **Four asks read as lost:** their lanes had not reported against them. The shared tooling, two"
-    " tenant follow-on PRs and the env-list tests are all running, and I've told the lanes to report.\n"
-    "- **Held PRs:** #28081 to #28086 show as held. I believe they are the network move PRs and have "
-    "asked the desk to confirm what holds them.\n"
+    "- **Ejection missed:** the queue ejected a PR on a red test and the watch had crashed on an "
+    "over-long state filename. The lane has the fix routed.\n"
     "\n"
-    "**Still with you:** the Flux delete list in #27953 and the design in #27868 are both held for "
-    "your read."
+    "**Still with you:** the delete list and the design doc are both held for your read."
 )
 
-VULCAN_CLICKS = (
-    "The #platform-internal post is now held until every target has deployed green through "
-    "`tools/deploy` at least once.\n"
+CONSOLE_CLICKS = (
+    "The announcement is now held until every target has deployed green.\n"
     "\n"
-    '- **What changed:** the announcement moves from "after one stack-apply proof" to "after the full'
-    ' catch-up deploy". The catch-up lane keeps a per-target table of build links, results and '
-    "monitor checks, and reports to me once when it is all green.\n"
-    "- **What did not change:** the catch-up and escape-hatch cut-over lanes still start as soon as "
-    "the `identity/core-gbl-identity` trust update is applied and one stack-apply target passes. The "
-    'escape-hatch tenant targets count toward "all targets", so the post also waits on that cut-over '
-    "and your two Vulcan clicks.\n"
-    "- **Where it is recorded:** the desk instruction, the ledger ask, the plan's Phase 0 heading, my"
-    " memory, and cc-notes answer `a529f9c`.\n"
+    "- **What did not change:** the cut-over lanes still start as soon as the trust update is applied, "
+    "and the post also waits on that cut-over and your two console clicks.\n"
     "\n"
-    "A failed target or a plan showing a delete or replace comes to you straight away instead of "
-    "waiting for the full table."
+    "A failed target comes to you straight away instead of waiting for the full table."
 )
 
 GO_GIVEN = (
-    "**Phase 0 is nearly through:** PR #27949 (the `deploy` pipeline, `tools/deploy`, and the "
-    "one-page skill) is green and approved, waiting only on the AI review check. The desk enqueues it"
-    " the moment that completes.\n"
+    "**Phase 0 is nearly through:** the pipeline PR is green and approved, waiting only on the review "
+    "check.\n"
     "\n"
     "I gave the lane its GO for what follows the landing:\n"
     "\n"
-    "1. `ci sync` to create the `deploy` Buildkite pipeline.\n"
-    "2. Read-only plans of the two stacks that must trust the new pipeline (identity and ci, "
-    "core-gbl-auto), with a per-stack op summary sent to me before each apply. I approve only an "
-    "update-only change to trust policies naming `deploy`; any create, delete, or replace comes to "
-    "you.\n"
-    "3. A real `dashboard` deploy to plat-usw2-prod at dev HEAD as the proof, then the same "
-    "plan-and-ask for the third identity stack Phase 0b needs.\n"
+    "1. Create the pipeline.\n"
+    "2. Plan the two stacks read-only; I approve only an update-only change, and any create, delete, "
+    "or replace comes to you.\n"
     "\n"
-    "Once it's merged and proven I'll post the usage note in #platform-internal under your standing "
-    "authorization.\n"
-    "\n"
-    "Also moving: all 27 earlier rulings are relayed; the fable lane is on the #27868 lease fix; "
-    "`cleanup-writes` is running your three hand deletes; the tooling PRs in cc-skills are being "
-    "merged and released; the bake lane finished with four PRs (#27970–#27973); and the area-card "
-    "port launches as its own lane once the Go stacks branch is pushed."
+    "Once it's merged and proven I'll post the usage note under your standing authorization."
 )
 
 OWED_REPORT = (
-    "None of them has deployed through the new pipeline yet. api, restate, executor, browser, "
-    "code-sandbox, tunnel, router, forge-dns and sanddb are all k8s targets. On plat prod they all "
-    "live in the single `k8s/plat-usw2-prod` stack, which is where the first k8s deploy was refused.\n"
+    "None of the targets has deployed through the new pipeline yet. They all live in one stack, where "
+    "the first deploy was refused.\n"
     "\n"
-    "**Why they are blocked:** the pipeline keeps one guard. A deploy that pins one target refuses if"
-    " the plan changes any other row. That stack has not converged since commit `682883c` and carries"
-    " 32 pending changes, so every single-target deploy there is refused. The pending changes "
-    "include:\n"
-    "- the four api Deployments, plus a new api ConfigMap and the delete of the old one\n"
-    "- the restate control-plane and data-plane workers and their register and retire commands\n"
-    "- the restate reaper role\n"
-    "- about a dozen helm releases, the Datadog agent, four CRD installs, a new node pool and a "
-    "browser probe pod\n"
-    "\n"
-    "Deploying api alone with `--whole-stack` would render new config against the old restate image "
-    "until restate follows. That is the config and image skew that caused release 420, so I did not "
-    "approve it.\n"
-    "\n"
-    "**The path I approved:** a lane is adding multi-target deploys to the tool. One plan then pins "
-    "api, restate, reaper, browser and the cluster-owned rows at the same commit and converges the "
-    "stack under the guard. After that, single-target deploys work there.\n"
+    "**Why they are blocked:** the pipeline keeps one guard. A deploy that pins one target refuses if "
+    "the plan changes any other row.\n"
     "\n"
     "**What I owe you and don't have:**\n"
-    "- The detail you asked for before deciding: which updates change an image versus config only, "
-    "and what still references the deleted ConfigMap.\n"
-    "- The same read-only plan for the router and SoFi clusters.\n"
-    "- A per-target table for the whole catch-up order, db-migration and sandsql included.\n"
+    "- The detail on which updates change an image versus config only.\n"
+    "- A per-target table for the whole catch-up order.\n"
     "\n"
-    "That report is overdue. I've told the desk to return it within ten minutes, with the state of "
-    "the multi-target PR, and to start any k8s target whose stack is already converged."
+    "That report is overdue. I've told the desk to return it within ten minutes."
 )
 
 APPROVAL_CONDITIONS = (
-    "**I approved the tenant account-id design for code, with conditions.** The organization row "
-    "creates the tenant AWS account and publishes its id. One small module reads that id from the "
-    "root-account stack's state once, before any program runs. The roughly 60 places that need a "
-    "plain string keep one, and nobody types an account id into a spec or form.\n"
+    "**I approved the account-id design for code, with conditions.** One small module reads the id "
+    "from the root stack's state once, before any program runs.\n"
     "\n"
     "My conditions:\n"
-    '- This is the single allowed exception to "cross-stack reads go through references", limited to '
-    "account ids and enforced by a test.\n"
-    "- It reads through the engine's existing state access, not a hand-rolled S3 path.\n"
+    "- It reads through the engine's existing state access, not a hand-rolled path.\n"
     "- Any role grant it needs is a separate small PR, and that apply comes to you.\n"
-    "- Removing the existing typed ids is a stacked PR written now, not an open-ended follow-up.\n"
-    "- The credential-resolution parts are written by the sensitive-code model.\n"
     "\n"
-    "**The sandsql build failure was a code regression, not a missing permission.** #27823 moved the "
-    "`sccache` setup to after the ECR role assumption, so `sccache` lost its cache bucket access. "
-    "Every `dev` sandsql image prebuild has failed since, and recent v2 releases passed only by "
-    "reusing a prebuilt image. The fix is one line plus a test. It repairs the old pipeline, the new "
-    "`deploy` pipeline and the `dev` prebuild, and it unblocks sandsql on prod.\n"
-    "\n"
-    "The three tenant scaffold PRs #28071 to #28073 are green and go to the desk."
+    "The three scaffold PRs are green and go to the desk."
 )
 
 DESK_WAKE = (
-    'Another Claude session sent a message: <agent-message from="landing-desk"> #28039 and #28042 landed '
+    'Another Claude session sent a message: <agent-message from="landing-desk"> Two PRs landed '
     "as squashes on dev. </agent-message>"
 )
 
 
-def asked_last(evt: BaseHookEvent) -> bool:
-    since = evt.ctx.t.after(tool=ASK_TOOLS)
-    return evt.ctx.t.has_tool(ASK_TOOLS, subagents=False) and not (
-        (count := len(since)) and since.assistant_text(count, max_per_msg=1)
-    )
+class AskedLast(CustomCondition):
+    """True when the turn's last act was an ask tool call with no prose after it."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        since = evt.ctx.t.after(tool=ASK_TOOLS)
+        return evt.ctx.t.has_tool(ASK_TOOLS, subagents=False) and not (
+            (count := len(since)) and since.assistant_text(count, max_per_msg=1)
+        )
+
+
+class ContinuingStop(CustomCondition):
+    """True when this Stop continues a turn an earlier Stop block already extended."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return evt.stop_hook_active
+
+
+class AskToolDisallowed(CustomCondition):
+    """True when the session was launched without the `AskUserQuestion` tool."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return "AskUserQuestion" in evt.disallowed_tools
 
 
 llm_gate(
@@ -234,7 +156,7 @@ Block (block=true) when the closing message:
   offer closing the message;
 - lists items pending on the user that the user could act on now: a "Waiting on you", "Still
   with you" or "Needs you" section, PRs or designs "held for your read" or "held for your
-  word", approvals, reads or clicks the user owes ("your two Vulcan clicks"), "it comes to you
+  word", approvals, reads or clicks the user owes ("your two console clicks"), "it comes to you
   for approval", "I'll bring it to you".
 
 An AskUserQuestion call covers only what it asked. Match each item the closing message leaves
@@ -246,7 +168,7 @@ Do NOT block when:
   message only reports the answer or the state it left;
 - an item cannot be put to the user yet because what the user would act on is still being
   produced (a plan, a diff, a report), and the message names what it waits on and who is
-  producing it: "comes to you once b2-data returns the diff, due 09:30Z";
+  producing it: "comes to you once the review lane returns the diff";
 - the message states a standing rule for a future event rather than a pending item: "any
   create, delete, or replace comes to you";
 - the item is something the agent owes the user, or an approval the agent itself grants to
@@ -262,9 +184,9 @@ Do NOT block when:
 When uncertain, return block=false. Put your reasoning (under 40 words, quoting the prose)
 in `reasoning`.""",
     message=(
-        "Your closing message leaves something waiting on the user in prose: {reasoning} "
-        "Ask for it now with AskUserQuestion (2-4 concrete options, recommended first) before ending "
-        "the turn. If an item is not askable yet, say so: what it waits on and who is producing it."
+        "Your closing message leaves something waiting on the user in prose. "
+        "Ask it now with `AskUserQuestion` (2-4 options, recommended first), or state what it waits on "
+        "and who is producing it."
     ),
     label="narrate_then_wait",
     signals=Signals(
@@ -305,18 +227,18 @@ in `reasoning`.""",
     ),
     skip_if=[
         FromSubagent(),
-        LambdaCondition(lambda evt: evt.stop_hook_active),
-        LambdaCondition(lambda evt: "AskUserQuestion" in evt.disallowed_tools),
-        LambdaCondition(asked_last),
+        ContinuingStop(),
+        AskToolDisallowed(),
+        AskedLast(),
         UsedSkill("present", scope="session", subagents=False),
         RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=False),
     ],
     guards_waiting=False,
     once_per_turn=False,
-    budget=Budget(turn_chars=CLOSING_CHARS),
+    budget=Budget(turn_chars=8000),
     events=Event.Stop,
     tests={
-        Input(transcript=[T.assistant(O1_PROSE_DECISION)]): Block(pattern="AskUserQuestion"),
+        Input(transcript=[T.assistant(PROSE_DECISION)]): Block(pattern="AskUserQuestion"),
         Input(transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")]): Block(
             pattern="AskUserQuestion"
         ),
@@ -324,19 +246,19 @@ in `reasoning`.""",
             transcript=[
                 T.assistant(
                     "Both stacks are green and the boot stack is four PRs deep.\n\n"
-                    "Still yours to decide at the end: the api-actions pool PRs, #21840 and #21847."
+                    "Still yours to decide at the end: the pool PRs."
                 )
             ]
         ): Block(pattern="AskUserQuestion"),
         Input(
-            transcript=[T.assistant("Still yours to decide: the api-actions pool PRs, #21840 and #21847.")],
+            transcript=[T.assistant("Still yours to decide: the pool PRs.")],
             background_tasks=[
-                {"id": "t1", "type": "subagent", "status": "running", "description": "pr-watcher on #21840"}
+                {"id": "t1", "type": "subagent", "status": "running", "description": "pr-watcher on the pool PRs"}
             ],
         ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[
-                T.assistant("Still yours to decide: the api-actions pool PRs, #21840 and #21847."),
+                T.assistant("Still yours to decide: the pool PRs."),
                 *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(8)),
             ]
         ): Block(pattern="AskUserQuestion"),
@@ -346,27 +268,29 @@ in `reasoning`.""",
         Input(transcript=[T.user("what is waiting on me?"), T.assistant(STILL_WITH_YOU)]): Block(
             pattern="AskUserQuestion"
         ),
-        Input(transcript=[T.user("where is the drive?"), T.assistant(VULCAN_CLICKS)]): Block(pattern="AskUserQuestion"),
+        Input(transcript=[T.user("where is the drive?"), T.assistant(CONSOLE_CLICKS)]): Block(
+            pattern="AskUserQuestion"
+        ),
         Input(
             transcript=[
-                T.user("roll back sand now"),
-                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Roll back sand 0.162.6?"}])),
-                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Prove the stack apply on tunnel?"}])),
+                T.user("roll back the release now"),
+                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Roll back the release?"}])),
+                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Prove the stack apply?"}])),
                 T.assistant(WAITING_ON_YOU),
             ]
         ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Rebase onto dev?"}])),
-                T.assistant("Still yours to decide: the api-actions pool PRs, #21840 and #21847."),
+                T.assistant("Still yours to decide: the pool PRs."),
                 *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(3)),
             ]
         ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[
                 T.user("what is the overall status of the deploy cli?"),
-                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Hold #27868?"}])),
-                T.assistant("Holding #27868 as you chose."),
+                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Hold the design PR?"}])),
+                T.assistant("Holding the design PR as you chose."),
                 T.user(DESK_WAKE),
                 T.assistant(STILL_WITH_YOU),
             ]
@@ -374,7 +298,7 @@ in `reasoning`.""",
         Input(
             transcript=[
                 T.user("status?"),
-                T.assistant("Desk relayed R131."),
+                T.assistant("Desk relayed the answers."),
                 T.user(DESK_WAKE),
                 T.assistant(STILL_WITH_YOU),
             ],
@@ -382,8 +306,8 @@ in `reasoning`.""",
         ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[
-                T.assistant(O1_PROSE_DECISION),
-                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Keep the IMDS firewall?"}])),
+                T.assistant(PROSE_DECISION),
+                T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Keep the firewall rule?"}])),
             ]
         ): Allow(),
         Input(transcript=[T.assistant("The narrow ci plan is ready; it comes to you for approval.")]): Block(
@@ -402,7 +326,7 @@ in `reasoning`.""",
             transcript=[
                 T.assistant(
                     "The gate now tells the session:\n\n```\nHolding for your pick: rebase onto dev or "
-                    "cherry-pick the fix?\n```\n\nShipped #94; CI is green."
+                    "cherry-pick the fix?\n```\n\nShipped the fix; CI is green."
                 )
             ],
             llm={"block": False},
@@ -429,7 +353,7 @@ in `reasoning`.""",
                 T.assistant("Your call on the board."),
             ]
         ): Allow(),
-        Input(transcript=[T.assistant("Shipped #94; CI is green.")]): Allow(),
+        Input(transcript=[T.assistant("Shipped the fix; CI is green.")]): Allow(),
         Input(
             transcript=[T.assistant("Both pool PRs are merged; nothing is left to decide.")],
             llm={"block": False},
