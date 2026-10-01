@@ -99,7 +99,8 @@ Notes:
 - `transcript_events=N` (1-256) on `hook()` or `@on` declares that the hook reads only the last
   `N` transcript events. When every hook on an event declares a window, the dispatch reads the
   widest one backwards from the end of the transcript instead of loading it whole; one undeclared
-  hook loads the full transcript.
+  hook loads the full transcript. A windowed `evt.ctx.t` is a `cc_transcript.query.Session` over
+  those events, so snapshot-only methods (`prompts`, `signal_texts`, `render`, `matches`) are absent.
 
 - `advisory_on_deny=True` keeps a warning after another matching hook denies the event, whether the
   warning was registered before or after the denying hook. Use it only when the message stays true

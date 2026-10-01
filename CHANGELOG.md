@@ -6,6 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.68.0] - 2026-10-01
+
+### Added
+
+- **Hooks can declare the transcript window they read.** `@hook(...,
+  transcript_events=N)` and `on(..., transcript_events=N)` (1-256) make the
+  dispatch read only the newest N events through cc-transcript's lease-free
+  `tail` operation, backwards from the end of the file. The dispatch reads the
+  widest window its hooks declare; one undeclared hook loads the full
+  transcript.
+
+### Fixed
+
+- **Hooks no longer skip on long transcripts.** The foreground transcript
+  byte budgets `FOREGROUND_READ_BYTES`, `GATE_SOURCE_READ_BYTES` and
+  `GRAPH_SOURCE_READ_BYTES` are gone; the per-dispatch deadline is the only
+  bound. cc-transcript 14.30.0 carries classifier labels across appends, so a
+  growing transcript no longer reclassifies from the first event on every
+  dispatch.
+- **A skipped hook is named once per session.** The context line lists each
+  hook skipped for incomplete evidence, with its cause, the first time it
+  skips, and points at `capt-hook logs --session <id>`. The doubling
+  fail-open tally and per-call warnings are removed.
+- **A configured classifier never reuses another caller's labels.** Its
+  policy version folds in a digest of the caller's whitelisted environment.
+
+### Changed
+
+- The `cc-transcript[judge]` pin moves to 14.30.0.
+
 ## [12.67.1] - 2026-10-01
 
 ### Fixed

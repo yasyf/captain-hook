@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import threading
 from pathlib import Path
@@ -66,10 +68,14 @@ def configured_classifier_policy(project_dir: str | Path | None) -> dict[str, st
     from captain_hook.cli import CliState
     from captain_hook.daemon.registry import Fingerprint
 
+    registry = (
+        _state.registry_fingerprint
+        or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest
+    )
+    caller_env = sorted((k, v) for k, v in reqenv.env_map().items() if reqenv.is_whitelisted(k))
     return {
         "id": "captain-configured",
-        "version": _state.registry_fingerprint
-        or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest,
+        "version": f"{registry}:{hashlib.sha256(json.dumps(caller_env).encode()).hexdigest()[:16]}",
     }
 
 
