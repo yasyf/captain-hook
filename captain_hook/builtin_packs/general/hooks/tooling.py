@@ -48,6 +48,7 @@ SCOPE = "tooling_nudge"
 EVIDENCE_CHARS = 240
 RESET = re.compile(r"rate-limited until (?P<at>\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))")
 VERB_WORD = re.compile(r"[a-z][\w-]*")
+RAW_TOOLS = frozenset({"ccx", "gt", "gh", "orca", "cc-slack"})
 LANE_MARKER = re.compile(r"\btooling-lane:\s*(?P<key>[\w:.-]+)")
 
 PROMPT = """You are a senior engineer watching another engineer ("the agent") mid-task. A
@@ -263,8 +264,12 @@ def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
                 evidence=excerpt(text, found),
                 expires=signature.expires(text),
             )
-    if evt.command and ccx_raw_marked(raw := evt.command.raw) and (calls := evt.command.calls()):
-        verb = Verb(*list(takewhile(VERB_WORD.fullmatch, argv(calls[0])))[:3])
+    if (
+        evt.command
+        and ccx_raw_marked(raw := evt.command.raw)
+        and (call := next((call for call in evt.command.calls() if argv(call)[0] in RAW_TOOLS), None))
+    ):
+        verb = Verb(*list(takewhile(VERB_WORD.fullmatch, argv(call)))[:3])
         evidence = f"the step ran raw instead: `{raw[:EVIDENCE_CHARS]}`"
         return f"ccx-raw:{'-'.join(verb.words)}", Refusal(
             tool="ccx", verbs=(verb.text,), evidence=evidence, expires=None
@@ -529,6 +534,10 @@ CC_SLACK_CLI_SYNC = (
         ): Warn(pattern="report the refusal to your orchestrator"),
         Input(command="gh pr edit 123 --base dev  # ccx:raw", seen={SCOPE: ["ccx-raw:gh-pr-edit:main"]}): Allow(),
         Input(command="cat > tests.py <<'PY'\nInput(command='gh pr edit 1  # ccx:raw')\nPY"): Allow(),
+        Input(command="cat notes.md  # ccx:raw"): Allow(),
+        Input(command="cd wt && gt submit --no-interactive  # ccx:raw"): Warn(
+            pattern=r"`tooling-lane: ccx-raw:gt-submit`"
+        ),
         Input(
             command="gh pr edit 123 --base dev  # ccx:raw",
             state=[ToolingRefusals(lanes={"ccx-raw:gh-pr-edit"})],

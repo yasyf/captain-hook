@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reset time or, when absent, one hour after recording; cc-slack and raw records do not expire.
   The required expiry field clears 12.73 refusal state on upgrade, including false records from
   source reads.
+- **Raw fallback records now skip ordinary shell commands.** A `# ccx:raw` marker takes its key
+  from the first `ccx`, `gt`, `gh`, `orca`, or `cc-slack` call, so `cd wt && gt submit` records
+  `ccx-raw:gt-submit`. Commands without those tools, including `cat` heredocs, create no raw
+  refusal record.
 
 ## [12.73.0] - 2026-10-01
 
