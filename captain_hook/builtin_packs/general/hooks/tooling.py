@@ -222,7 +222,7 @@ def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
     if evt.command and RAW_FALLBACK.search(raw := evt.command.raw) and (calls := evt.command.calls()):
         verb = " ".join([calls[0].name, *calls[0].args[:1]])
         evidence = f"the step ran raw instead: `{raw[:EVIDENCE_CHARS]}`"
-        return f"ccx-raw:{verb}", Refusal(tool="ccx", action=re.escape(verb), evidence=evidence)
+        return f"ccx-raw:{'-'.join(verb.split())}", Refusal(tool="ccx", action=re.escape(verb), evidence=evidence)
     return None
 
 
@@ -412,18 +412,18 @@ tooling_nudge(
             command="ccx vcs pr status 12",
             output="ccx: GitHub GraphQL quota exhausted; rate-limited until 14:05",
         ): Warn(pattern=r"^ccx refused: ccx: GitHub GraphQL quota exhausted"),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Warn(pattern=r"`tooling-lane: ccx-raw:gh pr`"),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Warn(pattern=r"`tooling-lane: ccx-raw:gh-pr`"),
         Input(
             command="gh pr edit 123 --base dev  # ccx:raw",
             agent_id="a1b2c3",
-            seen={SCOPE: ["ccx-raw:gh pr:main"]},
+            seen={SCOPE: ["ccx-raw:gh-pr:main"]},
         ): Warn(pattern="report the refusal verbatim"),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw", seen={SCOPE: ["ccx-raw:gh pr:main"]}): Allow(),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw", seen={SCOPE: ["ccx-raw:gh-pr:main"]}): Allow(),
         Input(
             command="gh pr edit 123 --base dev  # ccx:raw",
             state=[
                 ToolingRefusals(
-                    refusals={"ccx-raw:gh pr": Refusal(tool="ccx", action="gh\\ pr", evidence="x", lane=True)}
+                    refusals={"ccx-raw:gh-pr": Refusal(tool="ccx", action="gh\\ pr", evidence="x", lane=True)}
                 )
             ],
         ): Allow(),
@@ -454,6 +454,9 @@ def record_refusal(evt: BaseHookEvent) -> HookResult | None:
     return evt.warn(REFUSAL_MESSAGE.format(tool=known.tool, evidence=record.evidence, key=key))
 
 
+RAW_REFUSED = ToolingRefusals(
+    refusals={"ccx-raw:gh-pr": Refusal(tool="ccx", action=re.escape("gh pr"), evidence="gh pr edit 9  # ccx:raw")}
+)
 SLACK_REFUSED = ToolingRefusals(
     refusals={
         "cc-slack-session": Refusal(
@@ -511,6 +514,16 @@ SLACK_REFUSED = ToolingRefusals(
         Input(
             tool="Agent",
             tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
+        ): Allow(),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Retarget with gh pr edit 9 --base dev", "subagent_type": "lane"},
+            state=[RAW_REFUSED],
+        ): Block(pattern=r"`tooling-lane: ccx-raw:gh-pr`"),
+        Input(
+            tool="Agent",
+            tool_input={"prompt": "Teach ccx to retarget.\ntooling-lane: ccx-raw:gh-pr", "subagent_type": "lane"},
+            state=[RAW_REFUSED],
         ): Allow(),
     },
 )
