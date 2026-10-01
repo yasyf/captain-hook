@@ -35,6 +35,7 @@ GENERAL_HOOKS = {
     "sessions",
     "tasks",
     "tombstones",
+    "tooling",
     "tools",
 }
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
