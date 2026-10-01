@@ -6,6 +6,7 @@ from captain_hook import (
     Block,
     Budget,
     Event,
+    FromSubagent,
     Input,
     LambdaCondition,
     RanCommand,
@@ -252,6 +253,8 @@ Do NOT block when:
   its lanes; "sent to me" and "I approve" are the agent, not the user;
 - the question is rhetorical and answered, quotes or reports someone else's question, or is
   addressed to a subagent, teammate, or tool rather than the user;
+- the phrase sits only inside a code block or quoted text the agent is reporting (a hook
+  message, a log line, a draft), not in the agent's own words to the user;
 - the message reports finished work with nothing left on the user;
 - the decision is on a live cc-present board (a `present` skill or `cc-present start` in this
   session) and the prose refers the user to it.
@@ -301,9 +304,12 @@ in `reasoning`.""",
         scope="text",
     ),
     skip_if=[
+        FromSubagent(),
+        LambdaCondition(lambda evt: evt.stop_hook_active),
+        LambdaCondition(lambda evt: "AskUserQuestion" in evt.disallowed_tools),
         LambdaCondition(asked_last),
-        UsedSkill("present", scope="session"),
-        RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=True),
+        UsedSkill("present", scope="session", subagents=False),
+        RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=False),
     ],
     guards_waiting=False,
     once_per_turn=False,
@@ -384,6 +390,23 @@ in `reasoning`.""",
             pattern="AskUserQuestion"
         ),
         Input(transcript=[T.assistant("Applied the fix to your go-to helper; CI is green.")]): Allow(),
+        Input(
+            agent_id="tm1",
+            transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")],
+        ): Allow(),
+        Input(
+            disallowed_tools=("AskUserQuestion", "EnterPlanMode", "ExitPlanMode"),
+            transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")],
+        ): Allow(),
+        Input(
+            transcript=[
+                T.assistant(
+                    "The gate now tells the session:\n\n```\nHolding for your pick: rebase onto dev or "
+                    "cherry-pick the fix?\n```\n\nShipped #94; CI is green."
+                )
+            ],
+            llm={"block": False},
+        ): Allow(),
         Input(transcript=[T.user("status?"), T.assistant(GO_GIVEN)]): Allow(),
         Input(transcript=[T.user("what about api and restate?"), T.assistant(OWED_REPORT)]): Allow(),
         Input(transcript=[T.user(DESK_WAKE), T.assistant(APPROVAL_CONDITIONS)]): Allow(),
