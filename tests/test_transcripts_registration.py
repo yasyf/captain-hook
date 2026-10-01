@@ -793,18 +793,31 @@ def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_p
     assert len(loads) == 2
 
 
-def test_dispatch_reads_only_the_tail_its_hooks_declare(tmp_path, monkeypatch):
+def test_each_hook_reads_only_the_tail_it_declares(tmp_path, monkeypatch):
+    from cc_transcript.query import Session
+
     tails = []
+    loads = []
+    seen = {}
 
     @on(Event.Stop, transcript_events=30)
     def recent_gate(evt):
-        assert len(evt.ctx.t) == 0
-        return None
+        seen["recent"] = len(evt.ctx.t)
+
+    @on(Event.Stop, transcript_events=30)
+    def other_recent_gate(evt):
+        seen["other"] = len(evt.ctx.t)
+
+    @on(Event.Stop)
+    def history_gate(evt):
+        seen["history"] = len(evt.ctx.t)
 
     def tail(path, count):
-        from cc_transcript.query import Session
-
         tails.append((path, count))
+        return Session(())
+
+    def load(path):
+        loads.append(path)
         return Session(())
 
     monkeypatch.setattr("captain_hook.transcripts.tail_transcript", tail)
@@ -813,7 +826,9 @@ def test_dispatch_reads_only_the_tail_its_hooks_declare(tmp_path, monkeypatch):
         Event.Stop,
         {"session_id": "s-window", "transcript_path": str(tmp_path / "main.jsonl")},
         session_dir=ensure_session(SessionId("s-window")),
-        transcript_loader=lambda _: pytest.fail("a declared window loaded the whole transcript"),
+        transcript_loader=load,
     )
 
+    assert seen == {"recent": 0, "other": 0, "history": 0}
     assert tails == [(str(tmp_path / "main.jsonl"), 30)]
+    assert loads == [str(tmp_path / "main.jsonl")]

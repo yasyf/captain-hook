@@ -3,8 +3,8 @@
 A hook whose transcript evidence comes back incomplete is skipped, and a dispatch whose own
 evidence fails returns an empty success. Either way a guard did not run, and nothing in the
 response shows it. The record lives in the session directory so every worker shard serving the
-session shares it: the first skip of each hook is logged and named in one visible line, and
-later skips of that hook stay quiet.
+session shares it: every skip is logged, and the first skip of each hook is named in one visible
+line while later skips of that hook stay out of the response.
 """
 
 from __future__ import annotations
@@ -55,8 +55,8 @@ def tally_fail_open(event: Event | None, session_id: str, gaps: Sequence[str]) -
         ) as tally:
             for gap in gaps:
                 hook, _, cause = gap.partition(": ")
+                logger.bind(hook=hook, cause=cause).warning("hook skipped: evidence incomplete")
                 if hook not in tally.reported and hook not in tally.pending:
-                    logger.bind(hook=hook, cause=cause).warning("hook skipped: evidence incomplete")
                     tally.pending[hook] = cause
             if event is None or event not in SURFACING_EVENTS or not tally.pending:
                 return None

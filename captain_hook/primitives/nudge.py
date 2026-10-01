@@ -53,6 +53,7 @@ def nudge(
     tests: InlineTests | None = None,
     async_: bool = False,
     skip_planning_agents: bool | None = None,
+    transcript_events: int | None = None,
 ) -> None:
     """Register a nudge that warns (or blocks) when conditions or signals match.
 
@@ -125,6 +126,7 @@ def nudge(
         async_=async_,
         skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
         advisory_on_deny=advisory_on_deny,
+        transcript_events=transcript_events,
     )(handler)
 
 
@@ -141,6 +143,7 @@ def gate(
     tests: InlineTests | None = None,
     async_: bool = False,
     skip_planning_agents: bool | None = None,
+    transcript_events: int | None = None,
 ) -> None:
     """Register a blocking gate — ``nudge(message, block=True, ...)`` with an explicit signature.
 
@@ -167,4 +170,5 @@ def gate(
         tests=tests,
         async_=async_,
         skip_planning_agents=skip_planning_agents,
+        transcript_events=transcript_events,
     )

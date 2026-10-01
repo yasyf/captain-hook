@@ -276,7 +276,6 @@ def dispatch_event(
     event's reviewer and updater dispatch, stale-session cleanup, and ``async_=True`` hooks; the
     caller invokes it once the envelope has been delivered.
     """
-    from captain_hook.app import transcript_events_window
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
     from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_sources
@@ -292,7 +291,6 @@ def dispatch_event(
         resolved_path,
         loader=transcript_loader,
         attach=lambda: registered_sources(session_dir),
-        tail_events=transcript_events_window(event),
     )
     background_transcript = transcript.fork()
     ctx = HookContext(

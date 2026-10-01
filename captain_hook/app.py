@@ -331,12 +331,6 @@ def get_mandatory_hooks(event: Event) -> list[RegisteredHook]:
     return [h for h in _state.hooks if h.spec.mandatory and event in h.spec.events]
 
 
-def transcript_events_window(event: Event) -> int | None:
-    """The most recent transcript events *event*'s hooks read, or None when any of them reads further back."""
-    windows = [h.spec.transcript_events for h in _state.hooks if event in h.spec.events]
-    return None if not windows or None in windows else max(w for w in windows if w is not None)
-
-
 def registration_ranks() -> dict[int, int]:
     """Each registered hook's position, keyed by ``id``, for folding two phases' verdicts back into one order."""
     return {id(h): index for index, h in enumerate(_state.hooks)}

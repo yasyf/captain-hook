@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import threading
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
 
@@ -172,11 +173,15 @@ class TranscriptLoadError(Exception):
 
 
 class TranscriptPins:
-    def __init__(self, load: Callable[[], Session | RemoteSession]) -> None:
+    def __init__(
+        self, load: Callable[[], Session | RemoteSession], tail: Callable[[int], Session] | None = None
+    ) -> None:
         self.load = load
+        self.tail = tail
         self.guard = threading.Lock()
         self.pending = 1
         self.source: Session | RemoteSession | None = None
+        self.windows: dict[int, TranscriptPins] = {}
 
     def branch(self) -> LazyTranscript:
         with self.guard:
@@ -184,6 +189,19 @@ class TranscriptPins:
                 raise TranscriptLoadError("transcript preparation group is closed")
             self.pending += 1
         return LazyTranscript(self, seed=False)
+
+    def window(self, count: int) -> LazyTranscript:
+        if self.tail is None:
+            return self.branch()
+        with self.guard:
+            if self.pending == 0:
+                raise TranscriptLoadError("transcript preparation group is closed")
+            if (pins := self.windows.get(count)) is None:
+                pins = self.windows[count] = TranscriptPins(partial(self.tail, count))
+                pins.pending = 0
+        with pins.guard:
+            pins.pending += 1
+        return LazyTranscript(pins, seed=False)
 
     def borrow(self, *, seed: bool) -> Session | RemoteSession:
         from captain_hook.snapshots.client import RemoteSession
@@ -221,13 +239,13 @@ class LazyTranscript:
                 self.session = self.pins.borrow(seed=self.seed)
             return self.session
 
-    def fork(self) -> LazyTranscript:
+    def fork(self, tail_events: int | None = None) -> LazyTranscript:
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         with self.guard:
             if self.released:
                 raise EvidenceIncomplete("stale_handle", "transcript preparation branch is closed")
-            return self.pins.branch()
+            return self.pins.window(tail_events) if tail_events else self.pins.branch()
 
     def release(self) -> None:
         from captain_hook.snapshots.client import RemoteSession
@@ -257,11 +275,13 @@ class LazyTranscript:
         return bool(self.resolve())
 
 
-def fork_transcript(transcript: Session | RemoteSession | LazyTranscript) -> Session | RemoteSession | LazyTranscript:
+def fork_transcript(
+    transcript: Session | RemoteSession | LazyTranscript, tail_events: int | None = None
+) -> Session | RemoteSession | LazyTranscript:
     from captain_hook.snapshots.client import RemoteSession
 
     if type(transcript) is LazyTranscript:
-        return transcript.fork()
+        return transcript.fork(tail_events)
     return transcript.retain() if isinstance(transcript, RemoteSession) else transcript
 
 
@@ -279,25 +299,33 @@ def lazy_transcript(
     *,
     loader: Callable[[str | Path | None], Session | RemoteSession] | None = None,
     attach: Callable[[], GraphSources] | None = None,
-    tail_events: int | None = None,
 ) -> LazyTranscript:
     resolve = loader or load_transcript
 
     def load() -> Session | RemoteSession:
-        from captain_hook.snapshots.client import EvidenceIncomplete, RemoteSession
+        from captain_hook.snapshots.client import RemoteSession
 
-        reqenv.checkpoint()
-        try:
-            session = tail_transcript(path, tail_events) if path and tail_events else resolve(path)
-        except EvidenceIncomplete:
-            raise
-        except Exception as exc:
-            raise TranscriptLoadError(path) from exc
+        session = guarded_load(path, resolve)
         if attach and isinstance(session, RemoteSession):
             session = session.with_registered_sources(attach())
         return session
 
-    return LazyTranscript(TranscriptPins(load), seed=True)
+    def tail(source: str | Path, count: int) -> Session:
+        return guarded_load(source, lambda _: tail_transcript(source, count))
+
+    return LazyTranscript(TranscriptPins(load, partial(tail, path) if path else None), seed=True)
+
+
+def guarded_load[S: Session | RemoteSession](path: str | Path | None, read: Callable[[str | Path | None], S]) -> S:
+    from captain_hook.snapshots.client import EvidenceIncomplete
+
+    reqenv.checkpoint()
+    try:
+        return read(path)
+    except EvidenceIncomplete:
+        raise
+    except Exception as exc:
+        raise TranscriptLoadError(path) from exc
 
 
 def register_transcript(

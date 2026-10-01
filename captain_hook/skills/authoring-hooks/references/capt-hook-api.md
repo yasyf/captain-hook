@@ -80,8 +80,8 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `warn_command` | `(pattern, *, message, only_if=(), skip_if=(), tests=None, events=Event.PostToolUse)` | warns, never blocks |
 | `rewrite_command` | `(pattern=None, replace=None, *, only_if=(), skip_if=(), to=None, block=None, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
-| `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), guards_waiting=None, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()`, off with `guards_waiting=False` |
-| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), guards_waiting=None, block=False, advisory_on_deny=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
+| `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), guards_waiting=None, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None, transcript_events=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()`, off with `guards_waiting=False` |
+| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), guards_waiting=None, block=False, advisory_on_deny=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None, transcript_events=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
 | `lint` | `(check=None, *, pattern=None, message, lang='py', trigger=None, sep=', ', block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
 | `workflow` | `(*, label, marker, steps, artifacts=None, post_complete=None, on_start=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
 | `install_binary` | `(script, *, label=None, timeout=600, only_if=(), skip_if=(), tests=None)` | `SessionStart`, async; runs `script` via `/bin/sh` from the calling pack file's dir; always allows |
@@ -96,11 +96,11 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 
 Notes:
 
-- `transcript_events=N` (1-256) on `hook()` or `@on` declares that the hook reads only the last
-  `N` transcript events. When every hook on an event declares a window, the dispatch reads the
-  widest one backwards from the end of the transcript instead of loading it whole; one undeclared
-  hook loads the full transcript. A windowed `evt.ctx.t` is a `cc_transcript.query.Session` over
-  those events, so snapshot-only methods (`prompts`, `signal_texts`, `render`, `matches`) are absent.
+- `transcript_events=N` (1-256) on `hook()`, `@on`, `nudge()` or `gate()` declares that the hook
+  reads only the last `N` transcript events. That hook's conditions and handler see those events,
+  read backwards from the end of the transcript; hooks without a window on the same event still
+  load it whole. A windowed `evt.ctx.t` is a `cc_transcript.query.Session` over those events, so
+  snapshot-only methods (`prompts`, `signal_texts`, `render`, `matches`) are absent.
 
 - `advisory_on_deny=True` keeps a warning after another matching hook denies the event, whether the
   warning was registered before or after the denying hook. Use it only when the message stays true
