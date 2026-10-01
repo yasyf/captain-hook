@@ -10,17 +10,30 @@ from typing import TYPE_CHECKING
 
 from cc_transcript.literals import LITERALS
 
+from captain_hook.bindings import (
+    Known,
+    Literal,
+    Resolved,
+    Scope,
+    Unknown,
+    Unresolved,
+    dequote,
+    segments,
+    skip_group,
+    skip_quoted,
+)
 from captain_hook.util.globbing import GLOB_LIMIT, glob_matches
 from captain_hook.util.paths import resolve_target
 from captain_hook.util.scratch import is_scratch_path
-from captain_hook.util.shell import resolve_cd, safe_parse_command_line
+from captain_hook.util.shell import SHELLS, resolve_cd, safe_parse_command_line
 from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from cc_transcript.command import Command, CommandLine, CommandLineQuery, Occurrence, Redirect
+    from cc_transcript.command import Command, CommandLine, CommandLineQuery, Occurrence, Redirect, Word
 
+    from captain_hook.bindings import Binding, Resolution
     from captain_hook.events import ToolRewriteEvent
     from captain_hook.types import HookResult
 
@@ -315,6 +328,41 @@ class Call:
         """
         return self.source.span is not None
 
+    def resolve(self, word: Word) -> Resolution:
+        """Resolve one of this call's words through the assignments written earlier on the same line.
+
+        A literal word resolves to itself. A word carrying ``$NAME`` or ``${NAME}`` expansions
+        resolves when every name was set by a literal, unconditional, top-level assignment or
+        ``for`` head before the word (``HOME`` reads as ``~``); a nested payload sees the bindings
+        in force where it began, a single-quoted shell payload only the exported ones. Anything
+        else — a value built by a command substitution, a conditional or looped assignment, a
+        ``read``, a positional parameter, a word inside a function body, or a word with no byte
+        span — is :class:`~captain_hook.bindings.Unresolved`, carrying the text its value is
+        built from when the line shows it.
+        """
+        scope, offset = self.cmd.scope_for(self, word)
+        return Unresolved(None) if offset is None else scope.resolve(word.raw, offset)
+
+    def resolved_targets(self, words: tuple[Word, ...]) -> Targets:
+        """``words`` as targets, each same-line expansion the call can :meth:`resolve` expanded to its candidates."""
+        return Targets(
+            tuple(target for word in words for target in self.word_targets(word)), complete=not self.substituted
+        )
+
+    def word_targets(self, word: Word) -> tuple[Target, ...]:
+        if word.value is not None:
+            return (Target(word.value, word.raw, self.cwd),)
+        match self.resolve(word):
+            case Resolved(candidates, splittable):
+                pieces = [
+                    piece for candidate in candidates for piece in (candidate.split() if splittable else [candidate])
+                ]
+                if self.cwd is not None or all(map(anchored, pieces)):
+                    return tuple(Target(piece, piece, self.cwd) for piece in pieces)
+                return (Target(None, word.raw, self.cwd),)
+            case _:
+                return (Target(None, word.raw, self.cwd),)
+
     @property
     def flags(self) -> tuple[str, ...]:
         """The option tokens, dequoted, with any registered value-flag's argument (``git -C <dir>``) alongside it."""
@@ -322,7 +370,11 @@ class Call:
 
     @property
     def targets(self) -> Targets:
-        """The operand tokens as :class:`Target` objects, value-flag arguments and options removed."""
+        """The operand tokens as :class:`Target` objects, value-flag arguments and options removed.
+
+        An operand with a same-line expansion the call can :meth:`resolve` contributes one
+        target per candidate value; one it cannot stays unverified.
+        """
         return self._split[1]
 
     @cached_property
@@ -330,10 +382,7 @@ class Call:
         options, operands = self.command.split_options(COMMAND_VALUE_FLAGS.get(self.name, ()))
         return (
             tuple(word.value if word.value is not None else word.raw for word in options),
-            Targets(
-                tuple(Target(word.value, word.raw, self.cwd) for word in operands),
-                complete=not self.substituted,
-            ),
+            self.resolved_targets(operands),
         )
 
     def sub(self, old: str, new: str, *, args: Targets | None = None, note: str | None = None) -> HookResult | None:
@@ -375,6 +424,67 @@ class Call:
             self.cmd.line.splice(self.cmd.replacements),
             note="\n".join(dict.fromkeys(self.cmd.notes)) or None,
         )
+
+
+def anchored(candidate: str) -> bool:
+    return os.path.isabs(os.path.expanduser(candidate))
+
+
+def cd_operand(call: Call) -> tuple[str, ...]:
+    words = call.command.words[1:]
+    if len(words) != 1 or words[0].value is not None or call.occurrence.host is not None:
+        return call.command.args
+    match call.resolve(words[0]):
+        case Resolved((candidate,), splittable):
+            return tuple(candidate.split()) if splittable else (candidate,)
+        case _:
+            return call.command.args
+
+
+def payload_word(host: Call, word: Word) -> Word | None:
+    words = host.source.words
+    if word.span is not None:
+        return next(
+            (w for w in words if w.span is not None and w.span[0] <= word.span[0] and word.span[1] <= w.span[1]), None
+        )
+    return next((w for w in words[1:] if w.value is None or w.raw != w.value), None)
+
+
+def substitution_body(raw: str, offset: int) -> tuple[str, int] | None:
+    """The innermost ``$(...)`` or backtick body of ``raw`` holding character ``offset``, with its start."""
+    found: tuple[str, int] | None = None
+    index = 0
+    while index < len(raw):
+        if raw.startswith("$(", index):
+            end = skip_group(raw, index + 1, "(", ")")
+            if index + 2 <= offset < end:
+                found = (raw[index + 2 : end - 1], index + 2)
+            index += 2
+        elif raw[index] == "`":
+            end = skip_quoted(raw, index, "`")
+            if index + 1 <= offset < end:
+                found = (raw[index + 1 : end - 1], index + 1)
+            index = end
+        else:
+            index += 1
+    return found
+
+
+def relative_offset(text: str, command_raw: str, word_raw: str) -> int | None:
+    command_start = text.find(command_raw)
+    word_start = command_raw.find(word_raw)
+    if command_start < 0 or word_start < 0 or text.count(command_raw) > 1 or command_raw.count(word_raw) > 1:
+        return None
+    return command_start + word_start
+
+
+def env_bindings(call: Call) -> dict[str, Binding]:
+    return {
+        name: Known((dequote(value),))
+        if (parts := segments(value)) is not None and all(isinstance(part, Literal) for part in parts)
+        else Unknown(value)
+        for name, value in call.source.env
+    }
 
 
 @dataclass
@@ -442,5 +552,57 @@ class Cmd:
             effective[occurrence.index] = cwd
             calls.append(call := Call(self, occurrence, cwd))
             if call.name == "cd" and not occurrence.piped:
-                scopes[host] = resolve_cd(call.command.args, cwd)
+                scopes[host] = resolve_cd(cd_operand(call), cwd)
         return tuple(calls)
+
+    @cached_property
+    def scope(self) -> Scope:
+        """The same-line variable bindings of the whole command text."""
+        try:
+            return Scope(self.raw)
+        except RecursionError:
+            return Scope.unreadable(self.raw)
+
+    def char_offset(self, byte_offset: int) -> int:
+        return byte_offset if self.raw.isascii() else len(self.raw.encode()[:byte_offset].decode(errors="ignore"))
+
+    def scope_for(self, call: Call, word: Word) -> tuple[Scope, int | None]:
+        """The scope ``word`` of ``call`` resolves in, and the word's offset within that scope's text."""
+        host = call.occurrence.host
+        if host is None:
+            return self.scope, None if word.span is None else self.char_offset(word.span[0])
+        host_call = next(candidate for candidate in self._calls if candidate.occurrence.index == host.index)
+        payload = payload_word(host_call, word)
+        if payload is None or payload.span is None:
+            return self.scope, None
+        host_scope, host_offset = self.scope_for(host_call, payload)
+        if host_offset is None or host_scope.in_function(host_offset):
+            return self.scope, None
+        quote = call.occurrence.quote_contexts[-1:]
+        if quote == ('"',):
+            return host_scope, host_offset
+        within = None if word.span is None else self.char_offset(word.span[0]) - self.char_offset(payload.span[0])
+        if quote == ("'",) and payload.value is not None:
+            text, start = payload.value, 1
+        elif within is not None and (body := substitution_body(payload.raw, within)) is not None:
+            text, start = body
+        else:
+            return self.scope, None
+        offset = within - start if within is not None else relative_offset(text, call.occurrence.command.raw, word.raw)
+        if offset is None or not 0 <= offset <= len(text):
+            return self.scope, None
+        shell = host_call.name in SHELLS
+        return self._child_scope(
+            host_scope, text, host_offset, shell and quote == ("'",), host_call if shell else None
+        ), offset
+
+    def _child_scope(self, parent: Scope, text: str, offset: int, exported_only: bool, host: Call | None) -> Scope:
+        key = (id(parent), text, offset, exported_only, None if host is None else host.occurrence.index)
+        if key not in self._child_scopes:
+            overlay = None if host is None else env_bindings(host)
+            self._child_scopes[key] = parent.child(text, offset, exported_only=exported_only, overlay=overlay)
+        return self._child_scopes[key]
+
+    @cached_property
+    def _child_scopes(self) -> dict[tuple[int, str, int, bool, int | None], Scope]:
+        return {}

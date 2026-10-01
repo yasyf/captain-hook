@@ -213,6 +213,7 @@ ORCA = CommandSchema(
     "orca",
     operands=(Operand("group"), Operand("verb"), Operand("rest", count="*")),
     options=(
+        Option("help", ("--help", "-h"), bool),
         Option("tab", ("--tab",), bool),
         Option("all", ("--all",), bool),
         Option("interrupt", ("--interrupt",), bool),

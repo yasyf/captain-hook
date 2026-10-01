@@ -109,7 +109,7 @@ class TestCallProperties:
 
 
 class TestVerified:
-    @pytest.mark.parametrize("command", ["rm $HOME", 'rm "$V"/x'], ids=["bare-var", "quoted-var"])
+    @pytest.mark.parametrize("command", ["rm $DIR", 'rm "$V"/x'], ids=["bare-var", "quoted-var"])
     def test_expansion_tainted_target_is_unverified(self, command: str) -> None:
         (target,) = evt_for(command).cmd.call("rm").targets
         assert target.verified is False

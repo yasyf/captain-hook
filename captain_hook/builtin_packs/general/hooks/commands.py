@@ -12,17 +12,16 @@ from captain_hook import (
     CommandSchema,
     Event,
     Input,
-    LambdaCondition,
     Operand,
     Option,
     Or,
     PathMatches,
+    PathsMatch,
     RanCommand,
     Rewrite,
     Rewritten,
     Runs,
     T,
-    Target,
     Tool,
     UsedSkill,
     Warn,
@@ -31,9 +30,10 @@ from captain_hook import (
     rewrite_command_occurrences,
 )
 from captain_hook.cmd import COMMAND_VALUE_FLAGS
+from captain_hook.command_schemas import FIND
 
 if TYPE_CHECKING:
-    from captain_hook import Arguments, BaseHookEvent, Occurrence, PreToolUseEvent, WalkContext
+    from captain_hook import Arguments, Occurrence, PreToolUseEvent, WalkContext
 
 FIND_TO_RG = CommandSchema(
     "find",
@@ -49,9 +49,12 @@ FIND_TO_RG = CommandSchema(
     options_end_operands=True,
 )
 UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktrees"))
-HOME_SPELLINGS = ("$HOME", "${HOME}")
+BROAD_FIND_ROOT = PathMatches(
+    ("/", "~", "/Users", "/Users/*", "/home", "/home/*", "/System/Volumes/Data", "**/.claude/worktrees"),
+    unresolved=True,
+)
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
-FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir"})
+FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 ATTEMPT_TOOLS = "Bash|Edit|Write"
 
 GIT_STASH = CommandSchema(
@@ -366,17 +369,9 @@ nudge(
 )
 
 
-def home_respelled(target: Target) -> Target:
-    """A ``$HOME``-rooted target respelled with ``~``, since ``PathMatches`` expands no variables."""
-    if target.value is not None:
-        return target
-    head, slash, rest = target.raw.strip("\"'").partition("/")
-    return Target(text := f"~{slash}{rest}", text, target.cwd) if head in HOME_SPELLINGS else target
-
-
 def unbounded_root(arguments: Arguments) -> bool:
     """Whether a search rooted here walks the whole volume: /, a home directory, or the worktree pool."""
-    return any(UNBOUNDED_ROOT(home_respelled(target)) for target in arguments.paths("root"))
+    return any(UNBOUNDED_ROOT(target) for target in arguments.paths("root"))
 
 
 def rg_equivalent(call: Call) -> str | None:
@@ -399,8 +394,8 @@ def rg_equivalent(call: Call) -> str | None:
             return None
 
 
-def execs_per_hit(evt: BaseHookEvent) -> bool:
-    return any(not FIND_EXEC_FLAGS.isdisjoint(call.args) for call in evt.cmd.calls("find"))
+def execs_per_hit(arguments: Arguments) -> bool:
+    return "command" in arguments.values or not FIND_EXEC_FLAGS.isdisjoint(arguments.call.args)
 
 
 def rg_for_unbounded_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> Rewritten | None:
@@ -421,17 +416,29 @@ def rg_for_unbounded_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContex
 
 hook(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), LambdaCondition(execs_per_hit)],
+    only_if=[
+        Tool("Bash"),
+        CommandMatches(FIND, only_if=(PathsMatch("roots", BROAD_FIND_ROOT), execs_per_hit)),
+    ],
     message=(
-        "`find -exec` forks one process per hit and walks ignored trees. "
-        "Run `fd -H -i '<pattern>' <root> -x <cmd>` instead."
+        "`find -exec` from /, a home directory, or the worktree pool forks one process per hit across every "
+        "dependency tree. Run `fd -H -i '<pattern>' <root> -x <cmd>` instead."
     ),
     block=True,
     tests={
-        Input(command=r"find . -name '*.pyc' -exec rm {} \;"): Block(),
+        Input(command=r"find / -name '*.pyc' -exec rm {} \;"): Block(),
         Input(command="find ~ -type f -exec grep -l foo {} +"): Block(),
         Input(command="find /Users/yasyf -iname '*.log' -exec rm {} +"): Block(),
         Input(command="find ~ -type f -execdir ls {} +"): Block(),
+        Input(command="find ~/.claude/worktrees -name '*.lock' -exec rm {} +"): Block(),
+        Input(command="find $HOME -name '*.lock' -exec rm {} +"): Block(),
+        Input(command="D=$(mktemp -d); find $D -name '*.json' -exec cat {} +"): Block(),
+        Input(command="cd / && find . -name '*.pyc' -exec rm {} +"): Block(),
+        Input(command="find / -newermt 2020-01-01 -exec echo {} +"): Block(),
+        Input(command="find . -name '*.pyc' -exec rm {} +", cwd="/Users/alice"): Block(),
+        Input(command=r"cd /tmp/reco-box-size && find . -name '*gil*.json' -exec cat {} \;"): Allow(),
+        Input(command=r"find . -name '*.pyc' -exec rm {} \;", cwd="/repo"): Allow(),
+        Input(command="R=~/.claude/worktrees/monorepo/x; find $R -name targets.yaml -exec cat {} +"): Allow(),
         Input(command="find . -name '*.pyc'"): Allow(),
         Input(command="echo find . -exec rm {} +"): Allow(),
         Input(command="git status"): Allow(),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import os
 import shlex
 import sys
@@ -9,8 +10,11 @@ from typing import TYPE_CHECKING
 
 from captain_hook import Allow, Block, CommandMatches, CommandSchema, Event, HookResult, Input, Rewrite, Tool, on
 from captain_hook.cmd import Target
+from captain_hook.command_schema import glob_prefix
 from captain_hook.util import fs
 from captain_hook.util.globbing import GLOB_LIMIT
+from captain_hook.util.paths import resolve_target
+from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import emit_token, unescape_shell
 from captain_hook.util.vcs import contains_repo
 
@@ -71,9 +75,20 @@ def literal_spelling(target: Target, cwd: Path | None) -> Target:
     return target if target.verified else Target(unescape_shell(target.raw), target.raw, cwd)
 
 
+def scratch_glob(target: Target) -> bool:
+    if target.value is None or (prefix := resolve_target(str(glob_prefix(Path(target.value))), target.cwd)) is None:
+        return False
+    return is_scratch_path(prefix.resolve() / "_")
+
+
 def check_target(
     evt: PreToolUseEvent, target: Target, cwd: Path | None, *, rewritable: bool
 ) -> HookResult | Recoverable | None:
+    if not target.verified and glob.has_magic(target.raw):
+        return evt.block(
+            f"The glob '{target.raw}' is built at run time, so no expansion can be checked before deleting. "
+            "Expand it to explicit paths first."
+        )
     target = literal_spelling(target, cwd)
     if not target.has_glob:
         return check_resolved(evt, target, rewritable=rewritable)
@@ -84,7 +99,7 @@ def check_target(
             f"The glob '{token}' is too broad to verify before deleting. "
             "Narrow the pattern or run `rm -r <dir>` on a specific directory."
         )
-    if len(expansion) > GLOB_LIMIT:
+    if len(expansion) > GLOB_LIMIT and not scratch_glob(target):
         return evt.block(
             f"The glob '{token}' matches more than {GLOB_LIMIT} files. "
             f"Run `ls {token}`, then narrow the pattern or run `rm -r <dir>` on a named directory."
@@ -142,6 +157,14 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command='bash -c "rm $F"', cwd="/"): Block(pattern="repository"),
         Input(command='eval "rm $F"', cwd="/"): Block(pattern="repository"),
         Input(command="rm $FOO", cwd="/"): Block(pattern="repository"),
+        Input(command="FOO=/outside/x; rm $FOO", cwd="/"): RECOVERABLE_RM,
+        Input(command="FOO=/; rm -rf $FOO/x/..", cwd="/"): ROOT_RM,
+        Input(command='rm -f "$(git rev-parse --git-dir)/REBASE_HEAD"', cwd="/"): Block(pattern="substitution"),
+        Input(command="d=$(mktemp -d); rm -rf $d/*", cwd="/"): Block(pattern="built at run time"),
+        Input(command="rm -rf $d/*", cwd="/"): Block(pattern="built at run time"),
+        Input(command='X="/tmp/x /"; rm -rf $X', cwd="/"): ROOT_RM,
+        Input(command='X="/tmp/x /outside"; rm -rf $X', cwd="/"): RECOVERABLE_RM,
+        Input(command="rm -f /tmp/../etc/*", cwd="/"): Block(),
         Input(command="rm /outside/{a,b}", cwd="/"): Block(pattern="repository"),
         Input(command="rm foo\\\nbar", cwd="/"): Block(pattern="repository"),
         Input(command="rm $(ls)", cwd="/"): Block(pattern="repository"),
@@ -153,6 +176,11 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command="'rm' /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="rm /tmp/x.py", cwd="/"): Allow(),
         Input(command="rm -rf /tmp/scratch/build", cwd="/"): Allow(),
+        Input(command="cd ~/.claude/scratch/release-v3/b2-net && rm -v exec-*.log && ls exec-* 2>/dev/null"): Allow(),
+        Input(command="cd /Users/yasyf/.claude/scratch/pb && rm -f l*.md && ls | wc -l"): Allow(),
+        Input(command="rm -f /tmp/.reap-*", cwd="/w"): Allow(),
+        Input(command="d=~/.claude/scratch/release-v3/b2-net; rm -f $d/tmp-plat-g2-move.log", cwd="/"): Allow(),
+        Input(command="S=/tmp/precompact; rm -rf $S/sessions/1111 $S/sessions/2222", cwd="/"): Allow(),
         Input(command="rm foo.txt"): Allow(),
         Input(command="git rm foo.txt"): Allow(),
         Input(command="echo rm foo.txt"): Allow(),
