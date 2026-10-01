@@ -17,7 +17,7 @@ from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_seconds
 from captain_hook.testing.helpers import fixture_line
 from captain_hook.testing.snapshots import FixtureOwner
-from captain_hook.types import Event, HookResult
+from captain_hook.types import Event, HookResult, RanCommand
 from captain_hook.util import reqenv
 from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_result, raw_tool_use
 
@@ -283,3 +283,27 @@ def test_a_declared_window_reads_only_the_transcript_tail(
     assert denied == [guard]
     assert envelope is not None
     assert operations.seen == ["tail"]
+
+
+def test_a_declared_window_answers_while_a_full_load_runs_out_the_deadline(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript
+) -> None:
+    transcript.write("alpha")
+    fired: list[str] = []
+
+    @on(Event.PreToolUse, skip_if=[RanCommand("never", "ran")])
+    def history(evt: BaseHookEvent) -> None:
+        fired.append("history")
+
+    @on(Event.PreToolUse, skip_if=[RanCommand("ccx", "vcs", "status")], transcript_events=12)
+    def recent(evt: BaseHookEvent) -> HookResult:
+        fired.append("recent")
+        return evt.block("recent guard")
+
+    exchange = HeldExchange(owner, "acquire")
+
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange, TOOL_SECONDS)
+
+    assert fired == ["recent"]
+    assert [gap.partition(":")[0] for gap in gaps] == ["history"]
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"

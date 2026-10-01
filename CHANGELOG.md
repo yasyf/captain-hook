@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.69.1] - 2026-10-01
+
+### Fixed
+
+- **A windowed hook answers before a full load can spend the deadline.**
+  Dispatch evaluates the conditions of hooks that declare `transcript_events`
+  before those that load the whole transcript. Under 12.69.0 a hook without a
+  window ran its full acquire first, spent the tool event's 0.75 s, and the
+  windowed `landing_state_through_ccx` then skipped on the deadline.
+
 ## [12.69.0] - 2026-10-01
 
 ### Changed

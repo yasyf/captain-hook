@@ -567,27 +567,25 @@ def prepare_hook_events(
         raise
     finally:
         release_transcript(evt.ctx.transcript)
-    matching: list[RegisteredHook] = []
-    events: list[BaseHookEvent] = []
+    matched: dict[int, bool] = {}
     try:
-        for entry, fork in zip(entries, forks, strict=True):
+        for index in sorted(range(len(entries)), key=lambda index: entries[index].spec.transcript_events is None):
             try:
-                matched = matches_conditions(entry.spec, fork)
+                matched[index] = matches_conditions(entries[index].spec, forks[index])
             except EvidenceIncomplete as exc:
                 if not fails_open(exc):
                     raise
-                note_evidence_gap(entry, exc)
-                matched = False
-            if matched:
-                matching.append(entry)
-                events.append(fork)
-            else:
+                note_evidence_gap(entries[index], exc)
+                matched[index] = False
+        for index, fork in enumerate(forks):
+            if not matched[index]:
                 release_transcript(fork.ctx.transcript)
     except BaseException:
         for fork in forks:
             release_transcript(fork.ctx.transcript)
         raise
-    return matching, events
+    kept = [index for index in range(len(entries)) if matched[index]]
+    return [entries[index] for index in kept], [forks[index] for index in kept]
 
 
 def dispatch_mandatory(
