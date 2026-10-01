@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The general pack nudges toward fixing broken tooling.** The `tooling_nudge`
+  hook watches tool results for a first-party tool's refusal or usage error, a
+  `# ccx:raw` fallback, a papercut, a manual workaround next to a tool, the
+  same command run three times, and lane reports that name a tooling defect.
+  A model judges each hit and, when the tool itself fell short, asks the agent
+  to spawn a lane that fixes and ships the tool. Each signal fires at most
+  once per tool per session.
+
 ## [12.66.0] - 2026-10-01
 
 ### Added

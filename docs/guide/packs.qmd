@@ -17,7 +17,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   `osascript`/`softwareupdate`/`pmset`/`tmux`, and `shutdown`/`reboot`, in Bash and in MCP payloads,
   doc and prompt nudges, task and plan discipline, model-routing nudges, a code-review gate, a
   docs-freshness gate, a detour
-  check-in nudge, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
+  check-in nudge, a tooling nudge that asks for a tool-fix lane after a first-party tool refuses, a
+  `# ccx:raw` fallback, or a command repeated by hand, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
   comment that was already over budget only warns), `rm` safety, and a plain-English reply rewrite.
   The rewrite sends each assistant reply through Cerebras (`qwen-3.8-27b`) and does nothing until
   `CEREBRAS_API_KEY` is set. With the key set, it hides the reply's streamed chunks and shows the
