@@ -169,6 +169,11 @@ class TestTranscriptEventsWindow:
 
         assert transcript_events_window(Event.PreToolUse) is None
 
+    @pytest.mark.parametrize("count", [0, 257])
+    def test_rejects_a_window_the_tail_read_cannot_serve(self, count: int) -> None:
+        with pytest.raises(ValueError, match="between 1 and 256"):
+            register_hook(Event.PreToolUse, message="near", transcript_events=count)
+
     def test_an_event_without_hooks_declares_nothing(self) -> None:
         register_hook(Event.Stop, message="near", transcript_events=20)
 

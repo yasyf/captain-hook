@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from captain_hook import cli
-from captain_hook.snapshots.client import CURRENT_CLIENT, HOOK_WINDOW_BYTES, SnapshotClient
+from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient
 from captain_hook.snapshots.worker import empty_usage
 from captain_hook.types import Event
 from captain_hook.worker.protocol import ProtocolError, decode_snapshot_reply, read_message
@@ -131,8 +131,7 @@ def test_cold_cli_binds_snapshot_scope_after_discovery_for_both_phases(tmp_path,
     client = SnapshotClient(lambda value: pytest.fail("no transport needed"))
 
     @contextmanager
-    def scope(*, tail_bytes: int | None = None):
-        assert tail_bytes == HOOK_WINDOW_BYTES
+    def scope():
         assert seen == ["discover"]
         token = CURRENT_CLIENT.set(client)
         try:

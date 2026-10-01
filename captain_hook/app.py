@@ -37,6 +37,9 @@ class AsyncDecisionError(TypeError):
     """A hook combined ``async_=True`` with a decision-capable event, whose verdict would be lost."""
 
 
+MAX_TRANSCRIPT_EVENTS = 256
+
+
 class MandatoryHookError(TypeError):
     """A hook combined ``mandatory=True`` with a mode or event the client cannot hold the call for."""
 
@@ -58,6 +61,12 @@ def reject_mandatory_misuse(events: Event, async_: bool, mandatory: bool) -> Non
         raise MandatoryHookError(
             f"mandatory=True is invalid on {names}: the client prefilters only PreToolUse and PermissionRequest."
         )
+
+
+def reject_transcript_events(transcript_events: int | None) -> None:
+    """Reject a declared window the snapshot engine's ``tail`` operation cannot serve."""
+    if transcript_events is not None and not 0 < transcript_events <= MAX_TRANSCRIPT_EVENTS:
+        raise ValueError(f"transcript_events must be between 1 and {MAX_TRANSCRIPT_EVENTS}, got {transcript_events}")
 
 
 def reject_async_decision(events: Event, async_: bool) -> None:
@@ -212,6 +221,7 @@ def hook(
 ) -> None:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
+    reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     _state.hooks.append(
@@ -253,6 +263,7 @@ def on(
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
+    reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     spec = HookSpec(

@@ -14,7 +14,7 @@ from captain_hook.app import _state, on
 from captain_hook.cli import dispatch_event
 from captain_hook.events import BaseHookEvent
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, HOOK_WINDOW_BYTES, SnapshotClient, foreground_seconds
+from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_seconds
 from captain_hook.testing.helpers import fixture_line
 from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.types import Event, HookResult
@@ -127,7 +127,7 @@ def transcript(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, 
     return Transcript(tmp_path / "session" / "subagents" / "agent-lane.jsonl", sidechain=True)
 
 
-def register(event: Event, transcript: Transcript, name: str) -> list[str]:
+def register(event: Event, transcript: Transcript, name: str, transcript_events: int | None = None) -> list[str]:
     denied: list[str] = []
     evidence = GUARDS[name]
 
@@ -138,7 +138,7 @@ def register(event: Event, transcript: Transcript, name: str) -> list[str]:
         return evt.block(f"{name} guard")
 
     guard.__name__ = name
-    on(event)(guard)
+    on(event, transcript_events=transcript_events)(guard)
     return denied
 
 
@@ -169,9 +169,8 @@ def dispatch(
     transcript: Transcript,
     exchange: Callable[[dict[str, object]], dict[str, Any]] | None = None,
     seconds: float = DEADLINE_SECONDS,
-    tail_bytes: int = HOOK_WINDOW_BYTES,
 ) -> tuple[object, list[str]]:
-    client = SnapshotClient(exchange or owner.exchange, foreground_seconds=seconds, tail_bytes=tail_bytes)
+    client = SnapshotClient(exchange or owner.exchange, foreground_seconds=seconds)
     payload = {"session_id": SESSION, "transcript_path": str(transcript.path), "cwd": str(root)} | (
         {"tool_name": "Bash", "tool_input": {"command": "git push origin HEAD"}} if event is Event.PreToolUse else {}
     )
@@ -260,28 +259,31 @@ def test_a_late_lease_skips_only_the_hook_that_read_it(
 class SourceReads:
     def __init__(self, owner: FixtureOwner) -> None:
         self.owner = owner
+        self.operations: list[str] = []
         self.bytes = 0
 
     def __call__(self, wrapper: dict[str, object]) -> dict[str, Any]:
+        request = wrapper["request"]
+        assert isinstance(request, dict)
+        self.operations.append(request["operation"])
         result = self.owner.exchange(wrapper)
         self.bytes += result["response"]["usage"]["source_bytes_read"]
         return result
 
 
 @pytest.mark.parametrize("guard", ["has_command", "latest_prompt"])
-def test_a_transcript_past_the_window_reads_only_its_tail(
+def test_a_declared_window_reads_only_the_transcript_tail(
     tmp_path: Path, owner: FixtureOwner, transcript: Transcript, guard: str
 ) -> None:
-    window = 64 * 1024
     transcript.write("alpha", TURNS * 4)
     transcript.append("bravo")
-    denied = register(Event.PreToolUse, transcript, guard)
+    denied = register(Event.PreToolUse, transcript, guard, transcript_events=12)
     reads = SourceReads(owner)
 
-    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, reads, tail_bytes=window)
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, reads, TOOL_SECONDS)
 
-    assert transcript.path.stat().st_size > 20 * window
     assert gaps == []
     assert denied == [guard]
     assert envelope is not None
-    assert reads.bytes <= 2 * window
+    assert reads.operations == ["tail"]
+    assert reads.bytes < transcript.path.stat().st_size // 20

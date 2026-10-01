@@ -141,12 +141,7 @@ class WorkerService:
         from loguru import logger
 
         start = time.perf_counter()
-        from captain_hook.snapshots.client import (
-            CURRENT_CLIENT,
-            HOOK_WINDOW_BYTES,
-            SnapshotClient,
-            foreground_seconds,
-        )
+        from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_seconds
 
         def cleanup(value: dict[str, object]) -> dict[str, Any]:
             return self.snapshot_exchange(0, value, cleanup=True)
@@ -160,14 +155,12 @@ class WorkerService:
             root_warm_scheduler=self.schedule_root_warm,
             defer_cleanup=True,
             foreground_seconds=foreground_seconds(request.event),
-            tail_bytes=HOOK_WINDOW_BYTES,
         )
         background_client = SnapshotClient(
             lambda value: self.snapshot_exchange(0, value),
             cleanup_exchange=cleanup,
             warm_scheduler=self.schedule_graph_warm,
             root_warm_scheduler=self.schedule_root_warm,
-            tail_bytes=HOOK_WINDOW_BYTES,
         )
 
         def retry_pending_cleanup() -> None:
@@ -281,11 +274,10 @@ class WorkerService:
         descriptor = {
             "path": str(path.absolute()),
             "classifier": dict(classifier),
-            "tail_bytes": client.tail_bytes,
             "tool_registry": client.tool_registry(),
         }
         fingerprint = hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        owner_key = f"root:{descriptor['path']}:{classifier['id']}:{classifier['version']}:{client.tail_bytes}"
+        owner_key = f"root:{descriptor['path']}:{classifier['id']}:{classifier['version']}"
         warm_client = client.clone_for_exchange(lambda value: self.snapshot_exchange(0, value))
         self._schedule_warm_job(owner_key, fingerprint, RootWarmState(path, dict(classifier), warm_client))
 

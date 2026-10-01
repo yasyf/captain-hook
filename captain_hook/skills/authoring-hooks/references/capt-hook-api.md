@@ -96,9 +96,10 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 
 Notes:
 
-- `transcript_events=N` on `hook()` or `@on` declares that the hook reads only the last `N`
-  transcript events. When every hook on an event declares a window, the dispatch requests the
-  widest one from the snapshot engine; one undeclared hook keeps the default 4 MiB byte window.
+- `transcript_events=N` (1-256) on `hook()` or `@on` declares that the hook reads only the last
+  `N` transcript events. When every hook on an event declares a window, the dispatch reads the
+  widest one backwards from the end of the transcript instead of loading it whole; one undeclared
+  hook loads the full transcript.
 
 - `advisory_on_deny=True` keeps a warning after another matching hook denies the event, whether the
   warning was registered before or after the denying hook. Use it only when the message stays true

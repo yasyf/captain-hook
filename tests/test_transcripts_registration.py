@@ -20,7 +20,6 @@ from click.testing import CliRunner
 from captain_hook.app import on
 from captain_hook.cli import cli, dispatch_event
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import HOOK_WINDOW_BYTES
 from captain_hook.transcripts import register_transcript, registered_paths, resolved_transcript_paths
 from captain_hook.types import Event
 from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_use
@@ -184,8 +183,7 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
         }
 
     @contextmanager
-    def scope(*, tail_bytes: int | None = None):
-        assert tail_bytes == HOOK_WINDOW_BYTES
+    def scope():
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -278,8 +276,7 @@ def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
         }
 
     @contextmanager
-    def scope(*, tail_bytes: int | None = None):
-        assert tail_bytes == HOOK_WINDOW_BYTES
+    def scope():
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -336,8 +333,7 @@ def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_pa
         }
 
     @contextmanager
-    def scope(*, tail_bytes: int | None = None):
-        assert tail_bytes == HOOK_WINDOW_BYTES
+    def scope():
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -390,8 +386,7 @@ def test_warm_command_reports_unavailable_configured_classifier(tmp_path, monkey
         }
 
     @contextmanager
-    def scope(*, tail_bytes: int | None = None):
-        assert tail_bytes == HOOK_WINDOW_BYTES
+    def scope():
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -798,23 +793,27 @@ def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_p
     assert len(loads) == 2
 
 
-def test_dispatch_requests_the_window_its_hooks_declare(tmp_path):
-    from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient
+def test_dispatch_reads_only_the_tail_its_hooks_declare(tmp_path, monkeypatch):
+    tails = []
 
     @on(Event.Stop, transcript_events=30)
     def recent_gate(evt):
+        assert len(evt.ctx.t) == 0
         return None
 
-    client = SnapshotClient(lambda _: pytest.fail("a hook that never reads the transcript loaded it"))
-    token = CURRENT_CLIENT.set(client)
-    try:
-        dispatch_event(
-            tmp_path,
-            Event.Stop,
-            {"session_id": "s-window", "transcript_path": str(tmp_path / "main.jsonl")},
-            session_dir=ensure_session(SessionId("s-window")),
-        )
-    finally:
-        CURRENT_CLIENT.reset(token)
+    def tail(path, count):
+        from cc_transcript.query import Session
 
-    assert client.tail_events == 30
+        tails.append((path, count))
+        return Session(())
+
+    monkeypatch.setattr("captain_hook.transcripts.tail_transcript", tail)
+    dispatch_event(
+        tmp_path,
+        Event.Stop,
+        {"session_id": "s-window", "transcript_path": str(tmp_path / "main.jsonl")},
+        session_dir=ensure_session(SessionId("s-window")),
+        transcript_loader=lambda _: pytest.fail("a declared window loaded the whole transcript"),
+    )
+
+    assert tails == [(str(tmp_path / "main.jsonl"), 30)]

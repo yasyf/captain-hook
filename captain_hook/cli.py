@@ -279,20 +279,20 @@ def dispatch_event(
     from captain_hook.app import transcript_events_window
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
-    from captain_hook.snapshots.client import CURRENT_CLIENT
     from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_sources
     from captain_hook.util import reqenv
 
     record_heartbeat(event, raw)
-    if (client := CURRENT_CLIENT.get()) is not None:
-        client.tail_events = transcript_events_window(event)
     resolved_path = raw.get("agent_transcript_path") or (
         lane_transcript_path(parent, agent_id)
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
         else raw.get("transcript_path")
     )
     transcript = lazy_transcript(
-        resolved_path, loader=transcript_loader, attach=lambda: registered_sources(session_dir)
+        resolved_path,
+        loader=transcript_loader,
+        attach=lambda: registered_sources(session_dir),
+        tail_events=transcript_events_window(event),
     )
     background_transcript = transcript.fork()
     ctx = HookContext(
@@ -365,10 +365,10 @@ def run_event(state: CliState, event_name: str) -> None:
     setup_logging(session_id)
 
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
-    from captain_hook.snapshots.client import HOOK_WINDOW_BYTES, client_scope
+    from captain_hook.snapshots.client import client_scope
 
     tools = pack_tool_specs(state.discover())
-    with client_scope(tail_bytes=HOOK_WINDOW_BYTES) as client:
+    with client_scope() as client:
         client.bind_tool_registry(tools)
         output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
         if output:
@@ -843,7 +843,6 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
 
     from captain_hook.session import state_root
     from captain_hook.snapshots.client import (
-        HOOK_WINDOW_BYTES,
         NATIVE_CLASSIFIER,
         EvidenceIncomplete,
         RegisteredWarmState,
@@ -889,7 +888,7 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
                 sleep(min(WARM_INTERVAL_SECONDS, max(0, max_seconds - (monotonic() - started))))
         return complete, steps, failure, read_bytes, cache_hits
 
-    with client_scope(tail_bytes=HOOK_WINDOW_BYTES) as client:
+    with client_scope() as client:
         client.foreground_deadline_unix_ms = int((time() + max_seconds) * 1000)
         client.tool_registry()
         try:

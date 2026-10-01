@@ -33,8 +33,6 @@ CLEANUP_SECONDS = 5
 GRAPH_WORK_SECONDS = 0.75
 GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
 GATE_WORK_SECONDS = 5.0
-HOOK_WINDOW_BYTES = 4 * 1024 * 1024
-WINDOWED_OPERATIONS = frozenset({"acquire", "warm_root", "warm_registered", "prepare_graph"})
 GRAPH_DISCOVERY_ENTRIES = 50_000
 GRAPH_SOURCE_LIMIT = 4096
 DEFAULT_LIMITS = {
@@ -204,7 +202,6 @@ class SnapshotClient:
         root_warm_scheduler: Callable[[SnapshotClient, Path, Mapping[str, str]], None] | None = None,
         defer_cleanup: bool = False,
         foreground_seconds: float | None = None,
-        tail_bytes: int | None = None,
     ) -> None:
         self._exchange = exchange
         self._cleanup_exchange = cleanup_exchange or exchange
@@ -216,8 +213,6 @@ class SnapshotClient:
         self._defer_cleanup = defer_cleanup
         self._deferred_cursors: set[tuple[str, str | None]] = set()
         self._foreground_seconds = foreground_seconds
-        self.tail_bytes = tail_bytes
-        self.tail_events: int | None = None
         self.foreground_deadline_unix_ms: int | None = None
         self._prefix = uuid.uuid4().hex
         self._counter = 0
@@ -263,7 +258,7 @@ class SnapshotClient:
         ]
 
     def clone_for_exchange(self, exchange: Callable[[dict[str, object]], dict[str, Any]]) -> SnapshotClient:
-        clone = SnapshotClient(exchange, tail_bytes=self.tail_bytes)
+        clone = SnapshotClient(exchange)
         clone._tool_registry = self._tool_registry
         return clone
 
@@ -306,10 +301,6 @@ class SnapshotClient:
                 request.setdefault("limits", DEFAULT_LIMITS.copy())
             if self.foreground_deadline_unix_ms is not None and "deadline_unix_ms" in request:
                 request["deadline_unix_ms"] = min(int(request["deadline_unix_ms"]), self.foreground_deadline_unix_ms)
-            if self.tail_bytes is not None and operation in WINDOWED_OPERATIONS:
-                request["tail_bytes"] = self.tail_bytes
-                if self.tail_events is not None and operation == "acquire":
-                    request["tail_events"] = self.tail_events
             exchange = self._cleanup_exchange if operation == "release" else self._exchange
             try:
                 response = exchange({"schema": HOST_SCHEMA, "request": request, "tool_registry": self.tool_registry()})
@@ -1206,12 +1197,12 @@ class RemoteToolCalls:
 
 
 @contextmanager
-def client_scope(*, tail_bytes: int | None = None) -> Iterator[SnapshotClient]:
+def client_scope() -> Iterator[SnapshotClient]:
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
     bridge = Bridge()
-    client = SnapshotClient(bridge, tail_bytes=tail_bytes)
+    client = SnapshotClient(bridge)
     token = CURRENT_CLIENT.set(client)
     try:
         yield client

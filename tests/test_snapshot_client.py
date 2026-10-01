@@ -14,7 +14,6 @@ from captain_hook.snapshots.client import (
     DEFAULT_LIMITS,
     GATE_WORK_SECONDS,
     GRAPH_WORK_SECONDS,
-    HOOK_WINDOW_BYTES,
     HOST_SCHEMA,
     MAX_VIEW_ATTACHMENTS,
     AttachmentLimit,
@@ -503,7 +502,7 @@ def test_abandoned_foreground_cursor_waits_until_after_reply_for_cleanup():
         future.shutdown()
 
 
-def test_hook_client_windows_source_reads_without_a_byte_budget():
+def test_foreground_reads_carry_no_source_byte_budget():
     requests = []
 
     def exchange(wrapper):
@@ -511,82 +510,19 @@ def test_hook_client_windows_source_reads_without_a_byte_budget():
         requests.append(request)
         if request["operation"] == "acquire":
             result = response(request, {"kind": "acquired", "description": description()})
-            result["response"]["usage"]["source_bytes_read"] = 6 * 1024 * 1024
+            result["response"]["usage"]["source_bytes_read"] = 80 * 1024 * 1024
             return result
-        if request["operation"] == "prepare_hook_view":
-            return response(request, {"kind": "classifier", "classifier": {"id": "native", "version": "1"}})
         return response(request, {"kind": "scalar", "value": False})
 
-    client = SnapshotClient(exchange, foreground_seconds=0.75, tail_bytes=HOOK_WINDOW_BYTES)
+    client = SnapshotClient(exchange, foreground_seconds=0.75)
     client.bind_tool_registry({})
     session = client.acquire("/tmp/fixture.jsonl")
-    list(client.pages("prepare_hook_view", domain=True, view=session.view(), cwd="/tmp", droid=False))
     client.call("query", view=session.view(), query={"kind": "has_read", "pattern": "x", "subagents": False})
 
-    assert [request["operation"] for request in requests] == ["acquire", "prepare_hook_view", "query"]
-    assert [request.get("tail_bytes") for request in requests] == [HOOK_WINDOW_BYTES, None, None]
+    assert [request["operation"] for request in requests] == ["acquire", "query"]
     assert all(request["limits"] == DEFAULT_LIMITS for request in requests)
     assert len({request["deadline_unix_ms"] for request in requests}) == 1
     assert requests[0]["deadline_unix_ms"] <= int(time.time() * 1000) + 750
-
-
-def test_declared_events_narrow_only_the_hook_acquire():
-    requests = []
-
-    def exchange(wrapper):
-        requests.append(wrapper["request"])
-        return response(wrapper["request"], {"kind": "acquired", "description": description()})
-
-    client = SnapshotClient(exchange, tail_bytes=HOOK_WINDOW_BYTES)
-    client.tail_events = 40
-    client.bind_tool_registry({})
-    client.acquire("/tmp/fixture.jsonl")
-    client.call("retain", handle={"owner_epoch": "owner", "lease_id": "lease"})
-
-    assert (requests[0]["tail_bytes"], requests[0]["tail_events"]) == (HOOK_WINDOW_BYTES, 40)
-    assert "tail_events" not in requests[1]
-
-
-def test_whole_file_clients_send_no_window():
-    requests = []
-
-    def exchange(wrapper):
-        requests.append(wrapper["request"])
-        return response(wrapper["request"], {"kind": "acquired", "description": description()})
-
-    client = SnapshotClient(exchange)
-    client.bind_tool_registry({})
-    client.acquire("/tmp/fixture.jsonl")
-
-    assert "tail_bytes" not in requests[0]
-
-
-def test_warm_clones_keep_the_hook_window():
-    calls = []
-
-    def exchange(wrapper):
-        calls.append(wrapper["request"])
-        return response(
-            wrapper["request"],
-            {
-                "kind": "warmed_root",
-                "owner_epoch": "owner",
-                "source_revision": "revision",
-                "source_offset": 1024,
-                "source_size": 1024,
-                "complete": True,
-                "facts_complete": True,
-            },
-        )
-
-    client = SnapshotClient(lambda _: pytest.fail("the hook client itself warmed"), tail_bytes=HOOK_WINDOW_BYTES)
-    client.bind_tool_registry({})
-    RootWarmState(Path("/tmp/root.jsonl"), {"id": "native", "version": "1"}, client.clone_for_exchange(exchange)).step(
-        read_bytes=1024, deadline_seconds=1
-    )
-
-    assert calls[0]["operation"] == "warm_root"
-    assert calls[0]["tail_bytes"] == HOOK_WINDOW_BYTES
 
 
 def test_expired_foreground_budget_never_sends_a_native_request():
