@@ -7,10 +7,9 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook import Allow, BaseHookEvent, Event, HookResult, Input, Tool, on
+from captain_hook import Allow, Annotated, BaseHookEvent, Event, HookResult, Input, Tool, on
 from captain_hook.builtin_packs.graphite.hooks._lib import (
     CcxInstalled,
-    RawRequested,
     git_location,
     git_probe,
     graphite_owns,
@@ -228,7 +227,7 @@ def holds(cwd: Path, planned: list[Push]) -> list[Push]:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled()],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={
         Input(command="git push", cwd="/"): Allow(),
         Input(command="ccx vcs push", cwd="/"): Allow(),

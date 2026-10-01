@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
     from cc_transcript.tools import ToolCallBase
 
+    from captain_hook.confirm import Confirm
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
 
@@ -998,7 +999,8 @@ class HookResult:
     ``False`` surfaces the message as pure ``additionalContext`` without pre-approving
     the tool (the ``evt.context`` variant). ``system_message`` is shown to the user as
     Claude Code's top-level ``systemMessage`` alongside whatever the action renders, including
-    a ``Stop`` that allows; ``PreCompact``, whose stdout is plain text, drops it.
+    a ``Stop`` that allows; ``PreCompact``, whose stdout is plain text, drops it. ``confirm`` sends
+    a ``block`` through a small model before it lands (``evt.block(..., confirm=Confirm(...))``).
     """
 
     action: Action
@@ -1007,6 +1009,7 @@ class HookResult:
     note: str | None = None
     approve: bool = True
     system_message: str | None = None
+    confirm: Confirm | None = None
 
     @classmethod
     def of(cls, action: Action, message: str | None = None) -> HookResult:
@@ -1028,6 +1031,7 @@ class HookSpec:
     skip_if: tuple[TCondition, ...] = ()
     message: str | None = None
     block: bool = False
+    confirm: Confirm | None = None
     advisory_on_deny: bool = False
     respect_gitignore: bool = True
     max_fires: int | None = None

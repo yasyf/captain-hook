@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from captain_hook import (
     Allow,
+    Annotated,
     BaseHookEvent,
     CommandSchema,
     CustomCommandLineCondition,
@@ -30,7 +31,6 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     HasFlag,
     JJReads,
     PushesTagRef,
-    RawRequested,
     force_pushes,
     git_location,
     git_probe,
@@ -67,7 +67,7 @@ GH_PR_VIEW = CommandSchema(
 hook(
     Event.PreToolUse,
     only_if=[Tool("Bash"), GraphiteRuns(("jj",))],
-    skip_if=[JJReads(), RawRequested()],
+    skip_if=[JJReads(), Annotated("raw")],
     message=(
         "The repository this command targets keeps its stack in Graphite, which jj writes leave stale. "
         'Run `ccx vcs ship -m "<msg>"` to commit and submit instead.'
@@ -77,6 +77,10 @@ hook(
         in_graphite_repo("jj log && jj new"): Warn(pattern="Graphite"),
         in_graphite_repo("jj log"): Allow(),
         in_graphite_repo("jj new # ccx:raw"): Allow(),
+        in_graphite_repo("bash -c 'jj new # ccx:raw'"): Allow(),
+        in_graphite_repo("jj new && echo '# ccx:raw'"): Warn(pattern="Graphite"),
+        in_graphite_repo("jj new", env={"CAPT_HOOK_CCX_RAW": "0"}): Warn(pattern="Graphite"),
+        in_graphite_repo("jj new", env={"CAPT_HOOK_CCX_RAW": "true"}): Allow(),
         Input(command="jj new", cwd="/"): Allow(),
     },
 )
@@ -96,7 +100,7 @@ hook(
             ("git", "checkout", "-B"),
         ),
     ],
-    skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef(), RawRequested()],
+    skip_if=[HasFlag("--dry-run"), HasFlag("--tags"), PushesTagRef(), Annotated("raw")],
     message=(
         "The repository this command targets keeps its stack in Graphite, so raw git commits, branches, and "
         'pushes leave it stale. Run `ccx vcs ship -m "<msg>"` instead.'
@@ -123,11 +127,18 @@ hook(
         HasFlag("--dry-run"),
         HasFlag("--no-push"),
         HasFlag("--help", "-h"),
+        Annotated("role", scope="session"),
     ],
     message="Submit a change only after a review pass over its diff. Run `/cc-review:start` first.",
     tests={
         in_graphite_repo("gt submit"): Warn(pattern="review pass"),
         in_graphite_repo("ccx vcs ship -m x"): Warn(pattern="review pass"),
+        in_graphite_repo(
+            'ccx vcs ship -m "fix: x" --new-branch=hooks/x', transcript=[T.user("ccx: role=fix\nShip the fix.")]
+        ): Allow(),
+        in_graphite_repo(
+            'ccx vcs ship -m "fix: x" --new-branch=hooks/x', transcript=[T.user("Give this lane role=fix and ship.")]
+        ): Warn(pattern="review pass"),
         in_graphite_repo(
             "gt submit", transcript=[T.assistant(T.tool("Skill", skill="cc-review:start")), T.user("ship it")]
         ): Allow(),
@@ -175,7 +186,7 @@ hook(
         Tool("Bash"),
         GraphiteRuns(("git", "rebase"), ("git", "merge"), ("git", "pull")),
     ],
-    skip_if=[HasFlag("--abort", "--continue", "--quit"), RawRequested()],
+    skip_if=[HasFlag("--abort", "--continue", "--quit"), Annotated("raw")],
     message=(
         "A raw `git rebase`, `merge`, or `pull` leaves Graphite's parent records stale. "
         "Run `ccx vcs stack rebase` to replay the stack instead."
@@ -303,7 +314,7 @@ def hand_run_force_push(call: Call, evt: BaseHookEvent) -> bool:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled()],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={
         Input(command="gt submit", cwd="/"): Allow(),
         Input(command="gt restack", cwd="/"): Allow(),
@@ -337,7 +348,7 @@ def stack_writes_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_submit)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={Input(command="gt submit --ai", cwd="/"): Allow(), Input(command="git status", cwd="/"): Allow()},
 )
 def gt_submit_through_ccx(evt: BaseHookEvent) -> HookResult | None:
@@ -349,7 +360,7 @@ def gt_submit_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_restack)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={Input(command="gt sync", cwd="/"): Allow(), Input(command="gt log", cwd="/"): Allow()},
 )
 def gt_restack_through_ccx(evt: BaseHookEvent) -> HookResult | None:
@@ -362,7 +373,7 @@ def gt_restack_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_create)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={Input(command="gt create feat -m x", cwd="/"): Allow(), Input(command="gt log", cwd="/"): Allow()},
 )
 def gt_create_through_ccx(evt: BaseHookEvent) -> HookResult | None:
@@ -375,7 +386,7 @@ def gt_create_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_modify)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={Input(command="gt modify -m x", cwd="/"): Allow(), Input(command="gt log", cwd="/"): Allow()},
 )
 def gt_modify_through_ccx(evt: BaseHookEvent) -> HookResult | None:
@@ -387,7 +398,7 @@ def gt_modify_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_rebase)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={Input(command="git rebase main", cwd="/"): Allow(), Input(command="git rebase --abort", cwd="/"): Allow()},
 )
 def git_rebase_through_ccx(evt: BaseHookEvent) -> HookResult | None:
@@ -400,7 +411,7 @@ def git_rebase_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(conflict_rebase_control)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={
         Input(command="git rebase --continue", cwd="/"): Allow(),
         Input(command="git rebase main", cwd="/"): Allow(),
@@ -415,7 +426,7 @@ def conflict_workspace_finishes_through_ccx(evt: BaseHookEvent) -> HookResult | 
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(hand_run_force_push)],
-    skip_if=[RawRequested()],
+    skip_if=[Annotated("raw")],
     tests={Input(command="git push -f origin feat", cwd="/"): Allow(), Input(command="git push", cwd="/"): Allow()},
 )
 def force_push_through_ccx(evt: BaseHookEvent) -> HookResult | None:

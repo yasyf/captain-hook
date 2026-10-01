@@ -8,15 +8,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition, FileFixture, Input
-from captain_hook.util import reqenv
-from captain_hook.util.vcs import ccx_raw_marked, graphite_lane, graphite_lane_of_git_dir
+from captain_hook.util.vcs import graphite_lane, graphite_lane_of_git_dir
 
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
 
     from captain_hook.cmd import Call
 
-RAW_ENV = "CAPT_HOOK_CCX_RAW"
 FIXTURE_GITDIR = Path(__file__).parents[1] / "gitdir"
 
 JJ_READS = frozenset(
@@ -165,14 +163,6 @@ class CcxInstalled(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return shutil.which("ccx") is not None
-
-
-class RawRequested(CustomCommandLineCondition):
-    """Matches a command that opts out of ccx steering: a ``# ccx:raw`` comment on the line, or
-    ``CAPT_HOOK_CCX_RAW`` set for the session. Either runs the raw command as written."""
-
-    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
-        return bool(reqenv.getenv(RAW_ENV)) or ccx_raw_marked(evt.cmd.raw)
 
 
 def git_probe(call: Call, session_cwd: Path | None, *args: str) -> str | None:
