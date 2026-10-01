@@ -26,6 +26,10 @@ class Option:
     ``prefix`` keeps positional binding open for leading options in a schema whose
     options start a trailing expression. ``until`` consumes an opaque argument list
     through its terminator, such as a nested command passed to another program.
+    ``first`` binds the option only as the first word after the program, the way
+    ``kill`` reads a signal spec: it never joins a flag cluster, and a later spelling
+    is an unknown option that ends binding incomplete, so ``kill -9 -15`` cannot read
+    its negative process group as a second signal.
     """
 
     name: str
@@ -33,6 +37,7 @@ class Option:
     type: type[str] | type[int] | type[bool] = str
     prefix: bool = False
     until: tuple[tuple[str, ...], ...] = ()
+    first: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +59,9 @@ class Arguments:
 
     ``complete`` is false when an unknown option, missing value, invalid typed value,
     or command substitution prevents a complete binding. Known path operands remain
-    available so a policy can still reject an explicitly broad root.
+    available so a policy can still reject an explicitly broad root. ``unread`` holds
+    the words from the first unknown option on, or the option left without its value,
+    so a policy can name exactly what stopped the binding.
     """
 
     words: dict[str, tuple[Word, ...]]
@@ -62,6 +69,7 @@ class Arguments:
     cwd: Path | None
     complete: bool
     operands_complete: bool
+    unread: tuple[Word, ...] = ()
 
     def paths(self, name: str) -> Targets:
         """Return the named role as path targets with the invocation's working directory."""
@@ -80,16 +88,20 @@ class CommandSchema:
 
     Schemas operate on an existing ``Call`` and never parse shell text. With
     ``options_end_operands``, the first non-prefix option starts a trailing expression;
-    expression arguments never become positional operands. Unknown options end binding
-    and mark the result incomplete instead of guessing their arity. A value attached to a
-    short option (``-oVAL``) binds only when every single-dash alias is one letter, since a
-    schema with find-style single-dash words cannot split such a token unambiguously.
+    expression arguments never become positional operands. With ``operands_end_options``,
+    the first operand ends option reading the way POSIX utilities such as ``kill`` do, so
+    a later option word is unknown and ``kill 123 -l`` never reads as a listing. Unknown
+    options end binding and mark the result incomplete instead of guessing their arity. A
+    value attached to a short option (``-oVAL``) binds only when every single-dash alias
+    is one letter, since a schema with find-style single-dash words cannot split such a
+    token unambiguously.
     """
 
     program: str
     operands: tuple[Operand, ...] = ()
     options: tuple[Option, ...] = ()
     options_end_operands: bool = False
+    operands_end_options: bool = False
     separators: tuple[str, ...] = ()
 
     def bind(self, call: Call) -> Arguments:
@@ -101,15 +113,18 @@ class CommandSchema:
         words: dict[str, list[Word]] = {}
         values: dict[str, list[Scalar | None]] = {}
         positional: list[Word] = []
+        unread: tuple[Word, ...] = ()
         accept_operands = True
         accept_options = True
         complete = not call.substituted
         operands_complete = not call.substituted
         stream = iter(call.command.words[1:])
-        for word in stream:
+        for index, word in enumerate(stream):
             token = word.value
             flag, joined, attached = (token or "").partition("=")
             inline = attached if joined else None
+            if self.operands_end_options and positional:
+                accept_options = False
             if (
                 short_values
                 and token is not None
@@ -131,7 +146,10 @@ class CommandSchema:
                 and not token.startswith("--")
                 and flag not in aliases
                 and len(token) > 2
-                and all((part := aliases.get(f"-{letter}")) is not None and part.type is bool for letter in token[1:])
+                and all(
+                    (part := aliases.get(f"-{letter}")) is not None and part.type is bool and not part.first
+                    for letter in token[1:]
+                )
             ):
                 for letter in token[1:]:
                     option = aliases[f"-{letter}"]
@@ -139,7 +157,7 @@ class CommandSchema:
                     if self.options_end_operands and not option.prefix:
                         accept_operands = False
                 continue
-            if accept_options and (option := aliases.get(flag)) is not None:
+            if accept_options and (option := aliases.get(flag)) is not None and not (option.first and index):
                 if self.options_end_operands and not option.prefix:
                     accept_operands = False
                 if option.until:
@@ -157,6 +175,7 @@ class CommandSchema:
                 argument = word if inline is not None else next(stream, None)
                 if argument is None:
                     complete = False
+                    unread = (word,)
                     break
                 words.setdefault(option.name, []).append(argument)
                 value: Scalar | None = argument.value if inline is None else inline
@@ -167,11 +186,17 @@ class CommandSchema:
                         value = None
                 values.setdefault(option.name, []).append(value)
                 complete &= value is not None
-            elif accept_options and token is not None and token.startswith("-") and token != "-":
+            elif (
+                (accept_options or (self.operands_end_options and positional))
+                and token is not None
+                and token.startswith("-")
+                and token != "-"
+            ):
                 complete = False
                 operands_complete &= not accept_operands or (
                     self.options_end_operands and bool(positional or any(o.name in words for o in self.operands))
                 )
+                unread = (word, *stream)
                 break
             elif accept_operands:
                 positional.append(word)
@@ -192,6 +217,7 @@ class CommandSchema:
             call.cwd,
             complete and not positional,
             operands_complete,
+            unread,
         )
 
 

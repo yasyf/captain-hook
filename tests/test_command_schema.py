@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from captain_hook import CommandMatches, CommandSchema, Operand, Option, OptionIs, PathMatches, PathsMatch
-from captain_hook.command_schemas import FIND, GIT_PUSH
+from captain_hook.command_schemas import FIND, GIT_PUSH, KILL
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
@@ -86,6 +86,79 @@ def test_attached_short_values_stay_off_for_find_style_flags() -> None:
     arguments = FIND.bind(evt_for("find -fsrc -name x").cmd.call("find"))
     assert not arguments.complete
     assert arguments.values["roots"] == (".",)
+
+
+@pytest.mark.parametrize(
+    ("command", "options", "targets"),
+    [
+        ("kill -9 123", {"signal_flag": (True,)}, ("123",)),
+        ("kill -TERM 123", {"signal_flag": (True,)}, ("123",)),
+        ("kill -SIGSTOP 123", {"signal_flag": (True,)}, ("123",)),
+        ("kill -9 -- -15", {"signal_flag": (True,)}, ("-15",)),
+        ("kill -s TERM 123", {"signal": ("TERM",)}, ("123",)),
+        ("kill -n 9 123 456", {"signal": ("9",)}, ("123", "456")),
+        ("kill -0 123", {"probe": (True,)}, ("123",)),
+        ("kill -l", {"list": (True,)}, ()),
+        ("kill -l 9", {"list": (True,)}, ("9",)),
+        ("kill 123", {}, ("123",)),
+        ("kill", {}, ()),
+    ],
+)
+def test_first_option_binds_only_as_the_leading_word(
+    command: str, options: dict[str, tuple[bool | str, ...]], targets: tuple[str, ...]
+) -> None:
+    arguments = KILL.bind(evt_for(command).cmd.call("kill"))
+    assert {name: values for name, values in arguments.values.items() if name != "targets"} == options
+    assert arguments.values["targets"] == targets
+    assert arguments.complete
+
+
+@pytest.mark.parametrize(
+    "command", ["kill -9 -15", "kill -TERM -123", "kill -9 -1", "kill -123", "kill -sTERM 123", "kill -0 -9 123"]
+)
+def test_first_option_spelled_later_or_clustered_is_unknown(command: str) -> None:
+    arguments = KILL.bind(evt_for(command).cmd.call("kill"))
+    assert not arguments.complete
+    assert arguments.values["targets"] == ()
+
+
+@pytest.mark.parametrize(
+    ("command", "options", "targets", "unread"),
+    [
+        ("kill 123 -9", {}, ("123",), ("-9",)),
+        ("kill 123 -l", {}, ("123",), ("-l",)),
+        ("kill 14575 -s 0", {}, ("14575",), ("-s", "0")),
+        ("kill 14575 -n 0", {}, ("14575",), ("-n", "0")),
+        ("kill -9 14575 -L", {"signal_flag": (True,)}, ("14575",), ("-L",)),
+    ],
+)
+def test_an_operand_ends_option_reading(
+    command: str, options: dict[str, tuple[bool, ...]], targets: tuple[str, ...], unread: tuple[str, ...]
+) -> None:
+    arguments = KILL.bind(evt_for(command).cmd.call("kill"))
+    assert not arguments.complete
+    assert {name: values for name, values in arguments.values.items() if name != "targets"} == options
+    assert arguments.values["targets"] == targets
+    assert tuple(word.raw for word in arguments.unread) == unread
+
+
+@pytest.mark.parametrize(
+    ("command", "unread"),
+    [
+        ("kill -sTERM 123", ("-sTERM", "123")),
+        ("kill --signal=TERM 123", ("--signal=TERM", "123")),
+        ("kill -0 -9 14575", ("-9", "14575")),
+        ("kill -s", ("-s",)),
+    ],
+)
+def test_unread_names_the_word_that_stopped_binding(command: str, unread: tuple[str, ...]) -> None:
+    arguments = KILL.bind(evt_for(command).cmd.call("kill"))
+    assert not arguments.complete
+    assert tuple(word.raw for word in arguments.unread) == unread
+
+
+def test_a_complete_binding_leaves_nothing_unread() -> None:
+    assert KILL.bind(evt_for("kill -9 123 456").cmd.call("kill")).unread == ()
 
 
 def test_schema_binds_a_pattern_paths_and_typed_options() -> None:

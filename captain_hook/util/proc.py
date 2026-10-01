@@ -1,13 +1,90 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+from dataclasses import dataclass
+from datetime import datetime
 from functools import cache
 from pathlib import PurePath
+from typing import TYPE_CHECKING
 
 from captain_hook.util import reqenv
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
 MAX_WALK = 20
+PS_TABLE_ARGV = ("ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,command=")
+PS_TABLE_ENV = {"LC_ALL": "C", "TZ": "UTC"}
+PS_TABLE_ROW = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\w{3} \w{3}\s+\d{1,2} \d\d:\d\d:\d\d \d{4})\s+(.*)$")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRow:
+    pid: int
+    ppid: int
+    pgid: int
+    uid: int
+    started: datetime
+    command: str
+
+    @property
+    def argv0(self) -> str:
+        return PurePath(head[0]).name if (head := self.command.split(None, 1)) else ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessTable:
+    rows: Mapping[int, ProcessRow]
+
+    def ancestors(self, pid: int) -> tuple[ProcessRow, ...]:
+        chain: list[ProcessRow] = []
+        seen = {pid}
+        current = self.rows.get(pid)
+        while current is not None and len(chain) < MAX_WALK * 4:
+            if (parent := self.rows.get(current.ppid)) is None or parent.pid in seen:
+                break
+            seen.add(parent.pid)
+            chain.append(parent)
+            current = parent
+        return tuple(chain)
+
+    def nearest(self, pid: int, predicate: Callable[[ProcessRow], bool]) -> ProcessRow | None:
+        if (row := self.rows.get(pid)) is None:
+            return None
+        return next((candidate for candidate in (row, *self.ancestors(pid)) if predicate(candidate)), None)
+
+
+def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
+    try:
+        done = subprocess.run(
+            PS_TABLE_ARGV,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            env=os.environ | PS_TABLE_ENV,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    rows: dict[int, ProcessRow] = {}
+    for line in filter(str.strip, done.stdout.splitlines()):
+        if (match := PS_TABLE_ROW.match(line)) is None:
+            return None
+        pid, ppid, pgid, uid, started, command = match.groups()
+        rows[int(pid)] = ProcessRow(
+            int(pid),
+            int(ppid),
+            int(pgid),
+            int(uid),
+            datetime.strptime(" ".join(started.split()), "%a %b %d %H:%M:%S %Y"),
+            command,
+        )
+    return ProcessTable(rows)
 
 
 def process_start_time(pid: int) -> str | None:

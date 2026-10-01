@@ -10,11 +10,10 @@ from cc_transcript.tools import mcp_parts
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import GIT_PUSH
+from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import SHELLS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from cc_transcript.command import CommandLine
 
     from captain_hook.cmd import Call
@@ -39,47 +38,6 @@ DANGEROUS_MCP_VERBS = frozenset(
         "terminate",
     }
 )
-
-COMMAND_KEY = re.compile(r"cmd|command|script|shell|exec|args|argv|run|code", re.ASCII | re.IGNORECASE)
-MAX_SCAN_DEPTH = 12
-
-
-def payload_leaves(items: list[object], depth: int) -> Iterator[object]:
-    for item in items:
-        match item:
-            case list() if depth > 0:
-                yield from payload_leaves(item, depth - 1)
-            case list():
-                pass
-            case _:
-                yield item
-
-
-def list_leaf_texts(items: list[object], depth: int) -> Iterator[str]:
-    leaves = list(payload_leaves(items, depth))
-    if leaves and all(isinstance(leaf, str) for leaf in leaves):
-        yield " ".join(leaves)
-    else:
-        yield from (leaf for leaf in leaves if isinstance(leaf, str))
-
-
-def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
-    match value:
-        case dict() as mapping:
-            for key, val in mapping.items():
-                match val:
-                    case str() if COMMAND_KEY.fullmatch(key):
-                        yield val
-                    case list() if COMMAND_KEY.fullmatch(key):
-                        yield from list_leaf_texts(val, depth)
-                        if depth > 0:
-                            yield from command_texts(val, depth - 1)
-                    case dict() | list() if depth > 0:
-                        yield from command_texts(val, depth - 1)
-        case list() as items if depth > 0:
-            for item in items:
-                if isinstance(item, dict | list):
-                    yield from command_texts(item, depth - 1)
 
 
 def forces_or_deletes_ref(refspec: str) -> bool:

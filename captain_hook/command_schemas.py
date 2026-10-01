@@ -3,6 +3,52 @@ from __future__ import annotations
 from captain_hook.cmd import COMMAND_VALUE_FLAGS
 from captain_hook.command_schema import CommandSchema, Operand, Option
 
+SIGNAL_NAMES = (
+    "HUP",
+    "INT",
+    "QUIT",
+    "ILL",
+    "TRAP",
+    "ABRT",
+    "IOT",
+    "EMT",
+    "FPE",
+    "KILL",
+    "BUS",
+    "SEGV",
+    "SYS",
+    "PIPE",
+    "ALRM",
+    "TERM",
+    "URG",
+    "STOP",
+    "TSTP",
+    "CONT",
+    "CHLD",
+    "CLD",
+    "TTIN",
+    "TTOU",
+    "IO",
+    "POLL",
+    "XCPU",
+    "XFSZ",
+    "VTALRM",
+    "PROF",
+    "WINCH",
+    "INFO",
+    "USR1",
+    "USR2",
+    "PWR",
+    "STKFLT",
+    "RTMIN",
+    "RTMAX",
+)
+SIGNAL_FLAGS = (
+    *(f"-{number}" for number in range(1, 65)),
+    *(f"-{name}" for name in SIGNAL_NAMES),
+    *(f"-SIG{name}" for name in SIGNAL_NAMES),
+)
+
 FIND = CommandSchema(
     "find",
     operands=(Operand("roots", count="*", default=(".",)),),
@@ -138,5 +184,175 @@ GIT_PUSH = CommandSchema(
             ),
             bool,
         ),
+    ),
+)
+
+KILL = CommandSchema(
+    "kill",
+    operands=(Operand("targets", count="*"),),
+    operands_end_options=True,
+    options=(
+        Option("probe", ("-0",), bool, first=True),
+        Option("signal_flag", SIGNAL_FLAGS, bool, first=True),
+        Option("signal", ("-s", "-n")),
+        Option("list", ("-l", "-L"), bool),
+    ),
+)
+
+RENICE = CommandSchema(
+    "renice",
+    operands=(Operand("args", count="*"),),
+    options=(
+        Option("adjust", ("-n", "--priority", "--relative")),
+        Option("pid", ("-p", "--pid"), bool),
+        Option("scope", ("-g", "-u", "--pgrp", "--user"), bool),
+    ),
+)
+
+ORCA = CommandSchema(
+    "orca",
+    operands=(Operand("group"), Operand("verb"), Operand("rest", count="*")),
+    options=(
+        Option("tab", ("--tab",), bool),
+        Option("all", ("--all",), bool),
+        Option("interrupt", ("--interrupt",), bool),
+        Option(
+            "mode",
+            (
+                "--json",
+                "--enter",
+                "--force",
+                "--run-hooks",
+                "--allow-failed-archive-hook",
+                "--shell",
+                "--inject",
+                "--peek",
+                "--ack",
+                "--screen",
+                "--tasks",
+                "--messages",
+                "--full",
+                "--restore-window",
+                "--no-screenshot",
+            ),
+            bool,
+        ),
+        Option("text_stdin", ("--text-stdin",), bool),
+        Option("value_stdin", ("--value-stdin",), bool),
+        Option("terminal", ("--terminal",)),
+        Option("worktree", ("--worktree",)),
+        Option("dispatch", ("--dispatch",)),
+        Option("text", ("--text",)),
+        Option("value", ("--value",)),
+        Option("app", ("--app",)),
+        Option("key", ("--key",)),
+        Option("action", ("--action",)),
+        Option(
+            "parameter",
+            (
+                "--environment",
+                "--pairing-code",
+                "--command",
+                "--limit",
+                "--title",
+                "--direction",
+                "--prompt",
+                "--agent",
+                "--spec",
+                "--to",
+                "--run",
+                "--for",
+                "--retry-request",
+                "--wait-submit",
+                "--device",
+                "--session",
+                "--window-id",
+                "--window-index",
+                "--element-index",
+                "--x",
+                "--y",
+                "--reference",
+            ),
+        ),
+    ),
+)
+
+LAUNCHCTL = CommandSchema(
+    "launchctl",
+    operands=(Operand("verb"), Operand("targets", count="*")),
+    options=(
+        Option("mode", ("-k", "-p", "-s", "-w", "-F", "-x", "-h"), bool),
+        Option("session", ("-S", "-D")),
+    ),
+)
+
+OSASCRIPT = CommandSchema(
+    "osascript",
+    operands=(Operand("program", count="*"),),
+    options=(
+        Option("statement", ("-e",)),
+        Option("language", ("-l",)),
+        Option("flags", ("-s",)),
+        Option("interactive", ("-i",), bool),
+    ),
+)
+
+SOFTWAREUPDATE = CommandSchema(
+    "softwareupdate",
+    operands=(Operand("labels", count="*"),),
+    options=(
+        Option(
+            "read",
+            (
+                "-l",
+                "--list",
+                "--history",
+                "--dump-state",
+                "--list-full-installers",
+                "--evaluate-products",
+                "--no-scan",
+                "--verbose",
+                "--agree-to-license",
+            ),
+            bool,
+        ),
+        Option(
+            "mutate",
+            (
+                "-i",
+                "--install",
+                "-a",
+                "--all",
+                "-r",
+                "--recommended",
+                "--os-only",
+                "--safari-only",
+                "-R",
+                "--restart",
+                "--background",
+                "--fetch-full-installer",
+                "--install-rosetta",
+                "-d",
+                "--download",
+                "--stdinpass",
+                "--user",
+            ),
+            bool,
+        ),
+    ),
+)
+
+PMSET = CommandSchema(
+    "pmset",
+    operands=(Operand("verb"), Operand("rest", count="*")),
+    options=(Option("scope", ("-a", "-b", "-c", "-u", "-g"), bool),),
+)
+
+TMUX = CommandSchema(
+    "tmux",
+    operands=(Operand("verb"), Operand("rest", count="*")),
+    options=(
+        Option("parameter", ("-S", "-L", "-f", "-c", "-t", "-s", "-n")),
+        Option("mode", ("-2", "-C", "-l", "-u", "-v", "-V"), bool),
     ),
 )

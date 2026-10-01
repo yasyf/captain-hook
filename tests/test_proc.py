@@ -2,15 +2,128 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import datetime
 from typing import Any
 
 import pytest
 
 from captain_hook.util import proc, reqenv
-from captain_hook.util.proc import MAX_WALK, _cold_skip_permissions, claude_skip_permissions, parent_entry
+from captain_hook.util.proc import (
+    MAX_WALK,
+    PS_TABLE_ARGV,
+    PS_TABLE_ENV,
+    ProcessRow,
+    ProcessTable,
+    _cold_skip_permissions,
+    claude_skip_permissions,
+    parent_entry,
+    process_table,
+)
 
 HOOK_CMD = "/private/tmp/claude-501/-Users-yasyf-Code-captain-hook/wt/.venv/bin/capt-hook run PermissionRequest"
 SHELL_CMD = "/bin/zsh -c eval capt-hook && pwd -P >| /tmp/claude-d9da-cwd"
+PS_TABLE = (
+    "    1     0     1    0 Wed Sep 30 05:54:44 2026 /sbin/launchd\n"
+    "  310     1   310   -2 Wed Sep 30 05:54:50 2026 /usr/sbin/mDNSResponder\n"
+    " 1445     1  1445  501 Wed Sep  5 05:58:20 2026 /Applications/Orca.app/Contents/MacOS/Orca\n"
+    " 1743  1445  1743  501 Wed Sep 30 05:58:30 2026 /Applications/Orca.app/Contents/Frameworks/Orca Helper.app"
+    "/Contents/MacOS/Orca Helper /Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/main/daemon-entry.js"
+    " --socket /Users/y/Library/Application Support/orca/daemon/daemon-v36.sock\n"
+    "14575  1743 14575  501 Wed Sep 30 06:01:05 2026 claude --dangerously-skip-permissions\n"
+)
+
+
+def row(pid: int, ppid: int, command: str, *, uid: int = 501, started: str = "2026-09-30T06:00:00") -> ProcessRow:
+    return ProcessRow(pid, ppid, pid, uid, datetime.fromisoformat(started), command)
+
+
+def table(*rows: ProcessRow) -> ProcessTable:
+    return ProcessTable({entry.pid: entry for entry in rows})
+
+
+class TestProcessTable:
+    def test_parses_a_full_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(args: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            assert args == PS_TABLE_ARGV
+            assert kwargs["env"] == os.environ | PS_TABLE_ENV
+            assert kwargs["timeout"] == 2
+            return subprocess.CompletedProcess(args, 0, stdout=PS_TABLE, stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        snapshot = process_table()
+        assert snapshot is not None
+        assert set(snapshot.rows) == {1, 310, 1445, 1743, 14575}
+        assert snapshot.rows[310].uid == -2
+        assert snapshot.rows[1445].started == datetime(2026, 9, 5, 5, 58, 20)
+        assert snapshot.rows[1743].argv0 == "Orca"
+        assert snapshot.rows[1743].command.endswith("daemon-v36.sock")
+        assert snapshot.rows[14575] == ProcessRow(
+            14575, 1743, 14575, 501, datetime(2026, 9, 30, 6, 1, 5), "claude --dangerously-skip-permissions"
+        )
+
+    def test_timeout_is_the_callers_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[float] = []
+
+        def fake_run(args: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            seen.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        with reqenv.use_request(bound(client_ppid=50, session_id="s")), reqenv.deadline_in(60):
+            assert process_table(timeout=0.75) == ProcessTable({})
+        assert seen == [0.75]
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            pytest.param(OSError("no ps"), id="os_error"),
+            pytest.param(subprocess.TimeoutExpired("ps", 2), id="timeout"),
+        ],
+    )
+    def test_ps_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+        def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            raise exc
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        assert process_table() is None
+
+    @pytest.mark.parametrize(
+        ("returncode", "stdout"),
+        [
+            pytest.param(1, PS_TABLE, id="nonzero_exit"),
+            pytest.param(0, PS_TABLE + "garbage row\n", id="malformed_row"),
+            pytest.param(0, "  12  1  12  501 Wed Sep 30 2026 sleep\n", id="truncated_lstart"),
+        ],
+    )
+    def test_unparseable_output_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: str
+    ) -> None:
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda args, **kw: subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=""),
+        )
+        assert process_table() is None
+
+    def test_ancestors_are_strict_and_root_most_last(self) -> None:
+        snapshot = table(row(1, 0, "/sbin/launchd"), row(10, 1, "login"), row(20, 10, "fish"), row(30, 20, "claude"))
+        assert [entry.pid for entry in snapshot.ancestors(30)] == [20, 10, 1]
+        assert snapshot.ancestors(1) == ()
+        assert snapshot.ancestors(999) == ()
+
+    def test_ancestors_terminate_on_a_cycle(self) -> None:
+        snapshot = table(row(5, 6, "a"), row(6, 7, "b"), row(7, 5, "c"), row(8, 8, "self"))
+        assert [entry.pid for entry in snapshot.ancestors(5)] == [6, 7]
+        assert snapshot.ancestors(8) == ()
+
+    def test_nearest_checks_the_pid_itself_then_ancestors(self) -> None:
+        snapshot = table(row(1, 0, "launchd"), row(10, 1, "claude -p"), row(11, 10, "zsh -c hook"))
+        assert (found := snapshot.nearest(11, lambda entry: entry.argv0 == "claude")) is not None
+        assert found.pid == 10
+        assert (own := snapshot.nearest(10, lambda entry: entry.argv0 == "claude")) is not None
+        assert own.pid == 10
+        assert snapshot.nearest(11, lambda entry: entry.argv0 == "codex") is None
+        assert snapshot.nearest(999, lambda entry: True) is None
 
 
 @pytest.fixture(autouse=True)
