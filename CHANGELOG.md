@@ -6,7 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.66.0] - 2026-10-01
+
+### Added
+
+- **The general pack denies commands that end or signal existing agent sessions.**
+  The guard checks `PreToolUse` and `PermissionRequest`, including wrapped
+  commands, Orca terminal closes, service removal, shutdown, and reboot.
+- **Hooks can be marked `mandatory`.** These hooks run before the dispatch
+  margin and outside fan-out admission. A guarded call is denied when its
+  guard does not complete because of a missing host, transport error, timeout,
+  refusal, worker error, or a missing guard-completion marker. Completion preserves other hooks'
+  deny decisions.
+
+### Changed
+
+- **`kill <pid>` is denied.** The session guard replaces the earlier
+  `pkill`/`killall` block and its advice to use a literal pid. The read-only
+  `kill -0 <pid>` and `kill -l` commands still pass.
+
 ### Fixed
+
+- **Guarded plugin calls deny when the launcher or classifier is unavailable.**
+  The entrypoint preserves a host's verdict after it consumes stdin and
+  discards output from a failed classifier before emitting the deny response.
+
+- **Foreground lease expiry becomes a deadline evidence gap.** The lease is
+  not renewed past the transcript deadline, and a stale handle at or after
+  that deadline reports `deadline` instead of failing the dispatch.
 
 - **A worker's one-time loads no longer count as its service time.** On an
   8-CPU Sprite, a cold worker's first event carried its imports and pack
