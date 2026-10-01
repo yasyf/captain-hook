@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.70.1] - 2026-10-01
+
+### Fixed
+
+- **Session-scope conditions no longer skip on a window with large commands.**
+  cc-transcript 14.32.0 splits `deep_predicate_inputs` across records of at
+  most 256 KiB, so `ReviewPassRan`, `has_used_skill`, and the other
+  `deep_inputs()` readers answer when a window's commands total more than the
+  1 MiB record bound, instead of skipping with `output_limit`. Pin
+  `cc-transcript[judge]==14.32.0`.
+
 ## [12.70.0] - 2026-10-01
 
 ### Changed
