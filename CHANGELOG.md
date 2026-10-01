@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.67.1] - 2026-10-01
+
+### Fixed
+
+- **Team leads read their team's task list, including after a resume.**
+  `evt.tasks` uses `CLAUDE_CODE_TASK_LIST_ID` when set, then a sanitized
+  `teamName` from `subagents/agent-*.meta.json` beside the transcript, then
+  the session id. The general pack's `Open tasks remain` Stop gate and
+  task-drift nudge now see the lead's tasks. Both skip subagents so teammates
+  are never asked to complete the lead's list.
+- **Command matching dequotes heads with unexpanded variables.**
+  `"$SKILL/scripts/orca-launch.sh" lane` used to give `Call.name` a trailing
+  quote, so `calls("orca-launch.sh")` missed it. `Call.name` now uses `shlex`
+  to dequote the raw head word before taking its basename.
+
 ## [12.67.0] - 2026-10-01
 
 ### Added

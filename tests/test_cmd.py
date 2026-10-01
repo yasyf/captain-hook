@@ -63,6 +63,9 @@ class TestCallProperties:
     def test_name_is_basename_casefolded(self) -> None:
         assert evt_for("/usr/bin/RM x").cmd.call("rm").name == "rm"
 
+    def test_name_dequotes_an_unexpanded_head_word(self) -> None:
+        assert evt_for('"$SKILL/scripts/orca-launch.sh" lane sol').cmd.call("orca-launch.sh").args == ("lane", "sol")
+
     def test_wrappers_lists_stripped_wrapper_heads(self) -> None:
         call = evt_for("sudo rm /x").cmd.call("rm")
         assert call.wrappers == ("sudo",)

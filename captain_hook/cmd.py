@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import os
+import shlex
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -232,7 +233,9 @@ class Call:
     def name(self) -> str:
         """The unwrapped head word's basename, dequoted and casefolded."""
         words = self.command.words
-        return basename(words[0].value if words and words[0].value is not None else self.command.executable)
+        if not words:
+            return basename(self.command.executable)
+        return basename(words[0].value if words[0].value is not None else shlex.split(words[0].raw)[0])
 
     @property
     def wrappers(self) -> tuple[str, ...]:
