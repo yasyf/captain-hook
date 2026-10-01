@@ -15,8 +15,10 @@
     "transport-refused",
     "shed",
     "no-verdict",
-    "worker-error"
+    "worker-error",
+    "dependency-unavailable"
   ],
-  "reason": "BLOCKED: the session guard did not complete ({kind}) and this call names a session-ending program, so it stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain Hook host answers, or ask the owner to run it.",
-  "max_event_input": 33554432
+  "reason": "BLOCKED: the session guard did not complete ({kind}), so this call could not be checked for a session-ending program and stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain Hook host answers, or ask the owner to install the host or run the call themselves.",
+  "max_event_input": 33554432,
+  "pass_exit": 3
 }

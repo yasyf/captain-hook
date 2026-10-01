@@ -1,5 +1,39 @@
 #!/bin/bash
-case "$OSTYPE" in
-  linux*) exec "$HOME/.local/share/captain-hook/host/capt-hookd" "$@" ;;
+# shellcheck source-path=SCRIPTDIR/..
+set +e
+case "${1-} ${2-}" in
+  "run PreToolUse" | "run PermissionRequest") guarded=$2 ;;
+  *) guarded= ;;
 esac
-. "${0%/*}/../scripts/install-binary.sh"
+root="${0%/*}/.."
+deny() {
+  # binrun refuses before reading stdin and a host that ran has spent it: one byte tells them apart.
+  IFS= read -r -d '' -n 1 first || exit "$1"
+  verdict=$(python3 -I "$root/guard_literal.py" "$guarded" "$first")
+  rc=$?
+  . "$root/guard_literal.sh"
+  [ "$rc" -eq 0 ] && { printf '%s\n' "$verdict"; exit 0; }
+  [ "$rc" -eq "$GUARD_PASS_EXIT" ] && exit 1
+  case "$guarded" in
+    PreToolUse) printf '%s\n' "$GUARD_DENY_PreToolUse" ;;
+    PermissionRequest) printf '%s\n' "$GUARD_DENY_PermissionRequest" ;;
+  esac
+  exit 0
+}
+case "$OSTYPE" in
+  linux*)
+    # execfail: a failed exec returns here instead of ending the script, with stdin still unread.
+    shopt -s execfail
+    exec "$HOME/.local/share/captain-hook/host/capt-hookd" "$@"
+    rc=$?
+    [ -n "$guarded" ] && deny "$rc"
+    exit 1
+    ;;
+esac
+if [ -n "$guarded" ]; then
+  ( . "$root/scripts/install-binary.sh" )
+  rc=$?
+  [ "$rc" -eq 0 ] || deny "$rc"
+  exit "$rc"
+fi
+. "$root/scripts/install-binary.sh"

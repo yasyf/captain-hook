@@ -8,15 +8,16 @@ from typing import Never
 import pytest
 
 from capt_hook_client import client, guard_literal
+from tests.helpers import BENIGN_PAYLOAD, DESTRUCTIVE_PAYLOAD
 
-DESTRUCTIVE = b'{"session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
-BENIGN = b'{"session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"git status"}}'
+
+class UnreadBuffer:
+    def read(self, _size: int) -> Never:
+        raise AssertionError("stdin must not be read")
 
 
 class UnreadStdin:
-    @property
-    def buffer(self) -> Never:
-        raise AssertionError("stdin must not be read")
+    buffer = UnreadBuffer()
 
 
 def missing_execv(_path: str, _argv: list[str]) -> Never:
@@ -36,7 +37,7 @@ def test_missing_host_denies_a_destructive_event(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], event: str
 ) -> None:
     monkeypatch.setattr(os, "execv", missing_execv)
-    assert run(monkeypatch, event, io.TextIOWrapper(io.BytesIO(DESTRUCTIVE))) == 0
+    assert run(monkeypatch, event, io.TextIOWrapper(io.BytesIO(DESTRUCTIVE_PAYLOAD))) == 0
     captured = capsys.readouterr()
     assert captured.out == guard_literal.deny_envelope(event, "host-unavailable") + "\n"
     assert captured.err == ""
@@ -46,7 +47,7 @@ def test_missing_host_stays_a_hook_error_for_a_benign_event(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(os, "execv", missing_execv)
-    assert run(monkeypatch, "PreToolUse", io.TextIOWrapper(io.BytesIO(BENIGN))) == 1
+    assert run(monkeypatch, "PreToolUse", io.TextIOWrapper(io.BytesIO(BENIGN_PAYLOAD))) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == f"captain-hook client unavailable at {client.HOST}: missing\n"

@@ -243,9 +243,18 @@ The plugin registers one command for every event:
 [binrun](https://github.com/yasyf/binrun) with the descriptor beside it, bootstrapping the one
 pinned, sha256-verified runner on a machine without it. The descriptor names the installed app's
 `Contents/Helpers/capt-hookd` and sets `copy_exec`, so binrun runs a cached copy outside the
-bundle a deploy replaces. It requires app 12.31.0; an older app gets binrun's `brew upgrade`
-error, which exits 1 and never blocks a tool call. The
-client reads the event from stdin, takes the project root from the first of
+bundle a deploy replaces. It requires app 12.66.0.
+
+A missing or older app gets binrun's `brew upgrade` error and exit 1, except for a `PreToolUse`
+or `PermissionRequest`. binrun refuses before reading stdin, so `bin/hook` runs the plugin's
+bundled guard literal under the `python3` on `PATH`. A call that names a session-ending program
+is denied with exit 0 and the host-unavailable envelope, and any other call keeps the exit 1.
+When no `python3` can run the literal, nothing can classify the payload, so `bin/hook` denies
+every `PreToolUse` and `PermissionRequest` with the rendered `dependency-unavailable` envelope
+and exit 0 until the host or a working `python3` is installed. A host that ran and then failed
+has already read stdin, so its own exit code passes through untouched.
+
+The client reads the event from stdin, takes the project root from the first of
 `CLAUDE_PROJECT_DIR`, `FACTORY_PROJECT_DIR`, and the payload's `cwd`, and sends one request over daemonkit's
 length-framed persistent transport. While the host refuses the event before dispatch, because
 nothing is listening or the host is starting, draining, or out of session slots, the client
@@ -283,8 +292,9 @@ codes separate. The worker refuses an event whose deadline has already passed.
 
 There is no cold fallback, fail-open mode, replay, or compatibility protocol. A missing app,
 malformed frame, unavailable host, or expired deadline returns a non-zero hook
-process. Once an event is admitted, no transport outcome causes captain-hook to run it a second
-time.
+process, and a `PreToolUse` or `PermissionRequest` naming a session-ending program is denied
+instead, with exit 0 and the host-unavailable envelope. Once an event is admitted, no transport
+outcome causes captain-hook to run it a second time.
 
 Workers are disposable. When a worker call times out or its protocol fails, the host retires that
 exact generation, sends `TERM`, escalates to `KILL` after the bounded grace period, waits for it,
@@ -363,8 +373,9 @@ runtime owner; it does not make untrusted hook code safe.
 ### Host troubleshooting
 
 **The signed host is missing.** Install or repair it with
-`uvx capt-hook helper install`. Dispatch fails non-zero and never runs the Python CLI instead.
-[Troubleshooting](troubleshooting.qmd#the-signed-host-is-missing-or-dispatch-fails) walks both.
+`uvx capt-hook helper install`. Dispatch fails non-zero and never runs the Python CLI instead; a
+`PreToolUse` or `PermissionRequest` naming a session-ending program is denied until the host is
+back. [Troubleshooting](troubleshooting.qmd#the-signed-host-is-missing-or-dispatch-fails) walks both.
 
 **A worker is stuck or stale.** Run `"$host" status`, inspect `capt-hookd.log`, then use
 `"$host" restart-workers`. Restart kills and reaps the current worker generations; it is not a
