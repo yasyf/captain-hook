@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.70.0] - 2026-10-01
+
+### Changed
+
+- **Every hook reads a trailing window of the transcript.** Hook dispatch
+  acquires the newest 4 MiB of the transcript (`HOOK_TAIL_BYTES`; the window
+  spans 4-6 MiB and starts at an entry boundary) instead of parsing the whole
+  file, and root warming prepares the same window. Appends inside the window
+  reuse it and carry classifier labels; the window moves forward in 2 MiB
+  steps. Reviewer and transcript-mining reads stay whole-file.
+- **Turn throttles and echo windows follow the transcript window.**
+  `evt.ctx.window_start` is the byte offset the window starts at, and
+  `evt.ctx.event_count` counts from it. A gate's fired-this-turn check and a
+  nudge's echo window lapse when the window moves, instead of comparing event
+  counts from two different windows.
+- The `cc-transcript[judge]` pin moves to 14.31.1.
+
 ## [12.69.1] - 2026-10-01
 
 ### Fixed

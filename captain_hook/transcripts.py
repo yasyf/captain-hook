@@ -91,7 +91,7 @@ def load_transcript(path: None) -> Session: ...
 def load_transcript(path: str | Path | None) -> Session | RemoteSession:
     from cc_transcript.query import Session
 
-    from captain_hook.snapshots.client import CURRENT_CLIENT, NATIVE_CLASSIFIER, EvidenceIncomplete
+    from captain_hook.snapshots.client import CURRENT_CLIENT, HOOK_TAIL_BYTES, NATIVE_CLASSIFIER, EvidenceIncomplete
 
     if not path:
         return Session(())
@@ -100,10 +100,10 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
     from captain_hook.app import _state
 
     try:
-        session = client.acquire(path)
+        session = client.acquire(path, tail_bytes=HOOK_TAIL_BYTES)
     except EvidenceIncomplete as exc:
         if exc.status in {"incomplete", "deadline"}:
-            client.schedule_root_warm(path, NATIVE_CLASSIFIER)
+            client.schedule_root_warm(path, NATIVE_CLASSIFIER, HOOK_TAIL_BYTES)
         raise
     try:
         if _state.classifier is not None:
@@ -123,7 +123,7 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
         return session.with_classifier(data[0]["classifier"])
     except EvidenceIncomplete as exc:
         if exc.status in {"incomplete", "deadline"}:
-            client.schedule_root_warm(path, session.classifier)
+            client.schedule_root_warm(path, session.classifier, HOOK_TAIL_BYTES)
         session.release()
         raise
     except BaseException:

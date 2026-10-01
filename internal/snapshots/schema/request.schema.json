@@ -37,6 +37,20 @@
           "const": "cc-transcript.snapshot/1",
           "title": "Schema",
           "type": "string"
+        },
+        "tail_bytes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tail Bytes"
         }
       },
       "required": [
@@ -2455,6 +2469,20 @@
           "const": "cc-transcript.snapshot/1",
           "title": "Schema",
           "type": "string"
+        },
+        "tail_bytes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tail Bytes"
         }
       },
       "required": [

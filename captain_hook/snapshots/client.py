@@ -33,6 +33,7 @@ CLEANUP_SECONDS = 5
 GRAPH_WORK_SECONDS = 0.75
 GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
 GATE_WORK_SECONDS = 5.0
+HOOK_TAIL_BYTES = 4 * 1024 * 1024
 GRAPH_DISCOVERY_ENTRIES = 50_000
 GRAPH_SOURCE_LIMIT = 4096
 DEFAULT_LIMITS = {
@@ -266,9 +267,9 @@ class SnapshotClient:
         if self._warm_scheduler is not None:
             self._warm_scheduler(self, sources)
 
-    def schedule_root_warm(self, path: str | Path, classifier: Mapping[str, str]) -> None:
+    def schedule_root_warm(self, path: str | Path, classifier: Mapping[str, str], tail_bytes: int | None) -> None:
         if classifier["id"] != "captain-configured" and self._root_warm_scheduler is not None:
-            self._root_warm_scheduler(self, Path(path).absolute(), classifier)
+            self._root_warm_scheduler(self, Path(path).absolute(), classifier, tail_bytes)
 
     def call(self, operation: str, *, domain: bool = False, **arguments: object) -> dict[str, Any]:
         from jsonschema import ValidationError
@@ -362,15 +363,23 @@ class SnapshotClient:
                 else:
                     self.call("release", kind="cursor", token=cursor)
 
-    def acquire(self, path: str | Path, *, classifier: Mapping[str, str] = NATIVE_CLASSIFIER) -> RemoteSession:
+    def acquire(
+        self, path: str | Path, *, classifier: Mapping[str, str] = NATIVE_CLASSIFIER, tail_bytes: int | None = None
+    ) -> RemoteSession:
         description = None
-        for data in self.pages("acquire", path=str(Path(path).absolute()), classifier=dict(classifier)):
+        for data in self.pages(
+            "acquire", path=str(Path(path).absolute()), classifier=dict(classifier), tail_bytes=tail_bytes
+        ):
             if data.get("kind") == "acquired":
                 description = data["description"]
         if not isinstance(description, dict):
             raise SnapshotProtocolError("acquire completed without a snapshot description")
         return RemoteSession(
-            self, Lease(self, description), Path(description["canonical_path"]), description["classifier"]
+            self,
+            Lease(self, description),
+            Path(description["canonical_path"]),
+            description["classifier"],
+            tail_bytes=tail_bytes,
         )
 
     def classify(
@@ -412,7 +421,9 @@ class SnapshotClient:
         if result["status"] != "ok" or data["kind"] != "acquired":
             raise SnapshotProtocolError("classifier completed without a leased description")
         description = data["description"]
-        classified = RemoteSession(self, Lease(self, description), session.path, description["classifier"])
+        classified = RemoteSession(
+            self, Lease(self, description), session.path, description["classifier"], tail_bytes=session.tail_bytes
+        )
         session.release()
         return classified
 
@@ -604,6 +615,7 @@ class RootWarmState:
     path: Path
     classifier: Mapping[str, str]
     client: SnapshotClient
+    tail_bytes: int | None = None
     owner_epoch: str | None = None
     source_revision: str | None = None
     source_offset: int = 0
@@ -617,6 +629,7 @@ class RootWarmState:
             "warm_root",
             path=str(self.path),
             classifier=dict(self.classifier),
+            tail_bytes=self.tail_bytes,
             deadline_unix_ms=int((time.time() + deadline_seconds) * 1000),
             limits=graph_limits() | {"max_source_read_bytes": read_bytes},
         )
@@ -771,7 +784,7 @@ class PreparedGraphEvidence:
         except EvidenceIncomplete as exc:
             if exc.status in {"incomplete", "deadline"}:
                 session.client.schedule_graph_warm(self.sources)
-                session.client.schedule_root_warm(session.path, session.classifier)
+                session.client.schedule_root_warm(session.path, session.classifier, session.tail_bytes)
             if exc.status in {"stale_handle", "stale_cursor"}:
                 raise GraphEvidenceExpired(exc.status, exc.reason) from exc
             raise
@@ -813,6 +826,11 @@ class RemoteSession:
     classifier: Mapping[str, str]
     selectors: tuple[Mapping[str, object], ...] = ()
     graph: PreparedGraphEvidence = field(default_factory=lambda: PreparedGraphEvidence(GraphSources()))
+    tail_bytes: int | None = None
+
+    @property
+    def window_start(self) -> int:
+        return self.lease.description["window_start"]
 
     def view(self) -> dict[str, object]:
         return {
@@ -868,10 +886,10 @@ class RemoteSession:
             self.lease.require()
             client = CURRENT_CLIENT.get() or self.client
             try:
-                classified = client.acquire(self.path, classifier=classifier)
+                classified = client.acquire(self.path, classifier=classifier, tail_bytes=self.tail_bytes)
             except EvidenceIncomplete as exc:
                 if exc.status in {"incomplete", "deadline"}:
-                    client.schedule_root_warm(self.path, classifier)
+                    client.schedule_root_warm(self.path, classifier, self.tail_bytes)
                 raise
             try:
                 before, after = self.lease.description, classified.lease.description

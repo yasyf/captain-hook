@@ -225,7 +225,7 @@ def test_root_and_registered_warming_share_one_paced_fair_worker(monkeypatch, tm
     monkeypatch.setattr(worker, "_warm_step", step)
     source_client = client()
     try:
-        worker.schedule_root_warm(source_client, tmp_path / "root.jsonl", {"id": "native", "version": "1"})
+        worker.schedule_root_warm(source_client, tmp_path / "root.jsonl", {"id": "native", "version": "1"}, None)
         assert started.wait(2)
         worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",), session_key="session"))
         advance.set()

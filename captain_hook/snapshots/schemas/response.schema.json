@@ -287,6 +287,12 @@
           "minimum": 0,
           "title": "Turn Count",
           "type": "integer"
+        },
+        "window_start": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Window Start",
+          "type": "integer"
         }
       },
       "required": [
@@ -301,6 +307,7 @@
         "provider",
         "parser_version",
         "source_bytes",
+        "window_start",
         "committed_bytes",
         "event_count",
         "turn_count",
