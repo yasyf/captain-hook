@@ -52,6 +52,7 @@ UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktr
 HOME_SPELLINGS = ("$HOME", "${HOME}")
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
 FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir"})
+ATTEMPT_TOOLS = "Bash|Edit|Write"
 
 GIT_STASH = CommandSchema(
     "git",
@@ -190,6 +191,11 @@ class AllOf:
         return all(predicate(arguments) for predicate in self.predicates)
 
 
+def names_an_entry(arguments: Arguments) -> bool:
+    """Whether the verb names its entry; a ``$(...)`` operand leaves operands incomplete with nothing unread."""
+    return bool(arguments.values.get("targets")) or not (arguments.operands_complete or arguments.unread)
+
+
 def names_a_bare_plugin(arguments: Arguments) -> bool:
     return any("@" not in (name or "") for name in arguments.values.get("plugins", ()))
 
@@ -204,7 +210,7 @@ hook(
             skip_if=(
                 Binds("help"),
                 OperandIs("verb", {"list", "show"}),
-                AllOf(OperandIs("verb", {"apply", "drop"}), Binds("targets")),
+                AllOf(OperandIs("verb", {"apply", "drop"}), names_an_entry),
                 AllOf(OperandIs("verb", {"", "push"}), Binds("message")),
             ),
         ),
@@ -240,6 +246,12 @@ hook(
         Input(command="git stash apply --index stash@{1}"): Allow(),
         Input(command="git stash drop stash@{2}"): Allow(),
         Input(command="git stash drop -q 2"): Allow(),
+        Input(command="git stash drop -q $(git stash list | grep ccx-followups-test | cut -d: -f1)"): Allow(),
+        Input(command="git stash apply -q $(git stash list --format='%H %gs' | grep tag | cut -d' ' -f1)"): Allow(),
+        Input(command="git stash pop $(git stash list | grep tag | cut -d: -f1)"): Block(),
+        Input(command="git stash drop --bogus"): Block(),
+        Input(command="git stash list | grep tag"): Allow(),
+        Input(command="git -C /repo stash list | head"): Allow(),
         Input(command="git status"): Allow(),
         Input(command="echo git stash"): Allow(),
     },
@@ -268,9 +280,10 @@ hook(
 
 nudge(
     "Two tool failures without a second opinion. Run `/codex` before a third attempt.",
+    only_if=[Tool(ATTEMPT_TOOLS)],
     skip_if=[UsedSkill("codex"), RanCommand("codex")],
     events=Event.PostToolUseFailure,
-    when=lambda evt: evt.ctx.turn.count_failures() >= 2,
+    when=lambda evt: evt.ctx.turn.tool_calls.named(ATTEMPT_TOOLS).failed().count() >= 2,
     tests={
         Input(
             command="uv run pytest",
@@ -281,9 +294,37 @@ nudge(
             ],
         ): Warn(pattern="/codex"),
         Input(
+            tool="Edit",
+            file="m.py",
+            error="String to replace not found in file.",
+            transcript=[
+                *T.tool_turn("Bash", result="SyntaxError", is_error=True, command="uv run pytest"),
+                *T.tool_turn("Edit", result="String to replace not found", is_error=True, file_path="m.py"),
+            ],
+        ): Warn(pattern="/codex"),
+        Input(
             command="uv run pytest",
             error="ModuleNotFoundError",
             transcript=T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest"),
+        ): Allow(),
+        Input(
+            command="uv run pytest",
+            error="ModuleNotFoundError",
+            transcript=[
+                *T.tool_turn("Grep", result="Path does not exist: api/src/foo", is_error=True, pattern="x"),
+                *T.tool_turn("Agent", result="Concurrent subagent limit reached", is_error=True, prompt="go"),
+                *T.tool_turn("mcp__datadog__search_logs", result="MCP error -32603: timeout", is_error=True, query="x"),
+                *T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest"),
+            ],
+        ): Allow(),
+        Input(
+            tool="mcp__plugin_cc-context_cc-context__ccx_code_grep",
+            tool_input={"pattern": "x", "paths": ["api/src/missing"]},
+            error="path not found: api/src/missing",
+            transcript=[
+                *T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest"),
+                *T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest -x"),
+            ],
         ): Allow(),
     },
 )

@@ -19,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reset time or, when absent, one hour after recording; cc-slack and raw records do not expire.
   The required expiry field clears 12.73 refusal state on upgrade, including false records from
   source reads.
+- **The git-stash block lets an entry chosen by command substitution through.** `git stash drop
+  $(git stash list | grep <tag> | cut -d: -f1)` and the matching `apply` follow the tagged
+  sequence the block prescribes, so they pass; a bare `drop`, `apply` or `pop` still blocks.
+- **The multi-request nudge skips harness deliveries.** A prompt that is a teammate message,
+  another session's `<agent-message>`, a `<cross-session-message>`, a task notification, or a
+  `[Subagent hand-back]` frame no longer reads as several user requests.
+- **The `/codex` second-opinion nudge counts only failed Bash, Edit and Write calls.** A search
+  tool's path-not-found, an Agent spawn error, or an MCP error is not a failed approach.
+- **The narrate-then-wait gate accepts a command request.** A closing message that waits on the
+  user to run a named command, such as `! aws sso login`, is an action, not a decision, so the
+  signal prefilter and the judge both let it stop.
+- **The pre-existing-issue nudge needs corroboration for "not caused by my change".** That
+  clause alone no longer fires; it fires alongside "pre-existing" or "out of scope".
 
 ## [12.73.0] - 2026-10-01
 
