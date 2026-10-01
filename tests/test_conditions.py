@@ -1135,6 +1135,20 @@ class TestUserSaidCondition:
         assert check_condition(UserSaid("plan mode"), evt) is False
         assert check_condition(UserSaid("fix the typo"), evt) is True
 
+    def test_session_scope_reads_prompts_past_a_turn_over_the_record_bound(
+        self, tmp_path: Path, snapshot_owner: FixtureOwner
+    ) -> None:
+        path = tmp_path / "session.jsonl"
+        lines = [raw_text("user", "re-enter plan mode"), raw_text("assistant", "ok"), raw_text("user", "now build it")]
+        lines += [
+            raw_assistant(raw_tool_use("Bash", {"command": f"echo {index} {'x' * 400_000}"}, f"b{index}"))
+            for index in range(3)
+        ]
+        path.write_text("".join(json.dumps(fixture_line(index, line)) + "\n" for index, line in enumerate(lines)))
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=build_ctx(transcript=snapshot_owner.load(path)))
+        assert check_condition(UserSaid("plan mode", scope="session"), evt) is True
+        assert check_condition(UserSaid("deploy", scope="session"), evt) is False
+
 
 class TestReadFileCondition:
     @pytest.mark.parametrize(
