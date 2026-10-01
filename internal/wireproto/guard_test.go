@@ -130,9 +130,9 @@ func TestGuardInputBoundIsTheWireCeiling(t *testing.T) {
 
 func TestDenyEnvelopeRendersEachEventShapeWithKindOnlyDiagnostics(t *testing.T) {
 	t.Parallel()
-	reason := "BLOCKED: the session guard did not complete (host-unavailable) and this call names a session-ending " +
-		"program, so it stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain Hook host " +
-		"answers, or ask the owner to run it."
+	reason := "BLOCKED: the session guard did not complete (host-unavailable), so this call could not be checked for " +
+		"a session-ending program and stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain " +
+		"Hook host answers, or ask the owner to install the host or run the call themselves."
 	for event, want := range map[string]string{
 		"PreToolUse": `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",` +
 			`"permissionDecisionReason":"` + reason + `"}}`,

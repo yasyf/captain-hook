@@ -6,7 +6,7 @@ import os
 import sys
 from typing import NoReturn
 
-from capt_hook_client.guard_literal import EVENTS, MAX_EVENT_INPUT, deny_envelope, mandatory
+from capt_hook_client.guard_literal import deny_if_mandatory
 
 HOST = (
     os.path.join(os.path.expanduser("~"), "Applications", "Captain Hook.app", "Contents", "Helpers", "capt-hookd")
@@ -36,8 +36,7 @@ def ops_main() -> NoReturn:
 
 
 def _unavailable(event: str, exc: OSError) -> NoReturn:
-    if event in EVENTS and mandatory(event, sys.stdin.buffer.read(MAX_EVENT_INPUT + 1)):
-        print(deny_envelope(event, "host-unavailable"))
+    if deny_if_mandatory(event, sys.stdin.buffer) == 0:
         raise SystemExit(0)
     _die(f"captain-hook client unavailable at {HOST}: {exc}")
 

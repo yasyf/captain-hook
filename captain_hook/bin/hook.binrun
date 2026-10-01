@@ -13,6 +13,6 @@
     "exec": "Contents/Helpers/capt-hookd",
     "copy_exec": true,
     "formula": "yasyf/tap/captain-hook",
-    "min_version": "12.31.0"
+    "min_version": "12.66.0"
   }
 }

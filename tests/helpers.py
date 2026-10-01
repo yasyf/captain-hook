@@ -64,6 +64,8 @@ if TYPE_CHECKING:
 
 PKG_DIR = Path(__file__).resolve().parents[3]
 UUIDS = count(1)
+DESTRUCTIVE_PAYLOAD = b'{"session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
+BENIGN_PAYLOAD = b'{"session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"git status"}}'
 
 
 def dispatch_test(
