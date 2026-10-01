@@ -1030,6 +1030,7 @@ class HookSpec:
     async_: bool = False
     skip_planning_agents: bool = True
     mandatory: bool = False
+    transcript_events: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

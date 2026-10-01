@@ -791,3 +791,29 @@ def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_p
     ]
     assert len(reads) == 2
     assert len(loads) == 2
+
+
+def test_dispatch_reads_only_the_tail_its_hooks_declare(tmp_path, monkeypatch):
+    tails = []
+
+    @on(Event.Stop, transcript_events=30)
+    def recent_gate(evt):
+        assert len(evt.ctx.t) == 0
+        return None
+
+    def tail(path, count):
+        from cc_transcript.query import Session
+
+        tails.append((path, count))
+        return Session(())
+
+    monkeypatch.setattr("captain_hook.transcripts.tail_transcript", tail)
+    dispatch_event(
+        tmp_path,
+        Event.Stop,
+        {"session_id": "s-window", "transcript_path": str(tmp_path / "main.jsonl")},
+        session_dir=ensure_session(SessionId("s-window")),
+        transcript_loader=lambda _: pytest.fail("a declared window loaded the whole transcript"),
+    )
+
+    assert tails == [(str(tmp_path / "main.jsonl"), 30)]

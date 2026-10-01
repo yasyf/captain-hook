@@ -37,6 +37,9 @@ class AsyncDecisionError(TypeError):
     """A hook combined ``async_=True`` with a decision-capable event, whose verdict would be lost."""
 
 
+MAX_TRANSCRIPT_EVENTS = 256
+
+
 class MandatoryHookError(TypeError):
     """A hook combined ``mandatory=True`` with a mode or event the client cannot hold the call for."""
 
@@ -58,6 +61,12 @@ def reject_mandatory_misuse(events: Event, async_: bool, mandatory: bool) -> Non
         raise MandatoryHookError(
             f"mandatory=True is invalid on {names}: the client prefilters only PreToolUse and PermissionRequest."
         )
+
+
+def reject_transcript_events(transcript_events: int | None) -> None:
+    """Reject a declared window the snapshot engine's ``tail`` operation cannot serve."""
+    if transcript_events is not None and not 0 < transcript_events <= MAX_TRANSCRIPT_EVENTS:
+        raise ValueError(f"transcript_events must be between 1 and {MAX_TRANSCRIPT_EVENTS}, got {transcript_events}")
 
 
 def reject_async_decision(events: Event, async_: bool) -> None:
@@ -208,9 +217,11 @@ def hook(
     async_: bool = False,
     skip_planning_agents: bool | None = None,
     mandatory: bool = False,
+    transcript_events: int | None = None,
 ) -> None:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
+    reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     _state.hooks.append(
@@ -228,6 +239,7 @@ def hook(
                 async_=async_,
                 skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
                 mandatory=mandatory,
+                transcript_events=transcript_events,
             ),
             name=hook_name("hook", None, message),
             source_file=caller_file(),
@@ -247,9 +259,11 @@ def on(
     skip_planning_agents: bool = True,
     advisory_on_deny: bool = False,
     mandatory: bool = False,
+    transcript_events: int | None = None,
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
+    reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     spec = HookSpec(
@@ -263,6 +277,7 @@ def on(
         skip_planning_agents=skip_planning_agents,
         advisory_on_deny=advisory_on_deny,
         mandatory=mandatory,
+        transcript_events=transcript_events,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:
@@ -314,6 +329,12 @@ def get_hook_candidates(
 def get_mandatory_hooks(event: Event) -> list[RegisteredHook]:
     """Every ``mandatory=True`` registration for *event*, before any per-event opt-out, in registration order."""
     return [h for h in _state.hooks if h.spec.mandatory and event in h.spec.events]
+
+
+def transcript_events_window(event: Event) -> int | None:
+    """The most recent transcript events *event*'s hooks read, or None when any of them reads further back."""
+    windows = [h.spec.transcript_events for h in _state.hooks if event in h.spec.events]
+    return None if not windows or None in windows else max(w for w in windows if w is not None)
 
 
 def registration_ranks() -> dict[int, int]:

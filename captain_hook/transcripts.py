@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import threading
 from pathlib import Path
@@ -66,10 +68,14 @@ def configured_classifier_policy(project_dir: str | Path | None) -> dict[str, st
     from captain_hook.cli import CliState
     from captain_hook.daemon.registry import Fingerprint
 
+    registry = (
+        _state.registry_fingerprint
+        or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest
+    )
+    caller_env = sorted((k, v) for k, v in reqenv.env_map().items() if reqenv.is_whitelisted(k))
     return {
         "id": "captain-configured",
-        "version": _state.registry_fingerprint
-        or Fingerprint.compute(CliState(root=Path(project_dir) if project_dir else reqenv.cwd())).digest,
+        "version": f"{registry}:{hashlib.sha256(json.dumps(caller_env).encode()).hexdigest()[:16]}",
     }
 
 
@@ -122,6 +128,26 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
     except BaseException:
         session.release()
         raise
+
+
+def tail_transcript(path: str | Path, count: int) -> Session:
+    """The newest *count* events of the transcript at *path*, read backwards from its end without a lease."""
+    from cc_transcript.snapshots import SnapshotIncomplete, decode_projection
+
+    from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, SnapshotProtocolError
+
+    if (client := CURRENT_CLIENT.get()) is None:
+        raise EvidenceIncomplete("invalid_request", "transcript loading requires an admitted snapshot client")
+    result = client.call("tail", path=str(Path(path).absolute()), count=count)
+    if result["status"] not in {"ok", "incomplete"} or (data := result.get("data")) is None:
+        raise EvidenceIncomplete(str(result["status"]), str(result.get("reason")))
+    if data["kind"] != "tail":
+        raise SnapshotProtocolError("tail returned an unexpected projection")
+    try:
+        events = decode_projection(data["record_schema"], data["records_json"], tool_registry=client.tool_registry())
+    except SnapshotIncomplete as exc:
+        raise EvidenceIncomplete(exc.status, exc.reason) from exc
+    return lift_session(events, path=Path(path))
 
 
 def lane_transcript_path(transcript_path: str | Path, agent_id: str) -> Path:
@@ -253,6 +279,7 @@ def lazy_transcript(
     *,
     loader: Callable[[str | Path | None], Session | RemoteSession] | None = None,
     attach: Callable[[], GraphSources] | None = None,
+    tail_events: int | None = None,
 ) -> LazyTranscript:
     resolve = loader or load_transcript
 
@@ -261,7 +288,7 @@ def lazy_transcript(
 
         reqenv.checkpoint()
         try:
-            session = resolve(path)
+            session = tail_transcript(path, tail_events) if path and tail_events else resolve(path)
         except EvidenceIncomplete:
             raise
         except Exception as exc:

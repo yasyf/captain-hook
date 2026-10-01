@@ -82,7 +82,9 @@ def test_fixture_configured_classifier_stays_in_caller_scope(tmp_path, monkeypat
         assert first.prompts("first", 10) == ["include me"]
         assert second.prompts("first", 10) == ["ignore me"]
         assert first.classifier != second.classifier
-        assert policies == [{"id": "captain-configured", "version": "pinned-registry"}] * 2
+        assert [policy["id"] for policy in policies] == ["captain-configured"] * 2
+        assert all(policy["version"].startswith("pinned-registry:") for policy in policies)
+        assert policies[0]["version"] != policies[1]["version"]
         assert fixture.client.call("stats")["data"]["counters"]["cold_parses"] == 1
         first.release()
         second.release()

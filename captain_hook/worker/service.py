@@ -141,7 +141,7 @@ class WorkerService:
         from loguru import logger
 
         start = time.perf_counter()
-        from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_allowance
+        from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_seconds
 
         def cleanup(value: dict[str, object]) -> dict[str, Any]:
             return self.snapshot_exchange(0, value, cleanup=True)
@@ -154,8 +154,7 @@ class WorkerService:
             warm_scheduler=self.schedule_graph_warm,
             root_warm_scheduler=self.schedule_root_warm,
             defer_cleanup=True,
-            foreground_seconds=(allowance := foreground_allowance(request.event))[0],
-            foreground_source_read_bytes=allowance[1],
+            foreground_seconds=foreground_seconds(request.event),
         )
         background_client = SnapshotClient(
             lambda value: self.snapshot_exchange(0, value),

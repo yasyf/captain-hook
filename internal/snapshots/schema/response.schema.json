@@ -97,6 +97,7 @@
               "scalar": "#/$defs/ScalarResult",
               "stats": "#/$defs/StatsResult",
               "strings": "#/$defs/StringsResult",
+              "tail": "#/$defs/TailResult",
               "warmed_registry": "#/$defs/WarmedRegistryResult",
               "warmed_root": "#/$defs/WarmedRootResult"
             },
@@ -147,6 +148,9 @@
             },
             {
               "$ref": "#/$defs/RecordsResult"
+            },
+            {
+              "$ref": "#/$defs/TailResult"
             },
             {
               "$ref": "#/$defs/WaitingResult"
@@ -701,6 +705,7 @@
                   "scalar": "#/$defs/ScalarResult",
                   "stats": "#/$defs/StatsResult",
                   "strings": "#/$defs/StringsResult",
+                  "tail": "#/$defs/TailResult",
                   "warmed_registry": "#/$defs/WarmedRegistryResult",
                   "warmed_root": "#/$defs/WarmedRootResult"
                 },
@@ -751,6 +756,9 @@
                 },
                 {
                   "$ref": "#/$defs/RecordsResult"
+                },
+                {
+                  "$ref": "#/$defs/TailResult"
                 },
                 {
                   "$ref": "#/$defs/WaitingResult"
@@ -1258,6 +1266,51 @@
         "values"
       ],
       "title": "StringsResult",
+      "type": "object"
+    },
+    "TailResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "tail",
+          "title": "Kind",
+          "type": "string"
+        },
+        "record_schema": {
+          "const": "cc-transcript.event/1",
+          "title": "Record Schema",
+          "type": "string"
+        },
+        "records_json": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Records Json",
+          "type": "array"
+        },
+        "source_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "window_start_byte": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Window Start Byte",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "record_schema",
+        "records_json",
+        "source_bytes",
+        "window_start_byte"
+      ],
+      "title": "TailResult",
       "type": "object"
     },
     "Usage": {

@@ -31,11 +31,8 @@ MAX_RESULT_BYTES = 16 * 1024 * 1024
 MAX_VIEW_ATTACHMENTS = 1024
 CLEANUP_SECONDS = 5
 GRAPH_WORK_SECONDS = 0.75
-GRAPH_SOURCE_READ_BYTES = 1024 * 1024
-FOREGROUND_READ_BYTES = 64 * 1024 * 1024
 GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
 GATE_WORK_SECONDS = 5.0
-GATE_SOURCE_READ_BYTES = 8 * 1024 * 1024
 GRAPH_DISCOVERY_ENTRIES = 50_000
 GRAPH_SOURCE_LIMIT = 4096
 DEFAULT_LIMITS = {
@@ -54,16 +51,13 @@ def monotonic_deadline(deadline_unix_ms: int) -> float:
     return time.monotonic() + deadline_unix_ms / 1000 - time.time()
 
 
-def foreground_allowance(event: str) -> tuple[float, int]:
-    """The seconds and source bytes one dispatch may spend on evidence; turn-level gates fire rarely and get more."""
-    if event in GATE_EVENTS:
-        return GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES
-    return GRAPH_WORK_SECONDS, GRAPH_SOURCE_READ_BYTES
+def foreground_seconds(event: str) -> float:
+    """The seconds one dispatch may spend on evidence; turn-level gates fire rarely and get more."""
+    return GATE_WORK_SECONDS if event in GATE_EVENTS else GRAPH_WORK_SECONDS
 
 
 def graph_limits() -> dict[str, int]:
     limits = DEFAULT_LIMITS.copy()
-    limits["max_source_read_bytes"] = min(limits["max_source_read_bytes"], GRAPH_SOURCE_READ_BYTES)
     limits["max_discovery_entries"] = min(limits["max_discovery_entries"], GRAPH_DISCOVERY_ENTRIES)
     limits["max_sources"] = min(limits["max_sources"], GRAPH_SOURCE_LIMIT)
     return limits
@@ -208,7 +202,6 @@ class SnapshotClient:
         root_warm_scheduler: Callable[[SnapshotClient, Path, Mapping[str, str]], None] | None = None,
         defer_cleanup: bool = False,
         foreground_seconds: float | None = None,
-        foreground_source_read_bytes: int | None = None,
     ) -> None:
         self._exchange = exchange
         self._cleanup_exchange = cleanup_exchange or exchange
@@ -220,8 +213,6 @@ class SnapshotClient:
         self._defer_cleanup = defer_cleanup
         self._deferred_cursors: set[tuple[str, str | None]] = set()
         self._foreground_seconds = foreground_seconds
-        self._foreground_source_read_bytes = foreground_source_read_bytes
-        self._foreground_source_bytes = 0
         self.foreground_deadline_unix_ms: int | None = None
         self._prefix = uuid.uuid4().hex
         self._counter = 0
@@ -310,17 +301,6 @@ class SnapshotClient:
                 request.setdefault("limits", DEFAULT_LIMITS.copy())
             if self.foreground_deadline_unix_ms is not None and "deadline_unix_ms" in request:
                 request["deadline_unix_ms"] = min(int(request["deadline_unix_ms"]), self.foreground_deadline_unix_ms)
-            remaining_bytes = None
-            if self._foreground_source_read_bytes is not None and operation != "release":
-                with self._guard:
-                    remaining_bytes = self._foreground_source_read_bytes - self._foreground_source_bytes
-                if remaining_bytes <= 0:
-                    raise EvidenceIncomplete("incomplete", "foreground transcript byte budget exhausted")
-            if remaining_bytes is not None and "limits" in request:
-                limits = dict(request["limits"])
-                limits["max_source_read_bytes"] = min(int(limits["max_source_read_bytes"]), remaining_bytes)
-                limits["max_read_bytes"] = min(int(limits["max_read_bytes"]), FOREGROUND_READ_BYTES)
-                request["limits"] = limits
             exchange = self._cleanup_exchange if operation == "release" else self._exchange
             try:
                 response = exchange({"schema": HOST_SCHEMA, "request": request, "tool_registry": self.tool_registry()})
@@ -332,11 +312,6 @@ class SnapshotClient:
             result = response["response"]
             if result.get("schema") != CORE_SCHEMA or result.get("id") != request_id:
                 raise SnapshotProtocolError("snapshot response schema or id mismatch")
-            if self._foreground_source_read_bytes is not None and operation != "release":
-                with self._guard:
-                    self._foreground_source_bytes += result["usage"]["source_bytes_read"]
-                    if self._foreground_source_bytes > self._foreground_source_read_bytes:
-                        raise SnapshotProtocolError("foreground transcript byte budget was exceeded")
             if (
                 result.get("status") == "stale_handle"
                 and operation != "release"

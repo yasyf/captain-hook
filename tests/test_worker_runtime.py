@@ -489,16 +489,13 @@ def spawn_refused(*_: object, **__: object) -> tuple[None, object]:
     raise EvidenceIncomplete("cancelled", "posix_spawn python: resource temporarily unavailable")
 
 
-def session_request(state_dir: Path, *, event: str = "PreToolUse", warn_after: str | None = None) -> EventRequest:
-    env = {"CLAUDE_PROJECT_DIR": "/project", "CAPTAIN_HOOK_STATE_DIR": str(state_dir)}
-    if warn_after is not None:
-        env["CAPT_HOOK_FAIL_OPEN_WARN_AFTER"] = warn_after
+def session_request(state_dir: Path, *, event: str = "PreToolUse") -> EventRequest:
     return EventRequest(
         id=1,
         event=event,
         root="/project",
         cwd="/project",
-        env=env,
+        env={"CLAUDE_PROJECT_DIR": "/project", "CAPTAIN_HOOK_STATE_DIR": str(state_dir)},
         payload_raw=json.dumps({"session_id": "fail-open-session"}),
         client_pid=100,
         client_ppid=99,
@@ -515,39 +512,30 @@ def fail_open_runtime() -> ProductRuntime:
     )
 
 
-def test_fail_opens_warn_at_the_threshold_and_each_doubling_across_workers(tmp_path: Path) -> None:
+def test_a_failed_dispatch_is_named_once_per_session_across_workers(tmp_path: Path) -> None:
     shards = [fail_open_runtime(), fail_open_runtime()]
 
-    warned = []
-    for count in range(1, 10):
-        response, after = shards[count % 2].dispatch(session_request(tmp_path, warn_after="2"))
+    stdouts = []
+    for count in range(4):
+        response, after = shards[count % 2].dispatch(session_request(tmp_path))
         assert (response.status, response.exit, response.stderr, after) == ("ok", 0, "", None)
-        if response.stdout:
-            warned.append((count, json.loads(response.stdout)))
+        stdouts.append(response.stdout)
 
-    assert [count for count, _ in warned] == [2, 4, 8]
-    count, envelope = warned[-1]
-    assert envelope["systemMessage"].startswith("capt-hook: 8 hook dispatches in this session ran without")
-    assert "cancelled: posix_spawn python: resource temporarily unavailable" in envelope["systemMessage"]
+    assert stdouts[1:] == ["", "", ""]
+    envelope = json.loads(stdouts[0])
+    assert envelope["systemMessage"].startswith(
+        "capt-hook: skipped all hooks (cancelled: posix_spawn python: resource temporarily unavailable)"
+    )
     assert envelope["hookSpecificOutput"] == {
         "hookEventName": "PreToolUse",
         "additionalContext": envelope["systemMessage"],
     }
 
 
-def test_fail_open_warning_defaults_to_the_third_dispatch(tmp_path: Path) -> None:
-    runtime = fail_open_runtime()
-
-    stdouts = [runtime.dispatch(session_request(tmp_path))[0].stdout for _ in range(3)]
-
-    assert stdouts[:2] == ["", ""]
-    assert "3 hook dispatches" in json.loads(stdouts[2])["systemMessage"]
-
-
 def test_fail_open_warning_on_stop_never_blocks_the_stop(tmp_path: Path) -> None:
     runtime = fail_open_runtime()
 
-    response, _ = runtime.dispatch(session_request(tmp_path, event="Stop", warn_after="1"))
+    response, _ = runtime.dispatch(session_request(tmp_path, event="Stop"))
 
     envelope = json.loads(response.stdout)
     assert set(envelope) == {"systemMessage"}
@@ -557,13 +545,13 @@ def test_fail_open_warning_waits_for_an_event_whose_output_is_read(tmp_path: Pat
     runtime = fail_open_runtime()
 
     silent = [
-        runtime.dispatch(session_request(tmp_path, event=event, warn_after="1"))[0].stdout
+        runtime.dispatch(session_request(tmp_path, event=event))[0].stdout
         for event in ("PreCompact", "Notification", "SessionEnd")
     ]
-    prompt, _ = runtime.dispatch(session_request(tmp_path, event="UserPromptSubmit", warn_after="1"))
+    prompt, _ = runtime.dispatch(session_request(tmp_path, event="UserPromptSubmit"))
 
     assert silent == ["", "", ""]
-    assert "4 hook dispatches" in json.loads(prompt.stdout)["systemMessage"]
+    assert "skipped all hooks" in json.loads(prompt.stdout)["systemMessage"]
 
 
 def skipped_one_hook(*_: object, **__: object) -> tuple[dict[str, object], None]:
@@ -571,7 +559,7 @@ def skipped_one_hook(*_: object, **__: object) -> tuple[dict[str, object], None]
     return {"systemMessage": "sibling ran"}, None
 
 
-def test_a_skipped_hook_counts_and_joins_the_sibling_output(tmp_path: Path) -> None:
+def test_a_skipped_hook_is_named_once_and_joins_the_sibling_output(tmp_path: Path) -> None:
     runtime = ProductRuntime(
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=skipped_one_hook,
@@ -579,19 +567,20 @@ def test_a_skipped_hook_counts_and_joins_the_sibling_output(tmp_path: Path) -> N
         nlp_warmer=lambda: None,
     )
 
-    response, after = runtime.dispatch(session_request(tmp_path, event="Stop", warn_after="1"))
+    first, after = runtime.dispatch(session_request(tmp_path, event="Stop"))
+    second, _ = runtime.dispatch(session_request(tmp_path, event="Stop"))
 
     assert after is not None
-    message = json.loads(response.stdout.splitlines()[-1])["systemMessage"]
-    assert message.startswith("sibling ran\n\ncapt-hook: 1 hook dispatches in this session ran without")
-    assert "guard: entry_limit: condition incomplete" in message
+    message = json.loads(first.stdout.splitlines()[-1])["systemMessage"]
+    assert message.startswith("sibling ran\n\ncapt-hook: skipped guard (entry_limit: condition incomplete)")
+    assert json.loads(second.stdout.splitlines()[-1])["systemMessage"] == "sibling ran"
 
 
 def skipped_one_async_hook(*_: object, **__: object) -> tuple[None, object]:
     return None, lambda: reqenv.evidence_gaps().append("async guard: read_limit: incomplete")
 
 
-def test_a_hook_skipped_after_the_reply_counts_toward_the_next_warning(tmp_path: Path) -> None:
+def test_a_hook_skipped_after_the_reply_is_named_on_the_next_dispatch(tmp_path: Path) -> None:
     runtime = ProductRuntime(
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=skipped_one_async_hook,
@@ -599,13 +588,13 @@ def test_a_hook_skipped_after_the_reply_counts_toward_the_next_warning(tmp_path:
         nlp_warmer=lambda: None,
     )
 
-    response, after = runtime.dispatch(session_request(tmp_path, warn_after="2"))
+    response, after = runtime.dispatch(session_request(tmp_path))
     assert after is not None
     after()
-    warned, _ = fail_open_runtime().dispatch(session_request(tmp_path, warn_after="2"))
+    warned, _ = fail_open_runtime().dispatch(session_request(tmp_path))
 
     assert "{" not in response.stdout
-    assert "capt-hook: 2 hook dispatches" in json.loads(warned.stdout)["systemMessage"]
+    assert "skipped async guard (read_limit: incomplete); all hooks" in json.loads(warned.stdout)["systemMessage"]
 
 
 def test_a_contended_tally_still_fails_open(tmp_path: Path) -> None:
@@ -616,7 +605,7 @@ def test_a_contended_tally_still_fails_open(tmp_path: Path) -> None:
     runtime = fail_open_runtime()
 
     with FileLock(str(session_dir / "fail_open_tally.json.lock")):
-        response, after = runtime.dispatch(session_request(tmp_path, warn_after="1"))
+        response, after = runtime.dispatch(session_request(tmp_path))
 
     assert (response.status, response.exit, response.stdout, response.stderr, after) == ("ok", 0, "", "", None)
 

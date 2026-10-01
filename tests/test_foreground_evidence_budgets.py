@@ -14,7 +14,7 @@ from captain_hook.app import _state, on
 from captain_hook.cli import dispatch_event
 from captain_hook.events import BaseHookEvent
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_allowance
+from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient, foreground_seconds
 from captain_hook.testing.helpers import fixture_line
 from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.types import Event, HookResult
@@ -25,8 +25,8 @@ TURNS = 120
 PAYLOAD = 4096
 SESSION = "budget-session"
 DEADLINE_SECONDS = 30.0
-TOOL_SECONDS, _ = foreground_allowance(Event.PreToolUse.name)
-WARM_ROUND_TRIPS = {False: 10, True: 8}
+TOOL_SECONDS = foreground_seconds(Event.PreToolUse.name)
+WARM_ROUND_TRIPS = {False: 7, True: 8}
 
 GUARDS: dict[str, Callable[[BaseHookEvent, str], bool]] = {
     "user_text": lambda evt, marker: marker in evt.ctx.t.user_text,
@@ -127,7 +127,7 @@ def transcript(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, 
     return Transcript(tmp_path / "session" / "subagents" / "agent-lane.jsonl", sidechain=True)
 
 
-def register(event: Event, transcript: Transcript, name: str) -> list[str]:
+def register(event: Event, transcript: Transcript, name: str, transcript_events: int | None = None) -> list[str]:
     denied: list[str] = []
     evidence = GUARDS[name]
 
@@ -138,7 +138,7 @@ def register(event: Event, transcript: Transcript, name: str) -> list[str]:
         return evt.block(f"{name} guard")
 
     guard.__name__ = name
-    on(event)(guard)
+    on(event, transcript_events=transcript_events)(guard)
     return denied
 
 
@@ -170,10 +170,7 @@ def dispatch(
     exchange: Callable[[dict[str, object]], dict[str, Any]] | None = None,
     seconds: float = DEADLINE_SECONDS,
 ) -> tuple[object, list[str]]:
-    _, source_read_bytes = foreground_allowance(event.name)
-    client = SnapshotClient(
-        exchange or owner.exchange, foreground_seconds=seconds, foreground_source_read_bytes=source_read_bytes
-    )
+    client = SnapshotClient(exchange or owner.exchange, foreground_seconds=seconds)
     payload = {"session_id": SESSION, "transcript_path": str(transcript.path), "cwd": str(root)} | (
         {"tool_name": "Bash", "tool_input": {"command": "git push origin HEAD"}} if event is Event.PreToolUse else {}
     )
@@ -191,7 +188,7 @@ def dispatch(
 @pytest.mark.parametrize("guard", list(GUARDS))
 @pytest.mark.parametrize("event", [Event.PreToolUse, Event.Stop], ids=["tool", "turn"])
 @pytest.mark.parametrize("phase", list(PHASES))
-def test_a_transcript_guard_blocks_within_the_foreground_read_allowance(
+def test_a_transcript_guard_blocks_within_the_foreground_deadline(
     tmp_path: Path, owner: FixtureOwner, transcript: Transcript, event: Event, phase: str, guard: str
 ) -> None:
     transcript.write("alpha")
@@ -257,3 +254,32 @@ def test_a_late_lease_skips_only_the_hook_that_read_it(
     assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
     assert denied == ["policy"]
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class Operations:
+    def __init__(self, owner: FixtureOwner) -> None:
+        self.owner = owner
+        self.seen: list[str] = []
+
+    def __call__(self, wrapper: dict[str, object]) -> dict[str, Any]:
+        request = wrapper["request"]
+        assert isinstance(request, dict)
+        self.seen.append(request["operation"])
+        return self.owner.exchange(wrapper)
+
+
+@pytest.mark.parametrize("guard", ["has_command", "user_text"])
+def test_a_declared_window_reads_only_the_transcript_tail(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript, guard: str
+) -> None:
+    transcript.write("alpha", TURNS * 4)
+    transcript.append("bravo")
+    denied = register(Event.PreToolUse, transcript, guard, transcript_events=12)
+    operations = Operations(owner)
+
+    envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, operations, TOOL_SECONDS)
+
+    assert gaps == []
+    assert denied == [guard]
+    assert envelope is not None
+    assert operations.seen == ["tail"]

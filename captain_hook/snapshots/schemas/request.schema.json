@@ -2043,6 +2043,60 @@
       "title": "Stats",
       "type": "object"
     },
+    "Tail": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "exclusiveMinimum": 0,
+          "maximum": 256,
+          "title": "Count",
+          "type": "integer"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "tail",
+          "title": "Operation",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "path",
+        "count"
+      ],
+      "title": "Tail",
+      "type": "object"
+    },
     "ToolBoundary": {
       "additionalProperties": false,
       "properties": {
@@ -2466,12 +2520,16 @@
       "resume": "#/$defs/Resume",
       "retain": "#/$defs/Retain",
       "stats": "#/$defs/Stats",
+      "tail": "#/$defs/Tail",
       "warm_registered": "#/$defs/WarmRegistered",
       "warm_root": "#/$defs/WarmRoot"
     },
     "propertyName": "operation"
   },
   "oneOf": [
+    {
+      "$ref": "#/$defs/Tail"
+    },
     {
       "$ref": "#/$defs/Acquire"
     },

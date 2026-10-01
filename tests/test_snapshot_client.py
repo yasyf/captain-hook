@@ -11,10 +11,8 @@ import pytest
 
 from captain_hook.snapshots.client import (
     CORE_SCHEMA,
-    FOREGROUND_READ_BYTES,
-    GATE_SOURCE_READ_BYTES,
+    DEFAULT_LIMITS,
     GATE_WORK_SECONDS,
-    GRAPH_SOURCE_READ_BYTES,
     GRAPH_WORK_SECONDS,
     HOST_SCHEMA,
     MAX_VIEW_ATTACHMENTS,
@@ -27,7 +25,7 @@ from captain_hook.snapshots.client import (
     RemoteSession,
     RootWarmState,
     SnapshotClient,
-    foreground_allowance,
+    foreground_seconds,
 )
 from captain_hook.snapshots.worker import empty_usage, failure
 
@@ -504,7 +502,7 @@ def test_abandoned_foreground_cursor_waits_until_after_reply_for_cleanup():
         future.shutdown()
 
 
-def test_foreground_budget_covers_root_acquire_and_classifier():
+def test_foreground_reads_carry_no_source_byte_budget():
     requests = []
 
     def exchange(wrapper):
@@ -512,61 +510,19 @@ def test_foreground_budget_covers_root_acquire_and_classifier():
         requests.append(request)
         if request["operation"] == "acquire":
             result = response(request, {"kind": "acquired", "description": description()})
-            result["response"]["usage"]["source_bytes_read"] = 700 * 1024
+            result["response"]["usage"]["source_bytes_read"] = 80 * 1024 * 1024
             return result
-        if request["operation"] == "prepare_hook_view":
-            result = response(request, {"kind": "classifier", "classifier": {"id": "native", "version": "1"}})
-            result["response"]["usage"]["source_bytes_read"] = 300 * 1024
-            return result
-        result = response(request, {"kind": "scalar", "value": False})
-        result["response"]["usage"]["source_bytes_read"] = 24 * 1024
-        return result
+        return response(request, {"kind": "scalar", "value": False})
 
-    client = SnapshotClient(exchange, foreground_seconds=0.75, foreground_source_read_bytes=1024 * 1024)
+    client = SnapshotClient(exchange, foreground_seconds=0.75)
     client.bind_tool_registry({})
     session = client.acquire("/tmp/fixture.jsonl")
-    list(client.pages("prepare_hook_view", domain=True, view=session.view(), cwd="/tmp", droid=False))
     client.call("query", view=session.view(), query={"kind": "has_read", "pattern": "x", "subagents": False})
-    with pytest.raises(EvidenceIncomplete, match="foreground transcript byte budget exhausted"):
-        client.call("stats")
 
-    assert [request["operation"] for request in requests] == ["acquire", "prepare_hook_view", "query"]
-    assert [request["limits"]["max_source_read_bytes"] for request in requests] == [
-        1024 * 1024,
-        324 * 1024,
-        24 * 1024,
-    ]
-    assert all(request["limits"]["max_read_bytes"] == FOREGROUND_READ_BYTES for request in requests)
+    assert [request["operation"] for request in requests] == ["acquire", "query"]
+    assert all(request["limits"] == DEFAULT_LIMITS for request in requests)
     assert len({request["deadline_unix_ms"] for request in requests}) == 1
     assert requests[0]["deadline_unix_ms"] <= int(time.time() * 1000) + 750
-
-
-def test_foreground_root_cursor_stops_before_a_second_read_step():
-    operations = []
-
-    def exchange(wrapper):
-        request = wrapper["request"]
-        operations.append(request["operation"])
-        result = response(request, {"kind": "strings", "values": []}, cursor="root-cursor")
-        result["response"]["usage"]["source_bytes_read"] = 1024 * 1024
-        return result
-
-    def cleanup(wrapper):
-        return response(wrapper["request"], {"kind": "released", "released": True})
-
-    client = SnapshotClient(
-        exchange,
-        cleanup_exchange=cleanup,
-        defer_cleanup=True,
-        foreground_seconds=0.75,
-        foreground_source_read_bytes=1024 * 1024,
-    )
-    client.bind_tool_registry({})
-
-    with pytest.raises(EvidenceIncomplete, match="foreground transcript byte budget exhausted"):
-        list(client.pages("acquire", path="/tmp/large-root.jsonl", classifier={"id": "native", "version": "1"}))
-    assert operations == ["acquire"]
-    client.close_pending()
 
 
 def test_expired_foreground_budget_never_sends_a_native_request():
@@ -699,16 +655,16 @@ def test_retain_queues_for_admission_within_the_foreground_deadline():
 
 
 @pytest.mark.parametrize(
-    ("event", "allowance"),
+    ("event", "seconds"),
     [
-        ("Stop", (GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES)),
-        ("SubagentStop", (GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES)),
-        ("UserPromptSubmit", (GATE_WORK_SECONDS, GATE_SOURCE_READ_BYTES)),
-        ("PreToolUse", (GRAPH_WORK_SECONDS, GRAPH_SOURCE_READ_BYTES)),
+        ("Stop", GATE_WORK_SECONDS),
+        ("SubagentStop", GATE_WORK_SECONDS),
+        ("UserPromptSubmit", GATE_WORK_SECONDS),
+        ("PreToolUse", GRAPH_WORK_SECONDS),
     ],
 )
-def test_turn_level_gates_get_the_larger_foreground_allowance(event, allowance):
-    assert foreground_allowance(event) == allowance
+def test_turn_level_gates_get_more_foreground_seconds(event, seconds):
+    assert foreground_seconds(event) == seconds
 
 
 def test_release_does_not_retry_other_failures():

@@ -386,6 +386,7 @@
               "scalar": "#/$defs/Core_ScalarResult",
               "stats": "#/$defs/Core_StatsResult",
               "strings": "#/$defs/Core_StringsResult",
+              "tail": "#/$defs/Core_TailResult",
               "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
               "warmed_root": "#/$defs/Core_WarmedRootResult"
             },
@@ -436,6 +437,9 @@
             },
             {
               "$ref": "#/$defs/Core_RecordsResult"
+            },
+            {
+              "$ref": "#/$defs/Core_TailResult"
             },
             {
               "$ref": "#/$defs/Core_WaitingResult"
@@ -1307,6 +1311,7 @@
                   "scalar": "#/$defs/Core_ScalarResult",
                   "stats": "#/$defs/Core_StatsResult",
                   "strings": "#/$defs/Core_StringsResult",
+                  "tail": "#/$defs/Core_TailResult",
                   "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
                   "warmed_root": "#/$defs/Core_WarmedRootResult"
                 },
@@ -1357,6 +1362,9 @@
                 },
                 {
                   "$ref": "#/$defs/Core_RecordsResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_TailResult"
                 },
                 {
                   "$ref": "#/$defs/Core_WaitingResult"
@@ -3335,6 +3343,105 @@
       "title": "StringsResult",
       "type": "object"
     },
+    "Core_Tail": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "exclusiveMinimum": 0,
+          "maximum": 256,
+          "title": "Count",
+          "type": "integer"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Core_Limits"
+        },
+        "operation": {
+          "const": "tail",
+          "title": "Operation",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "path",
+        "count"
+      ],
+      "title": "Tail",
+      "type": "object"
+    },
+    "Core_TailResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "tail",
+          "title": "Kind",
+          "type": "string"
+        },
+        "record_schema": {
+          "const": "cc-transcript.event/1",
+          "title": "Record Schema",
+          "type": "string"
+        },
+        "records_json": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Records Json",
+          "type": "array"
+        },
+        "source_bytes": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "window_start_byte": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Window Start Byte",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "record_schema",
+        "records_json",
+        "source_bytes",
+        "window_start_byte"
+      ],
+      "title": "TailResult",
+      "type": "object"
+    },
     "Core_ToolBoundary": {
       "additionalProperties": false,
       "properties": {
@@ -4173,6 +4280,7 @@
                   "scalar": "#/$defs/Core_ScalarResult",
                   "stats": "#/$defs/Core_StatsResult",
                   "strings": "#/$defs/Core_StringsResult",
+                  "tail": "#/$defs/Core_TailResult",
                   "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
                   "warmed_root": "#/$defs/Core_WarmedRootResult"
                 },
@@ -4223,6 +4331,9 @@
                 },
                 {
                   "$ref": "#/$defs/Core_RecordsResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_TailResult"
                 },
                 {
                   "$ref": "#/$defs/Core_WaitingResult"
@@ -4340,6 +4451,7 @@
                       "scalar": "#/$defs/Core_ScalarResult",
                       "stats": "#/$defs/Core_StatsResult",
                       "strings": "#/$defs/Core_StringsResult",
+                      "tail": "#/$defs/Core_TailResult",
                       "warmed_registry": "#/$defs/Core_WarmedRegistryResult",
                       "warmed_root": "#/$defs/Core_WarmedRootResult"
                     },
@@ -4390,6 +4502,9 @@
                     },
                     {
                       "$ref": "#/$defs/Core_RecordsResult"
+                    },
+                    {
+                      "$ref": "#/$defs/Core_TailResult"
                     },
                     {
                       "$ref": "#/$defs/Core_WaitingResult"

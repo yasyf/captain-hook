@@ -15,6 +15,7 @@ from captain_hook.app import (
     load_gitignore,
     on,
     reset,
+    transcript_events_window,
 )
 from captain_hook.app import (
     hook as register_hook,
@@ -148,6 +149,35 @@ class TestRegistrationFields:
         assert spec.max_fires == 3
         assert spec.respect_gitignore is False
         assert spec.async_ is True
+
+
+class TestTranscriptEventsWindow:
+    def test_declared_windows_take_the_widest(self) -> None:
+        register_hook(Event.PreToolUse, message="near", transcript_events=20)
+
+        @on(Event.PreToolUse | Event.Stop, transcript_events=50)
+        def far(evt: Any) -> None:
+            return None
+
+        assert _state.hooks[1].spec.transcript_events == 50
+        assert transcript_events_window(Event.PreToolUse) == 50
+        assert transcript_events_window(Event.Stop) == 50
+
+    def test_an_undeclared_hook_keeps_the_byte_window(self) -> None:
+        register_hook(Event.PreToolUse, message="near", transcript_events=20)
+        register_hook(Event.PreToolUse, message="history")
+
+        assert transcript_events_window(Event.PreToolUse) is None
+
+    @pytest.mark.parametrize("count", [0, 257])
+    def test_rejects_a_window_the_tail_read_cannot_serve(self, count: int) -> None:
+        with pytest.raises(ValueError, match="between 1 and 256"):
+            register_hook(Event.PreToolUse, message="near", transcript_events=count)
+
+    def test_an_event_without_hooks_declares_nothing(self) -> None:
+        register_hook(Event.Stop, message="near", transcript_events=20)
+
+        assert transcript_events_window(Event.PreToolUse) is None
 
 
 class TestRegisteredHookMetadata:
