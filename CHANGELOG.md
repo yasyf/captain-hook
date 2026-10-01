@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.71.0] - 2026-10-01
+
+### Added
+
+- **`evt.disallowed_tools`.** Returns the tool names the session's `claude` process was
+  launched with under `--disallowedTools`, in either spelling. It reads the same
+  process-tree walk as `evt.skip_permissions`. Inline tests set it with
+  `Input(disallowed_tools=(...))`; when unset it is empty, so a test never inherits
+  the runner's own launch flags.
+
+### Fixed
+
+- **The general pack's stop-and-plan guard no longer blocks Orca workers.** The
+  `PreToolUse` guard that tells the agent to stop and go back into plan mode no longer
+  reads the inside of `<pasted_content>` blocks as a directive. It matches `plan` only as
+  a word, not inside a path or branch name such as `l39-plan.md`. It also stays silent
+  when the session was launched with `ExitPlanMode` disallowed, since the agent cannot
+  satisfy the block there. An Orca worker's dispatch preamble tells the worker to stop
+  and start no new work once it reports done. That pasted rule, together with a task line
+  naming `l39-plan.md`, had blocked every `Write` in a bypass-permissions worker that had
+  no plan-mode tools.
+
 ## [12.70.2] - 2026-10-01
 
 ### Fixed

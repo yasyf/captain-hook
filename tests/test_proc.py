@@ -14,8 +14,10 @@ from captain_hook.util.proc import (
     PS_TABLE_ENV,
     ProcessRow,
     ProcessTable,
-    _cold_skip_permissions,
+    _cold_claude_argv,
+    claude_disallowed_tools,
     claude_skip_permissions,
+    disallowed_tools,
     parent_entry,
     process_table,
 )
@@ -128,9 +130,9 @@ class TestProcessTable:
 
 @pytest.fixture(autouse=True)
 def clear_walk_cache():
-    _cold_skip_permissions.cache_clear()
+    _cold_claude_argv.cache_clear()
     yield
-    _cold_skip_permissions.cache_clear()
+    _cold_claude_argv.cache_clear()
 
 
 def bound(client_ppid: int, session_id: str) -> reqenv.RequestOverrides:
@@ -342,3 +344,40 @@ class TestRequestBoundSkipPermissions:
             assert claude_skip_permissions() is True
         with reqenv.use_request(bound(client_ppid=60, session_id="shared")):
             assert claude_skip_permissions() is False
+
+
+ORCA_WORKER_CMD = (
+    "claude --allow-dangerously-skip-permissions --permission-mode bypassPermissions "
+    "--disallowedTools AskUserQuestion,EnterPlanMode,ExitPlanMode --model claude-opus-5-5 --effort xhigh"
+)
+
+
+class TestDisallowedTools:
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param(ORCA_WORKER_CMD, {"AskUserQuestion", "EnterPlanMode", "ExitPlanMode"}, id="orca_worker"),
+            pytest.param("claude --disallowed-tools Edit Write -p go", {"Edit", "Write"}, id="kebab_variadic"),
+            pytest.param("claude --disallowedTools=Edit,Write --model x", {"Edit", "Write"}, id="inline_value"),
+            pytest.param("claude --disallowedTools Edit --disallowedTools Bash", {"Edit", "Bash"}, id="repeated"),
+            pytest.param("claude --allowedTools ExitPlanMode --model x", set(), id="allowed_tools_flag"),
+            pytest.param("claude -p ExitPlanMode", set(), id="bare_token"),
+        ],
+    )
+    def test_parses_flag_values(self, command: str, expected: set[str]) -> None:
+        assert disallowed_tools(command.split()) == expected
+
+    def test_reads_nearest_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_chain(monkeypatch, [HOOK_CMD, SHELL_CMD, ORCA_WORKER_CMD])
+        assert "ExitPlanMode" in claude_disallowed_tools()
+        assert claude_skip_permissions() is True
+
+    def test_flag_in_non_claude_ancestor_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_chain(monkeypatch, [HOOK_CMD, "/bin/zsh -c run --disallowedTools ExitPlanMode", "claude -p go"])
+        assert claude_disallowed_tools() == frozenset()
+
+    def test_request_bound_walks_from_client_ppid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        table = {50: (1, ORCA_WORKER_CMD)}
+        monkeypatch.setattr(proc, "parent_entry", lambda pid: table.get(pid))
+        with reqenv.use_request(bound(client_ppid=50, session_id="s1")):
+            assert "ExitPlanMode" in claude_disallowed_tools()

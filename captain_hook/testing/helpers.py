@@ -570,6 +570,8 @@ def input_to_event(
         # or a no-consent test silently inverts inside a bypass-launched dev session.
         evt.__dict__["skip_permissions"] = inp.skip_permissions
 
+    evt.__dict__["disallowed_tools"] = frozenset(inp.disallowed_tools or ())
+
     evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm)
 
     return evt
