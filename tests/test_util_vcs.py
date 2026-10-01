@@ -183,7 +183,7 @@ def test_nogt_short_circuits_the_lane_probe(tmp_path: Path, monkeypatch: pytest.
     """The cheap git-config read runs first, so a repo that opted out never pays for the subprocess."""
     repo = gt_repo_with(tmp_path, "true")
     ran = tmp_path / "ccx-ran"
-    stub_ccx(tmp_path, monkeypatch, f'touch {ran}; printf \'{{"lane": "gt"}}\'')
+    stub_ccx(tmp_path, monkeypatch, f"touch {ran}; printf '{{\"lane\": \"gt\"}}'")
     assert graphite_lane(repo) is False
     assert not ran.exists()
 

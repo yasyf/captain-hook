@@ -27,8 +27,7 @@ def session_text(t: Session) -> str:
 def text_matches(pattern: str) -> Callable[[Session], bool]:
     return lambda t: (
         t.query({"kind": "workflow_text", "mode": "regex", "pattern": pattern})
-        if isinstance(t, RemoteSession)
-        else bool(re.search(pattern, session_text(t)))
+        if isinstance(t, RemoteSession) else bool(re.search(pattern, session_text(t)))
     )
 
 
@@ -72,8 +71,7 @@ class Workflow:
         transcript = evt.ctx.t
         complete = (
             transcript.query({"kind": "workflow_text", "mode": "contains", "pattern": self.marker})
-            if isinstance(transcript, RemoteSession)
-            else self.marker in session_text(transcript)
+            if isinstance(transcript, RemoteSession) else self.marker in session_text(transcript)
         )
         if not complete:
             resume = next(
