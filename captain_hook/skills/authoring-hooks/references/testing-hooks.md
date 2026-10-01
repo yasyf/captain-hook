@@ -35,6 +35,7 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
 | `agent_id` | Subagent/teammate id, set on every event; presence makes `evt.is_subagent` and `FromSubagent()` true | `Input(command="ls", agent_id="tm1")` |
 | `permission_mode` | e.g. plan mode | `Input(permission_mode="plan")` |
 | `skip_permissions` | Pre-seeds `evt.skip_permissions` / `SkipPermissions()`; `None` leaves the real process-tree walk in place | `Input(command="ls", skip_permissions=True)` |
+| `disallowed_tools` | Pre-seeds `evt.disallowed_tools`, the session's `--disallowedTools` names; `None` seeds an empty set, never the runner's own launch flags | `Input(file="x.py", disallowed_tools=("ExitPlanMode",))` |
 | `transcript` | Session history; a `Path` also lands in the payload as `evt.transcript_path`, on every event | `Input(transcript=[T.user("ship it"), T.assistant(T.tool("Bash", command="uv run pytest"))])` |
 | `session_id` | The payload's `session_id` (`evt.session_id`), unset by default | `Input(session_id="0123456789abcdef")` |
 | `seen` | Keys `evt.ctx.s.once`/`unseen` already saw this session, per scope (`""` for the unscoped call); backed by a real temp session dir, so "the repeat is silent" is one `Input` | `Input(command="git push", seen={"push": ["origin"]})` |

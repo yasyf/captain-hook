@@ -51,11 +51,14 @@ work, not finished, which is what `Waiting()` reads.
 ## Shared properties
 
 Every event also exposes the base accessors: `event`, `session_id`, `is_subagent`,
-`transcript_path`, `cwd`, `permission_mode`, `skip_permissions`, `parent_agent_type`,
-`stop_hook_active`, `tasks`, and `ctx`. `cwd` is the session's working directory when the
-event fired, for resolving relative tool paths. `skip_permissions` walks the process tree and
-reports whether the session's `claude` process was launched with
-`--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`. `tasks` is the
+`transcript_path`, `cwd`, `permission_mode`, `skip_permissions`, `disallowed_tools`,
+`parent_agent_type`, `stop_hook_active`, `tasks`, and `ctx`. `cwd` is the session's working
+directory when the event fired, for resolving relative tool paths. `skip_permissions` walks the
+process tree and reports whether the session's `claude` process was launched with
+`--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`.
+`disallowed_tools` reads the same process and returns the tool names it was launched with
+under `--disallowedTools`, so a hook can stay silent when the tool its message names does not
+exist in the session. `tasks` is the
 live Claude Code task list; `ctx` is the hook context, with the transcript, settings, and the
 current turn.
 

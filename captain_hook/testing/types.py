@@ -26,6 +26,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "offset": (int,),
     "limit": (int,),
     "skip_permissions": (bool,),
+    "disallowed_tools": (tuple,),
     "tool_input": (dict,),
     "llm": (dict,),
     "tasks": (list,),
@@ -171,6 +172,9 @@ class Input:
         skip_permissions: Pre-seeds ``evt.skip_permissions`` (normally the
             process-tree walk for ``--dangerously-skip-permissions``); ``None``
             leaves the real walk in place.
+        disallowed_tools: Pre-seeds ``evt.disallowed_tools`` (normally the process-tree walk
+            for ``--disallowedTools``); ``None`` seeds an empty set, so a test never inherits
+            the runner's own launch flags.
         offset: ``Read`` call offset.
         limit: ``Read`` call limit.
         transcript: Session history for transcript conditions — a path, a
@@ -219,6 +223,7 @@ class Input:
     cwd: str | None = None
     session_id: str | None = None
     skip_permissions: bool | None = None
+    disallowed_tools: tuple[str, ...] | None = None
     offset: int | None = None
     limit: int | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
+
 from captain_hook import (
     Allow,
-    And,
     Block,
     Clause,
     Event,
@@ -11,21 +12,38 @@ from captain_hook import (
     InPlanMode,
     Input,
     LambdaCondition,
-    Or,
     Phrase,
     RewritingExistingPlan,
     T,
     Tool,
     UsedTool,
-    UserSaid,
     hook,
 )
-from captain_hook.signals.nlp import dep_related, find_lemma_matches, parse, verb_candidates
+from captain_hook.signals.nlp import dep_related, find_lemma_matches, parse, scan_text, verb_candidates
 
 ENTER_PLAN_MODE = Clause(
     noun=Phrase("mode", "planning"),
     verb=Phrase("enter", "re-enter", "reenter", "return", "go", "switch", "get", "come"),
     subject=("unnamed",),
+)
+STOP_WORK = (
+    Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
+    Clause(noun=Phrase("work"), verb=Phrase("stop", "halt", "pause")),
+)
+ORCA_WORKER_BRIEF = (
+    "Please carry out this task from my Orca coordinator by following the brief I pasted below.\n\n"
+    '<pasted_content id="edaa">\n'
+    "You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n\n"
+    "=== AFTER YOU SEND worker_done ===\n\n"
+    "worker_done ends your turn for this task. Your dispatched work is complete:\n"
+    "stop, return to an idle prompt, and take no further actions — do NOT start\n"
+    "new or unrelated work, do NOT run a sleep/poll loop, and do NOT keep calling\n"
+    "`orca orchestration check`.\n\n"
+    "=== TASK ===\n"
+    "Lane l39-plan-text: read /Users/yasyf/.claude/scratch/pb/l39-plan.md in full first and execute it exactly. "
+    "No lane stops for a design question: it picks its recommended option and keeps going. "
+    "Never end a turn waiting and never park; the plan wins.\n"
+    '</pasted_content id="edaa">\n'
 )
 
 
@@ -35,6 +53,13 @@ def directs_plan_mode(text: str) -> bool:
         and any(dep_related(noun, verb) for noun in find_lemma_matches(ENTER_PLAN_MODE.noun, sent, {"NOUN", "PROPN"}))
         for sent in parse(text).sents
         for verb in verb_candidates(ENTER_PLAN_MODE, sent)
+    )
+
+
+def directs_replanning(prompt: str) -> bool:
+    typed = re.sub(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", " ", prompt, flags=re.DOTALL)
+    return directs_plan_mode(typed) or (
+        scan_text(typed, STOP_WORK) and scan_text(typed, (r"(?<![\w./-])(?:re-)?plan",))
     )
 
 
@@ -78,20 +103,14 @@ hook(
 
 hook(
     Event.PreToolUse,
-    only_if=[
-        Tool.EditTools,
-        Or(
-            LambdaCondition(lambda evt: directs_plan_mode(evt.ctx.turn.user_text)),
-            And(
-                UserSaid(
-                    Clause(noun=Phrase("work"), verb=Phrase("do"), negated=True),
-                    Clause(noun=Phrase("work"), verb=Phrase("stop", "halt", "pause")),
-                ),
-                UserSaid(r"\bplan"),
-            ),
-        ),
+    only_if=[Tool.EditTools, LambdaCondition(lambda evt: directs_replanning(evt.ctx.turn.user_text))],
+    skip_if=[
+        FromSubagent(),
+        InPlanMode(),
+        UsedTool("ExitPlanMode"),
+        LambdaCondition(lambda evt: "ExitPlanMode" in evt.disallowed_tools),
+        FilePath("**/plans/*.md", project_only=False),
     ],
-    skip_if=[FromSubagent(), InPlanMode(), UsedTool("ExitPlanMode"), FilePath("**/plans/*.md", project_only=False)],
     message=(
         "The user told you to stop and go back into plan mode. Put a plan to the user with "
         "ExitPlanMode (entering plan mode first if you are not in it) before making any more edits."
@@ -246,5 +265,45 @@ hook(
             content="x = 1",
             transcript=[T.user("In a workflow, verification agents never outnumber the agents doing the work.")],
         ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/go/ci/internal/release/pipeline/plantext.go",
+            content="package pipeline",
+            permission_mode="bypassPermissions",
+            transcript=[T.user(ORCA_WORKER_BRIEF)],
+        ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/go/ci/internal/release/pipeline/plantext.go",
+            content="package pipeline",
+            transcript=[T.user("Stop all work until we agree on a plan.\n\n" + ORCA_WORKER_BRIEF)],
+        ): Block(pattern="plan mode"),
+        Input(
+            tool="Edit",
+            file="/x/src/upload.py",
+            content="x = 1",
+            transcript=[T.user("Stop the work on the uploader and push yasyf/v3-l39-plan-text-base.")],
+        ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("Stop all work. We need to re-plan the approach.")],
+        ): Block(pattern="plan mode"),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            permission_mode="bypassPermissions",
+            disallowed_tools=("AskUserQuestion", "EnterPlanMode", "ExitPlanMode"),
+            transcript=[T.user("Stop all work until we agree on a plan.")],
+        ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            permission_mode="bypassPermissions",
+            transcript=[T.user("Stop all work until we agree on a plan.")],
+        ): Block(pattern="plan mode"),
     },
 )

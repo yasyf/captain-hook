@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
 MAX_WALK = 20
 PS_TABLE_ARGV = ("ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,command=")
@@ -141,33 +141,60 @@ def is_claude(tokens: list[str]) -> bool:
             return False
 
 
-def walk_skip_permissions(start_pid: int) -> bool:
+def walk_claude_argv(start_pid: int) -> tuple[str, ...]:
     pid = start_pid
     for _ in range(MAX_WALK):
         if (entry := parent_entry(pid)) is None:
-            return False
+            return ()
         ppid, command = entry
         if is_claude(tokens := command.split()):
-            return not {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}.isdisjoint(tokens)
+            return tuple(tokens)
         if ppid <= 1:
-            return False
+            return ()
         pid = ppid
-    return False
+    return ()
 
 
 @cache
-def _cold_skip_permissions() -> bool:
-    return walk_skip_permissions(os.getpid())
+def _cold_claude_argv() -> tuple[str, ...]:
+    return walk_claude_argv(os.getpid())
 
 
-def claude_skip_permissions() -> bool:
-    """Whether the nearest ``claude`` ancestor launched with a skip-permissions flag.
+def claude_argv() -> tuple[str, ...]:
+    """The whitespace-split command line of the nearest ``claude`` ancestor, ``()`` when none is found.
 
     Cold, the walk starts at this process and is process-cached. Under a bound request (the
     resident daemon) it walks fresh from the client's parent on every call — a resumed
     session may relaunch with different flags, and per-dispatch memoization already lives on
-    ``BaseHookEvent.skip_permissions``.
+    the ``BaseHookEvent`` properties that read it.
     """
     if (ov := reqenv.current()) is None:
-        return _cold_skip_permissions()
-    return walk_skip_permissions(ov.client_ppid)
+        return _cold_claude_argv()
+    return walk_claude_argv(ov.client_ppid)
+
+
+def disallowed_tools(argv: Sequence[str]) -> frozenset[str]:
+    names: list[str] = []
+    taking = False
+    for token in argv:
+        if token == "--":
+            break
+        flag, eq, inline = token.partition("=")
+        if flag in {"--disallowedTools", "--disallowed-tools"}:
+            names.extend(inline.split(","))
+            taking = not eq
+        elif token.startswith("-"):
+            taking = False
+        elif taking:
+            names.extend(token.split(","))
+    return frozenset(filter(None, names))
+
+
+def claude_skip_permissions() -> bool:
+    """Whether the nearest ``claude`` ancestor launched with a skip-permissions flag."""
+    return not {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}.isdisjoint(claude_argv())
+
+
+def claude_disallowed_tools() -> frozenset[str]:
+    """The tool names the nearest ``claude`` ancestor launched with under ``--disallowedTools``."""
+    return disallowed_tools(claude_argv())

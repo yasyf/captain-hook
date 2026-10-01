@@ -245,6 +245,7 @@ event payload; set the fields the target event reads. All fields default to `Non
 | `source` | `str` | `SessionStart` source, one of `startup`, `resume`, `clear`, `compact` |
 | `permission_mode` | `str` | Plan-mode and permission gating |
 | `skip_permissions` | `bool` | Pre-seeds `evt.skip_permissions`, replacing the process-tree walk; `None` keeps the real walk |
+| `disallowed_tools` | `tuple[str, ...]` | Pre-seeds `evt.disallowed_tools`, replacing the process-tree walk; `None` seeds an empty set |
 | `offset` | `int` | `Read` call offset |
 | `limit` | `int` | `Read` call limit |
 | `transcript` | `Path \| TranscriptFixture \| list[dict]` | Session history for transcript conditions; build entries with `T` |

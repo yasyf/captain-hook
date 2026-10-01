@@ -189,6 +189,18 @@ class BaseHookEvent:
 
         return claude_skip_permissions()
 
+    @cached_property
+    def disallowed_tools(self) -> frozenset[str]:
+        """The tools the session's ``claude`` process was launched without.
+
+        Walks the process tree to the nearest ``claude`` ancestor and collects the tool names
+        it was started with under ``--disallowedTools`` (or ``--disallowed-tools``); a hook
+        reads it to stay silent when the tool it would direct the agent to does not exist.
+        """
+        from captain_hook.util.proc import claude_disallowed_tools
+
+        return claude_disallowed_tools()
+
     @property
     def user_prompt(self) -> str | None:
         return self._raw.get("prompt")
