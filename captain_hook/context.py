@@ -101,7 +101,7 @@ class HookEvidence:
     event_count: int
     window_start: int
     current_turn_event_count: int
-    signal_texts: tuple[tuple[tuple[int | Literal["turn"], str], tuple[str, ...]], ...]
+    signal_texts: tuple[tuple[tuple[int | Literal["turn"], str, bool], tuple[str, ...]], ...]
     prompt: str
 
 
@@ -116,7 +116,9 @@ class HookContext:
     transcript: Session | RemoteSession | LazyTranscript
     settings: HooksSettings | None
     project_root: Path | None = None
-    signal_evidence: dict[tuple[int | Literal["turn"], str], tuple[str, ...]] = field(default_factory=dict, init=False)
+    signal_evidence: dict[tuple[int | Literal["turn"], str, bool], tuple[str, ...]] = field(
+        default_factory=dict, init=False
+    )
     prepared_evidence: HookEvidence | None = field(default=None, init=False)
 
     def fork(self, transcript: Session | RemoteSession | LazyTranscript) -> HookContext:

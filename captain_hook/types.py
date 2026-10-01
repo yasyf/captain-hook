@@ -948,6 +948,10 @@ class Signals:
     prompt or correction (a ``UserPromptSubmit`` nudge, say), where the just-submitted
     prompt is prepended to the scan only under ``"any"``.
 
+    ``thinking`` keeps the agent's thinking blocks among the candidate texts. Pass
+    ``thinking=False`` for a stance nudge that judges what the agent wrote, not the
+    options it weighed privately on the way there.
+
     ``vetoes`` are presence-only suppressors: if any veto matches any window entry
     — including already-consumed ones — the bundle does not fire and consumes
     nothing. A veto's ``weight`` is meaningless and must be left at its default.
@@ -964,6 +968,7 @@ class Signals:
     window: int | Literal["turn"] = 15
     scope: Literal["text", "window"] = field(default="window", kw_only=True)
     origin: Literal["assistant", "any"] = field(default="assistant", kw_only=True)
+    thinking: bool = field(default=True, kw_only=True)
     vetoes: Sequence[Signal | NlpSignal] = ()
 
     def __post_init__(self) -> None:

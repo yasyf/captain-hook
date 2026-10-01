@@ -3228,6 +3228,10 @@
           "title": "Origin",
           "type": "string"
         },
+        "thinking": {
+          "title": "Thinking",
+          "type": "boolean"
+        },
         "window": {
           "anyOf": [
             {
@@ -3246,7 +3250,8 @@
       "required": [
         "kind",
         "window",
-        "origin"
+        "origin",
+        "thinking"
       ],
       "title": "SignalTexts",
       "type": "object"

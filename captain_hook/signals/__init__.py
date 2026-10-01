@@ -76,11 +76,11 @@ def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> lis
     return result
 
 
-def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
+def block_texts(event: UserEvent | AssistantEvent, *, thinking: bool) -> Iterator[str]:
     for block in event.blocks:
         match block:
-            case ThinkingBlock(thinking=thinking):
-                yield thinking
+            case ThinkingBlock(thinking=text) if thinking:
+                yield text
             case ToolUseBlock(name=name, input=payload):
                 match parse_tool_call(name, payload, on_error="other"):
                     case (
@@ -97,7 +97,10 @@ def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
 
 
 def transcript_texts(
-    evt: BaseHookEvent, window: int | Literal["turn"], origin: Literal["assistant", "any"] = "any"
+    evt: BaseHookEvent,
+    window: int | Literal["turn"],
+    origin: Literal["assistant", "any"] = "any",
+    thinking: bool = True,
 ) -> list[str]:
     """Extract prose from recent transcript events for signal scoring.
 
@@ -111,7 +114,8 @@ def transcript_texts(
     assistant prose alike, while ``"assistant"`` drops user messages (and, on
     ``UserPromptSubmit``, the just-submitted prompt) so a stance hook scores only the
     agent's own words. Signal-driven hooks thread ``Signals.origin`` here, which
-    defaults to ``"assistant"``.
+    defaults to ``"assistant"``. ``thinking=False`` drops thinking blocks, so a hook scores
+    only what the agent wrote; signal-driven hooks thread ``Signals.thinking`` here.
 
     A fixed ``window`` counts scored prose entries, not raw JSONL events: tool calls
     and their results carry no prose, so they never crowd a message out of the window,
@@ -135,7 +139,7 @@ def transcript_texts(
     transcript, so scoring it would let one agent's words trip this agent's gate.
     """
 
-    key = (window, origin)
+    key = (window, origin, thinking)
     if (prepared := evt.ctx.prepared_evidence) is not None:
         for saved_key, texts in prepared.signal_texts:
             if saved_key == key:
@@ -144,7 +148,7 @@ def transcript_texts(
     if key in evt.ctx.signal_evidence:
         return list(evt.ctx.signal_evidence[key])
     if isinstance(evt.ctx.t, RemoteSession):
-        texts = evt.ctx.t.signal_texts(window=window, origin=origin)
+        texts = evt.ctx.t.signal_texts(window=window, origin=origin, thinking=thinking)
         if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
             texts = [evt.user_prompt, *texts]
         evt.ctx.signal_evidence[key] = tuple(texts)
@@ -159,7 +163,7 @@ def transcript_texts(
         )
 
     def texts_of(event: UserEvent | AssistantEvent) -> list[str]:
-        return [text for text in (event.text, *block_texts(event)) if text]
+        return [text for text in (event.text, *block_texts(event, thinking=thinking)) if text]
 
     if window == "turn":
         texts = [text for event in evt.ctx.turn.events if eligible(event) for text in texts_of(event)]

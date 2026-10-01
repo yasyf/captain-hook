@@ -25,6 +25,31 @@ from captain_hook import (
     nudge,
 )
 
+THINKING_MISFIRES = (
+    "Thinking it through more, the deploy applies the stack at the dev commit, so this addon update is likely just "
+    "dev catching up to whatever live already has — not something new introduced by my change.",
+    "Before escalating, I want to pin down whether TS release still runs anywhere, since if it doesn't, switching "
+    "pr-reviewer to target names might just be fixing an existing mismatch rather than introducing a new behavior "
+    "change.",
+    "The deeper problem is that leading-option binding stops at any unrecognized flag, meaning something like "
+    "`cc-notes --foo task validate x` would leave the verb words undetected and get approved by mistake — and the "
+    "old check has this same evasion flaw, so I need a more robust way to detect the dangerous verb regardless of "
+    "leading options.",
+    "The worktree removal is stuck on an idle-check tied to a known refusal pattern, so I'll leave it as a minor "
+    "issue to report later.",
+    "The root cause traces to deploy 8fbf85b landing outside the release pointer process, leaving SSM still pointing "
+    "at an older release expecting an outdated alembic revision while the DB had already migrated further — then a "
+    "box resize/reboot re-triggered that stale pointer deploy, causing a migration failure and 502s, which was "
+    "ultimately fixed by restoring 8fbf85b.",
+    'But I\'m second-guessing whether "placeholder" as a literal string is the right approach versus leaving it '
+    'unset, since a consumer that checks truthiness would pass the check with "placeholder" and then fail later with '
+    'a confusing opaque OAuth error rather than a clear "not configured" message — whereas leaving it empty/unset '
+    "lets the existing guard clauses report the clean error upfront.",
+    "For OUTAGE-level customer monitors I need to wrap handles with the pageOnAlert helper instead, covering chime "
+    "run errors, sofi ATO errors, the sofi pager stopped handles, and the polar undelivered/ATO run errors—while "
+    "leaving the chime composite alerts alone since they're already properly gated.",
+)
+
 
 class TypeCheckerContext(CustomCondition):
     """True when the recent assistant transcript is discussing a type checker / diagnostics."""
@@ -80,6 +105,7 @@ nudge(
         threshold=2,
         window=15,
         scope="text",
+        thinking=False,
         vetoes=[
             Signal(pattern=r"(?i)\b(?:which|that)\s+leaves?\b"),
             Signal(pattern=r"(?i)\bleaving\b[^.!?]{0,80}?\bmeans?\b"),
@@ -268,36 +294,12 @@ nudge(
             ]
         ): Allow(),
         Input(transcript=[T.assistant("I'll leave that CLAUDE.md issue unaddressed for now.")]): Warn(),
+        **{Input(transcript=[T.assistant(T.thinking(text))]): Allow() for text in THINKING_MISFIRES},
         Input(
             transcript=[
                 T.assistant(
-                    T.thinking(
-                        "Thinking it through more, the deploy applies the stack at the dev commit, so this addon "
-                        "update is likely just dev catching up to whatever live already has — not something new "
-                        "introduced by my change."
-                    )
-                )
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                T.assistant(
-                    T.thinking(
-                        "Before escalating, I want to pin down whether TS release still runs anywhere, since if it "
-                        "doesn't, switching pr-reviewer to target names might just be fixing an existing mismatch "
-                        "rather than introducing a new behavior change."
-                    )
-                )
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                T.assistant(
-                    T.thinking(
-                        "That test failure on #28529's own branch looks like a pre-existing bug in deploy-go, not "
-                        "something caused by my change, so I should report it upstream rather than try to fix it "
-                        "myself."
-                    )
+                    "That test failure on #28529's own branch looks like a pre-existing bug in deploy-go, not "
+                    "something caused by my change, so I should report it upstream rather than try to fix it myself."
                 )
             ]
         ): Warn(),

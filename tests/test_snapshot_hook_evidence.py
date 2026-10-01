@@ -32,7 +32,7 @@ class SnapshotFixture:
         assert not self.released
         return self
 
-    def signal_texts(self, *, window, origin):
+    def signal_texts(self, *, window, origin, thinking):
         assert not self.released
         self.signal_reads += 1
         return ['trigger {"key": "value"}']

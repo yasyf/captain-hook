@@ -92,7 +92,7 @@ def nudge(
             tracker = EchoTracker(
                 window=ECHO_WINDOW + (sig.window if isinstance(sig.window, int) else TURN_ECHO_LOOKBACK)
             )
-            candidates = tracker.survivors(transcript_texts(evt, sig.window, sig.origin), evt=evt)
+            candidates = tracker.survivors(transcript_texts(evt, sig.window, sig.origin, sig.thinking), evt=evt)
             matches = matching_texts(sig, candidates, consumed=evt.ctx.s.load(PrimitiveState).consumed.get(name, ()))
             if not matches:
                 return None
