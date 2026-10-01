@@ -13,10 +13,6 @@ from captain_hook import (
     hook,
 )
 
-# Compose conditions to target exactly the right edit. only_if is AND, skip_if is
-# any-skips, and SourceEdits already narrows to non-test source in one language.
-# Here: a raw SQL string written into application Python, but not into migrations
-# (skipped by path) and not into tests (SourceEdits excludes test files by default).
 hook(
     Event.PostToolUse,
     message="Raw SQL in application code. Route queries through db/queries.py.",

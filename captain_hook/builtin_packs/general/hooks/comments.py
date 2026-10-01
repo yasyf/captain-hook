@@ -1,48 +1,4 @@
-"""Enforce terse comments: block an edit that leaves an over-budget comment block, warn on the rest.
-
-Comments should be terse and used sparingly — names, types, and organization carry the meaning.
-This measures the comment blocks an edit *creates or grows* (untouched blocks stay exempt; a block's
-identity is its whitespace-normalized text, so a pure move stays quiet) at their full post-edit size,
-and blocks plain blocks past 3 lines or 200 chars. Grammar-classified documentation comments keep
-only their opening paragraph carved out, under a 6-line / 400-char ceiling; trailing paragraphs use
-the plain budget. Mid-band doc heads draw an advisory warn, and an edit whose added lines are mostly
-comments draws a density warn. Language-agnostic via the tree-sitter comment kinds and committed doc
-tables in :mod:`captain_hook.ast_grep`.
-
-Design notes — accepted tradeoffs, by construction, not bugs:
-
-* Doc-ness is table-driven: native grammar markers, or a declaration beginning on the immediately
-  following line. A plain comment above a covered declaration therefore classifies doc, bounded by
-  the head ceiling and plain-tail budget.
-* A doc block splits arithmetically at its first alphanumeric-free comment row or blank source gap.
-  The opening paragraph keeps the carve-out; all trailing paragraphs form one plain-budget tail, so
-  that tail never re-classifies as documentation.
-* Multi-paragraph godoc, rustdoc, or JSDoc whose detail text exceeds the plain budget now blocks; long
-  API prose belongs in package documentation.
-* Floating JSDoc is plain; Python and Elixir never classify comment runs as docs; Haskell haddock
-  falls to the plain budget. Dart ``///`` adjacent to a declaration classifies as documentation,
-  like the generic Swift and Kotlin adjacency cases.
-* A Python PEP 723 fence (``# /// script`` … ``# ///``) whose body parses as TOML with top-level
-  keys in the PEP 723 schema is machine metadata, dropped like a shebang; a lookalike with a prose
-  body stays on the plain budget. String *values* inside the fence are not measured — comments are
-  this hook's only surface, and code string literals already carry unbounded prose — and a comment
-  glued to the fence with no blank line makes the whole run plain-budget material.
-* Divider and decoration rows add no lines to either side, but their characters land in the segment
-  they sit in, so decoration can't carry unbounded bulk. Character counts include leaders and omit
-  interior newlines.
-* Density classification stays run-level, so doc-tail lines remain excluded from comment density.
-* A new-path ``Write`` has no pre-image, so a carried-over legacy oversized comment re-trips as
-  "created" (blocks, not warns); move provenance only survives an in-place edit.
-* Editing a legacy oversized run's words draws an advisory at full size, not a block — only a new run,
-  or one grown over budget from within it, blocks. Ancestry is position-mapped, so a delete-and-replace
-  at the same spot classifies as an edit of the old run, while a moved-and-edited run finds no aligned
-  ancestor and blocks.
-* ``yaml`` and ``json`` (through a JSONC-tolerant grammar) parse and fire comment hooks; ``toml`` and
-  ``sql`` have no bundled grammar; ``md`` parses but defines no comment nodes.
-* Threshold boundaries are permissive (``> 3`` lines / ``> 200`` chars, and ``> 6`` lines /
-  ``> 400`` chars for a doc head — the boundary value passes).
-* On a deny that also carries advisories, block messages come first, then the warns.
-"""
+"""Block an edit that leaves an over-budget comment block it created or grew; warn on legacy, doc, and dense cases."""
 
 from __future__ import annotations
 
@@ -75,6 +31,9 @@ from captain_hook.ast_grep import (
 
 if TYPE_CHECKING:
     from captain_hook.ast_grep import CommentBlock, TouchedComment
+
+DOC_HEAD_LINES = 6
+DOC_HEAD_CHARS = 400
 
 GO_DOC_RUN = (
     "package p\n\n// F alpha line here\n// F beta line here\n// F gamma line here\n// F delta line here\nfunc F() {}\n"
@@ -135,9 +94,7 @@ def touched_ancestry(evt: BaseHookEvent) -> list[TouchedComment]:
     if not (file := evt.file) or not (lang := lang_for_path(file.path)):
         return []
     if (post := evt.post_image) is None:
-        # Span edit (opaque locator, no simulated post-image): compare the whole-file pre-image
-        # against the new span text — a conservative superset that only suppresses, never misfires.
-        # Span edits only: a builtin edit's `replaced` is just its old span, not a superset.
+        # WORKAROUND: span edits carry no post-image, so diff the whole-file pre-image against the new span text.
         if not isinstance(evt.input, SpanEditCall) or (pre := evt.replaced) is None or (post := evt.content) is None:
             return []
     elif (pre := evt.pre_image) is None:
@@ -206,18 +163,13 @@ class CommentDenseEdit(CustomCondition):
 hook(
     Event.PreToolUse,
     (
-        "Verbose comment: this edit leaves a comment over budget — a plain comment run over 3 lines / "
-        "200 chars, or a doc comment whose opening paragraph runs past 6 lines / 400 chars (trailing "
-        "paragraphs — everything past the first comment row with no letters or digits, or a blank gap — "
-        "share one plain 3-line / 200-char budget). Comments are terse and sparing — names, "
-        "types, and organization document the code. Shrink it to the one non-obvious fact, or delete it "
-        "and let the code speak; long-form rationale belongs in the commit message. See: STYLEGUIDE.md § "
-        "Comments."
+        f"Verbose comment: a plain comment run is capped at {MAX_COMMENT_LINES} lines / {MAX_COMMENT_CHARS} chars, "
+        f"and a doc comment's opening paragraph at {DOC_HEAD_LINES} lines / {DOC_HEAD_CHARS} chars. "
+        "Shrink it to the one non-obvious fact or delete it."
     ),
     only_if=[Tool("Edit", "Write", "MultiEdit"), VerboseComment()],
     block=True,
     tests={
-        # Too-long non-doc blocks an edit creates or grows — blocked.
         Input(
             file="svc.go",
             content=(
@@ -301,12 +253,10 @@ hook(
                 "\nvar x = 1\n"
             ),
         ): Block(pattern="Verbose comment"),
-        # Blank-line-split paragraphs merge for the size check (else they evade the block).
         Input(
             file="split.py",
             content="# para one aaa\n# para one bbb\n\n# para two ccc\n# para two ddd\n# para two eee\nx = 1\n",
         ): Block(pattern="Verbose comment"),
-        # A doc-classified run above a declaration still blocks past the head ceiling.
         Input(
             file="poison.js",
             content=(
@@ -333,7 +283,6 @@ hook(
                 "x();\n"
             ),
         ): Block(pattern="Verbose comment"),
-        # Growing / reflowing a run over the threshold — blocked.
         Input(
             file=FileFixture(name="grow.py", content="# a here\n# b here\n# c here\nx = 1\n"),
             old="# a here\n# b here\n# c here",
@@ -350,8 +299,6 @@ hook(
             old="x = 1",
             content="# a here\n# b here\n# c here\n# d here\n# e here\nx = 1",
         ): Block(pattern="Verbose comment"),
-        # A legacy long comment deleted while an unrelated long comment lands elsewhere in the same
-        # edit: the new run has no positional ancestor, so it is created, not an edit — blocked.
         Input(
             file=FileFixture(
                 name="relocate.py",
@@ -360,7 +307,6 @@ hook(
             old="# gone one here\n# gone two here\n# gone three here\n# gone four here\nx = 1\ny = 2",
             content="x = 1\n# new one here\n# new two here\n# new three here\n# new four here\ny = 2",
         ): Block(pattern="Verbose comment"),
-        # Boundaries, trailing comments, shebangs, and untouched / exempt blocks — allowed.
         Input(file="m.py", content="# one here\n# two here\n# three here\nx = 1\n"): Allow(),
         Input(file="ok.go", content="package p\n\nfunc F() {\n\t// " + "x" * 197 + "\n\tx := 1\n}\n"): Allow(),
         Input(file="chars.go", content="package p\n\n// " + "x" * 397 + "\nfunc F() {}\n"): Allow(),
@@ -378,7 +324,6 @@ hook(
             file="head.py",
             content="#!/usr/bin/env python3\n# header line one\n# header line two\n# header line three\nx = 1\n",
         ): Allow(),
-        # A PEP 723 fence is machine-read script metadata, never run material — however long.
         Input(
             file="tool.py",
             content=(
@@ -393,7 +338,6 @@ hook(
                 '"""Tool."""\n\nx = 1\n'
             ),
         ): Allow(),
-        # A fence lookalike whose body isn't TOML is prose on the plain budget.
         Input(
             file="fake.py",
             content=(
@@ -437,8 +381,6 @@ hook(
             old="// deliberately: the mint-verify TOCTOU",
             content="//  deliberately: the mint-verify TOCTOU",
         ): Allow(),
-        # Reworking a comment already over budget before the edit is an advisory, not a block —
-        # a light word change, and a full in-place rewrite of the legacy run, both stay allowed here.
         Input(
             file=FileFixture(name="legacy-light.py", content=PY_LONG_RUN),
             old="# note two here",
@@ -459,7 +401,6 @@ hook(
         Input(file="f.yaml", content="# a\n# b\n# c\n# d\n# e\n# f\n# g\n# h\n# i\n# j\n"): Block(
             pattern="Verbose comment"
         ),
-        # Doc heads within the ceiling are carved out; a density-shaped edit's short runs stay inline-clean.
         Input(file="lib.rs", content=RS_LONG_DOC): Allow(),
         Input(file="doc.go", content=GO_DOC_RUN): Allow(),
         Input(file="cd.go", content=GO_CONST_DOC): Allow(),
@@ -473,18 +414,14 @@ hook(
 
 nudge(
     (
-        "Legacy long comment: you reworked a comment that was already over budget before this edit, so "
-        "that rework alone isn't the reason for any deny. Still, while you're in it, trim it to the one "
-        "non-obvious fact — or delete it and let the code speak. A comment you newly push over budget — "
-        "including growing a shorter one past it — is still denied. See: STYLEGUIDE.md § Comments."
+        "Legacy long comment: this edit reworks a comment that was already over budget. "
+        "Trim it to the one non-obvious fact or delete it."
     ),
     only_if=[Tool("Edit", "Write", "MultiEdit"), LegacyCommentEdit()],
     events=Event.PreToolUse,
     max_fires=None,
     advisory_on_deny=True,
     tests={
-        # Reworking a legacy over-budget run — a light word change, a full in-place rewrite, or a
-        # doc-tail edit — warns instead of blocking.
         Input(
             file=FileFixture(name="legacy-light.py", content=PY_LONG_RUN),
             old="# note two here",
@@ -506,8 +443,6 @@ nudge(
             old="// stale token from an earlier session.",
             content="// stale token from a much earlier session.",
         ): Warn(pattern="Legacy long comment"),
-        # A brand-new over-budget comment, a within-budget run grown past budget, and a trim back
-        # under budget are the blocking hook's business (or nobody's) — the legacy advisory stays quiet.
         Input(file="new.py", content=PY_LONG_RUN): Allow(),
         Input(
             file=FileFixture(name="grow.py", content="# a here\n# b here\n# c here\nx = 1\n"),
@@ -522,7 +457,6 @@ nudge(
             ),
             content="# just one terse note",
         ): Allow(),
-        # An identical resave, a whitespace-only reflow, and a Write to a brand-new file all stay quiet.
         Input(file=FileFixture(name="resave.py", content=PY_LONG_RUN), content=PY_LONG_RUN): Allow(),
         Input(
             file=FileFixture(
@@ -537,11 +471,9 @@ nudge(
 
 nudge(
     (
-        "Long documentation comment: a doc comment's opening paragraph is carved out of the "
-        "verbose-comment block up to 6 lines / 400 chars, but keep it a real description of the API — "
-        "narrative padding and signature restatement dilute it. Past the ceiling the edit is denied, and "
-        "trailing paragraphs — everything past the first comment row with no letters or digits — share "
-        "one plain-budget tail. Tighten this one if it can say the same in fewer lines."
+        f"Long documentation comment: the opening paragraph runs past {MAX_COMMENT_LINES} lines / "
+        f"{MAX_COMMENT_CHARS} chars. "
+        "Cut it to a real description of the API in fewer lines."
     ),
     only_if=[Tool("Edit", "Write", "MultiEdit"), VerboseDocComment()],
     events=Event.PreToolUse,
@@ -556,8 +488,6 @@ nudge(
             file="plain.rs",
             content="// line one here\n// line two here\n// line three here\n// line four here\nfn f() {}\n",
         ): Warn(pattern="documentation comment"),
-        # A short doc run, a 200-char rustdoc at EOF (trailing newline not counted), and a long
-        # non-doc run all leave the doc warn quiet.
         Input(file="lib.rs", content="/// Builds a widget.\npub fn f() {}\n"): Allow(),
         Input(file="eof.rs", content="/// " + "x" * 196 + "\n"): Allow(),
         Input(file="m.py", content=PY_LONG_RUN): Allow(),
@@ -584,9 +514,8 @@ nudge(
 
 nudge(
     (
-        "Comment-dense edit: most of the lines this edit adds are comments. A few terse comments beat a "
-        "running commentary — let names and structure carry the story, and keep only the non-obvious "
-        "ones. See: STYLEGUIDE.md § Comments."
+        "Comment-dense edit: most lines this edit adds are comments. "
+        "Delete every comment the names and structure already carry."
     ),
     only_if=[Tool("Edit", "Write", "MultiEdit"), CommentDenseEdit()],
     events=Event.PreToolUse,
@@ -594,9 +523,7 @@ nudge(
     advisory_on_deny=True,
     tests={
         Input(file="dense.py", content=PY_DENSE_FIRES): Warn(pattern="Comment-dense"),
-        # The block already covers an all-comment edit; the density warn stands down.
         Input(file="all.py", content=PY_ALL_COMMENT): Allow(),
-        # A PEP 723 fence's lines are metadata, not comment density.
         Input(
             file="fence.py",
             content=(
@@ -666,7 +593,6 @@ nudge(
                 "}"
             ),
         ): Allow(),
-        # Exactly 50% is not "most": no warn.
         Input(file="half.py", content="# c1 here\na = 1\n# c2 here\nb = 2\n# c3 here\nc = 3\n"): Allow(),
         Input(file="sparse.py", content="# c1 here\na = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n# c2 here\n"): Allow(),
         Input(file="floor.py", content="# c1 here\n# c2 here\n# c3 here\n"): Allow(),

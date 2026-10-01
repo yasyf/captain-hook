@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import re
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from captain_hook import (
     Allow,
     Block,
     Call,
+    CommandMatches,
     CommandSchema,
     Event,
     Input,
@@ -19,6 +21,7 @@ from captain_hook import (
     Rewrite,
     Rewritten,
     Runs,
+    T,
     Target,
     Tool,
     UsedSkill,
@@ -27,23 +30,11 @@ from captain_hook import (
     nudge,
     rewrite_command_occurrences,
 )
+from captain_hook.cmd import COMMAND_VALUE_FLAGS
 
 if TYPE_CHECKING:
-    from captain_hook import Arguments, BaseHookEvent, HookResult, Occurrence, PreToolUseEvent, WalkContext
+    from captain_hook import Arguments, BaseHookEvent, Occurrence, PreToolUseEvent, WalkContext
 
-FIND_TO_RG_NOTE = (
-    "Rewrote an unbounded `find` to `rg --files`: a name search rooted at $HOME or / walks every "
-    "worktree, node_modules, and build tree on the volume and pins a core for minutes. rg honours "
-    ".gitignore/.ignore and skips hidden files, so it returns the tracked hits in well under a "
-    "second. Need the ignored or hidden ones too? Re-run with `rg --files -uu` or `fd -H -I`."
-)
-FIND_EXEC_BLOCKED = (
-    "BLOCKED: `find -exec` forks one process per hit and traverses ignored trees, so it pins a core "
-    "for minutes on any real checkout. Use `fd` instead: `fd -H -i '<pattern>' <root> -x <cmd>` runs "
-    "the same command per hit, in parallel, honouring .gitignore/.ignore — and `-X` batches them "
-    "into one invocation like `-exec {} +`. To act on content matches rather than names, "
-    "`rg -l '<pattern>' | xargs <cmd>`."
-)
 FIND_TO_RG = CommandSchema(
     "find",
     operands=(Operand("root"),),
@@ -58,50 +49,169 @@ FIND_TO_RG = CommandSchema(
     options_end_operands=True,
 )
 UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktrees"))
-HOME_VARIABLE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
+HOME_SPELLINGS = ("$HOME", "${HOME}")
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
+FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir"})
 
-STASH_READ_ONLY_VERBS = frozenset({"list", "show"})
-STASH_ADDRESSED_VERBS = frozenset({"apply", "drop"})
+GIT_STASH = CommandSchema(
+    "git",
+    operands=(Operand("subcommand"), Operand("verb"), Operand("targets", count="*")),
+    options=(
+        Option("environment", COMMAND_VALUE_FLAGS["git"]),
+        Option("message", ("-m", "--message", *(f"-{letter}m" for letter in "pkuaqS"))),
+        Option("pathspec_file", ("--pathspec-from-file",)),
+        Option("help", ("-h", "--help"), bool),
+        Option(
+            "inert",
+            (
+                "-p",
+                "-P",
+                "-k",
+                "-u",
+                "-a",
+                "-q",
+                "-S",
+                "--paginate",
+                "--no-pager",
+                "--bare",
+                "--no-optional-locks",
+                "--no-replace-objects",
+                "--no-advice",
+                "--no-lazy-fetch",
+                "--literal-pathspecs",
+                "--glob-pathspecs",
+                "--noglob-pathspecs",
+                "--icase-pathspecs",
+                "--patch",
+                "--keep-index",
+                "--no-keep-index",
+                "--include-untracked",
+                "--no-include-untracked",
+                "--all",
+                "--quiet",
+                "--staged",
+                "--index",
+                "--pathspec-file-nul",
+            ),
+            bool,
+        ),
+    ),
+)
+CLAUDE_PLUGIN_UPDATE = CommandSchema(
+    "claude",
+    operands=(Operand("group"), Operand("action"), Operand("plugins", count="*")),
+    options=(
+        Option("scope", ("-s", "--scope")),
+        Option("marketplace", ("--marketplace",)),
+        Option("accept_command", ("--accept-command",)),
+        Option("flag", ("-h", "--help", "-y", "--yes", "--json"), bool),
+    ),
+)
+FLEET_TOOLS = frozenset(
+    {"capt-hook", "captain-hook", "cc-transcript", "cc-notes", "slop-cop", "cc-guides", "cc-context"}
+)
+UVX = CommandSchema(
+    "uvx",
+    operands=(Operand("tool"), Operand("args", count="*")),
+    operands_end_options=True,
+    options=(
+        Option(
+            "value",
+            (
+                "--from",
+                "-w",
+                "--with",
+                "--with-editable",
+                "--with-requirements",
+                "-p",
+                "--python",
+                "-c",
+                "--constraints",
+                "--overrides",
+                "--env-file",
+                "--index",
+                "--default-index",
+                "-i",
+                "--index-url",
+                "--extra-index-url",
+                "-f",
+                "--find-links",
+                "--index-strategy",
+                "--exclude-newer",
+                "--directory",
+            ),
+        ),
+        Option(
+            "flag",
+            (
+                "--isolated",
+                "-n",
+                "--no-cache",
+                "--refresh",
+                "--offline",
+                "-q",
+                "--quiet",
+                "-v",
+                "--verbose",
+                "--no-index",
+            ),
+            bool,
+        ),
+    ),
+)
 
 
-def tagged_stash(args: tuple[str, ...]) -> bool:
-    """Whether a push carries ``-m``/``--message``, so its entry stays findable by its own tag."""
-    return any(
-        arg.startswith("--message") or (not arg.startswith("--") and "m" in arg) for arg in args if arg.startswith("-")
-    )
+@dataclass(frozen=True, slots=True)
+class OperandIs:
+    name: str
+    values: Collection[str]
+
+    def __call__(self, arguments: Arguments) -> bool:
+        bound = arguments.values.get(self.name, ())
+        return (bound[0] if bound else "") in self.values
 
 
-def safe_stash(args: tuple[str, ...]) -> bool:
-    """Whether one ``git stash`` invocation reads the stack, names the entry it takes, or tags the entry it adds."""
-    verb = args[0] if args and not args[0].startswith("-") else ""
-    if verb in STASH_READ_ONLY_VERBS or "-h" in args or "--help" in args:
-        return True
-    if verb in STASH_ADDRESSED_VERBS:
-        return any(not arg.startswith("-") for arg in args[1:])
-    return verb in ("", "push") and tagged_stash(args)
+@dataclass(frozen=True, slots=True)
+class Binds:
+    name: str
+
+    def __call__(self, arguments: Arguments) -> bool:
+        return bool(arguments.values.get(self.name))
 
 
-def clobbers_the_shared_stash(evt: BaseHookEvent) -> bool:
-    """Whether any ``git stash`` call can lose work: an untagged push, or one taking an entry blind."""
-    return any(
-        argv[:1] == ("stash",) and not safe_stash(argv[1:])
-        for call in evt.cmd.calls("git")
-        for argv in (call.verb_argv[1:],)
-    )
+@dataclass(frozen=True, slots=True)
+class AllOf:
+    predicates: tuple[Callable[[Arguments], bool], ...]
+
+    def __init__(self, *predicates: Callable[[Arguments], bool]) -> None:
+        object.__setattr__(self, "predicates", predicates)
+
+    def __call__(self, arguments: Arguments) -> bool:
+        return all(predicate(arguments) for predicate in self.predicates)
+
+
+def names_a_bare_plugin(arguments: Arguments) -> bool:
+    return any("@" not in (name or "") for name in arguments.values.get("plugins", ()))
 
 
 hook(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), LambdaCondition(clobbers_the_shared_stash)],
+    only_if=[
+        Tool("Bash"),
+        CommandMatches(
+            GIT_STASH,
+            only_if=(OperandIs("subcommand", {"stash"}),),
+            skip_if=(
+                Binds("help"),
+                OperandIs("verb", {"list", "show"}),
+                AllOf(OperandIs("verb", {"apply", "drop"}), Binds("targets")),
+                AllOf(OperandIs("verb", {"", "push"}), Binds("message")),
+            ),
+        ),
+    ],
     message=(
-        "BLOCKED: this git stash takes from the stack blind, and the stack is shared with every "
-        "other worktree and session on the machine — a bare stash or a pop can swallow work that is "
-        'not yours. Set work aside under a tag instead: `git stash push -u -m "<unique-tag>"`, then '
-        "`git stash list --format='%H %gs'` to find your entry, `git stash apply <sha>` to restore it "
-        "(never pop), and `git stash drop <n>` once you are done. In a jj repo you never need to "
-        "stash — the working copy is commit @; use `jj new` to set it aside or `jj rebase` directly. "
-        "In plain git, a WIP commit on a branch works too."
+        "This `git stash` takes from or adds to the stack shared by every worktree without a tag. "
+        'Run `git stash push -u -m "<unique-tag>"` to set work aside, then `git stash apply <sha>` (never pop).'
     ),
     block=True,
     tests={
@@ -142,14 +252,8 @@ hook(
         Or(Runs("jj", "op", "restore"), Runs("jj", "operation", "restore"), Runs("jj", "undo")),
     ],
     message=(
-        "BLOCKED: jj op restore and jj undo rewrite the whole repo to an earlier operation and can "
-        "clobber everything since. Inspect instead: `jj op log` to find the operation, `jj op show <op>` "
-        "or `jj op diff --op <op>` to see what it changed, and any read command against that state via "
-        "`jj --at-op=<op> ...` (e.g. `jj --at-op=<op> st`, `jj --at-op=<op> file show -r <rev> <path>`). "
-        "To recover content without time-travel: `jj restore --from <commit> <path>` for one file (hidden "
-        "commits stay addressable by full ID via `jj --at-op=<op> log`), or materialize the old state in "
-        "a throwaway workspace: `jj --at-op=<op> workspace add <dir> -r <rev>`. If a true restore is "
-        "needed, stop and ask the user to run it."
+        "`jj op restore` and `jj undo` rewrite the whole repo to an earlier operation and can clobber "
+        "everything since. Run `jj op log` to find the operation, then `jj --at-op=<op> <read command>` to inspect it."
     ),
     block=True,
     tests={
@@ -162,91 +266,60 @@ hook(
     },
 )
 
-# Requires the codex plugin (/plugin install codex@skills from yasyf/cc-skills).
-# Delete this nudge if you don't use Codex.
 nudge(
-    """
-    Multiple tool failures detected without a /codex invocation. After 2 failed
-    approaches, get a second opinion from `/codex` before attempting a 3rd —
-    Codex catches errors that Claude may miss.
-    """,
+    "Two tool failures without a second opinion. Run `/codex` before a third attempt.",
     skip_if=[UsedSkill("codex"), RanCommand("codex")],
     events=Event.PostToolUseFailure,
     when=lambda evt: evt.ctx.turn.count_failures() >= 2,
+    tests={
+        Input(
+            command="uv run pytest",
+            error="ModuleNotFoundError",
+            transcript=[
+                *T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest"),
+                *T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest -x"),
+            ],
+        ): Warn(pattern="/codex"),
+        Input(
+            command="uv run pytest",
+            error="ModuleNotFoundError",
+            transcript=T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest"),
+        ): Allow(),
+    },
 )
 
-
-def operands(call: Call, *, after: int = 0) -> list[str]:
-    """The call's positional words past ``after``, with flags and their values dropped."""
-    rest: list[str] = []
-    skip = False
-    for arg in call.args[after:]:
-        if skip:
-            skip = False
-        elif arg in ("--scope", "--marketplace"):
-            skip = True
-        elif not arg.startswith("-"):
-            rest.append(arg)
-    return rest
-
-
-def updates_a_bare_plugin(evt: BaseHookEvent) -> bool:
-    return any(
-        call.args[:2] == ("plugin", "update") and any("@" not in name for name in operands(call, after=2))
-        for call in evt.command.calls("claude")
-    )
-
-
 nudge(
-    "`claude plugin update <name>` with a bare name fails 'not found', and the scope silently "
-    "defaults to user regardless of cwd. Take the qualifier and scope from the plugin's "
-    "~/.claude/plugins/installed_plugins.json record and pass them: "
-    "`claude plugin update <plugin>@<marketplace> --scope <scope>`.",
-    only_if=[Tool("Bash"), LambdaCondition(updates_a_bare_plugin)],
+    "Update plugins by qualified name and scope from `~/.claude/plugins/installed_plugins.json`. "
+    "Run `claude plugin update <plugin>@<marketplace> --scope <scope>`.",
+    only_if=[
+        Tool("Bash"),
+        CommandMatches(
+            CLAUDE_PLUGIN_UPDATE,
+            only_if=(OperandIs("group", {"plugin"}), OperandIs("action", {"update"}), names_a_bare_plugin),
+        ),
+    ],
     events=Event.PreToolUse,
     tests={
-        # Bare name -> warn (the qualifier and scope are missing).
         Input(command="claude plugin update cc-context"): Warn(),
-        # A --scope without an @ qualifier is still a bare name -> warn.
         Input(command="claude plugin update cc-context --scope user"): Warn(),
-        # Fully qualified with scope -> silent.
         Input(command="claude plugin update cc-context@cc-context --scope user"): Allow(),
-        # Qualified without scope -> silent (the @ carve-out).
         Input(command="claude plugin update cc-context@cc-context"): Allow(),
-        # Not a plugin update -> silent.
         Input(command="claude plugin list"): Allow(),
         Input(command="git status"): Allow(),
     },
 )
 
-
-def runs_an_unpinned_fleet_tool(evt: BaseHookEvent) -> bool:
-    for call in evt.command.calls("uvx"):
-        if "UV_EXCLUDE_NEWER" in call.source.args:
-            continue
-        if any(
-            name in {"capt-hook", "captain-hook", "cc-transcript", "cc-notes", "slop-cop", "cc-guides", "cc-context"}
-            for name in operands(call)
-        ):
-            return True
-    return False
-
-
 nudge(
-    "Right after a release, a bare `uvx` can serve a stale cached tool env, and the "
-    "UV_EXCLUDE_NEWER window hides just-published versions. When you need the fresh release, pin "
-    "exact (`uvx <pkg>@X.Y.Z`) or prefix `env -u UV_EXCLUDE_NEWER`.",
-    only_if=[Tool("Bash"), LambdaCondition(runs_an_unpinned_fleet_tool)],
+    "A bare `uvx` of a fleet tool can serve a stale cached env right after a release. "
+    "Run `env -u UV_EXCLUDE_NEWER uvx <pkg> <args>` to get the fresh one.",
+    only_if=[Tool("Bash"), CommandMatches(UVX, only_if=(OperandIs("tool", FLEET_TOOLS),))],
+    skip_if=[Runs("env", "-u", "UV_EXCLUDE_NEWER")],
     events=Event.PreToolUse,
     tests={
-        # Bare, unpinned uvx of a fleet tool -> warn.
         Input(command="uvx capt-hook run PostToolUse"): Warn(),
         Input(command="uvx cc-notes status"): Warn(),
-        # Version-pinned -> silent.
         Input(command="uvx capt-hook@9.19.0 test"): Allow(),
-        # env -u UV_EXCLUDE_NEWER prefix -> silent.
         Input(command="env -u UV_EXCLUDE_NEWER uvx capt-hook test"): Allow(),
-        # A non-fleet tool -> silent (scoped narrowly to avoid noise).
         Input(command="uvx ruff check"): Allow(),
     },
 )
@@ -254,9 +327,10 @@ nudge(
 
 def home_respelled(target: Target) -> Target:
     """A ``$HOME``-rooted target respelled with ``~``, since ``PathMatches`` expands no variables."""
-    if target.value is not None or not HOME_VARIABLE.match(raw := target.raw.strip("\"'")):
+    if target.value is not None:
         return target
-    return Target(text := HOME_VARIABLE.sub("~", raw), text, target.cwd)
+    head, slash, rest = target.raw.strip("\"'").partition("/")
+    return Target(text := f"~{slash}{rest}", text, target.cwd) if head in HOME_SPELLINGS else target
 
 
 def unbounded_root(arguments: Arguments) -> bool:
@@ -284,25 +358,51 @@ def rg_equivalent(call: Call) -> str | None:
             return None
 
 
-def guard_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> str | Rewritten | HookResult | None:
+def execs_per_hit(evt: BaseHookEvent) -> bool:
+    return any(not FIND_EXEC_FLAGS.isdisjoint(call.args) for call in evt.cmd.calls("find"))
+
+
+def rg_for_unbounded_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> Rewritten | None:
     command = occ.command.unwrapped
-    if command.executable != "find":
-        return None
-    if "-exec" in command.args or "-execdir" in command.args:
-        return evt.block(FIND_EXEC_BLOCKED)
-    if not ctx.spliceable or command.env or command.redirects:
+    if command.executable != "find" or not ctx.spliceable or command.env or command.redirects:
         return None
     rewritten = rg_equivalent(Call(evt.cmd, occ, ctx.cwd))
-    return Rewritten(rewritten, FIND_TO_RG_NOTE) if rewritten else None
+    return (
+        Rewritten(
+            rewritten,
+            "Rewrote an unbounded `find` to `rg --files`, which honours .gitignore and skips hidden files. "
+            "Re-run with `rg --files -uu` to include the ignored and hidden ones.",
+        )
+        if rewritten
+        else None
+    )
 
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), LambdaCondition(execs_per_hit)],
+    message=(
+        "`find -exec` forks one process per hit and walks ignored trees. "
+        "Run `fd -H -i '<pattern>' <root> -x <cmd>` instead."
+    ),
+    block=True,
+    tests={
+        Input(command=r"find . -name '*.pyc' -exec rm {} \;"): Block(),
+        Input(command="find ~ -type f -exec grep -l foo {} +"): Block(),
+        Input(command="find /Users/yasyf -iname '*.log' -exec rm {} +"): Block(),
+        Input(command="find ~ -type f -execdir ls {} +"): Block(),
+        Input(command="find . -name '*.pyc'"): Allow(),
+        Input(command="echo find . -exec rm {} +"): Allow(),
+        Input(command="git status"): Allow(),
+    },
+)
 
 rewrite_command_occurrences(
-    visit=guard_find,
+    visit=rg_for_unbounded_find,
     tests={
         Input(command="find /Users/yasyf -iname '*plugin-workspace-tools*'"): Rewrite(
             pattern="rg --files /Users/yasyf --iglob '*plugin-workspace-tools*'"
         ),
-        # The root keeps its source spelling, so ~ still expands and the glob stays quoted.
         Input(command="find ~ -iname '*.pem'"): Rewrite(pattern="rg --files ~ --iglob '*.pem'"),
         Input(command="find $HOME -type f -iname foo"): Rewrite(pattern="rg --files $HOME --iglob foo"),
         Input(command="find ~ -iname '*.pem' -type f"): Rewrite(pattern="rg --files ~ --iglob '*.pem'"),
@@ -312,25 +412,17 @@ rewrite_command_occurrences(
         Input(command="find ~/.claude/worktrees -iname '*.lock'"): Rewrite(
             pattern="rg --files ~/.claude/worktrees --iglob '*.lock'"
         ),
-        # Only the find segment is spliced; its siblings survive byte-for-byte.
         Input(command="find / -iname 'libssl*' | head -5"): Rewrite(pattern="rg --files / --iglob 'libssl*' | head -5"),
         Input(command="cd /tmp && find ~ -name Cargo.toml"): Rewrite(
             pattern="cd /tmp && rg --files ~ --glob Cargo.toml"
         ),
-        # A scoped root is cheap -> untouched.
         Input(command="find . -iname '*.ts'"): Allow(),
         Input(command="find ~/Code/monorepo -iname '*.ts'"): Allow(),
         Input(command="find api/src -iname '*.ts'"): Allow(),
-        # -type d has no rg --files equivalent -> untouched.
         Input(command="find ~ -type d -iname build"): Allow(),
         Input(command="find ~ -iname foo -newer bar"): Allow(),
         Input(command="find ~ -name x -print0"): Allow(),
         Input(command="find ~ -iname a -iname b"): Allow(),
-        # -exec blocks at any root, and beats the rewrite.
-        Input(command=r"find . -name '*.pyc' -exec rm {} \;"): Block(),
-        Input(command="find ~ -type f -exec grep -l foo {} +"): Block(),
-        Input(command="find /Users/yasyf -iname '*.log' -exec rm {} +"): Block(),
-        # The word `find` as an argument is not a find call.
         Input(command="echo find ~ -iname foo"): Allow(),
         Input(command="git status"): Allow(),
     },

@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Final
 
 from captain_hook.app import on
-from captain_hook.signals import cite_message, matching_texts, resolve_signals, transcript_texts
+from captain_hook.signals import matching_texts, resolve_signals, transcript_texts
 from captain_hook.state import (
     ECHO_WINDOW,
     TURN_ECHO_LOOKBACK,
@@ -101,14 +101,11 @@ def nudge(
                     return None
                 mark_fired(ps, evt)
             tracker.record(message, triggering=triggering, evt=evt)
-            cited = cite_message(sig, triggering, message)
-        else:
-            cited = message
 
         if block:
             record_fire(evt)
-            return HookResult.of(Action.block, cited)
-        return HookResult.of(Action.warn, cited)
+            return HookResult.of(Action.block, message)
+        return HookResult.of(Action.warn, message)
 
     handler.__name__ = handler.__qualname__ = name
 

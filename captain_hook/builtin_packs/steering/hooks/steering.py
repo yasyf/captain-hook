@@ -41,10 +41,9 @@ class TypeCheckerContext(CustomCondition):
 
 
 nudge(
-    "You appear to be dismissing a pre-existing issue rather than fixing it. "
-    "Leave the codebase better than you found it — if you encounter a bug, style "
-    "violation, or broken test in code you're touching, fix it. Don't rationalize "
-    "skipping it as out of scope. See: AGENTS.md § Code Stewardship.",
+    "Bugs, style violations, and broken tests in code you touch get fixed, not dismissed as pre-existing or "
+    "out of scope. "
+    "Fix the issue in this change before moving on.",
     skip_if=[TypeCheckerContext()],
     signals=Signals(
         [
@@ -79,15 +78,7 @@ nudge(
         window=15,
         scope="text",
         vetoes=[
-            # A relative clause ("which/that leaves ... unset") describes a bug's mechanism in
-            # the third person — not the assistant electing to leave an issue unaddressed — but
-            # still trips the issue/leave clause above (misfire watched live 2026-07-24).
             Signal(pattern=r"(?i)\b(?:which|that)\s+leaves?\b"),
-            # "leaving X [unedited/unaddressed/...] means ..." states the consequence of NOT
-            # acting as the reason a fix is happening in this same turn — not a decision to
-            # skip it. The gerund "leaving" dependency-links to a nearby "issue"/"bug"/... noun
-            # within the clause's 3-hop window even though it isn't that noun's object
-            # (misfire 2026-09-19, session a568684c).
             Signal(pattern=r"(?i)\bleaving\b[^.!?]{0,80}?\bmeans?\b"),
         ],
     ),
@@ -152,8 +143,6 @@ nudge(
                 )
             ]
         ): Warn(),
-        # FIX-mode regression matrix (misfires watched live 2026-07-10); message byte-identical.
-        # m1 briefing-quote: dismissal quoted into a subagent briefing arrives user-role -> origin drop
         Input(
             transcript=[
                 T.user(
@@ -165,7 +154,6 @@ nudge(
                 T.assistant("Starting the review of that excerpt now."),
             ]
         ): Allow(),
-        # m2 TaskUpdate-description: misfire note (PROSE_TOOLS path) scores "pre-existing" once post-merge
         Input(
             transcript=[
                 T.assistant(
@@ -180,7 +168,6 @@ nudge(
                 )
             ]
         ): Allow(),
-        # m3 salvage-assessment: salvage-vs-rerun reasoning naming the misfire scores "pre-existing" once
         Input(
             transcript=[
                 T.assistant(
@@ -190,7 +177,6 @@ nudge(
                 )
             ]
         ): Allow(),
-        # m4 quoted-fixture: this file's own fixtures read back arrive user-role -> origin drop
         Input(
             transcript=[
                 T.assistant("Reading the steering pack fixtures."),
@@ -202,17 +188,14 @@ nudge(
                 ),
             ]
         ): Allow(),
-        # m5 self-echo: the nudge's own opening sentence echoed back scores "pre-existing" once post-merge
-        # (verbatim cross-turn echoes are additionally damped by echo_verbatim on a real dispatch, 8.18.0)
         Input(
             transcript=[
                 T.assistant(
-                    "You appear to be dismissing a pre-existing issue rather than fixing it. "
-                    "Acknowledged — I'll actually fix it."
+                    "Bugs, style violations, and broken tests in code you touch get fixed, not dismissed as "
+                    "pre-existing or out of scope. Acknowledged — I'll actually fix it."
                 )
             ]
         ): Allow(),
-        # m6 user-origin: full dismissal in a user message (scores 4 as assistant prose) -> origin drop
         Input(
             transcript=[
                 T.user(
@@ -221,7 +204,6 @@ nudge(
                 )
             ]
         ): Allow(),
-        # fl1 fire-log completion: past-tense "left" (VBD) is not a prospective leave
         Input(
             transcript=[
                 T.assistant(
@@ -230,7 +212,6 @@ nudge(
                 )
             ]
         ): Allow(),
-        # fl2 fire-log completion: real report, "pre-existing" scored once + past "left" not matched
         Input(
             transcript=[
                 T.assistant(
@@ -239,33 +220,21 @@ nudge(
                 )
             ]
         ): Allow(),
-        # tp_existing_issue: genuine dismissal pairing "pre-existing" with change-not-caused still warns
         Input(
             transcript=[
                 T.assistant("That's a pre-existing issue, not caused by my change — I'm not going to touch it.")
             ]
         ): Warn(),
-        # tp_prospective_leave: genuine prospective dismissal ("I'll leave the broken test") still warns
         Input(transcript=[T.assistant("I'll leave the broken test as is.")]): Warn(),
-        # tp_leave_flaky_test: a flaky (ADJ) defect qualifier on "leave the test" still warns
         Input(transcript=[T.assistant("I'll leave the flaky test as is.")]): Warn(),
-        # f16 leave-test-no-defect: prospective "leave the test" with no defect qualifier is benign
         Input(transcript=[T.assistant("I'll leave the integration test running while I inspect its logs.")]): Allow(),
-        # f17 negated-scope: "made no changes outside the scope" is scope compliance, not dismissal
         Input(
             transcript=[T.assistant("I fixed all known issues and made no changes outside the scope of the task.")]
         ): Allow(),
-        # f18a modal-perfect counterfactual: "should have left ... but I fixed it" is not a prospective leave
         Input(transcript=[T.assistant("I should have left the broken test alone, but I fixed it.")]): Allow(),
-        # f18b negated prospective: "Leaving ... was never an option, so I fixed it" is not a dismissal
         Input(transcript=[T.assistant("Leaving the test broken was never an option, so I fixed it.")]): Allow(),
-        # f19 previous-issue dismissal: "the previous issue is beyond the scope" warns (regex arm restored)
         Input(transcript=[T.assistant("The previous issue is beyond the scope of this change.")]): Warn(),
-        # f21 word-boundary: "unknown bugs" must not match the "known bug" arm
         Input(transcript=[T.assistant("There are no unknown bugs left outside scope.")]): Allow(),
-        # f22 subject-of-leave: a substantive noun subject (the bug itself, not the
-        # agent) on prospective "leave" describes a consequence, not a dismissal
-        # (misfire 2026-08-24, session 30c00a95)
         Input(
             transcript=[
                 T.assistant(
@@ -275,10 +244,7 @@ nudge(
                 )
             ]
         ): Allow(),
-        # f22-genuine: pronoun-subject prospective "leave" on the same noun class still warns
         Input(transcript=[T.assistant("I'll leave that failure unresolved for now.")]): Warn(),
-        # m7 mechanism-description: diagnosing a race condition's effect ("which leaves the poison
-        # unset") is describing the bug, not electing to leave it — misfire watched live 2026-07-24
         Input(
             transcript=[
                 T.assistant(
@@ -287,11 +253,7 @@ nudge(
                 )
             ]
         ): Allow(),
-        # m7 boundary: a genuine first-person decision to leave an issue still warns even though
-        # the mechanism-description veto is now active
         Input(transcript=[T.assistant("I'll leave that issue alone for now.")]): Warn(),
-        # f23 same-turn motivation: "leaving X unedited means Y" states the reason a fix is
-        # happening right now, not a decision to skip it (misfire 2026-09-19, session a568684c)
         Input(
             transcript=[
                 T.assistant(
@@ -302,19 +264,15 @@ nudge(
                 )
             ]
         ): Allow(),
-        # f23-genuine: a first-person prospective dismissal still warns even with the
-        # same-turn-motivation veto active
         Input(transcript=[T.assistant("I'll leave that CLAUDE.md issue unaddressed for now.")]): Warn(),
     },
 )
 
 
 nudge(
-    "Stop investigating trivial pyright/typing warnings. Per AGENTS.md § General Rules — "
-    "Don't contort code to satisfy a checker: ignore trivial type issues (`cached_property` "
-    "overriding `property`, minor override mismatches, descriptor protocol). Only fix type "
-    "issues that indicate actual bugs. Don't check git history to see if you introduced "
-    "them — move on.",
+    "Trivial type-checker warnings (`cached_property` overriding `property`, minor override mismatches, "
+    "descriptor protocol) need no fix; only type issues that indicate real bugs do. "
+    "Move on to the task without checking git history for who introduced them.",
     skip_if=[
         RanCommand("uv", "run", "ty", "check"),
         RanCommand("uvx", "ty", "check"),
@@ -435,15 +393,9 @@ trains the agent to ignore this nudge. Fire only when a specific tell is clearly
 "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one tell that
 decided it) in `reasoning`.""",
     message=(
-        "This plan looks like a band-aid — it treats the symptom rather than removing the "
-        "cause of the problem you were asked to solve. Why: {reasoning} "
-        "Re-derive from first principles: name the actual root cause, then make the failure "
-        "impossible (propagate/classify the error, fix the general computation, or delete the "
-        "code that creates it) rather than catching, defaulting, retrying, suppressing, or "
-        "special-casing it. If a small/direct fix is genuinely correct here, or the user asked "
-        "for this approach, proceed. If the blocker is a release, version bump, or cross-repo "
-        "change, that is routine work here — plan it as part of the fix rather than designing "
-        "around it."
+        "This plan treats the symptom instead of removing the cause, and a needed release, version bump, "
+        "or cross-repo change is part of the fix. Revise the plan to name the root cause and make the "
+        "failure impossible instead of catching, retrying, or suppressing it."
     ),
     only_if=[Tool("ExitPlanMode")],
     events=Event.PostToolUse,
@@ -514,13 +466,9 @@ stop teaches the agent to ignore this gate. Fire only when a specific tell is cl
 and no "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one
 tell that decided it) in `reasoning`.""",
     message=(
-        "You appear to be deferring the real fix — whether closing the turn or still mid-work, "
-        "you have declared it out of reach and substituted a softer deliverable (or filed one "
-        "as the plan of record) without asking. Why: {reasoning} "
-        "Do the fix the user asked for: a release, version bump, or cross-repo change is "
-        "routine work here, not a blocker — plan it and do it. If you are genuinely blocked, "
-        "stop and ask the user how to proceed instead of substituting docs, help text, or a "
-        "follow-up issue they never asked for."
+        "Deliver the requested fix instead of substituting docs, help text, or a follow-up issue; a "
+        "release, version bump, or cross-repo change is part of that fix, not a blocker. If you are "
+        "genuinely blocked, end the turn by asking how to proceed."
     ),
     signals=Signals(
         [
@@ -662,7 +610,7 @@ tell that decided it) in `reasoning`.""",
         Input(
             transcript=[
                 T.assistant(
-                    "Since fixing this requires a cc-interact release, the practical "
+                    "Since fixing this requires a vcs-core release, the practical "
                     "solution is to improve the documentation and help text."
                 )
             ]
@@ -679,7 +627,7 @@ tell that decided it) in `reasoning`.""",
         Input(
             transcript=[
                 T.assistant(
-                    "Fixing this properly requires an upstream release of cc-interact, "
+                    "Fixing this properly requires an upstream release of vcs-core, "
                     "so the pragmatic approach is to document the limitation in the README."
                 )
             ]
@@ -687,7 +635,7 @@ tell that decided it) in `reasoning`.""",
         Input(
             transcript=[
                 T.assistant(
-                    "Fixing this properly requires a cc-interact release. Do you want "
+                    "Fixing this properly requires a vcs-core release. Do you want "
                     "me to cut that release, or would you prefer to just document the "
                     "limitation for now?"
                 )
@@ -730,7 +678,7 @@ tell that decided it) in `reasoning`.""",
         Input(
             transcript=[
                 T.assistant(
-                    "Fixing this cleanly needs a new cc-transcript release. Do you want "
+                    "Fixing this cleanly needs a new logparse release. Do you want "
                     "me to cut that release, or handle it another way?"
                 )
             ]
@@ -746,15 +694,15 @@ tell that decided it) in `reasoning`.""",
                                 "line": 105,
                                 "summary": (
                                     "OpClose --stale and OpList are documented as cross-repo "
-                                    "commands, but cc-interact's dispatch runs ScopeResolve "
+                                    "commands, but vcs-core's dispatch runs ScopeResolve "
                                     "(vcs.Root) on the caller's cwd for every domain op with a "
                                     "hardcoded exemption set, so both error when invoked "
                                     "outside a git/jj repo."
                                 ),
                                 "failure_scenario": (
-                                    "User cd ~ && cc-review list → error from vcs.Root instead "
-                                    "of the cross-repo listing; fix requires a cc-interact "
-                                    "release, so cc-review documents the run-inside-a-repo "
+                                    "User cd ~ && reviewctl list → error from vcs.Root instead "
+                                    "of the cross-repo listing; fix requires a vcs-core "
+                                    "release, so reviewctl documents the run-inside-a-repo "
                                     "constraint instead."
                                 ),
                                 "verdict": "CONFIRMED",
@@ -768,12 +716,12 @@ tell that decided it) in `reasoning`.""",
             transcript=[
                 T.assistant(
                     T.thinking(
-                        "I'm seeing that cc-interact has hardcoded exemptions for certain "
+                        "I'm seeing that vcs-core has hardcoded exemptions for certain "
                         "operations, which means any domain operation without an exemption "
                         "gets an error when the scope can't be resolved. The issue is that "
-                        "`cc-review list` and `close --stale` commands don't have consumer "
+                        "`reviewctl list` and `close --stale` commands don't have consumer "
                         "hooks to exempt them, so running these from outside a repo directory "
-                        "triggers a vcs.Root error. Since fixing this requires a cc-interact "
+                        "triggers a vcs.Root error. Since fixing this requires a vcs-core "
                         "release, the practical solution is to improve the documentation and "
                         "help text to guide users on where to run these commands from."
                     )
@@ -783,7 +731,7 @@ tell that decided it) in `reasoning`.""",
         Input(
             transcript=[
                 T.assistant(
-                    "Since fixing this requires a cc-interact release, the practical "
+                    "Since fixing this requires a vcs-core release, the practical "
                     "solution is to document the limitation in the help text."
                 ),
                 *(line for i in range(6) for line in T.tool_turn("Read", file_path=f"/tmp/f{i}.py")),
@@ -910,37 +858,37 @@ tell that decided it) in `reasoning`.""",
         ): Allow(),
         Input(
             transcript=[
-                T.user("why are the capt-hook hooks timing out, slop-cop timing out, and SessionStart failing?"),
+                T.user("why are the build hooks timing out, the linter timing out, and SessionStart failing?"),
                 T.assistant(
                     T.thinking(
-                        "The daemon's been running since Aug 20 with a day of uptime, but checking its environment "
-                        "via ps didn't return anything useful. I'll move on and check the registry priority instead "
-                        "to confirm codex is actually selected and see if there's a fallback mechanism on failure."
+                        "The daemon has been up for a day, but checking its environment via ps didn't return "
+                        "anything useful. I'll move on and check the registry priority instead to confirm the "
+                        "right backend is selected and see if there's a fallback mechanism on failure."
                     )
                 ),
                 T.assistant(
-                    "Three separate causes, not one.\n\n## 1. capt-hook `context deadline exceeded` — codex OAuth "
-                    "token refresh storm\n\n~37 concurrent codex processes share one rotating refresh token with "
-                    "no cross-process lock; each failed call burns ~24 s before raising, which blows the hook "
-                    "client's socket deadline. It self-healed at 01:24:51 UTC when one refresh won.\n\n"
-                    "## 2. slop-cop `claude timed out after 2m0s` — load, not auth\n\nWorkaround is the known one: "
+                    "Three separate causes, not one.\n\n## 1. hook `context deadline exceeded` — OAuth token "
+                    "refresh storm\n\nDozens of concurrent worker processes share one rotating refresh token "
+                    "with no cross-process lock; each failed call burns seconds before raising, which blows the "
+                    "hook client's socket deadline. It self-healed once one refresh won.\n\n"
+                    "## 2. linter `timed out after 2m0s` — load, not auth\n\nWorkaround is the known one: "
                     "`--sentence-timeout=6m`, or `--llm-effort=off` when you only want the client-side rules.\n\n"
-                    "## 3. SessionStart fish PATH-probe fault — mostly cosmetic now\n\nThe launchd plist already "
-                    "pins a PATH that resolves both `claude` and `codex`, so the probe failing is harmless.\n\n---\n\n"
+                    "## 3. SessionStart PATH-probe fault — mostly cosmetic now\n\nThe launchd plist already "
+                    "pins a PATH that resolves the worker binaries, so the probe failing is harmless.\n\n---\n\n"
                     "Want me to apply a durable fix for #1? The options:\n"
-                    "- Point capt-hook's `debugging`/`review` specialties at the claude backend.\n"
-                    "- Wrap codex-ask's dispatch in a `flock` on `~/.codex/auth.json` so refreshes serialize.\n"
-                    "- File it upstream against spawnllm/codex-ask and leave it — it self-heals each hour."
+                    "- Point the hook's review specialty at a different backend.\n"
+                    "- Wrap the worker dispatch in a `flock` on the auth file so refreshes serialize.\n"
+                    "- File it upstream against the worker library and leave it — it self-heals each hour."
                 ),
             ]
         ): Allow(),
         Input(
             transcript=[
-                T.user("why is slop-cop timing out? fix it"),
+                T.user("why is the linter timing out? fix it"),
                 T.assistant(
                     "The sentence pass still times out under load. Workaround is the known one: I bumped "
                     "`--sentence-timeout` to 6m in the wrapper and left the startup cost as-is; the real fix "
-                    "lives in the slop-cop repo."
+                    "lives in the linter repo."
                 ),
             ]
         ): Block(),
@@ -963,7 +911,7 @@ tell that decided it) in `reasoning`.""",
         Input(
             transcript=[
                 T.assistant(
-                    "Fixing this needs a cc-transcript release, so for now I documented the limitation. "
+                    "Fixing this needs a logparse release, so for now I documented the limitation. "
                     "Want me to cut that release?\n- yes, cut it now\n- no, leave the note"
                 )
             ]

@@ -17,7 +17,7 @@ from captain_hook import (
 def pip_to_uv(evt: BaseHookEvent, occ: Occurrence) -> str | None:
     cmd = occ.command
     if occ.piped or cmd.redirects or cmd.env:
-        return None  # only rewrite what the splice can reproduce in full
+        return None
     if cmd.executable != "pip" or not cmd.args or cmd.args[0] != "install":
         return None
     return shlex.join(["uv", "pip", *cmd.args])
@@ -28,7 +28,6 @@ rewrite_command_occurrences(
     note=lambda evt, pairs: f"Rewrote {len(pairs)} pip install(s) to uv pip: same resolver, faster installs.",
     tests={
         Input(command="pip install requests"): Rewrite(pattern="uv pip install requests"),
-        # Only the pip segment is rewritten; the cd and pytest survive byte-for-byte.
         Input(command="cd api && pip install -r requirements.txt && pytest"): Rewrite(
             pattern="cd api && uv pip install -r requirements.txt && pytest"
         ),

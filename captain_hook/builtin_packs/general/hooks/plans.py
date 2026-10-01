@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from captain_hook import (
     Allow,
+    BaseHookEvent,
     Block,
     Clause,
+    CustomCondition,
     Event,
     FilePath,
     FromSubagent,
     InPlanMode,
     Input,
-    LambdaCondition,
     Phrase,
     RewritingExistingPlan,
     T,
@@ -32,7 +34,7 @@ STOP_WORK = (
 )
 ORCA_WORKER_BRIEF = (
     "Please carry out this task from my Orca coordinator by following the brief I pasted below.\n\n"
-    '<pasted_content id="edaa">\n'
+    '<pasted_content id="p1">\n'
     "You are working inside Orca, a multi-agent IDE. You are a dispatched worker.\n\n"
     "=== AFTER YOU SEND worker_done ===\n\n"
     "worker_done ends your turn for this task. Your dispatched work is complete:\n"
@@ -40,10 +42,10 @@ ORCA_WORKER_BRIEF = (
     "new or unrelated work, do NOT run a sleep/poll loop, and do NOT keep calling\n"
     "`orca orchestration check`.\n\n"
     "=== TASK ===\n"
-    "Lane l39-plan-text: read /Users/yasyf/.claude/scratch/pb/l39-plan.md in full first and execute it exactly. "
+    "Lane plan-text: read /x/plan.md in full first and execute it exactly. "
     "No lane stops for a design question: it picks its recommended option and keeps going. "
     "Never end a turn waiting and never park; the plan wins.\n"
-    '</pasted_content id="edaa">\n'
+    '</pasted_content id="p1">\n'
 )
 
 
@@ -63,6 +65,19 @@ def directs_replanning(prompt: str) -> bool:
     )
 
 
+class DirectsReplanning(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        return directs_replanning(evt.ctx.turn.user_text)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDisallowed(CustomCondition):
+    name: str
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return self.name in evt.disallowed_tools
+
+
 hook(
     Event.PreToolUse,
     only_if=[Tool("Write"), RewritingExistingPlan()],
@@ -72,7 +87,6 @@ hook(
     ),
     block=True,
     tests={
-        # Rewriting a plan already written this session, no new plan cycle since -> block.
         Input(
             tool="Write",
             file="/x/plans/p.md",
@@ -82,7 +96,6 @@ hook(
                 T.assistant(T.tool("Write", file_path="/x/plans/p.md", content="# Plan v2")),
             ],
         ): Block(),
-        # A new plan cycle (EnterPlanMode) started since the last write -> allow the rewrite.
         Input(
             tool="Write",
             file="/x/plans/p.md",
@@ -93,9 +106,7 @@ hook(
                 T.assistant(T.tool("Write", file_path="/x/plans/p.md", content="# Plan v2")),
             ],
         ): Allow(),
-        # First write of this plan this session -> allow.
         Input(tool="Write", file="/x/plans/p.md", content="# Plan", transcript=[]): Allow(),
-        # Not a plan file -> allow.
         Input(tool="Write", file="/x/src/main.py", content="x = 1"): Allow(),
     },
 )
@@ -103,17 +114,17 @@ hook(
 
 hook(
     Event.PreToolUse,
-    only_if=[Tool.EditTools, LambdaCondition(lambda evt: directs_replanning(evt.ctx.turn.user_text))],
+    only_if=[Tool.EditTools, DirectsReplanning()],
     skip_if=[
         FromSubagent(),
         InPlanMode(),
         UsedTool("ExitPlanMode"),
-        LambdaCondition(lambda evt: "ExitPlanMode" in evt.disallowed_tools),
+        ToolDisallowed("ExitPlanMode"),
         FilePath("**/plans/*.md", project_only=False),
     ],
     message=(
-        "The user told you to stop and go back into plan mode. Put a plan to the user with "
-        "ExitPlanMode (entering plan mode first if you are not in it) before making any more edits."
+        "Plan mode was requested, so no more edits until the user approves a plan. "
+        "Call `ExitPlanMode` with the plan, entering plan mode first if needed."
     ),
     block=True,
     tests={
@@ -171,7 +182,7 @@ hook(
             transcript=[
                 T.user(
                     "update the plan again so we can compact again (dont enter plan mode), dump all context that "
-                    "would be needed on restpr, and lets be more cautious about our main agent context moving forward"
+                    "would be needed on restart, and lets be more cautious about our main agent context moving forward"
                 )
             ],
         ): Allow(),
@@ -184,7 +195,7 @@ hook(
                 T.user(
                     "update the plan again so we can compact again (dont enter"
                     + " " * 112
-                    + "\n              plan mode), dump all context that would be needed on restpr. also fix the hook "
+                    + "\n              plan mode), dump all context that would be needed on restart. also fix the hook "
                     "that blocked you from doing this in a background agent"
                 )
             ],
@@ -255,7 +266,7 @@ hook(
             transcript=[
                 T.user(
                     "STOP and report rather than guessing. If a write is refused with "
-                    "'The user told you to stop and go back into plan mode', that is the hook you are fixing."
+                    "'Plan mode was requested', that is the hook you are fixing."
                 )
             ],
         ): Allow(),
@@ -282,7 +293,7 @@ hook(
             tool="Edit",
             file="/x/src/upload.py",
             content="x = 1",
-            transcript=[T.user("Stop the work on the uploader and push yasyf/v3-l39-plan-text-base.")],
+            transcript=[T.user("Stop the work on the uploader and push user/plan-text-base.")],
         ): Allow(),
         Input(
             tool="Write",

@@ -52,6 +52,12 @@ def general_pack(isolate_modules: None, monkeypatch: pytest.MonkeyPatch) -> None
     discover_pack("general", PACKS_DIR / "general" / "hooks")
 
 
+def session_guards() -> list[str]:
+    names = [hook.name for hook in app.get_mandatory_hooks(Event.PreToolUse)]
+    assert {"kill_unverified_pid", "signal_by_criteria"} <= set(names)
+    return names
+
+
 def inside_margin() -> reqenv.RequestOverrides:
     return replace(bounded_request(-1.0), client_ppid=HOOK_SHELL)
 
@@ -84,7 +90,7 @@ class TestDispatchEvent:
         assert decision(envelope) == "deny"
         assert "pkill" in reason(envelope)
         assert ran == []
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == ["guard_sessions"]
+        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
 
     def test_a_healthy_guarded_call_records_completion_without_an_envelope(
         self, general_pack: None, frozen_clock: None, tmp_path: Path
@@ -93,7 +99,7 @@ class TestDispatchEvent:
         with reqenv.use_request(overrides):
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
         assert envelope is None
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == ["guard_sessions"]
+        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
 
     def test_an_advisory_deny_survives_the_guards_allow(
         self, general_pack: None, frozen_clock: None, tmp_path: Path
@@ -107,7 +113,7 @@ class TestDispatchEvent:
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
         assert decision(envelope) == "deny"
         assert reason(envelope) == "advisory says no"
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == ["guard_sessions"]
+        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
 
     def test_the_guard_runs_with_no_fanout_permit_left(
         self, general_pack: None, frozen_clock: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -123,7 +129,7 @@ class TestDispatchEvent:
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, DESTRUCTIVE, session_dir=None)
         assert decision(envelope) == "deny"
         assert ran == []
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == ["guard_sessions"]
+        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
 
 
 @pytest.mark.usefixtures("frozen_clock")

@@ -10,14 +10,16 @@ llm_gate(
     "(read STYLEGUIDE.md from the working dir). Scope rules, applied before any finding: "
     "review only code that appears in <diff> — the transcript is context for understanding "
     "what the change is trying to do, never an additional review subject; files outside the "
-    "repository working tree (session scratchpads, temp directories, one-shot workflow "
-    "continuation scripts) are never review subjects, even when the transcript shows them "
-    "being written; a deliberate guard or tripwire in an already-completed one-shot script "
-    "is not a correctness bug. Set block=true ONLY for a concrete, real issue in the changed "
-    "code shown in <diff>, with the specific problem and the fix in `reasoning`. Otherwise "
-    "block=false. Do not block on style nits absent from STYLEGUIDE, on unchanged "
-    "pre-existing code, or on speculative concerns.",
-    message="Review flagged an issue to fix before stopping: {reasoning}",
+    "repository working tree (session scratchpads, temp directories, workflow scripts) are "
+    "never review subjects, even when the transcript shows them being written; a deliberate "
+    "guard or tripwire in a completed script is not a correctness bug. Set block=true ONLY "
+    "for a concrete, real issue in the changed code shown in <diff>, with the specific "
+    "problem and the fix in `reasoning`. Otherwise block=false. Do not block on style nits "
+    "absent from STYLEGUIDE, on unchanged pre-existing code, or on speculative concerns.",
+    message=(
+        "The stop review found a correctness bug or STYLEGUIDE.md violation in the uncommitted diff. "
+        "Run `git diff`, fix the issue, and stop again."
+    ),
     diff=True,
     only_if=[EditedSource()],
     events=Event.Stop,

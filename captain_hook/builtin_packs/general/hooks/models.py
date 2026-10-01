@@ -57,11 +57,11 @@ WRITING_VERBS = (
     "update",
     "edit",
 )
+INLINE_EDIT_MIN_CHARS = 400
+SUSTAINED_BROWSER_CALLS = 5
+BROWSER_DRIVER = re.compile(r"(?i)\b(agent-browser|playwright)\b")
 SOURCE_FILE_GLOBS = tuple(
-    pattern
-    for language, patterns in LANG_GLOBS.items()
-    if language != "md"  # Markdown is exempt from delegation routing under the docs-exception policy.
-    for pattern in patterns
+    pattern for language, patterns in LANG_GLOBS.items() if language != "md" for pattern in patterns
 )
 
 
@@ -117,6 +117,14 @@ def browser_calls(
     return [T.assistant(T.tool(tool, **{field: value})) for _ in range(n)]
 
 
+def turn_browser_call_count(evt: BaseHookEvent) -> int:
+    calls = evt.ctx.t.current_turn.tool_calls
+    return (
+        calls.named("Bash").where_input(command=BROWSER_DRIVER).count()
+        + calls.named("Skill").where_input(skill=BROWSER_DRIVER).count()
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DelegatedSpawn:
     """Gating context: the pending Agent/Task call's model pin, agent type, and prompt."""
@@ -152,7 +160,7 @@ class ProseSpawn(DelegatedSpawn):
     unpinned_note: str = "(none — an unpinned subagent runs opus; subagents never inherit fable)"
 
     def content(self, evt: BaseHookEvent) -> str | None:
-        # zero-arg super() breaks under @dataclass(slots=True) — the decorator rebuilds the class
+        # WORKAROUND: zero-arg super() breaks under @dataclass(slots=True), which rebuilds the class.
         if (base := DelegatedSpawn.content(self, evt)) is None or (call := evt.as_input(TaskCall)) is None:
             return None
         if not (sentences := prose_deliverable_sentences((call.prompt or "")[:WORKFLOW_SCRIPT_CAP])):
@@ -186,19 +194,13 @@ hook(
         )
     ],
     message=(
-        "This subagent is pinned to haiku. Route a subagent to haiku only for a single-fact "
-        "mechanical step — classifying, labeling, tagging, counting, or probing one thing per "
-        "item. For judgment-bearing work, use the task's Model Routing lane. An unpinned spawn "
-        "runs opus; use model='sonnet' when the lane calls for sonnet. If this genuinely is a "
-        "mechanical single-fact step, say 'mechanical' in the prompt and retry — the haiku pin "
-        "will be allowed. "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
+        "Haiku runs only single-fact mechanical steps such as classifying, labeling, or counting one thing per item. "
+        "Drop the `model` pin so the spawn runs opus, or pin `model='sonnet'` when the lane calls for sonnet."
     ),
     block=True,
     tests={
-        Input(model="haiku", prompt="implement the retry backoff in the client"): Block(pattern="An unpinned spawn"),
-        Input(model="haiku", prompt="implement the retry backoff"): Block(pattern="§ Model Routing"),
+        Input(model="haiku", prompt="implement the retry backoff in the client"): Block(pattern="Drop the `model` pin"),
+        Input(model="haiku", prompt="implement the retry backoff"): Block(pattern="single-fact mechanical"),
         Input(model="haiku", prompt="classify each file's language"): Allow(),
         Input(model="haiku", prompt="Probe subagent capacity: spawn and return the word ok"): Allow(),
         Input(model="haiku", prompt="mechanical step: return the repo's default branch name"): Allow(),
@@ -214,13 +216,9 @@ llm_gate(
         deliverable_rubric=str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block")),
     ),
     message=(
-        "This subagent would write its prose deliverable itself on a Claude model. "
-        "{reasoning} Prose routes to gpt-6-astra at xhigh through the codex skill: "
-        "Skill(codex) from the main conversation, subagent_type: 'codex:codex-wrapper' for a "
-        "delegated lane, or codex-ask -m astra for parallel lanes. Hand the writing there, or "
-        "state in the prompt that this agent delegates every sentence there and lands it "
-        "verbatim. No Claude model pin clears this; fable is not the writing lane. "
-        "See CLAUDE.md § Model Routing."
+        "Prose deliverables are written by gpt-6-astra through codex, never by a Claude subagent. "
+        "Spawn `subagent_type: 'codex:codex-wrapper'` with the writing brief, or state in the prompt "
+        "that every sentence is delegated to codex and landed verbatim."
     ),
     contexts=[ProseSpawn()],
     events=Event.PreToolUse,
@@ -274,12 +272,7 @@ set_tool_input(
     "sonnet",
     tool="Agent|Task",
     only_if=[Agent("Explore|claude-code-guide")],
-    note=(
-        "Upgraded this recon subagent from the silent haiku default to sonnet, per the Models "
-        "table. "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
-    ),
+    note="Recon subagents run on sonnet, not the haiku default. Pinned `model='sonnet'` on this spawn.",
     tests={
         Input(agent_type="Explore"): Rewrite(model="sonnet"),
         Input(agent_type="Explore", model="haiku"): Allow(),
@@ -290,16 +283,9 @@ set_tool_input(
 llm_nudge(
     Prompt.load("models/implementation_spawn_nudge"),
     message=(
-        "This implementation delegation needs a different route. {reasoning} "
-        "Implementation defaults to model='opus': effort='high' for an individual bounded, "
-        "decision-light change; effort='xhigh' for ambiguous, exploratory, decision-dense, "
-        "large net-new, or long-running implementation. Repetitive bounded N-unit sweeps run "
-        "on gpt-6-astra at xhigh via codex:codex-wrapper, or on sonnet at xhigh when the lanes "
-        "must stay Claude-side; they never run on opus. Shell-heavy execution also routes to "
-        "gpt-6-astra at xhigh via codex:codex-wrapper with a self-contained prompt. "
-        "Keep fable if this genuinely is sensitive or error-prone. "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
+        "Implementation subagents run on `model='opus'` and repetitive N-unit sweeps on gpt-6-astra via "
+        "`codex:codex-wrapper`; fable is only for sensitive or error-prone code. "
+        "Re-spawn with that route, at `effort='high'` for a bounded change and `effort='xhigh'` otherwise."
     ),
     contexts=[DelegatedSpawn()],
     events=Event.PreToolUse,
@@ -330,18 +316,9 @@ llm_nudge(
 llm_nudge(
     Prompt.load("models/inline_edit_nudge"),
     message=(
-        "This inline implementation should be delegated. {reasoning} "
-        "Implementation defaults to a model='opus' subagent: effort='high' for an individual "
-        "bounded, decision-light change; effort='xhigh' for ambiguous, exploratory, "
-        "decision-dense, large net-new, or long-running implementation. Repetitive bounded "
-        "N-unit sweeps run on gpt-6-astra at xhigh via codex:codex-wrapper, or on sonnet at "
-        "xhigh when the lanes must stay Claude-side; they never run on opus. Shell-heavy "
-        "execution also routes to gpt-6-astra at xhigh via codex:codex-wrapper. Sensitive or "
-        "error-prone implementation goes to a typed model='fable' subagent, never inline. "
-        "For other implementation, keep editing inline only when the change is small or "
-        "bound to judgment you just exercised. "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
+        "Sizable implementation is delegated, not edited inline on the main loop. "
+        "Spawn an `Agent` with `model='opus'`, or a typed `model='fable'` subagent for sensitive code, "
+        "and hand it this change."
     ),
     contexts=[InlineEdit()],
     events=Event.PreToolUse,
@@ -350,7 +327,7 @@ llm_nudge(
         FilePath(*SOURCE_FILE_GLOBS),
     ],
     skip_if=[TestFile(), FromSubagent()],
-    when=lambda evt: len(evt.content or "") >= 400,
+    when=lambda evt: len(evt.content or "") >= INLINE_EDIT_MIN_CHARS,
     max_fires=1,
     agent=False,
     transcript=False,
@@ -389,33 +366,16 @@ llm_nudge(
 llm_nudge(
     Prompt.load("models/browser_delegation_nudge"),
     message=(
-        "This is sustained browser automation running inline on the main loop. {reasoning} "
-        "Sustained tool-driving, including browser automation and QA sweeps, routes to an "
-        "opus subagent: spawn model='opus' at effort='xhigh' to drive agent-browser and return "
-        "findings, or use an agent-browser-with-cookies teammate on opus at xhigh when the "
-        "site needs your login. Keep driving the browser inline only for a single gated, "
-        "stateful, or authenticated interaction you just decided to run (a go/no-go verification). "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
+        "Sustained browser automation runs in a subagent, not inline on the main loop. "
+        "Spawn an `Agent` with `model='opus'` and `effort='xhigh'` to drive `agent-browser` and return findings."
     ),
     events=Event.PostToolUse,
     only_if=[
         Tool("Bash|Skill"),
-        Or(
-            ToolInput("command", r"(?i)\b(agent-browser|playwright)\b"),
-            ToolInput("skill", r"(?i)\b(agent-browser|playwright)\b"),
-        ),
+        Or(ToolInput("command", BROWSER_DRIVER.pattern), ToolInput("skill", BROWSER_DRIVER.pattern)),
     ],
     skip_if=[FromSubagent()],
-    when=lambda evt: (
-        evt.ctx.t.current_turn.tool_calls.named("Bash")
-        .where_input(command=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
-        .count()
-        + evt.ctx.t.current_turn.tool_calls.named("Skill")
-        .where_input(skill=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
-        .count()
-        >= 5
-    ),
+    when=lambda evt: turn_browser_call_count(evt) >= SUSTAINED_BROWSER_CALLS,
     max_fires=1,
     agent=False,
     transcript=True,
@@ -443,18 +403,9 @@ llm_nudge(
     Prompt.load("models/review_routing_spawn_nudge"),
     label="review_routing_spawn",
     message=(
-        "This review/diagnosis delegation needs a different route. {reasoning} "
-        "Code/diff review is gpt-6-astra's finder lane, with a refuter only at audit depth. "
-        "Security review/audit, verification of security-sensitive code, and bug diagnosis "
-        "also route to gpt-6-astra at xhigh: spawn codex:codex-wrapper with the self-contained "
-        "question as its prompt; from the main conversation, use Skill(codex). "
-        "Design/architecture review runs on opus at xhigh; synthesis/accept-reject over findings "
-        "defaults to opus at xhigh, with astra at xhigh an equally accepted route. "
-        "Escalate an astra miss to opus at xhigh; reach fable only after opus at "
-        "xhigh has actually fallen short on that work. Security-sensitive implementation "
-        "goes directly to a typed model='fable' subagent. "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
+        "Code review, security audit, and bug diagnosis route to gpt-6-astra through codex, not a Claude subagent. "
+        "Spawn `subagent_type: 'codex:codex-wrapper'` with the self-contained question, or run `Skill(codex)` "
+        "from the main conversation."
     ),
     contexts=[DelegatedSpawn()],
     events=Event.PreToolUse,
@@ -517,12 +468,8 @@ llm_nudge(
 )
 
 nudge(
-    """
-    This workflow script pins agent() steps to haiku. Reserve haiku for mechanical single-fact
-    map steps; route a judgment-bearing stage by its task's Model Routing lane.
-    An unpinned stage runs opus; it does not inherit the session model.
-    See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet re-bootstrapped).
-    """,
+    "Haiku runs only single-fact mechanical `agent()` steps. "
+    "Drop the `model: 'haiku'` pin from judgment-bearing stages so they run opus.",
     only_if=[Tool("Workflow"), WorkflowScript(model="haiku")],
     events=Event.PreToolUse,
     max_fires=2,
@@ -539,12 +486,8 @@ llm_nudge(
         deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
     ),
     message=(
-        "This workflow script runs a stage whose deliverable is prose on a Claude model. "
-        "{reasoning} Prose routes to gpt-6-astra at xhigh through the codex skill: give that "
-        "stage agentType: 'codex:codex-wrapper' with a self-contained writing brief, or have "
-        "its prompt delegate every sentence to astra through codex and land it verbatim. No "
-        "model: pin clears this, fable included, because model: takes only Claude models. "
-        "See CLAUDE.md § Model Routing."
+        "Workflow prose stages are written by gpt-6-astra through codex, which no `model:` pin reaches. "
+        "Give the stage `agentType: 'codex:codex-wrapper'` with a self-contained writing brief."
     ),
     contexts=[ProseWorkflowScript()],
     events=Event.PreToolUse,
@@ -581,18 +524,8 @@ llm_nudge(
     ),
     label="review_routing_workflow",
     message=(
-        "This workflow's review/diagnosis stages need a different route. {reasoning} "
-        "Route code/diff finder stages, refuters only at audit depth, security review/audit, "
-        "verification of security-sensitive code, and bug diagnosis to gpt-6-astra at xhigh. "
-        "Give each stage agentType: 'codex:codex-wrapper' with the self-contained question as "
-        "its prompt. Design/architecture review stages run on opus at xhigh; synthesis/accept-reject "
-        "stages default to opus at xhigh, with astra at xhigh an equally accepted route. "
-        "Escalate an astra miss to an opus xhigh stage; reach fable only after "
-        "opus at xhigh has actually fallen short on that work. An unpinned stage runs opus; "
-        "it does not inherit the session model. Security-sensitive implementation goes "
-        "directly to a typed model='fable' subagent. "
-        "See CLAUDE.md § Model Routing (§ Plan Execution & Orchestration in repos not yet "
-        "re-bootstrapped)."
+        "Workflow review, security-audit, and bug-diagnosis stages route to gpt-6-astra through codex. "
+        "Give each such stage `agentType: 'codex:codex-wrapper'` with the self-contained question as its prompt."
     ),
     contexts=[WorkflowScriptSource()],
     events=Event.PreToolUse,
@@ -653,7 +586,7 @@ llm_nudge(
             llm={"fire": False},
         ): Allow(),
         Input(
-            script="export const meta = { description: 'refuter pass; astra lane quota-dead this session — "
+            script="export const meta = { description: 'refuter pass; astra lane unavailable — "
             "opus escalation per models table' }\n"
             "const f = await agent(`Adversarially refute: ${finding.title}`)",
             llm={"fire": False},
@@ -676,11 +609,8 @@ llm_nudge(
 llm_nudge(
     Prompt.load("models/writing_docs_spawn_nudge"),
     message=(
-        "This prompt delegates prose but paraphrases the writing rules instead of pointing at them. "
-        "{reasoning} A paraphrase drifts and silently overrides the skill — rewrite the prompt to "
-        "direct the agent to READ the writing-docs skill and its references (the installed plugin under "
-        "~/.claude/plugins/cache/skills/writing-docs, or plugins/writing-docs in the cc-skills repo) "
-        "before it writes."
+        "Delegated prose points at the `writing-docs` skill instead of paraphrasing its rules. "
+        "Rewrite the prompt to tell the agent to read the `writing-docs` skill and its references before it writes."
     ),
     contexts=[ProseSpawn()],
     events=Event.PreToolUse,
@@ -712,11 +642,8 @@ llm_nudge(
 llm_nudge(
     Prompt.load("models/writing_docs_workflow_nudge", workflow_script_header=WORKFLOW_HEADER),
     message=(
-        "This workflow script delegates prose but paraphrases the writing rules instead of pointing at "
-        "them. {reasoning} A paraphrase drifts and silently overrides the skill — rewrite the offending "
-        "agent() prompt to direct its subagent to READ the writing-docs skill and its references (the "
-        "installed plugin under ~/.claude/plugins/cache/skills/writing-docs, or plugins/writing-docs in "
-        "the cc-skills repo) before it writes."
+        "Workflow prose stages point at the `writing-docs` skill instead of paraphrasing its rules. "
+        "Rewrite the `agent()` prompt to tell its subagent to read the `writing-docs` skill and its references."
     ),
     contexts=[ProseWorkflowScript()],
     events=Event.PreToolUse,

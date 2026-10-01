@@ -13,11 +13,10 @@ from captain_hook import (
     hook,
 )
 
-# Block irreversible infrastructure commands before they run.
 block_command(
-    r"terraform\s+destroy",
+    ["terraform", "destroy"],
     reason="terraform destroy tears down live infrastructure",
-    hint="Target a single resource, or run it in a sandbox workspace",
+    hint="Run `terraform destroy -target=<resource>` against a single resource",
     tests={
         Input(command="terraform destroy"): Block(),
         Input(command="terraform destroy -target=module.cache"): Block(),
@@ -26,9 +25,9 @@ block_command(
 )
 
 block_command(
-    r"kubectl\s+delete\s+(namespace|ns)\b",
+    ["kubectl", "delete", "namespace|ns"],
     reason="Deleting a namespace deletes everything inside it",
-    hint="Delete the specific resource instead of the whole namespace",
+    hint="Run `kubectl delete <kind> <name>` for the specific resource",
     tests={
         Input(command="kubectl delete namespace prod"): Block(),
         Input(command="kubectl delete pod web-123"): Allow(),
@@ -41,7 +40,6 @@ SecretsExfil = LambdaCondition(
 )
 
 
-# Block commands that would copy a secret into the transcript or a log.
 hook(
     Event.PreToolUse,
     message="BLOCKED: this prints a secret into the transcript. Read it from your secret store at runtime.",

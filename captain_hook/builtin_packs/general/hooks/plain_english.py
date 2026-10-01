@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import re
 import time
+from concurrent.futures import wait
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -68,31 +69,30 @@ def unwrapped(answer: str, text: str) -> str:
     return match.group(1).strip() if (match := WRAPPING_FENCE.fullmatch(stripped)) else stripped
 
 
-def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
+def rewrite(evt: MessageDisplayEvent, text: str, api_key: str, timeout: int) -> str:
     from spawnllm import OpenAiEndpointBackend
 
+    return evt.ctx.call_llm(
+        rewrite_prompt(evt, text),
+        backend=OpenAiEndpointBackend(
+            "https://api.cerebras.ai/v1", "qwen-3.8-27b", api_key=api_key, reasoning_effort="none"
+        ),
+        timeout=timeout,
+    )
+
+
+def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
     if not is_prose(text):
         return text
     left = reqenv.seconds_left()
     budget = REWRITE_TIMEOUT_SECONDS if left is None else min(REWRITE_TIMEOUT_SECONDS, left - 3.0)
-    try:
-        future = offload_pool().submit(
-            contextvars.copy_context().run,
-            evt.ctx.call_llm,
-            rewrite_prompt(evt, text),
-            backend=OpenAiEndpointBackend(
-                "https://api.cerebras.ai/v1", "qwen-3.8-27b", api_key=api_key, reasoning_effort="none"
-            ),
-            timeout=max(1, int(budget)),
-        )
-        try:
-            answer = future.result(timeout=max(0.0, budget))
-        finally:
-            future.cancel()
-    except Exception as exc:
-        faults.record("plain_english rewrite", exc, str(evt.cwd) if evt.cwd else None)
+    future = offload_pool().submit(contextvars.copy_context().run, rewrite, evt, text, api_key, max(1, int(budget)))
+    finished = bool(wait([future], timeout=max(0.0, budget)).done)
+    future.cancel()
+    if (failure := future.exception() if finished else TimeoutError()) is not None:
+        faults.record("plain_english rewrite", failure, str(evt.cwd) if evt.cwd else None)
         return text
-    return unwrapped(answer, text) or text
+    return unwrapped(future.result(), text) or text
 
 
 @on(Event.MessageDisplay)

@@ -336,8 +336,8 @@ class TestNudgeMaxFiresDefault:
         assert _state.hooks[-1].spec.max_fires == expected
 
 
-class TestSignalCitation:
-    def test_signal_triggered_nudge_cites_context(self, tmp_path: Path) -> None:
+class TestSignalMessage:
+    def test_signal_triggered_nudge_leaves_the_message_bare(self, tmp_path: Path) -> None:
         register_nudge(
             "Watch out for force push",
             signals=[Signal(pattern=r"force.push", weight=1)],
@@ -349,8 +349,7 @@ class TestSignalCitation:
 
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
-        assert "Triggered by:" in msg
-        assert "force push" in msg
+        assert msg == "Watch out for force push"
 
 
 class TestNudgeSignalsPrecedence:

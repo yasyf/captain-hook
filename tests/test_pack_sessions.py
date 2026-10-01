@@ -143,10 +143,9 @@ class TestUnprovenChildren:
     ) -> None:
         message = decide(command, tmp_path)
         assert message is not None
-        assert "pid 31337 (`sleep 60`" in message
+        assert "pid 31337 (`sleep 60`) runs under claude 14575" in message
         assert "no recorded per-task creation identity ties it to this task" in message
-        assert "it runs under claude 14575" in message
-        assert "use the harness's stop tool for that task" in message
+        assert "Stop a background task you started with the harness's stop tool" in message
 
     @pytest.mark.parametrize(
         ("command", "holder"),
@@ -166,9 +165,8 @@ class TestUnprovenChildren:
         fake_table["table"] = NESTED
         message = decide(command, tmp_path)
         assert message is not None
-        assert "no recorded per-task creation identity ties it to this task" in message
-        assert f"it runs {holder}, and a pid under this session's claude 14575 can belong to a nested agent" in message
-        assert "AGENTS.md § Protect Existing Sessions" in message
+        assert f"runs {holder}, and no recorded per-task creation identity ties it to this task" in message
+        assert "Stop a background task you started with the harness's stop tool" in message
 
     def test_a_protected_process_inside_this_session_stays_protected(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -187,9 +185,8 @@ class TestUnprovenChildren:
     ) -> None:
         message = decide("kill 4242", tmp_path)
         assert message is not None
-        assert "pid 4242 (`sleep 5`" in message
-        assert "under claude 14462" in message
-        assert "AGENTS.md § Protect Existing Sessions" in message
+        assert "pid 4242 (`sleep 5`) runs under claude 14462" in message
+        assert "no recorded per-task creation identity" in message
 
     def test_a_detached_process_has_no_provable_owner(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -208,11 +205,11 @@ class TestUnprovenChildren:
     def test_a_reused_pid_now_under_another_session_names_that_session(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
-        assert "it runs under claude 14575" in (decide("kill 31337", tmp_path) or "")
+        assert "runs under claude 14575" in (decide("kill 31337", tmp_path) or "")
         fake_table["table"] = REUSED_PID
         message = decide("kill 31337", tmp_path)
         assert message is not None
-        assert "it runs under claude 14462" in message
+        assert "runs under claude 14462" in message
 
 
 class TestProtectedHosts:
@@ -267,7 +264,7 @@ class TestFailClosed:
         assert message is not None
         assert "cannot resolve this session's own agent process" in message
 
-    def test_a_crashing_verdict_denies(
+    def test_a_crashing_verdict_never_allows(
         self,
         general_pack: None,
         fake_table: dict[str, ProcessTable | None],
@@ -278,16 +275,15 @@ class TestFailClosed:
             raise RuntimeError("ps exploded")
 
         monkeypatch.setattr(proc, "process_table", explode)
-        message = decide("kill 31337", tmp_path)
-        assert message is not None
-        assert "RuntimeError: ps exploded" in message
+        with pytest.raises(RuntimeError, match="ps exploded"):
+            decide("kill 31337", tmp_path)
 
     def test_permission_request_denies_too(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
         message = decide("pkill -x sleep", tmp_path, event=Event.PermissionRequest)
         assert message is not None
-        assert "2026-09-30" in message
+        assert "`pkill` signals every process matching a name" in message
         assert "no recorded per-task creation identity" in (
             decide("kill 31337", tmp_path, event=Event.PermissionRequest) or ""
         )

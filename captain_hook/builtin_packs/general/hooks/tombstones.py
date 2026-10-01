@@ -153,12 +153,7 @@ Set fire=true only when at least one entry in <tombstone_comments> is clearly a
 tombstone. When uncertain, set fire=false — a stray tombstone costs little,
 while a false alarm teaches the agent to ignore this nudge. Keep reasoning
 under 60 words and quote the offending comment verbatim.""",
-    message=(
-        "Tombstone comment: the edit adds a comment describing code that no longer exists. "
-        "{reasoning} Delete the comment line itself; do NOT restore the removed code "
-        "(git history records it). If it can instead document the behavior of the code "
-        "that remains, rewrite it to say that."
-    ),
+    message="Tombstone comment: it narrates removed code instead of documenting what remains. Delete the comment line.",
     contexts=[TombstoneComments()],
     events=Event.PreToolUse,
     only_if=[Tool("Edit", "Write", "MultiEdit")],
@@ -175,20 +170,20 @@ under 60 words and quote the offending comment verbatim.""",
         Input(file="src/app.py", old="a = 1\n", content="a = 2\n"): Allow(),
         Input(
             file="src/app.py", old="# removed the retry logic\nx()\n", content="# removed the retry logic\ny()\n"
-        ): Allow(),  # pre-existing comment: not introduced
+        ): Allow(),
         Input(
             file="src/queue.py",
             old="pass\n",
             content="# remove the node from the queue before re-linking\nnode.unlink()\n",
-        ): Allow(),  # imperative
+        ): Allow(),
         Input(
             file="src/cache.py", old="pass\n", content="# TODO: remove after the June migration\ncleanup()\n"
-        ): Allow(),  # veto signal
+        ): Allow(),
         Input(
             tool="Write",
             file=FileFixture(name="ts_w1.py", content="# no longer needed\nx = 1\n"),
             content="# no longer needed\nx = 2\n",
-        ): Allow(),  # Write: comment already on disk
+        ): Allow(),
         Input(
             tool="Write",
             file=FileFixture(name="ts_w2.py", content="x = 1\n"),

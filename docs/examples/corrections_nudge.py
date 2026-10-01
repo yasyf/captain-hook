@@ -7,9 +7,8 @@ import re
 from captain_hook import Allow, Event, Input, Signal, Signals, T, Warn, nudge
 
 nudge(
-    "You just took a durable correction from the user. You don't have to hand-write the hook: "
-    "captain-hook's session reviewer is already mining corrections like this one. Run "
-    "`uvx capt-hook status` to watch it climb toward a hook pull request.",
+    "A durable correction was just given, and the session reviewer turns those into hooks. "
+    "Run `uvx capt-hook status` to see its progress.",
     signals=Signals(
         patterns=[
             Signal(pattern=r"\bnever\b", weight=2, flags=re.IGNORECASE),

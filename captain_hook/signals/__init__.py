@@ -177,15 +177,6 @@ def transcript_texts(
     return texts
 
 
-def cite_message(sig: Signals, triggering: list[str], message: str) -> str:
-    """Append trigger context to a message when signal matches are found."""
-    return (
-        f"{message}\n\nTriggered by: {'; '.join(context)}"
-        if (context := extract_signal_context(sig.patterns, "\n".join(triggering)))
-        else message
-    )
-
-
 def resolve_signals(signals: Sequence[Signal | NlpSignal] | Signals | None) -> Signals | None:
     """Normalize signals input into a ``Signals`` bundle, or None.
 

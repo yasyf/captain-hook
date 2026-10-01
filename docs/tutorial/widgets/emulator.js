@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: f6e7e57e27ff4da875729e7c199fed82067989450873cdcb055f58602a76fcdf
+// capt-hook-widget src-sha256: 506d4fd58e49187e5558dce56d95fae587eac9e732ff3714be47ca802ca494bb
 
 // autocomplete.ts
 var counter = 0;
@@ -525,13 +525,13 @@ var ASSIGNMENT2 = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var SAFE_WORD = /^[^\s'"\\$`;&|<>(){}#]+$/;
 var TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm"];
 var SCRATCH_DIR_NAMES = /* @__PURE__ */ new Set(["tmp", "temp", "scratch", "scratchpad", "scratchpads"]);
-var commandSubBlock = (raw) => `BLOCKED: a command substitution supplies rm targets in '${raw}', so they cannot be verified against any git/jj repository or scratch exemption. Expand the substitution to explicit paths first, or ask the user to run it themselves.`;
-var globOverLimitBlock = (token) => `BLOCKED: the glob '${token}' matches more than ${GLOB_LIMIT} files \u2014 an easy way to delete far more than intended. List the matches first (ls ${token}), narrow the pattern, or name a directory explicitly with rm -r <dir>.`;
-var repoRootBlock = (token) => `BLOCKED: '${token}' is a git/jj repository root \u2014 deleting it destroys the repo and its entire history. If this is really intended, ask the user to run it themselves.`;
-var fsRootBlock = (token) => `BLOCKED: '${token}' is the filesystem root \u2014 deleting it destroys the entire system. If this is really intended, ask the user to run it themselves.`;
-var containsRepoBlock = (token) => `BLOCKED: '${token}' contains git/jj repositories \u2014 deleting it would destroy them and their entire history. Delete a narrower path instead, or ask the user to run it themselves.`;
-var unrecoverableBlock = (token) => `BLOCKED: rm target '${token}' resolves outside any git/jj repository, so nothing can restore it after deletion. Move it to the trash instead, or stop and ask the user to confirm this deletion. (Temp and scratch paths are exempt.)`;
-var recoverableNote = (token) => `Rewrote rm to trash: '${token}' resolves outside any git/jj repository, so rm would be unrecoverable. The targets were moved to the macOS Trash instead \u2014 restorable via Finder (Put Back). If permanent deletion is truly intended, ask the user to run the rm themselves.`;
+var COMMAND_SUB_BLOCK = "A command substitution supplies the `rm` targets, so no git/jj repository check can verify them. Expand it to explicit paths first.";
+var globOverLimitBlock = (token) => `The glob '${token}' matches more than ${GLOB_LIMIT} files. Run \`ls ${token}\`, then narrow the pattern or run \`rm -r <dir>\` on a named directory.`;
+var repoRootBlock = (token) => `'${token}' is a git/jj repository root, and deleting it destroys the repo and its history. Delete a path inside it, or ask the user to run the \`rm\` themselves.`;
+var fsRootBlock = (token) => `'${token}' is the filesystem root, and deleting it destroys the system. Ask the user to run the \`rm\` themselves.`;
+var containsRepoBlock = (token) => `'${token}' contains git/jj repositories, and deleting it destroys them with their history. Delete a narrower path instead.`;
+var UNRECOVERABLE_BLOCK = "`rm` cannot be undone outside a git/jj repository. Run `trash <path>` instead.";
+var RECOVERABLE_NOTE = "Rewrote `rm` to `trash` because the target is outside any git/jj repository. Restore it from the Trash in Finder.";
 function norm(p) {
   const abs = p.startsWith("/");
   const out = [];
@@ -908,7 +908,7 @@ function evaluateRmWorld(world, command) {
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);
     }
-    if (substitution) return block(commandSubBlock(call.segment.text));
+    if (substitution) return block(COMMAND_SUB_BLOCK);
     if (honest) return honesty();
     let recovery = null;
     for (const target of targets) {
@@ -921,7 +921,7 @@ function evaluateRmWorld(world, command) {
     if (rewritable && targets.every((t) => t.emittable)) {
       const args = targets.map((t) => t.raw.startsWith("-") ? `./${t.raw}` : t.raw);
       edits.push({ ...call.segment, text: [world.trash, ...args].join(" ") });
-      notes.push(recoverableNote(recovery));
+      notes.push(RECOVERABLE_NOTE);
       result = {
         action: "rewrite",
         message: [...new Set(notes)].join("\n") || null,
@@ -929,7 +929,7 @@ function evaluateRmWorld(world, command) {
       };
       continue;
     }
-    return block(unrecoverableBlock(recovery));
+    return block(UNRECOVERABLE_BLOCK);
   }
   return result ?? { action: "pass", message: null, rewritten: null };
 }

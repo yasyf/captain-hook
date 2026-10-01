@@ -300,8 +300,7 @@ class TestNudgeSignalScoring:
 
         assert output is not None
         ctx_text = output["hookSpecificOutput"]["additionalContext"]
-        assert "stop retrying" in ctx_text
-        assert "Triggered by:" in ctx_text
+        assert ctx_text == "stop retrying"
 
 
 class TestEchoSuppression:

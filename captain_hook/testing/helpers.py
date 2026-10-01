@@ -33,6 +33,7 @@ from captain_hook.events import (
     ToolHookEvent,
     UserPromptSubmitEvent,
 )
+from captain_hook.hook_lint import result_violations
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import RemoteSession
@@ -811,6 +812,9 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                                     else None
                                 )
                         assert_result(hook_result, expected, entry.name)
+                        assert hook_result is None or not (copy := result_violations(hook_result)), (
+                            f"[{entry.name}] message misses the copy bar: {'; '.join(copy)}"
+                        )
                     elif jsonl := SessionCache.for_root().load(key):
                         with hermetic_request(), home_env(str(scratch_home)):
                             replays = list(replay_session(entry, jsonl))

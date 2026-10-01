@@ -17,6 +17,7 @@ import pytest
 from capt_hook_client import guard_literal as shim
 from captain_hook import guard_literal as guard
 from captain_hook.app import _state
+from captain_hook.builtin_packs.general.hooks import _sessions as session_guard
 from captain_hook.builtin_packs.general.hooks import sessions
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.types import Event
@@ -200,9 +201,9 @@ def test_fixtures_agree_across_renderings(fixture: dict[str, Any]) -> None:
 
 
 def test_guarded_alternation_is_exactly_the_guards_prefilter_set() -> None:
-    assert set(guarded_names()) == {*sessions.GUARDED_PROGRAMS, *sessions.LAUNCHERS, "find"}
-    assert sessions.names_guarded is guard.names_guarded
-    assert sessions.QUOTING_CHARS is guard.QUOTING_CHARS
+    assert set(guarded_names()) == {*session_guard.GUARDED_PROGRAMS, *session_guard.LAUNCHERS, "find"}
+    assert session_guard.names_guarded is guard.names_guarded
+    assert session_guard.QUOTING_CHARS is guard.QUOTING_CHARS
 
 
 def test_regex_dialect_is_valid_in_both_engines() -> None:
@@ -226,8 +227,8 @@ def test_spoofed_spellings_stay_inside_the_parent_guards_scope(text: str) -> Non
     assert parent_names_guarded(text)
     assert guard.names_guarded(text)
     assert guard.mandatory("PreToolUse", json.dumps({"tool_name": "Bash", "tool_input": {"command": text}}).encode())
-    evt = input_to_event(Event.PreToolUse, sessions.guarded(command=text))
-    assert sessions.names_a_guarded_program(evt)
+    evt = input_to_event(Event.PreToolUse, session_guard.guarded(command=text))
+    assert session_guard.names_a_guarded_program(evt)
 
 
 def test_every_folded_spelling_of_every_guarded_name_matches_as_the_parent_did() -> None:
@@ -247,10 +248,10 @@ def test_every_folded_spelling_of_every_guarded_name_matches_as_the_parent_did()
 def guard_rows() -> list[Any]:
     _state.hooks.clear()
     importlib.reload(sessions)
-    entry = next(hook for hook in _state.hooks if hook.name == "guard_sessions")
-    assert entry.spec.mandatory is True
-    assert entry.spec.tests is not None
-    return [key for key in entry.spec.tests if not isinstance(key, str)]
+    guards = [hook for hook in _state.hooks if hook.spec.mandatory]
+    assert len(guards) == len(_state.hooks) > 1
+    assert all(hook.spec.tests for hook in guards)
+    return [key for hook in guards for key in hook.spec.tests or {} if not isinstance(key, str)]
 
 
 def test_every_inline_guard_row_the_prefilter_matches_is_mandatory() -> None:
@@ -259,7 +260,7 @@ def test_every_inline_guard_row_the_prefilter_matches_is_mandatory() -> None:
     for row in rows:
         evt = input_to_event(Event.PreToolUse, row)
         raw = json.dumps(evt._raw).encode()
-        if sessions.names_a_guarded_program(evt):
+        if session_guard.names_a_guarded_program(evt):
             matched += 1
             assert guard.mandatory("PreToolUse", raw), row
             assert guard.mandatory("PermissionRequest", raw), row
@@ -271,7 +272,7 @@ def test_every_fixture_the_prefilter_matches_is_mandatory(fixture: dict[str, Any
     if fixture["event"] not in guard.EVENTS:
         return
     evt = Event[fixture["event"]].event_class(_raw=fixture["payload"], ctx=make_ctx())
-    if sessions.names_a_guarded_program(evt):
+    if session_guard.names_a_guarded_program(evt):
         assert fixture["mandatory"] is True
 
 

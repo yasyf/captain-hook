@@ -27,6 +27,7 @@ from captain_hook import (
     on,
     workflow_state,
 )
+from captain_hook.util.vcs import ccx_raw_marked
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -35,7 +36,6 @@ if TYPE_CHECKING:
 
 TOOLING = frozenset({"ccx", "gt", "orca", "ccn", "cc-notes", "cc-slack", "codex-ask", "capt-hook"})
 TOOL_WORD = re.compile(rf"(?<![\w-])({'|'.join(sorted(map(re.escape, TOOLING)))})(?![\w-])")
-RAW_FALLBACK = re.compile(r"#\s*ccx:raw\b")
 MANUAL = re.compile(r"(?i)\b(?:work[-\s]?around|by hand|manually)\b")
 REFUSAL_LINE = re.compile(r"(?i)\b(?:usage|refus\w*|unknown (?:command|flag|option)|unrecognized)\b")
 LANE_REPORT = re.compile(r"(?i)\bccx refusal:|\btooling defect\b")
@@ -106,11 +106,8 @@ When uncertain, return fire=false. Put your reasoning (under 40 words, naming th
 what it should do instead) in `reasoning`."""
 
 MESSAGE = (
-    "Tooling defect or tool-shaped gap detected. {reasoning} "
-    "Spawn a tooling lane now (opus at high; `lane-ship` in a long-running drive) to fix the tool: "
-    "PR, merge, release, install. Do not work around it and do not wait to be told; keep going on "
-    "your task meanwhile. If you cannot spawn agents, record a `ccn papercut` naming the defect. "
-    "See CLAUDE.md § Tooling (owner rule, 2026-10-01)."
+    "A first-party tool fell short and the agent worked around it. "
+    "Spawn a tooling lane that fixes and releases the tool, or run `ccn papercut` if you cannot spawn agents."
 )
 
 
@@ -175,16 +172,13 @@ class ToolingRefusals(WorkflowState):
 
 
 REFUSAL_MESSAGE = (
-    "{tool} refused: {evidence}\n"
-    "Spawn a tooling lane now that fixes {tool} (PR, merge, release, install), with the line "
-    "`tooling-lane: {key}` in its prompt, and keep going on your task meanwhile. Until that lane exists, "
-    "an Agent or Skill dispatch that repeats this action is blocked. If you cannot spawn agents, report "
-    "the refusal verbatim to your orchestrator."
+    "`{tool}` refused this action: spawn a tooling lane that fixes it with `tooling-lane: {key}` in its prompt, "
+    "or report the refusal to your orchestrator if you cannot spawn agents. "
+    "Repeats of the dispatch stay blocked until the lane exists."
 )
 REPEAT_MESSAGE = (
-    "This dispatch repeats an action {tool} already refused ({evidence}), and no tooling lane for that "
-    "refusal exists. Spawn the tooling lane first, with the line `tooling-lane: {key}` in its prompt, then "
-    "retry this dispatch."
+    "This dispatch repeats an action `{tool}` already refused, and no tooling lane exists for it. "
+    "Spawn the tooling lane with `tooling-lane: {key}` in its prompt, then retry."
 )
 
 
@@ -219,7 +213,7 @@ def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
             return signature.key, Refusal(
                 tool=signature.tool, action=signature.action.pattern, evidence=excerpt(text, found)
             )
-    if evt.command and RAW_FALLBACK.search(raw := evt.command.raw) and (calls := evt.command.calls()):
+    if evt.command and ccx_raw_marked(raw := evt.command.raw) and (calls := evt.command.calls()):
         verb = " ".join([calls[0].name, *calls[0].args[:1]])
         evidence = f"the step ran raw instead: `{raw[:EVIDENCE_CHARS]}`"
         return f"ccx-raw:{'-'.join(verb.split())}", Refusal(tool="ccx", action=re.escape(verb), evidence=evidence)
@@ -402,7 +396,7 @@ tooling_nudge(
             tool="mcp__plugin_cc-slack_cc-slack__slack_reply",
             tool_input={"channel_id": "C1", "thread_ts": "1.2", "text": "hi"},
             output="no cc-slack session for this Claude window; run cc-slack login",
-        ): Warn(pattern=r"^cc-slack refused: no cc-slack session.*\n.*`tooling-lane: cc-slack-session`"),
+        ): Warn(pattern="^`cc-slack` refused.*`tooling-lane: cc-slack-session`"),
         Input(
             tool="Agent",
             tool_input={"prompt": "reply in the thread", "subagent_type": "lane"},
@@ -411,13 +405,13 @@ tooling_nudge(
         Input(
             command="ccx vcs pr status 12",
             output="ccx: GitHub GraphQL quota exhausted; rate-limited until 14:05",
-        ): Warn(pattern=r"^ccx refused: ccx: GitHub GraphQL quota exhausted"),
+        ): Warn(pattern="^`ccx` refused this action"),
         Input(command="gh pr edit 123 --base dev  # ccx:raw"): Warn(pattern=r"`tooling-lane: ccx-raw:gh-pr`"),
         Input(
             command="gh pr edit 123 --base dev  # ccx:raw",
             agent_id="a1b2c3",
             seen={SCOPE: ["ccx-raw:gh-pr:main"]},
-        ): Warn(pattern="report the refusal verbatim"),
+        ): Warn(pattern="report the refusal to your orchestrator"),
         Input(command="gh pr edit 123 --base dev  # ccx:raw", seen={SCOPE: ["ccx-raw:gh-pr:main"]}): Allow(),
         Input(
             command="gh pr edit 123 --base dev  # ccx:raw",
@@ -431,7 +425,7 @@ tooling_nudge(
         Input(
             command="cc-slack reply --url C1/p12 --text hi",
             output="posting\ncc-slack: no cc-slack session for this Claude window\n",
-        ): Warn(pattern=r"^cc-slack refused: cc-slack: no cc-slack session for this Claude window\n"),
+        ): Warn(pattern="^`cc-slack` refused this action"),
         Input(
             command="git grep -n 'no cc-slack session' go/cc-slack",
             output="go/cc-slack/ops.go:651: no cc-slack session for this Claude window",
@@ -451,7 +445,7 @@ def record_refusal(evt: BaseHookEvent) -> HookResult | None:
         known = state.refusals.setdefault(key, record)
     if known.lane or not evt.ctx.s.once(f"{key}:{evt.agent_id or 'main'}", scope=SCOPE):
         return None
-    return evt.warn(REFUSAL_MESSAGE.format(tool=known.tool, evidence=record.evidence, key=key))
+    return evt.warn(REFUSAL_MESSAGE.format(tool=known.tool, key=key))
 
 
 RAW_REFUSED = ToolingRefusals(
@@ -537,5 +531,5 @@ def block_repeated_dispatch(evt: BaseHookEvent) -> HookResult | None:
                 state.refusals[key].lane = True
     for key, record in refusals.items():
         if key not in marked and not record.lane and re.search(record.action, text):
-            return evt.block(REPEAT_MESSAGE.format(tool=record.tool, evidence=record.evidence, key=key))
+            return evt.block(REPEAT_MESSAGE.format(tool=record.tool, key=key))
     return None

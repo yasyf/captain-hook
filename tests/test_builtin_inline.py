@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import captain_hook
+from captain_hook.hook_lint import lint_paths
 
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
@@ -68,6 +69,10 @@ def dispatch_comment_case(content_name: str, file_name: str, *, advisory_on_deny
     result = dispatch(Event.PreToolUse, evt)
     assert result is not None
     return result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_builtin_packs_meet_the_authoring_bar() -> None:
+    assert lint_paths([BUILTIN_PACKS_DIR]) == []
 
 
 @pytest.mark.parametrize("dotted", [dotted for dotted, _ in MODULES], ids=[name for _, name in MODULES])

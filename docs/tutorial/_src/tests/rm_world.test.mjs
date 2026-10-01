@@ -57,8 +57,8 @@ test("run/user → honesty", () => assertHonesty("rm /run/user/x.py"));
 test("multi-recoverable glob → honesty", () => assertHonesty("rm src/*"));
 
 const FS_ROOT_BLOCK =
-  "BLOCKED: '/' is the filesystem root — deleting it destroys the entire system. " +
-  "If this is really intended, ask the user to run it themselves.";
+  "'/' is the filesystem root, and deleting it destroys the system. " +
+  "Ask the user to run the `rm` themselves.";
 
 // Finding 2 — the completed wrapper set (doas/exec/nice) now reaches rm and blocks, byte-equal.
 for (const command of ["exec rm -rf /", "nice rm -rf /", "doas rm -rf /"]) {
@@ -67,16 +67,15 @@ for (const command of ["exec rm -rf /", "nice rm -rf /", "doas rm -rf /"]) {
   });
 }
 
-const recoverableNote = (token) =>
-  `Rewrote rm to trash: '${token}' resolves outside any git/jj repository, so rm would be ` +
-  "unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). " +
-  "If permanent deletion is truly intended, ask the user to run the rm themselves.";
+const recoverableNote = () =>
+  "Rewrote `rm` to `trash` because the target is outside any git/jj repository. " +
+  "Restore it from the Trash in Finder.";
 
 // Finding 4 — a `-`-leading operand after `--` is a real target, not a flag (faithful, byte-equal).
 test("terminator keeps dash-leading operand", () => {
   assert.deepEqual(evaluateRmWorld(world, "rm -- -foo.txt"), {
     action: "rewrite",
-    message: recoverableNote("-foo.txt"),
+    message: recoverableNote(),
     rewritten: "/usr/bin/trash ./-foo.txt",
   });
 });
@@ -84,7 +83,7 @@ test("terminator keeps dash-leading operand", () => {
 test("terminator mid-args drops -- and keeps operands", () => {
   assert.deepEqual(evaluateRmWorld(world, "rm foo.txt -- notes.md"), {
     action: "rewrite",
-    message: recoverableNote("foo.txt"),
+    message: recoverableNote(),
     rewritten: "/usr/bin/trash foo.txt notes.md",
   });
 });
