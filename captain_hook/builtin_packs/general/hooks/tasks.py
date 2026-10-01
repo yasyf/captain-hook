@@ -10,6 +10,7 @@ from captain_hook import (
     Block,
     CustomCondition,
     Event,
+    FromSubagent,
     InPlanMode,
     Input,
     LambdaCondition,
@@ -48,7 +49,7 @@ hook(
     "TaskUpdate tool (add a note if you're deliberately deferring one), or output "
     f"{OVERRIDE_TOKEN} to acknowledge and stop. See: CLAUDE.md § Task Tracking.",
     only_if=[LambdaCondition(lambda evt: not evt.tasks.all_completed)],
-    skip_if=[Waiting(), LambdaCondition(lambda evt: evt.ctx.t.has_override(OVERRIDE_TOKEN))],
+    skip_if=[Waiting(), FromSubagent(), LambdaCondition(lambda evt: evt.ctx.t.has_override(OVERRIDE_TOKEN))],
     block=True,
     tests={
         Input(tasks=[{"id": "1", "subject": "a", "status": "completed"}]): Allow(),
@@ -66,6 +67,7 @@ nudge(
     "new work or changed direction, use the TaskCreate/TaskUpdate tools to update it. "
     "See: CLAUDE.md § Task Tracking.",
     only_if=[Tool("Edit|Write"), DriftedFromTasks()],
+    skip_if=[FromSubagent()],
     events=Event.PostToolUse,
     tests={
         Input(file="m.py", content="x = 1\n", tasks=[]): Allow(),

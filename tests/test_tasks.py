@@ -123,6 +123,37 @@ class TestTasksForSession:
         assert tasks.all_completed  # the pending task in the truncated dir is never read
 
 
+class TestListId:
+    def write_meta(self, transcript: Path, name: str, **meta: Any) -> None:
+        subagents = transcript.with_suffix("") / "subagents"
+        subagents.mkdir(parents=True, exist_ok=True)
+        (subagents / f"agent-{name}.meta.json").write_text(json.dumps({"name": name} | meta))
+
+    def test_session_without_a_team_reads_its_own_list(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "explorer")
+        assert Tasks.list_id("s", transcript) == "s"
+        assert Tasks.list_id("s", None) == "s"
+
+    def test_resumed_team_lead_reads_its_team_list(self, tasks_root: Path, tmp_path: Path) -> None:
+        transcript = tmp_path / "900424b6.jsonl"
+        self.write_meta(transcript, "lane", teamName="session-756e25cc")
+        write_task(tasks_root / "session-756e25cc", "1", "in_progress")
+        assert Tasks.list_id("900424b6", transcript) == "session-756e25cc"
+        assert len(Tasks.for_session(Tasks.list_id("900424b6", transcript))) == 1
+
+    def test_team_name_is_sanitized(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "lane", teamName="release v3")
+        assert Tasks.list_id("s", transcript) == "release-v3"
+
+    def test_explicit_list_id_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "lane", teamName="team")
+        monkeypatch.setenv("CLAUDE_CODE_TASK_LIST_ID", "shared")
+        assert Tasks.list_id("s", transcript) == "shared"
+
+
 class TestTasksQuerying:
     def make(self, *statuses: str) -> Tasks:
         return Tasks(tuple(Task.from_raw({"id": str(i + 1), "status": s}) for i, s in enumerate(statuses)))

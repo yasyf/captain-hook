@@ -170,12 +170,12 @@ class BaseHookEvent:
         """The live task list for this session, read from Claude Code's native task store.
 
         Unlike transcript-derived ``task_ops()``, this reflects updates made by
-        subagents, teammates, or resumed sessions, and is empty when the session
-        has no task store — it never falls back to another session's tasks.
+        subagents, teammates, or resumed sessions. A team lead reads its team's list
+        (:meth:`~captain_hook.tasks.Tasks.list_id`); a session with no store has no tasks.
         """
         from captain_hook.tasks import Tasks as T
 
-        return T.for_session(self.session_id)
+        return T.for_session(T.list_id(self.session_id, self.transcript_path))
 
     @cached_property
     def skip_permissions(self) -> bool:
