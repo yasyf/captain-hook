@@ -20,6 +20,7 @@ from click.testing import CliRunner
 from captain_hook.app import on
 from captain_hook.cli import cli, dispatch_event
 from captain_hook.session import ensure_session
+from captain_hook.snapshots.client import HOOK_WINDOW_BYTES
 from captain_hook.transcripts import register_transcript, registered_paths, resolved_transcript_paths
 from captain_hook.types import Event
 from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_use
@@ -183,7 +184,8 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
         }
 
     @contextmanager
-    def scope():
+    def scope(*, tail_bytes: int | None = None):
+        assert tail_bytes == HOOK_WINDOW_BYTES
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -276,7 +278,8 @@ def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
         }
 
     @contextmanager
-    def scope():
+    def scope(*, tail_bytes: int | None = None):
+        assert tail_bytes == HOOK_WINDOW_BYTES
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -333,7 +336,8 @@ def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_pa
         }
 
     @contextmanager
-    def scope():
+    def scope(*, tail_bytes: int | None = None):
+        assert tail_bytes == HOOK_WINDOW_BYTES
         yield client
 
     monkeypatch.setattr(client, "call", warm)
@@ -386,7 +390,8 @@ def test_warm_command_reports_unavailable_configured_classifier(tmp_path, monkey
         }
 
     @contextmanager
-    def scope():
+    def scope(*, tail_bytes: int | None = None):
+        assert tail_bytes == HOOK_WINDOW_BYTES
         yield client
 
     monkeypatch.setattr(client, "call", warm)

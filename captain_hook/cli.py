@@ -361,10 +361,10 @@ def run_event(state: CliState, event_name: str) -> None:
     setup_logging(session_id)
 
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
-    from captain_hook.snapshots.client import client_scope
+    from captain_hook.snapshots.client import HOOK_WINDOW_BYTES, client_scope
 
     tools = pack_tool_specs(state.discover())
-    with client_scope() as client:
+    with client_scope(tail_bytes=HOOK_WINDOW_BYTES) as client:
         client.bind_tool_registry(tools)
         output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
         if output:
@@ -839,6 +839,7 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
 
     from captain_hook.session import state_root
     from captain_hook.snapshots.client import (
+        HOOK_WINDOW_BYTES,
         NATIVE_CLASSIFIER,
         EvidenceIncomplete,
         RegisteredWarmState,
@@ -884,7 +885,7 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
                 sleep(min(WARM_INTERVAL_SECONDS, max(0, max_seconds - (monotonic() - started))))
         return complete, steps, failure, read_bytes, cache_hits
 
-    with client_scope() as client:
+    with client_scope(tail_bytes=HOOK_WINDOW_BYTES) as client:
         client.foreground_deadline_unix_ms = int((time() + max_seconds) * 1000)
         client.tool_registry()
         try:

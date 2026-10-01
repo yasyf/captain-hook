@@ -1,15 +1,15 @@
-"""Count the dispatches a session answered without some of its hooks, and say so out loud.
+"""Name each hook a session ran without, once, out loud.
 
 A hook whose transcript evidence comes back incomplete is skipped, and a dispatch whose own
 evidence fails returns an empty success. Either way a guard did not run, and nothing in the
-response shows it. The tally lives in the session directory so every worker shard serving the
-session adds to one count, and a warning goes out at the configured count and again each time
-the count doubles.
+response shows it. The record lives in the session directory so every worker shard serving the
+session shares it: the first skip of each hook is logged and named in one visible line, and
+later skips of that hook stay quiet.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cc_transcript.ids import SessionId
 from filelock import Timeout
@@ -19,10 +19,11 @@ from pydantic import BaseModel
 from captain_hook.dispatch import Envelope, format_output
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.types import Action, Event, HookResult
-from captain_hook.util import reqenv
 
-WARN_AFTER_ENV = "CAPT_HOOK_FAIL_OPEN_WARN_AFTER"
-DEFAULT_WARN_AFTER = 3
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+ALL_HOOKS = "all hooks"
 TALLY_LOCK_SECONDS = 0.5
 SURFACING_EVENTS = (
     Event.SessionStart
@@ -36,33 +37,40 @@ SURFACING_EVENTS = (
 
 
 class FailOpenTally(BaseModel):
-    count: int = 0
-    warned_at: int = 0
+    reported: list[str] = []
+    pending: dict[str, str] = {}
 
 
-def tally_fail_open(event: Event | None, session_id: str, cause: str) -> str | None:
-    """Count one dispatch that ran without some of its hooks; return the warning when one is due.
+def tally_fail_open(event: Event | None, session_id: str, gaps: Sequence[str]) -> str | None:
+    """Record the hooks one dispatch ran without; return the line naming the newly skipped ones.
 
-    Runs on the failure path, so a tally it cannot take is logged and dropped rather than raised
-    over the response. A warning due on an event whose output nobody reads, or on work finished
-    after the reply (``event`` is None), stays due for the next dispatch that can carry it.
+    Each gap reads ``"<hook>: <status>: <reason>"``. Runs on the failure path, so a record it cannot
+    take is logged and dropped rather than raised over the response. A line due on an event whose
+    output nobody reads, or on work finished after the reply (``event`` is None), stays due for the
+    next dispatch that can carry it.
     """
-    warn_after = int(reqenv.getenv(WARN_AFTER_ENV) or DEFAULT_WARN_AFTER)
     try:
         with SessionSlot(ensure_session(SessionId(session_id)), FailOpenTally).mutate(
             timeout=TALLY_LOCK_SECONDS
         ) as tally:
-            tally.count += 1
-            if event is None or event not in SURFACING_EVENTS or tally.count < max(warn_after, 2 * tally.warned_at):
+            for gap in gaps:
+                hook, _, cause = gap.partition(": ")
+                if hook not in tally.reported and hook not in tally.pending:
+                    logger.bind(hook=hook, cause=cause).warning("hook skipped: evidence incomplete")
+                    tally.pending[hook] = cause
+            if event is None or event not in SURFACING_EVENTS or not tally.pending:
                 return None
-            tally.warned_at = count = tally.count
+            due = tally.pending
+            tally.reported.extend(due)
+            tally.pending = {}
     except (Timeout, OSError):
         logger.opt(exception=True).warning("fail-open tally skipped")
         return None
+    skipped = "; ".join(f"{hook} ({cause})" for hook, cause in due.items())
     return (
-        f"capt-hook: {count} hook dispatches in this session ran without some or all of their hooks "
-        f"because transcript evidence was incomplete (latest: {cause}). Those hooks' guards were not "
-        f"enforced for those events. Run `capt-hook logs --session {session_id}` for the causes."
+        f"capt-hook: skipped {skipped} because transcript evidence was incomplete, so those guards were "
+        f"not enforced. Each hook is named once per session; `capt-hook logs --session {session_id}` "
+        "lists every skip."
     )
 
 

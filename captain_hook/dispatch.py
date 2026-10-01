@@ -140,7 +140,6 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
 
 def note_evidence_gap(entry: RegisteredHook, exc: EvidenceIncomplete) -> None:
     """Record that *entry* was skipped for incomplete evidence, so its siblings still decide the event."""
-    logger.bind(hook=entry.name, status=exc.status, reason=exc.reason).warning("hook skipped: evidence incomplete")
     reqenv.evidence_gaps().append(f"{entry.name}: {exc.status}: {exc.reason}")
 
 

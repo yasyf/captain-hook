@@ -23,7 +23,7 @@ from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event
 from captain_hook.util import reqenv
-from captain_hook.worker.fail_open import fail_open_envelope, tally_fail_open, with_warning
+from captain_hook.worker.fail_open import ALL_HOOKS, fail_open_envelope, tally_fail_open, with_warning
 from captain_hook.worker.protocol import GUARD_COMPLETED, EventRequest, EventResponse, GuardCompletion
 from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 
@@ -129,8 +129,11 @@ class ProductRuntime:
                 return self._response(buffers, exit_code=_exit_code(exc.code)), None
             except EvidenceIncomplete as exc:
                 if fails_open(exc):
-                    logger.bind(status=exc.status, reason=exc.reason).warning("snapshot evidence incomplete")
-                    warning = tally_fail_open(event, session_id, f"{exc.status}: {exc.reason}") if session_id else None
+                    warning = (
+                        tally_fail_open(event, session_id, [f"{ALL_HOOKS}: {exc.status}: {exc.reason}"])
+                        if session_id
+                        else None
+                    )
                     envelope = fail_open_envelope(event, warning) if warning else None
                     return EventResponse(stdout=envelope_text(envelope) + "\n" if envelope else ""), None
                 buffers.stderr.write(traceback.format_exc())
@@ -175,11 +178,7 @@ class ProductRuntime:
             )
             context = contextvars.copy_context()
             guard = _guard_completion(event) if request.mandatory else ""
-        if (
-            session_id
-            and (gaps := reqenv.evidence_gaps())
-            and (warning := tally_fail_open(event, session_id, gaps[-1]))
-        ):
+        if session_id and (gaps := reqenv.evidence_gaps()) and (warning := tally_fail_open(event, session_id, gaps)):
             output = with_warning(event, output, warning)
         if output:
             buffers.stdout.write(envelope_text(output) + "\n")
@@ -235,15 +234,14 @@ def _run_detached(background: Background, session_id: str | None) -> None:
                 if not fails_open(exc):
                     logger.bind(status=exc.status, reason=exc.reason).error("post-reply evidence incomplete")
                     raise
-                logger.bind(status=exc.status, reason=exc.reason).warning("post-reply snapshot evidence incomplete")
-                late.append(f"{exc.status}: {exc.reason}")
+                late.append(f"{ALL_HOOKS}: {exc.status}: {exc.reason}")
             except Exception:
                 logger.exception("post-reply dispatch failed")
     finally:
         CURRENT_CLIENT.reset(token)
     late = reqenv.evidence_gaps()[replied:] + late
     if session_id and late:
-        tally_fail_open(None, session_id, late[-1])
+        tally_fail_open(None, session_id, late)
 
 
 def _warm_nlp(warmer: Callable[[], None]) -> None:
