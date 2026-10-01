@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.71.1] - 2026-10-01
+
+### Fixed
+
+- **The narrate-then-wait Stop gate reads only the session's own transcript.**
+  Its live-board carve-out (`UsedSkill("present")` and `cc-present start`)
+  searched every subagent transcript, so on an orchestrator session with
+  hundreds of sidechains the prepared graph query missed its deadline and the
+  gate skipped instead of asking. The board is the session's own; a board a
+  subagent started no longer stands the gate down.
+- **The narrate-then-wait gate judges main sessions once per stop.** A
+  subagent or teammate final, a session launched with `AskUserQuestion`
+  disallowed (an Orca worker asks through `orca orchestration ask`), and the
+  Stop that continues an earlier block all pass, and the judge leaves a phrase
+  quoted inside a code block alone.
+
 ## [12.71.0] - 2026-10-01
 
 ### Added
