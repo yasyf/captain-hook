@@ -350,8 +350,7 @@ class UserMessages:
             recent = tail[1:]
             return "\n\n".join(
                 [f"[first]\n{clip(first[0], self.per_message)}"]
-                + [f"[recent -{len(recent) - i}]\n{clip(prompt, self.per_message)}"
-                   for i, prompt in enumerate(recent)]
+                + [f"[recent -{len(recent) - i}]\n{clip(prompt, self.per_message)}" for i, prompt in enumerate(recent)]
             )
         if not (prompts := [turn.prompt for turn in transcript.turns if turn.prompt]):
             return None

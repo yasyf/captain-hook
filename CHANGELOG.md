@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.72.0] - 2026-10-01
+
+### Added
+
+- **`on_incomplete=` makes a gate fail closed.** `llm_gate(..., on_incomplete="<remediation>")`
+  and `on(..., on_incomplete=...)` block a call the hook cannot judge instead of skipping it:
+  incomplete transcript evidence, a condition that cannot be evaluated, a hook the fan-out
+  budget never started, and a verdict still pending at the caller's deadline all render a
+  block naming the cause and the remediation. A fail-closed skip no longer counts as an
+  evidence gap. Use it for permission gates, where a skipped judge lets the guarded action
+  through; `async_=True` rejects it.
+
+### Fixed
+
+- **Windowed renders no longer fail on transcript size.** cc-transcript 14.32.1 charges a
+  `render` query only for the events inside its window and keeps the newest events that fit,
+  so a 60-message window inside one long orchestrator turn renders instead of failing with
+  `output_limit`.
+
 ## [12.71.1] - 2026-10-01
 
 ### Fixed

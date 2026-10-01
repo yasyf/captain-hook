@@ -63,6 +63,12 @@ def reject_mandatory_misuse(events: Event, async_: bool, mandatory: bool) -> Non
         )
 
 
+def reject_async_fail_closed(async_: bool, on_incomplete: str | None) -> None:
+    """Reject ``on_incomplete`` on an async hook: no reply waits on it, so it has no call to block."""
+    if async_ and on_incomplete is not None:
+        raise AsyncDecisionError("on_incomplete is invalid with async_=True: an async hook has no call to block.")
+
+
 def reject_transcript_events(transcript_events: int | None) -> None:
     """Reject a declared window the snapshot engine's ``tail`` operation cannot serve."""
     if transcript_events is not None and not 0 < transcript_events <= MAX_TRANSCRIPT_EVENTS:
@@ -260,9 +266,11 @@ def on(
     advisory_on_deny: bool = False,
     mandatory: bool = False,
     transcript_events: int | None = None,
+    on_incomplete: str | None = None,
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
+    reject_async_fail_closed(async_, on_incomplete)
     reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
@@ -278,6 +286,7 @@ def on(
         advisory_on_deny=advisory_on_deny,
         mandatory=mandatory,
         transcript_events=transcript_events,
+        on_incomplete=on_incomplete,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:
@@ -314,7 +323,11 @@ def skips_event(spec: HookSpec, evt: BaseHookEvent) -> bool:
 
 
 def get_hook_candidates(
-    evt: BaseHookEvent, *, async_: bool | None = None, mandatory: bool | None = None
+    evt: BaseHookEvent,
+    *,
+    async_: bool | None = None,
+    mandatory: bool | None = None,
+    fail_closed: bool | None = None,
 ) -> list[RegisteredHook]:
     return [
         h
@@ -322,6 +335,7 @@ def get_hook_candidates(
         if evt.event in h.spec.events
         and (async_ is None or h.spec.async_ is async_)
         and (mandatory is None or h.spec.mandatory is mandatory)
+        and (fail_closed is None or (h.spec.on_incomplete is not None) is fail_closed)
         and not skips_event(h.spec, evt)
     ]
 

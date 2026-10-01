@@ -143,6 +143,17 @@ def note_evidence_gap(entry: RegisteredHook, exc: EvidenceIncomplete) -> None:
     reqenv.evidence_gaps().append(f"{entry.name}: {exc.status}: {exc.reason}")
 
 
+def closed_verdict(entry: RegisteredHook, status: str, reason: str) -> HookResult | None:
+    """The block a fail-closed hook (``on_incomplete``) renders in place of the verdict it could not reach."""
+    if entry.spec.on_incomplete is None:
+        return None
+    return HookResult(
+        action=Action.block,
+        message=f"{entry.name} could not judge this call ({status}: {reason}), and it fails closed. "
+        f"{entry.spec.on_incomplete}",
+    )
+
+
 def record_fire(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult) -> None:
     """Record the ledger decision for a hook that fired (the count is reserved under lock upstream)."""
     from captain_hook.decisions import record_decision
@@ -267,18 +278,20 @@ def run_scheduled(
         return None
     if reqenv.deadline_within(margin):
         logger.bind(hook=entry.name).warning("caller deadline is near; skipping this hook")
-        return None
-    try:
-        reqenv.checkpoint()
-        result = execute_hook(entry, evt, session_dir)
-    except reqenv.Abandoned:
-        logger.bind(hook=entry.name).info("verdict no longer wanted; hook stopped at a checkpoint")
-        return None
-    except EvidenceIncomplete as exc:
-        if not fails_open(exc):
-            raise
-        note_evidence_gap(entry, exc)
-        return None
+        result = closed_verdict(entry, "deadline", "the caller's deadline arrived before it started")
+    else:
+        try:
+            reqenv.checkpoint()
+            result = execute_hook(entry, evt, session_dir)
+        except reqenv.Abandoned:
+            logger.bind(hook=entry.name).info("verdict no longer wanted; hook stopped at a checkpoint")
+            return None
+        except EvidenceIncomplete as exc:
+            if not fails_open(exc):
+                raise
+            if (result := closed_verdict(entry, exc.status, exc.reason)) is None:
+                note_evidence_gap(entry, exc)
+                return None
     if result is not None and result.action is Action.block:
         blocked.record(index)
     return result
@@ -463,7 +476,8 @@ def combine(
     anything to say, and only then waits for it — so a hook a block already suppressed is never
     waited on, and its exception is never raised, exactly as a sequential dispatch never called it.
     A hook whose future is still unsettled when the caller's deadline arrives is abandoned: its
-    verdict misses this reply, and its name joins :func:`captain_hook.util.reqenv.abandoned`.
+    verdict misses this reply, and its name joins :func:`captain_hook.util.reqenv.abandoned`. A
+    fail-closed hook (``on_incomplete``) that never started or never settled blocks instead.
 
     Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching hook
     beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another hook's
@@ -496,12 +510,18 @@ def combine(
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
         if (future := futures[index]).cancelled():
-            continue
-        if not settled(future, margin):
+            if (result := closed_verdict(entry, "deadline", "the fan-out budget ran out before it started")) is None:
+                continue
+        elif not settled(future, margin):
             logger.bind(hook=entry.name).warning("caller deadline reached; abandoning this hook's verdict")
             reqenv.abandoned().append(entry.name)
-            continue
-        if (result := future.result()) is not None and result.system_message:
+            if (
+                result := closed_verdict(entry, "deadline", "the caller's deadline arrived before its verdict")
+            ) is None:
+                continue
+        else:
+            result = future.result()
+        if result is not None and result.system_message:
             notices.append(result.system_message)
         match result:
             case HookResult(action=Action.block, message=msg):
@@ -549,10 +569,11 @@ def prepare_hook_events(
     *,
     async_: bool,
     mandatory: bool | None = None,
+    fail_closed: bool | None = None,
 ) -> tuple[list[RegisteredHook], list[BaseHookEvent]]:
     from captain_hook.transcripts import fork_transcript, release_transcript
 
-    entries = get_hook_candidates(evt, async_=async_, mandatory=mandatory)
+    entries = get_hook_candidates(evt, async_=async_, mandatory=mandatory, fail_closed=fail_closed)
     forks: list[BaseHookEvent] = []
     try:
         for entry in entries:
@@ -575,8 +596,9 @@ def prepare_hook_events(
             except EvidenceIncomplete as exc:
                 if not fails_open(exc):
                     raise
-                note_evidence_gap(entries[index], exc)
-                matched[index] = False
+                if entries[index].spec.on_incomplete is None:
+                    note_evidence_gap(entries[index], exc)
+                matched[index] = entries[index].spec.on_incomplete is not None
         for index, fork in enumerate(forks):
             if not matched[index]:
                 release_transcript(fork.ctx.transcript)
@@ -636,6 +658,14 @@ def dispatch_mandatory(
     return entries, futures
 
 
+def in_registration_order(
+    entries: Sequence[RegisteredHook], futures: Sequence[Future[HookResult | None]]
+) -> tuple[list[RegisteredHook], list[Future[HookResult | None]]]:
+    ranks = registration_ranks()
+    folded = sorted(zip(entries, futures, strict=True), key=lambda pair: ranks[id(pair[0])])
+    return [entry for entry, _ in folded], [future for _, future in folded]
+
+
 def dispatch(
     event: Event,
     evt: BaseHookEvent,
@@ -662,7 +692,8 @@ def dispatch(
     registration positions, so a mandatory block dooms exactly the handler-backed hooks registered
     after it and an advisory hook registered before it keeps its run, its ledger write, and its
     claim on the deny's reason. ``advisory=False`` stops after them, so a caller already inside the
-    deadline margin still completes the guard while skipping the hooks the margin exists for.
+    deadline margin still completes the guard while skipping the hooks the margin exists for; a
+    fail-closed hook (``on_incomplete``) that matches then blocks, since it never got to judge.
     """
     from captain_hook.transcripts import release_transcript
 
@@ -672,8 +703,15 @@ def dispatch(
         release_transcript(evt.ctx.transcript)
         raise
     if not advisory:
-        release_transcript(evt.ctx.transcript)
-        return combine(event, entries, futures, SYNC_DEADLINE_MARGIN_SECONDS)
+        closed, forks = prepare_hook_events(evt, async_=False, mandatory=False, fail_closed=True)
+        for fork in forks:
+            release_transcript(fork.ctx.transcript)
+        unstarted: list[Future[HookResult | None]] = [Future() for _ in closed]
+        for future in unstarted:
+            future.cancel()
+        return combine(
+            event, *in_registration_order(entries + closed, futures + unstarted), SYNC_DEADLINE_MARGIN_SECONDS
+        )
     matching, events = prepare_hook_events(evt, async_=False, mandatory=False)
     if not matching:
         return combine(event, entries, futures, SYNC_DEADLINE_MARGIN_SECONDS)
@@ -687,11 +725,8 @@ def dispatch(
     fanout = Fanout(len(groups))
     try:
         started = start_hooks(matching, groups, events, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, fanout, blocked)
-        folded = sorted(
-            zip([*entries, *matching], [*futures, *started], strict=True), key=lambda pair: ranks[id(pair[0])]
-        )
         return combine(
-            event, [entry for entry, _ in folded], [future for _, future in folded], SYNC_DEADLINE_MARGIN_SECONDS
+            event, *in_registration_order(entries + matching, futures + started), SYNC_DEADLINE_MARGIN_SECONDS
         )
     finally:
         fanout.close()

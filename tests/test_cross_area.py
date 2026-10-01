@@ -732,8 +732,12 @@ class TestCLISubprocess:
         )
 
         result = run_cli(
-            "run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin_payload,
-            timeout=30, cwd=str(tmp_path),
+            "run",
+            "PreToolUse",
+            hooks_dir=str(hooks_dir),
+            stdin_data=stdin_payload,
+            timeout=30,
+            cwd=str(tmp_path),
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         output = json.loads(result.stdout)
@@ -760,8 +764,12 @@ class TestCLISubprocess:
         )
 
         result = run_cli(
-            "run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin_payload,
-            timeout=30, cwd=str(tmp_path),
+            "run",
+            "PreToolUse",
+            hooks_dir=str(hooks_dir),
+            stdin_data=stdin_payload,
+            timeout=30,
+            cwd=str(tmp_path),
         )
         assert result.returncode == 0
         assert result.stdout.strip() == ""
@@ -788,8 +796,12 @@ class TestCLISubprocess:
         )
 
         result = run_cli(
-            "run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin_payload,
-            timeout=30, cwd=str(tmp_path),
+            "run",
+            "PreToolUse",
+            hooks_dir=str(hooks_dir),
+            stdin_data=stdin_payload,
+            timeout=30,
+            cwd=str(tmp_path),
         )
         assert result.returncode == 0
         output = json.loads(result.stdout)

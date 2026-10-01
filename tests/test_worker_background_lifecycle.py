@@ -19,10 +19,19 @@ from captain_hook.worker.service import WorkerService
 
 def request_frame(request_id: int) -> dict[str, object]:
     return {
-        'protocol': 1, 'op': 'event', 'id': request_id,
-        'request': {
-            'schema': 1, 'event': 'PreToolUse', 'root': '/fixture', 'cwd': '/fixture',
-            'env': {}, 'payload_raw': '{}', 'client_pid': 100, 'client_ppid': 99, 'deadline_unix_ms': 0,
+        "protocol": 1,
+        "op": "event",
+        "id": request_id,
+        "request": {
+            "schema": 1,
+            "event": "PreToolUse",
+            "root": "/fixture",
+            "cwd": "/fixture",
+            "env": {},
+            "payload_raw": "{}",
+            "client_pid": 100,
+            "client_ppid": 99,
+            "deadline_unix_ms": 0,
         },
     }
 
@@ -53,7 +62,8 @@ class RecordingOutput(io.BytesIO):
     def wait_for_begins(self, count: int) -> bool:
         with self.changed:
             return self.changed.wait_for(
-                lambda: sum(frame['op'] == 'background_begin' for frame in self.frames) == count, timeout=3,
+                lambda: sum(frame["op"] == "background_begin" for frame in self.frames) == count,
+                timeout=3,
             )
 
 
@@ -73,8 +83,8 @@ def start(service: WorkerService) -> tuple[threading.Thread, Future[None]]:
 
 
 def test_background_frames_have_exact_shape() -> None:
-    assert background_begin_message(7) == {'protocol': 1, 'op': 'background_begin', 'id': 7}
-    assert background_end_message(7) == {'protocol': 1, 'op': 'background_end', 'id': 7}
+    assert background_begin_message(7) == {"protocol": 1, "op": "background_begin", "id": 7}
+    assert background_end_message(7) == {"protocol": 1, "op": "background_end", "id": 7}
 
 
 def test_begin_precedes_result_and_callback_precedes_end() -> None:
@@ -82,13 +92,13 @@ def test_begin_precedes_result_and_callback_precedes_end() -> None:
     seen = []
 
     def callback() -> None:
-        seen.extend(frame['op'] for frame in output.frames)
+        seen.extend(frame["op"] for frame in output.frames)
 
     service = WorkerService(input_stream(7), output, dispatch=lambda _: (EventResponse(), callback))
     service.run()
-    assert seen == ['background_begin', 'result']
-    assert [frame['op'] for frame in output.frames] == ['background_begin', 'result', 'background_end']
-    assert [frame['id'] for frame in output.frames] == [7, 7, 7]
+    assert seen == ["background_begin", "result"]
+    assert [frame["op"] for frame in output.frames] == ["background_begin", "result", "background_end"]
+    assert [frame["id"] for frame in output.frames] == [7, 7, 7]
     assert service._background_outstanding == 0
 
 
@@ -96,7 +106,7 @@ def test_no_callback_has_no_background_ticket() -> None:
     output = RecordingOutput()
     service = WorkerService(input_stream(1), output, dispatch=lambda _: (EventResponse(), None))
     service.run()
-    assert [frame['op'] for frame in output.frames] == ['result']
+    assert [frame["op"] for frame in output.frames] == ["result"]
     assert service._background_outstanding == 0
 
 
@@ -104,12 +114,12 @@ def test_callback_failure_releases_ticket_and_is_observable() -> None:
     output = RecordingOutput()
 
     def callback() -> None:
-        raise RuntimeError('callback failed')
+        raise RuntimeError("callback failed")
 
     service = WorkerService(input_stream(1), output, dispatch=lambda _: (EventResponse(), callback))
-    with pytest.raises(RuntimeError, match='callback failed'):
+    with pytest.raises(RuntimeError, match="callback failed"):
         service.run()
-    assert [frame['op'] for frame in output.frames] == ['background_begin', 'result', 'background_end']
+    assert [frame["op"] for frame in output.frames] == ["background_begin", "result", "background_end"]
     assert service._background_outstanding == 0
 
 
@@ -118,9 +128,9 @@ def test_submission_failure_releases_ticket() -> None:
     invoked = []
     service = WorkerService(input_stream(1), output, dispatch=lambda _: (EventResponse(), lambda: invoked.append(True)))
     service._background.shutdown()
-    with pytest.raises(RuntimeError, match='cannot schedule new futures after shutdown'):
+    with pytest.raises(RuntimeError, match="cannot schedule new futures after shutdown"):
         service.run()
-    assert [frame['op'] for frame in output.frames] == ['background_begin', 'result', 'background_end']
+    assert [frame["op"] for frame in output.frames] == ["background_begin", "result", "background_end"]
     assert invoked == []
     assert service._background_outstanding == 0
 
@@ -137,6 +147,7 @@ def test_eof_drains_running_and_queued_callbacks_without_cancellation() -> None:
             assert release.wait(timeout=3)
             assert service._snapshot_closed
             callbacks.append(request.id)
+
         return EventResponse(), callback
 
     service = WorkerService(input_stream(1, 2, 3), output, dispatch=dispatch)
@@ -157,6 +168,8 @@ def test_eof_drains_running_and_queued_callbacks_without_cancellation() -> None:
     assert sorted(callbacks) == [1, 2, 3]
     assert service._background_outstanding == 0
     for request_id in (1, 2, 3):
-        assert [frame['op'] for frame in output.frames if frame['id'] == request_id] == [
-            'background_begin', 'result', 'background_end',
+        assert [frame["op"] for frame in output.frames if frame["id"] == request_id] == [
+            "background_begin",
+            "result",
+            "background_end",
         ]

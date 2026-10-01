@@ -163,3 +163,85 @@ def test_context_fork_preserves_model_stub_and_clears_source_caches(leased_event
     assert "transcript_ref" not in fork.__dict__
     fork.transcript.release()
     evt.ctx.transcript.release()
+
+
+def test_fail_closed_handler_evidence_failure_blocks(leased_event):
+    evt, _, _ = leased_event
+
+    @on(Event.PostToolUse, on_incomplete="Ask the user for this write again.")
+    def guard(evt):
+        assert len(evt.ctx.t) == 42
+        raise EvidenceIncomplete("output_limit", "projection text exceeds output budget")
+
+    overrides = reqenv.RequestOverrides(env={}, cwd="/tmp", client_ppid=1, session_id="s")
+    with reqenv.use_request(overrides):
+        envelope = dispatch(Event.PostToolUse, evt)
+    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "guard could not judge this call (output_limit: projection text exceeds output budget)" in reason
+    assert reason.endswith("Ask the user for this write again.")
+    assert overrides.evidence_gaps == []
+    assert evt.ctx.transcript.pins.pending == 0
+
+
+def test_fail_closed_condition_evidence_failure_still_runs_the_hook(leased_event):
+    evt, _, _ = leased_event
+
+    class Incomplete(CustomCondition):
+        def check(self, evt):
+            raise EvidenceIncomplete("entry_limit", "condition incomplete")
+
+    @on(Event.PostToolUse, only_if=[Incomplete()], on_incomplete="Ask again.")
+    def guard(evt):
+        return evt.block("judged")
+
+    overrides = reqenv.RequestOverrides(env={}, cwd="/tmp", client_ppid=1, session_id="s")
+    with reqenv.use_request(overrides):
+        envelope = dispatch(Event.PostToolUse, evt)
+    assert envelope["hookSpecificOutput"]["permissionDecisionReason"] == "judged"
+    assert overrides.evidence_gaps == []
+    assert evt.ctx.transcript.pins.pending == 0
+
+
+def test_fail_closed_hook_without_a_verdict_blocks_the_fold():
+    from concurrent.futures import Future
+
+    from captain_hook.dispatch import combine
+    from captain_hook.types import HookSpec, RegisteredHook
+
+    closed = RegisteredHook(spec=HookSpec(events=Event.PreToolUse, on_incomplete="Ask again."), name="guard")
+    skipped = RegisteredHook(spec=HookSpec(events=Event.PreToolUse), name="advice")
+    never_started: Future = Future()
+    never_started.cancel()
+    also_cancelled: Future = Future()
+    also_cancelled.cancel()
+    envelope = combine(Event.PreToolUse, [skipped, closed], [also_cancelled, never_started], 0.0)
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert envelope["hookSpecificOutput"]["permissionDecisionReason"].startswith(
+        "guard could not judge this call (deadline:"
+    )
+    assert combine(Event.PreToolUse, [skipped], [also_cancelled], 0.0) is None
+
+
+def test_fail_closed_rejects_async_hooks():
+    from captain_hook.app import AsyncDecisionError
+
+    with pytest.raises(AsyncDecisionError, match="on_incomplete"):
+        on(Event.Notification, async_=True, on_incomplete="Ask again.")
+
+
+def test_fail_closed_hook_blocks_a_dispatch_inside_the_deadline_margin(leased_event):
+    evt, loaded, _ = leased_event
+
+    @on(Event.PostToolUse)
+    def advice(evt):
+        raise AssertionError("advisory hooks stay unrun inside the margin")
+
+    @on(Event.PostToolUse, on_incomplete="Ask again.")
+    def guard(evt):
+        raise AssertionError("a fail-closed hook has no time to judge inside the margin")
+
+    envelope = dispatch(Event.PostToolUse, evt, advisory=False)
+    assert envelope["hookSpecificOutput"]["permissionDecisionReason"].startswith("guard could not judge this call")
+    assert loaded == []
+    assert evt.ctx.transcript.pins.pending == 0
