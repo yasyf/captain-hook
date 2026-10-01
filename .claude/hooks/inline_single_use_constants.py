@@ -9,8 +9,6 @@ _CONST_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def _is_prompt_load(call: ast.Call) -> bool:
-    # `NAME = Prompt.load(...)` is this repo's accepted exception: the name documents
-    # intent for a call site that appears well below the imports, before it's written.
     func = call.func
     return (isinstance(func, ast.Attribute) and func.attr == "load") or (
         isinstance(func, ast.Name) and func.id == "load"
@@ -67,12 +65,7 @@ def single_use_constants(content: str) -> list[str]:
 
 lint(
     single_use_constants,
-    message=(
-        'User feedback: "dont do constants like DANGEROUS, just inline" plus repeated plan corrections '
-        "dropping module-level lib.py builders and Signals(...) constants for inline literals at the one "
-        "call site. This constant is defined once and used exactly once elsewhere in the file -- inline it "
-        "at its call site instead: {violations}"
-    ),
+    message="A module constant used once belongs inline at its call site. Inline {violations}.",
     tests={
         Input(
             file="captain_hook/util/proc.py",
@@ -178,9 +171,7 @@ lint(
         Input(
             file="captain_hook/util/runtimes.py",
             content=(
-                "JS_RUNTIMES = ('node', 'bun', 'deno')\n\n"
-                "def is_js(cmd: str) -> bool:\n"
-                "    return cmd in JS_RUNTIMES\n"
+                "JS_RUNTIMES = ('node', 'bun', 'deno')\n\ndef is_js(cmd: str) -> bool:\n    return cmd in JS_RUNTIMES\n"
             ),
         ): Warn(pattern="JS_RUNTIMES"),
     },

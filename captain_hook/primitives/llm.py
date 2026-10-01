@@ -367,10 +367,10 @@ def llm_gate(
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
-        ...          message=lambda r: f"Excuse detected: {r.reasoning}",
+        ...          message="Fix the failure instead of blaming an external service. Rerun the failing step.",
         ...          signals=Signals([Signal(r"external.*service", weight=2)], threshold=2))
         >>> llm_gate("Does the new code hardcode a secret?",
-        ...          message=lambda r: f"Secret detected: {r.reasoning}",
+        ...          message="Secrets come from the environment, never source. Read it with `os.environ`.",
         ...          contexts=[Introduced(pattern='os.environ[$KEY] = $VALUE')],
         ...          events=Event.PreToolUse, only_if=[Tool("Edit", "Write", "MultiEdit")])
     """
@@ -475,7 +475,7 @@ def llm_nudge(
         ...           message="Observe, don't infer -- check traces first",
         ...           signals=Signals([Signal(r"should contain", weight=2)], threshold=3))
         >>> llm_nudge("Does any newly introduced comment narrate the edit itself?",
-        ...           message="Tombstone comment: {reasoning}",
+        ...           message="Comments never narrate the edit. Delete the comment.",
         ...           contexts=[Introduced(kind=COMMENT_TYPES)],
         ...           events=Event.PreToolUse, only_if=[Tool("Edit", "Write", "MultiEdit")])
     """

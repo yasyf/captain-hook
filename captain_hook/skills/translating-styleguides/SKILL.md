@@ -333,7 +333,7 @@ llm_nudge(
     "Is the agent changing things beyond the requested scope — refactoring code it wasn't "
     "asked to touch, renaming for taste, adding speculative parameters or files? "
     "Fire only when the drift is unambiguous.",
-    message=lambda r: f"Scope drift: {r.reasoning}. STYLEGUIDE.md: make the test pass, then stop.",
+    message="Stay in scope: make the test pass, then stop. Revert the unrelated changes.",
     events=Event.Stop,
     only_if=[TouchedFile("**/*.py")],
     max_fires=1,

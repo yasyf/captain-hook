@@ -28,7 +28,7 @@ llm_nudge(
     "Is the agent changing things beyond the requested scope — refactoring code it wasn't "
     "asked to touch, renaming for taste, adding speculative parameters or files? "
     "Fire only when the drift is unambiguous.",
-    message=lambda r: f"Scope drift: {r.reasoning}. STYLEGUIDE.md: make the test pass, then stop.",
+    message="Stay in scope: make the test pass, then stop. Revert the unrelated changes.",
     events=Event.Stop,
     only_if=[TouchedFile("**/*.py")],
     max_fires=1,
@@ -37,8 +37,8 @@ llm_nudge(
 
 - `events=Event.Stop` overrides the `PostToolUse` default; `max_fires=1` overrides the
   nudge default of 3.
-- `message` receives a `NudgeVerdict(fire, reasoning)`; surface `r.reasoning` plus the
-  guide citation.
+- `message` states the rule and the remediation; the verdict's `reasoning` decides the fire
+  and never goes into the message.
 - `only_if=[TouchedFile(...)]` skips the LLM entirely on sessions that edited nothing
   relevant.
 
@@ -54,7 +54,7 @@ llm_gate(
     "The style guide forbids defensive coding: no fallbacks, shims, or guards against "
     "impossible states. Does this edit add a fallback path that silently masks a failure "
     "instead of letting it crash? Block only when the fallback is unambiguous.",
-    message=lambda r: f"Defensive coding: {r.reasoning}. STYLEGUIDE.md: fail fast, fail loud.",
+    message="Fail fast instead of guarding impossible states. Delete the fallback and let it raise.",
     signals=Signals(
         patterns=[
             Signal(pattern=r"except Exception", weight=2),
@@ -75,7 +75,7 @@ llm_gate(
   swallowing); any veto match cancels the fire. Pattern weights must be positive.
 - `llm_gate` defaults to `Stop | SubagentStop` and `max_fires=1`; here it is retargeted
   at edits.
-- `message` receives a `GateVerdict(block, reasoning)`.
+- `message` states the rule and the remediation, never the verdict's `reasoning`.
 
 ## Template 3 — prompt_check on a diff
 

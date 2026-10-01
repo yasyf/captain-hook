@@ -1,0 +1,266 @@
+"""Lint hook files against the authoring bar: a message states the rule, then the remediation, and
+the hook code uses the declarative surface instead of hand-rolled parsing."""
+
+from __future__ import annotations
+
+import ast
+import io
+import re
+import tokenize
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from textwrap import dedent
+from typing import TYPE_CHECKING
+
+from captain_hook.types import render_runs, runs_spelling
+
+if TYPE_CHECKING:
+    from captain_hook.types import HookResult
+
+MAX_SENTENCES = 2
+MAX_CHARS = 300
+
+CODE_SPAN = re.compile(r"`[^`]*`")
+PLACEHOLDER = re.compile(r"\{[^{}]*\}")
+ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|etc|vs)\.", re.IGNORECASE)
+SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+ECHOED_INPUT = re.compile(r"\{[^{}]*\b(?:reasoning|user_prompt|prompt)\b[^{}]*\}")
+
+COPY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("quoted text", re.compile(r"""(?<!\w)["“'‘][^"”'’\n]*\s[^"”'’\n]*\s[^"”'’\n]*["”'’](?!\w)""")),
+    (
+        "provenance",
+        re.compile(
+            r"\b(?:user|owner)(?:'s)?\s+(?:feedback|said|says|asked|correction|rule|order)\b|\brulings?\b",
+            re.IGNORECASE,
+        ),
+    ),
+    ("record id", re.compile(r"(?<![\w-])[RGL]\d{1,4}\b|(?<![\w/&])#\d{2,}\b|\bwf_[0-9a-f]{6,}\b")),
+    ("session id", re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")),
+    ("commit hash", re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
+    (
+        "date or time",
+        re.compile(r"\b20\d\d-\d\d-\d\d\b|\b\d{1,2}:\d\d(?::\d\d)?\s?(?:Z|UTC|PT|PDT|PST|am|pm)\b|\b\d\d:\d\d:\d\d\b"),
+    ),
+    ("token count", re.compile(r"\b\d[\d,.]*\s?[kKmM]?\s+tokens\b")),
+    (
+        "narrative",
+        re.compile(
+            r"\b(?:first seen|last time|this happened|happened (?:on|at|when)|was caused by|we (?:saw|hit)"
+            r"|incident on|has not (?:replied|answered)|hasn't (?:replied|answered))\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+MESSAGE_KEYWORDS = frozenset({"message", "reason", "hint", "note"})
+MESSAGE_POSITIONAL = frozenset({"block", "warn", "context", "gate", "nudge", "deny"})
+REGEX_METHODS = frozenset({"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"})
+COMMAND_TEXT = re.compile(r"\.raw\b|tool_input(?:\[|\.get\()[\"']command[\"']|^(?:str\()?(?:evt\.)?(?:command|cmd)\)?$")
+TRANSCRIPT_FILES = re.compile(r"\.jsonl\b|\.claude/projects")
+BROAD_EXCEPTIONS = frozenset({"Exception", "BaseException"})
+COMMAND_PATTERN_CALLS = frozenset({"Command", "CommandCondition", "block_command", "warn_command"})
+ALLOWED_COMMENT = re.compile(r"#!|#\s*(?:TODO|FIXME|WORKAROUND|noqa|type:|pyright:|ruff:|fmt:|pragma)")
+
+
+@dataclass(frozen=True, slots=True)
+class Finding:
+    """One way a hook file misses the bar, at the line that misses it."""
+
+    path: Path
+    line: int
+    rule: str
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line}: {self.rule}: {self.detail}"
+
+
+def copy_violations(text: str) -> list[str]:
+    """How a hook message misses the copy bar: the rule, then the remediation, in at most two sentences.
+
+    Code spans and ``{placeholders}`` are exempt from the prose rules, so a remediation command may carry
+    quotes, ids, and paths of its own.
+    """
+    prose = ABBREVIATION.sub("eg", PLACEHOLDER.sub("X", CODE_SPAN.sub("X", stripped := text.strip())))
+    sentences = [part for part in SENTENCE_BREAK.split(prose) if part.strip()]
+    return [
+        *([f"{len(sentences)} sentences; state the rule, then the remediation"] * (len(sentences) > MAX_SENTENCES)),
+        *([f"{len(stripped)} chars; keep it to {MAX_CHARS}"] * (len(stripped) > MAX_CHARS)),
+        *(["echoes the prompt or the judge's reasoning; state the rule instead"] * bool(ECHOED_INPUT.search(stripped))),
+        *(f"{name} {match.group(0)!r}" for name, pattern in COPY_RULES if (match := pattern.search(prose))),
+    ]
+
+
+def result_violations(result: HookResult) -> list[str]:
+    """Copy violations in the text a hook result surfaces to the agent: its message, or a rewrite's note."""
+    return [violation for text in (result.message, result.note) if text for violation in copy_violations(text)]
+
+
+def bindings(node: ast.stmt) -> list[tuple[ast.expr, ast.expr]]:
+    match node:
+        case ast.Assign(targets=targets, value=value):
+            return [(target, value) for target in targets]
+        case ast.AnnAssign(target=target, value=ast.expr() as value):
+            return [(target, value)]
+        case _:
+            return []
+
+
+def module_constants(tree: ast.Module) -> dict[str, ast.expr]:
+    return {target.id: value for node in tree.body for target, value in bindings(node) if isinstance(target, ast.Name)}
+
+
+def placeholder(node: ast.expr) -> str:
+    return f"{{{ast.unparse(node)}}}"
+
+
+def fstring_part(part: ast.expr) -> str:
+    match part:
+        case ast.Constant(value=str() as text):
+            return text
+        case ast.FormattedValue(value=value):
+            return placeholder(value)
+        case _:
+            return placeholder(part)
+
+
+def texts(node: ast.expr, consts: dict[str, ast.expr]) -> list[str]:
+    match node:
+        case ast.Constant(value=str() as text):
+            return [text]
+        case ast.JoinedStr(values=parts):
+            return ["".join(map(fstring_part, parts))]
+        case ast.BinOp(op=ast.Add(), left=left, right=right):
+            return [
+                head + tail
+                for head in texts(left, consts) or [placeholder(left)]
+                for tail in texts(right, consts) or [placeholder(right)]
+            ]
+        case ast.Name(id=name) if name in consts:
+            return texts(consts.pop(name), consts)
+        case ast.Call(func=ast.Attribute(attr="format", value=template)):
+            return texts(template, consts)
+        case ast.Call(func=ast.Name(id="dedent") | ast.Attribute(attr="dedent"), args=[inner]):
+            return [dedent(text).strip() for text in texts(inner, consts)]
+        case ast.Lambda(body=body):
+            return texts(body, consts)
+        case ast.IfExp(body=body, orelse=orelse):
+            return texts(body, consts) + texts(orelse, consts)
+        case _:
+            return []
+
+
+def callee(call: ast.Call) -> str | None:
+    match call.func:
+        case ast.Name(id=name) | ast.Attribute(attr=name):
+            return name
+        case _:
+            return None
+
+
+def message_nodes(call: ast.Call) -> Iterator[ast.expr]:
+    yield from (keyword.value for keyword in call.keywords if keyword.arg in MESSAGE_KEYWORDS)
+    if callee(call) in MESSAGE_POSITIONAL and call.args:
+        yield call.args[0]
+
+
+def copy_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
+    consts = module_constants(tree)
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        for message in message_nodes(call):
+            for text in texts(message, dict(consts)):
+                for violation in copy_violations(text):
+                    yield Finding(path, message.lineno, "copy", violation)
+
+
+def regex_over_command(call: ast.Call) -> bool:
+    match call.func:
+        case ast.Attribute(attr=method, value=receiver) if method in REGEX_METHODS:
+            operands = [receiver, *call.args] if method == "split" else call.args
+            return any(COMMAND_TEXT.search(ast.unparse(operand)) for operand in operands)
+        case _:
+            return False
+
+
+def textual_command_name(call: ast.Call) -> str | None:
+    match call.args:
+        case [ast.Constant(value=str() as pattern), *_] if callee(call) in COMMAND_PATTERN_CALLS and (
+            argvs := runs_spelling(pattern)
+        ):
+            return render_runs(argvs)
+        case _:
+            return None
+
+
+def code_violation(node: ast.AST) -> str | None:
+    match node:
+        case ast.Call() if (runs := textual_command_name(node)) is not None:
+            return f"matches a command name as text; match it with {runs}"
+        case ast.Call(func=ast.Attribute(value=ast.Name(id="shlex"), attr="split")):
+            return "splits a command by hand; match with Runs(...) or walk evt.command"
+        case ast.Call() if regex_over_command(node):
+            return "regexes command text; match with Runs(...), a CommandSchema, or an ast-grep rewrite_command pattern"
+        case ast.Attribute(attr="transcript_path") | ast.Name(id="transcript_path"):
+            return "reads the transcript by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
+        case ast.Constant(value=str() as text) if TRANSCRIPT_FILES.search(text):
+            return "reads transcript files by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
+        case ast.ExceptHandler(type=None):
+            return "swallows failures; let the hook raise, the dispatcher records the fault"
+        case ast.ExceptHandler(type=ast.Name(id=name)) if name in BROAD_EXCEPTIONS:
+            return "swallows failures; let the hook raise, the dispatcher records the fault"
+        case ast.Call(func=ast.Name(id="suppress") | ast.Attribute(attr="suppress"), args=args) if any(
+            isinstance(arg, ast.Name) and arg.id in BROAD_EXCEPTIONS for arg in args
+        ):
+            return "swallows failures; let the hook raise, the dispatcher records the fault"
+        case _:
+            return None
+
+
+def code_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
+    for node in ast.walk(tree):
+        if (violation := code_violation(node)) is not None:
+            yield Finding(path, getattr(node, "lineno", 1), "code", violation)
+
+
+def comment_findings(path: Path, source: str) -> Iterator[Finding]:
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT and not ALLOWED_COMMENT.match(token.string):
+            yield Finding(path, token.start[0], "comment", "rename or restructure instead of commenting")
+
+
+def lint_source(path: Path, source: str) -> list[Finding]:
+    """Every finding in one hook file's source, ordered by line."""
+    tree = ast.parse(source, filename=str(path))
+    return sorted(
+        [*copy_findings(path, tree), *code_findings(path, tree), *comment_findings(path, source)],
+        key=lambda finding: (finding.line, finding.rule, finding.detail),
+    )
+
+
+def is_hook_source(path: Path) -> bool:
+    return (
+        path.suffix == ".py"
+        and "__pycache__" not in path.parts
+        and "tests" not in path.parts
+        and path.name != "conftest.py"
+        and not path.name.startswith("test_")
+        and not path.stem.endswith("_test")
+    )
+
+
+def hook_sources(paths: Iterable[Path]) -> list[Path]:
+    return sorted(
+        {
+            source
+            for path in paths
+            for source in (sorted(path.rglob("*.py")) if path.is_dir() else [path])
+            if is_hook_source(source)
+        }
+    )
+
+
+def lint_paths(paths: Iterable[Path]) -> list[Finding]:
+    """Every finding across the hook files under ``paths``; a directory is walked, test files skipped."""
+    return [finding for source in hook_sources(paths) for finding in lint_source(source, source.read_text())]
