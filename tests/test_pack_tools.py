@@ -268,3 +268,55 @@ def test_tooling_refusal_reads_structured_tool_responses(tmp_path: Path) -> None
     key, record = found
     assert key == "cc-slack-session"
     assert record.evidence == "cc-slack: no cc-slack session for this Claude window"
+
+
+def test_tooling_refusal_drops_a_pre_expiry_record_and_spares_unrelated_dispatches(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import (
+        CC_SLACK_CLI_SYNC,
+        ToolingRefusals,
+        block_repeated_dispatch,
+    )
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    store = SessionStore(tmp_path)
+    slot = store[ToolingRefusals].path
+    assert slot is not None
+    slot.write_text(
+        '{"refusals": {"github-quota": {"tool": "ccx", "action": "\\\\bccx vcs\\\\b", "evidence": "x", "lane": false}}}'
+    )
+    evt = PreToolUseEvent(
+        _raw={"tool_name": "Agent", "tool_input": {"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"}},
+        ctx=HookContext(store, None, None),
+    )
+
+    assert ToolingRefusals.load(evt).refusals == {}
+    assert block_repeated_dispatch(evt) is None
+
+
+def test_tooling_lane_spawned_before_the_refusal_silences_it(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import block_repeated_dispatch, record_lane, record_refusal
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    ctx = HookContext(SessionStore(tmp_path), None, None)
+    spawn = PreToolUseEvent(
+        _raw={"tool_name": "Agent", "tool_input": {"prompt": "Fix ccx reads.", "name": "gh-quota-once-and-for-all"}},
+        ctx=ctx,
+    )
+    refused = PostToolUseEvent(
+        _raw={
+            "tool_name": "Bash",
+            "tool_input": {"command": "ccx vcs pr status 12"},
+            "tool_response": {"stdout": "", "stderr": "ccx: GitHub GraphQL quota exhausted\n"},
+        },
+        ctx=ctx,
+    )
+    repeat = PreToolUseEvent(
+        _raw={"tool_name": "Agent", "tool_input": {"prompt": "Poll `ccx vcs pr status 12` until it lands."}},
+        ctx=ctx,
+    )
+
+    assert record_lane(spawn) is None
+    assert record_refusal(refused) is None
+    assert block_repeated_dispatch(repeat) is None
