@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UserPromptSubmit`. Foreground work over snapshots in memory gets its own
   `64 MiB` `max_read_bytes` cap, so reading the transcript no longer shrinks
   that cap. Background work keeps its `512 MiB` logical cap. This requires
-  `cc-transcript` 14.29.0.
+  `cc-transcript` 14.29.1.
 - **The reviewer prepares corrections around large turns.** A turn whose events
   together exceed `1 MiB` no longer fails correction preparation. Each request
   materializes one activity window for all its anchors, and a batch whose window
@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other transcripts. Review preparation materializes each transcript event at most
   once, shared by every survival check and hook-complaint detection, and an event over
   the `1 MiB` record bound refuses correction preparation as it refuses review.
+- **Concurrent snapshot owners no longer break each other's startup.** In
+  `$TMPDIR/cc-transcript-prepared`, stale-owner cleanup could take a new owner's
+  lock before the owner did and remove its directory, causing `prepared facts
+  disk cache: Resource temporarily unavailable (os error 35)` or later
+  `incomplete` results that skipped hooks needing transcript evidence. Owners
+  now lock under a staging name cleanup ignores, then move into place locked.
+  Long tool-heavy sessions also hit fewer `read_limit` skips: queries no longer
+  charge their logical budget for entries they walk past without reading.
+  Sidechain facts from the prepared disk cache stay in memory instead of being
+  re-read and re-hashed by later queries. This requires `cc-transcript` 14.29.1.
 
 ## [12.65.1] - 2026-09-30
 
