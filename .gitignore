@@ -63,5 +63,4 @@ site/
 # captain-hook repo-local
 stress/reports/
 captain_hook/langs.py
-captain_hook/guard_literal.py
 capt_hook_client/guard_literal.py
