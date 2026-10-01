@@ -219,6 +219,7 @@ def llm_primitive[M: BaseModel](
     tool_results: bool = False,
     budget: Budget | None = None,
     diff: bool | str = False,
+    on_incomplete: str | None = None,
 ) -> None:
     prompt = str(prompt)
     sig = resolve_signals(signals)
@@ -281,6 +282,7 @@ def llm_primitive[M: BaseModel](
         async_=async_,
         skip_planning_agents=action is not Action.block,
         advisory_on_deny=advisory_on_deny,
+        on_incomplete=on_incomplete,
     )(handler)
 
 
@@ -309,6 +311,7 @@ def llm_gate(
     tool_results: bool = False,
     budget: Budget | None = None,
     diff: bool | str = False,
+    on_incomplete: str | None = None,
 ) -> None:
     """Register an LLM-powered blocking gate.
 
@@ -357,6 +360,10 @@ def llm_gate(
             Pass ``False`` for a Stop gate that must judge every closing message: teammate and
             cross-session messages wake an orchestrator without opening a new turn, so one
             fire would otherwise silence the gate until the user next types.
+        on_incomplete: Fail closed. When set, a call the gate cannot judge — its transcript
+            evidence came back incomplete, or the caller's deadline left it unrun — is blocked
+            with this remediation instead of skipped. Use it for permission gates, where a
+            skipped judge lets the guarded action through.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -395,6 +402,7 @@ def llm_gate(
         tool_results=tool_results,
         budget=budget,
         diff=diff,
+        on_incomplete=on_incomplete,
     )
 
 

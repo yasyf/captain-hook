@@ -311,6 +311,12 @@ class TestLlmGateDefaultEvents:
         assert len(_state.hooks) == 1
         assert _state.hooks[0].spec.events == (Event.Stop | Event.SubagentStop)
 
+    def test_llm_gate_fails_open_unless_on_incomplete_is_set(self, tmp_path: Path) -> None:
+        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
+        register_llm_gate("Check that", message="BLOCKED", when=lambda evt: True, on_incomplete="Ask again.")
+
+        assert [hook.spec.on_incomplete for hook in _state.hooks] == [None, "Ask again."]
+
 
 class TestLlmNudgeDefaultEvents:
     def test_llm_nudge_default_events(self, tmp_path: Path) -> None:

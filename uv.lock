@@ -277,7 +277,7 @@ docs = [
 requires-dist = [
     { name = "ast-grep-py", specifier = ">=0.44,<0.45" },
     { name = "capt-hook", marker = "extra == 'dev'" },
-    { name = "cc-transcript", extras = ["judge"], specifier = "==14.32.0" },
+    { name = "cc-transcript", extras = ["judge"], specifier = "==14.32.1" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
     { name = "funcy", specifier = ">=2.0" },
@@ -320,17 +320,17 @@ wheels = [
 
 [[package]]
 name = "cc-transcript"
-version = "14.32.0"
+version = "14.32.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "orjson" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/f9/39cf55898aee45b69e0ea96e0da82c47c084e645ed5f2f78b3ca39a661f6/cc_transcript-14.32.0.tar.gz", hash = "sha256:515863218a67f4b86780e3463102cb6d6b40fc6d2cff993e56d73b62e741b808", size = 12443152, upload-time = "2026-10-01T11:20:37.659Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/aa/51/5c2ec999ab8c2c2a31fa680290d372c863ac78d1c52630ee5f4ff7d6a51c/cc_transcript-14.32.1.tar.gz", hash = "sha256:e15484b6fe6dc82722716cf4e61c010b00df214bd756a9d1eb57b03b5cdae811", size = 12444137, upload-time = "2026-10-01T18:43:23.187Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/d5/02232438cb14255e9e2d327fcd6d51e44b104155e4707aa61affb52afad8/cc_transcript-14.32.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:77dedd3609effa04ae3a759448b60d0fc1f877d073cada05740aee24675fca69", size = 30085322, upload-time = "2026-10-01T11:20:27.029Z" },
-    { url = "https://files.pythonhosted.org/packages/48/13/12fa07bb13384dfe3c712dc4fadf77f13d4225b727a659a493bb9d950ed1/cc_transcript-14.32.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:84efbae40c7e59d8405170922bc609e4dc00293b01b607be7e1724db0a648d93", size = 30619870, upload-time = "2026-10-01T11:20:30.008Z" },
-    { url = "https://files.pythonhosted.org/packages/74/e3/29ea12be2106cc661cf6bd1a115a0cd29223bef8a54cdcc92f243eda1488/cc_transcript-14.32.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ed8047eebdb509aae7ac4c875c33746d4e46f565dc927bce0e96ffa900d8c1a9", size = 30279400, upload-time = "2026-10-01T11:20:32.664Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/0b/c34e3e5d1820fcc60c1b23bd87503cf370b4bfebb45e922452b997c820c6/cc_transcript-14.32.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7e376e64b757229533cfaf8585d4ed52244e0b083bc3d3885ffc2d029896303d", size = 30866328, upload-time = "2026-10-01T11:20:35.358Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/9e/84de9f115e1886d278f5ec8b1e0e28eee4767b621b398f9cedabb94f570d/cc_transcript-14.32.1-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:787b341228668270706adf400d9638ffbf9b58dfc91b02a5527b51cac73fc289", size = 30084601, upload-time = "2026-10-01T18:43:11.517Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/8a/ddc28f68957944f4f1b9a113bf6d440b3efd79261b4cdddf713e8b8bfea7/cc_transcript-14.32.1-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:5e34edd943d2d700bb0168aea9770f6ea248bfe6432418d6df5eeed523e3260e", size = 30620312, upload-time = "2026-10-01T18:43:14.585Z" },
+    { url = "https://files.pythonhosted.org/packages/da/22/7b1af7d26813faa84ca31105a198522036e2899d82e3c0101b18ddee5427/cc_transcript-14.32.1-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:11b8067504223fbd13da675a51be720e34a451c011b63d6d7cb80e1e799fad9c", size = 30300173, upload-time = "2026-10-01T18:43:17.518Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/07/c5a0c84dec2f5cb3f9660310e49d5ca949d1ec5c4b02e1694d1005134455/cc_transcript-14.32.1-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:68bc4d47211604db378f9bd51672dc7f279cd95f8bc9fe97af1a5fec037a0e72", size = 30887014, upload-time = "2026-10-01T18:43:20.264Z" },
 ]
 
 [package.optional-dependencies]
@@ -671,7 +671,7 @@ wheels = [
 
 [[package]]
 name = "great-docs"
-version = "0.15.1.dev1+g2a9315baf"
+version = "0.14.2.dev115+g2a9315baf"
 source = { git = "https://github.com/yasyf/great-docs?rev=2a9315baf34a4c90f3512a2199215fe1b8755ff4#2a9315baf34a4c90f3512a2199215fe1b8755ff4" }
 dependencies = [
     { name = "click" },
