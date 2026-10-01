@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.70.2] - 2026-10-01
+
+### Fixed
+
+- **`UserSaid(scope="session")` reads prompts, not whole turns.** On a snapshot
+  transcript it asks for the window's prompts instead of materializing every
+  turn, so a turn whose events exceed the 1 MiB record bound no longer skips the
+  hook with `output_limit`. The review-pass gate on `gt submit` and
+  `ccx vcs ship` uses it and now fires on long lane transcripts.
+
 ## [12.70.1] - 2026-10-01
 
 ### Fixed

@@ -216,12 +216,17 @@ class UserSaid(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         from captain_hook.signals.nlp import scan_text
+        from captain_hook.snapshots.client import RemoteSession
 
-        return (
-            evt.ctx.turn.matches(*self.patterns)
-            if self.scope == "turn"
-            else any(scan_text(turn.prompt, self.patterns) for turn in evt.ctx.t.turns if turn.prompt)
+        if self.scope == "turn":
+            return evt.ctx.turn.matches(*self.patterns)
+        t = evt.ctx.t
+        prompts = (
+            t.prompts(selection="first", count=len(t))
+            if isinstance(t, RemoteSession)
+            else [turn.prompt for turn in t.turns if turn.prompt]
         )
+        return any(scan_text(prompt, self.patterns) for prompt in prompts)
 
 
 class AllEditsUnder(CustomCondition):
