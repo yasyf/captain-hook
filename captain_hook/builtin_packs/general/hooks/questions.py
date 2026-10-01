@@ -20,6 +20,7 @@ from captain_hook import (
 from captain_hook.state import PrimitiveState
 
 ASK_TOOLS = "AskUserQuestion|ExitPlanMode"
+NO_COMMAND_FOR_YOU = r"(?!(?:(?!\n\n)[^.])*?[`\n]!\s)"
 
 PROSE_DECISION = (
     "One decision for you: the firewall rule is what forces three hand-rolled scripts. Keep it, and an "
@@ -98,6 +99,12 @@ APPROVAL_CONDITIONS = (
     "- Any role grant it needs is a separate small PR, and that apply comes to you.\n"
     "\n"
     "The three scaffold PRs are green and go to the desk."
+)
+
+SSO_LOGIN = (
+    "Both already handled (lanes stopped, tasks deleted). Nothing new. Waiting on your SSO login "
+    "(`! aws sso login --sso-session forge` and `! aws login`); every lane that depends on it is polling "
+    "and will act on its own once it succeeds."
 )
 
 DESK_WAKE = (
@@ -179,7 +186,12 @@ Do NOT block when:
   message, a log line, a draft), not in the agent's own words to the user;
 - the message reports finished work with nothing left on the user;
 - the decision is on a live cc-present board (a `present` skill or `cc-present start` in this
-  session) and the prose refers the user to it.
+  session) and the prose refers the user to it;
+- the only thing left on the user is an action the agent cannot take for them, such as running
+  a command (a login, an MFA tap), and the message names the exact command, often in the
+  `! <cmd>` form: "Waiting on your SSO login (`! aws sso login`)". That is an action, not a
+  choice, and prose naming the command is the right way to ask for it. A choice in the same
+  message still counts.
 
 When uncertain, return block=false. Put your reasoning (under 40 words, quoting the prose)
 in `reasoning`.""",
@@ -192,10 +204,12 @@ in `reasoning`.""",
     signals=Signals(
         [
             Signal(pattern=r"(?i)\bone decision for you\b", weight=2),
-            Signal(pattern=r"(?i)\b(?:holding|waiting) (?:for|on) (?:your|you)\b", weight=2),
+            Signal(pattern=rf"(?i)\b(?:holding|waiting) (?:for|on) (?:your|you)\b{NO_COMMAND_FOR_YOU}", weight=2),
             Signal(pattern=r"(?i)\b(?:still|now|back) (?:with|on) you\b", weight=2),
             Signal(pattern=r"(?i)\bheld (?:for|on|until) (?:your|you)\b", weight=2),
-            Signal(pattern=r"(?i)\b(?:needs?|awaits?|awaiting|requires?) (?:your|you)\b", weight=2),
+            Signal(
+                pattern=rf"(?i)\b(?:needs?|awaits?|awaiting|requires?) (?:your|you)\b{NO_COMMAND_FOR_YOU}", weight=2
+            ),
             Signal(
                 pattern=r"(?i)\byour (?:\w+ ){0,2}(?:reads?|reviews?|approvals?|sign-?offs?|clicks?|hand[- ]?steps?)\b",
                 weight=2,
@@ -354,6 +368,16 @@ in `reasoning`.""",
             ]
         ): Allow(),
         Input(transcript=[T.assistant("Shipped the fix; CI is green.")]): Allow(),
+        Input(transcript=[T.assistant(SSO_LOGIN)]): Allow(),
+        Input(
+            transcript=[T.assistant("The S3 proof is blocked.\n\nWaiting on your SSO login:\n```\n! aws login\n```")]
+        ): Allow(),
+        Input(transcript=[T.assistant("Waiting on your SSO login before the S3 proof can run.")]): Block(
+            pattern="AskUserQuestion"
+        ),
+        Input(
+            transcript=[T.assistant(f"{SSO_LOGIN}\n\nAlso your call: rebase onto dev or cherry-pick the fix?")]
+        ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[T.assistant("Both pool PRs are merged; nothing is left to decide.")],
             llm={"block": False},
