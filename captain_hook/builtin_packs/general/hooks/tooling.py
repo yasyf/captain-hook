@@ -113,7 +113,8 @@ def first_output_line(text: str) -> str:
 
 def repeated_command(evt: BaseHookEvent, raw: str) -> bool:
     exact = re.compile("^" + re.escape(raw).replace("\\ ", " ") + "$")
-    return evt.ctx.t.tool_calls.named("Bash").where_input(command=exact).count() >= REPEATS
+    calls = evt.ctx.t.tool_calls.named("Bash").where_input(command=exact)
+    return calls.count() + calls.failed().count() >= REPEATS
 
 
 def detect_bash(evt: BaseHookEvent) -> Detection | None:
@@ -175,6 +176,7 @@ def tooling_nudge(events: Event, tools: tuple[str, ...], tests: InlineTests) -> 
         only_if=[Tool(*tools)],
         events=events,
         when=claim,
+        max_fires=None,
         contexts=[ToolingSignal()],
         agent=False,
         transcript=True,
@@ -182,8 +184,8 @@ def tooling_nudge(events: Event, tools: tuple[str, ...], tests: InlineTests) -> 
     )
 
 
-def bash_calls(command: str, n: int) -> list[dict[str, object]]:
-    return [T.assistant(T.tool("Bash", command=command)) for _ in range(n)]
+def bash_calls(command: str, n: int, *, is_error: bool = False) -> list[dict[str, object]]:
+    return [line for _ in range(n) for line in T.tool_turn("Bash", command=command, is_error=is_error)]
 
 
 tooling_nudge(
@@ -236,6 +238,10 @@ tooling_nudge(
             tool="Agent",
             tool_input={"prompt": "land the stack", "subagent_type": "lane"},
             output="Landed. tooling defect: gt restack replays merged commits.",
+        ): Warn(pattern="tooling lane"),
+        Input(
+            command="ccx vcs pr status 12",
+            transcript=bash_calls("ccx vcs pr status 12", 3, is_error=True),
         ): Warn(pattern="tooling lane"),
         Input(
             command="orca terminal send w1 'status?'",
