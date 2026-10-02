@@ -12,14 +12,19 @@ from captain_hook.bindings import Ref, Resolved, segments
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
     GUARDED_PROGRAMS,
+    INLINE_OWNER_ANSWER,
+    INLINE_OWNER_TERMINAL,
     KILL_FIX,
     LAUNCHERS,
     NEGATIVE_TARGET,
     RENICE_FIX,
     Scan,
+    Unreadable,
+    answer_names,
     applescripts,
     block_first,
     clip,
+    describe,
     describe_target,
     double_quoted,
     first_operand,
@@ -27,6 +32,8 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     guarded,
     head_reason,
     hidden_behind,
+    hosts_agent,
+    is_agent,
     literal_pid,
     nested,
     pid_verdict,
@@ -132,6 +139,8 @@ ORCA_PAYLOADS = {
 }
 HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
+ORCA_CLOSE_SCOPES = frozenset({"all", "worktree", "tab"})
+OWNER_FIX = "Add `# ccx:owner-authorized=<cc-notes answer id>`; its body must name this terminal id."
 KEY_ALIASES = {
     "command": "cmd",
     "meta": "cmd",
@@ -321,6 +330,20 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
         guarded(command='X=echo; f() { echo }; "$X" claude; }; X=pkill; f'): Block(pattern="named at run time"),
         guarded(command='for X in {echo,pkill}; do "$X" claude; done'): Block(pattern="text the guard cannot read"),
         guarded(command="PWD=/tmp; cd /; $PWD/kill 14575"): Block(pattern="named at run time"),
+        guarded(
+            command=(
+                "S=/Users/yasyf/.claude/scratch/release-v3; cat > $S/briefs/s3-2.md <<'EOF'\n# s3-2 brief\n"
+                "Report lines to orca-desk-from-workers.md, then worker_done.\nEOF\n"
+                "cat $S/briefs/common-rules.md >> $S/briefs/s3-2.md\n"
+                "ORCA_LAUNCH_BOOT_SECONDS=180 $S/launch-explicit.sh s3-2 sonnet high $S/briefs/s3-2.md 2>&1 | tail -3"
+            )
+        ): Allow(),
+        guarded(
+            command=(
+                "false && S=/tmp; cat > $S/briefs/s3-2.md <<'EOF'\nReport to orca-desk-from-workers.md.\nEOF\n"
+                "$S/launch-explicit.sh s3-2"
+            )
+        ): Block(pattern="text the guard cannot read"),
         guarded(command='cd ~/.orca/workspaces/x && for g in a.ts b.ts; do eval "timeout 120 bun $g"; done'): Allow(),
         guarded(command="~/bin/kill 14575"): Allow(),
         guarded(command="kill 14575"): Allow(),
@@ -427,6 +450,8 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         ),
         guarded(command="kill 1445"): Block(pattern="the Orca app"),
         guarded(command="kill -9 14575"): Block(pattern="an agent session"),
+        guarded(command=f"kill 16002 # ccx:owner-authorized={INLINE_OWNER_ANSWER}"): Block(pattern="an agent session"),
+        guarded(command="kill 15001"): Block(pattern="pid 15001"),
         guarded(command="kill 14545"): Block(pattern="a terminal host"),
         guarded(command="kill 14550"): Block(pattern="an ancestor of a protected process"),
         guarded(command="kill 900"): Block(pattern="the Captain Hook host"),
@@ -704,7 +729,58 @@ def help_only(call: Call, values: dict[str, tuple[Scalar | None, ...]]) -> bool:
     return len(path) == len(call.args) - 1 and len(path) <= 2 and (not path or path[0] in ORCA_GROUPS)
 
 
-def orca_ending_verdict(call: Call) -> str | None:
+def closed_terminal(call: Call, arguments: Arguments) -> str | None:
+    values = arguments.values
+    if (
+        call.substituted
+        or call.wrappers
+        or not arguments.complete
+        or not arguments.operands_complete
+        or orca_command(arguments) != ("terminal", "close")
+        or values.get("rest")
+        or not ORCA_CLOSE_SCOPES.isdisjoint(values)
+    ):
+        return None
+    words = arguments.words.get("terminal", ())
+    handles = values.get("terminal", ())
+    if len(words) != 1 or words[0].value is None or words[0].expandable or not isinstance(handles[0], str):
+        return None
+    return None if handles[0].startswith("-") else handles[0]
+
+
+def closes_one_terminal(call: Call) -> bool:
+    return call.name == "orca" and closed_terminal(call, ORCA.bind(call)) is not None
+
+
+def single_close(call: Call, scan: Scan) -> bool:
+    return all(other is not call for other in scan.respelled) and sum(map(closes_one_terminal, scan.literal_calls)) == 1
+
+
+def terminal_close_denied(spelling: str, handle: str, detail: str) -> str:
+    return f"BLOCKED: `{spelling}` closes terminal `{clip(handle, 48)}`{detail}. {OWNER_FIX}"
+
+
+def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewriteEvent) -> str | None:
+    deny = partial(terminal_close_denied, clip(call.source.raw, 50), handle)
+    if isinstance(answer := evt.annotations.get("owner-authorized"), str):
+        match answer_names(answer, handle, evt.cwd):
+            case True:
+                return None
+            case Unreadable(reason):
+                return deny(f", and cc-notes answer `{clip(answer, 20)}` was not read ({reason})")
+            case _:
+                return deny(f", and cc-notes answer `{clip(answer, 20)}` does not name it")
+    match scan.facts.terminal_tree(handle):
+        case Unreadable(reason):
+            return deny(f" ({reason})")
+        case (root, *below):
+            agent = next((row for row in below if hosts_agent(row)), root if is_agent(root) else None)
+            return None if agent is None else deny(f", where {describe(agent)} runs")
+        case _:
+            return deny(" (its process tree could not be read)")
+
+
+def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | None:
     if call.name != "orca":
         return None
     spelling = spell(call)
@@ -712,6 +788,8 @@ def orca_ending_verdict(call: Call) -> str | None:
     values = arguments.values
     if help_only(call, values):
         return None
+    if (handle := closed_terminal(call, arguments)) is not None and single_close(call, scan):
+        return terminal_close_verdict(call, handle, scan, evt)
     found = next(
         (
             (group, verb)
@@ -785,6 +863,59 @@ def orca_vm_run_flag(call: Call) -> str | None:
                 "close --terminal $t 2>&1 | tail -1; done"
             )
         ): Block(pattern="closes terminal"),
+        guarded(
+            command=(
+                f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json "
+                f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+            )
+        ): Allow(),
+        guarded(
+            command=f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json # ccx:raw owner-authorized=R740"
+        ): Block(pattern="`# ccx:owner-authorized=<cc-notes answer id>`"),
+        guarded(
+            command=f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json # ccx:owner-authorized=r740"
+        ): Block(pattern="cc-notes answer `r740` was not read"),
+        guarded(
+            command=f"orca terminal close --terminal term_agent2 --json # ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+        ): Block(pattern="does not name it"),
+        guarded(
+            command=(
+                f"T={INLINE_OWNER_TERMINAL}; orca terminal close --terminal $T "
+                f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+            )
+        ): Block(pattern="leave ending them to the owner"),
+        guarded(
+            command=(
+                f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --terminal term_agent "
+                f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+            )
+        ): Block(),
+        guarded(
+            command=(
+                "orca terminal close --terminal term_agent; orca terminal close --terminal term_agent "
+                f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+            )
+        ): Block(pattern="leave ending them to the owner"),
+        guarded(
+            command=f"timeout 5 orca terminal close --terminal term_agent # ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+        ): Block(),
+        guarded(
+            command=f"orca terminal close --terminal term_agent --all # ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+        ): Block(),
+        guarded(
+            command=f"orca orchestration worker-stop --dispatch ctx-1 # ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+        ): Block(pattern="worker-stop ends the worker"),
+        guarded(command="orca terminal close --terminal term_idle --json"): Allow(),
+        guarded(command="orca terminal close --terminal term_agent --json"): Block(
+            pattern=r"where pid 16002 \(`claude"
+        ),
+        guarded(command="orca terminal close --terminal term_shim"): Block(pattern=r"where pid 17002 \(`"),
+        guarded(command="orca terminal close --terminal term_gone"): Block(pattern="is not in the process table"),
+        guarded(command="orca terminal close --terminal term_nope"): Block(pattern="Orca reports no process"),
+        guarded(command="orca terminal close --terminal term_idle; orca terminal close --terminal term_idle"): Block(),
+        guarded(command="for x in term_idle; do orca terminal close --terminal $x; done"): Block(
+            pattern="leave ending them to the owner"
+        ),
         guarded(command="orca terminal close"): Block(pattern="closes the current terminal"),
         guarded(command="orca terminal close --tab"): Block(pattern="the current tab's terminal"),
         guarded(command="orca terminal close --worktree active --all"): Block(
@@ -861,7 +992,8 @@ def orca_vm_run_flag(call: Call) -> str | None:
     }
 )
 def orca_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(orca_ending_verdict, Scan.of(evt).literal_calls))
+    scan = Scan.of(evt)
+    return block_first(evt, (orca_ending_verdict(call, scan, evt) for call in scan.literal_calls))
 
 
 def orca_send_verdict(call: Call) -> str | None:

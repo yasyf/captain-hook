@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An owner-recorded cc-notes answer authorizes one `orca terminal close`.** A Bash comment
+  `# ccx:owner-authorized=<answer id>` lets the session guard allow `orca terminal close
+  --terminal <id>` when `ccn answer show <id>` returns a body naming that exact terminal id and
+  the command closes one literally spelled terminal. A missing `ccn`, a failed or timed-out
+  lookup, an answer that does not name the id, a variable id, a loop, or any other
+  session-ending verb keeps the deny, whose copy now names the annotation.
+
 ### Fixed
 
 - **A `# ccx:raw` comment no longer records a tooling refusal.** The raw escape is sanctioned,
@@ -13,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Only a first-party tool's own failed output records a refusal now. That covers cc-slack session
   and `no_watch` refusals and GitHub quota refusals from a failed `ccx`, `gh`, or `stack-enqueue`
   call.
+- **Closing an Orca terminal that hosts no agent is allowed.** The session guard resolves the
+  terminal's process through `orca terminal show` and `orca diagnostics memory`, reads its
+  subtree from the process table, and allows the close when nothing below the shell is an agent,
+  a protected program, or a `cc-*`/`orca-*` shim. An unreadable table, an unknown terminal, or a
+  process Orca cannot name still denies; `kill` of the bare shell's pid is unchanged.
 - **Adding lines to an over-budget comment blocks again.** The verbose-comment block now covers
   an edit that lengthens a run already over budget; a same-length reword still only warns.
 - **The `git stash` block names a drop it allows.** Its copy resolves the entry's `stash@{N}`

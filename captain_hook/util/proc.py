@@ -55,6 +55,21 @@ class ProcessTable:
             return None
         return next((candidate for candidate in (row, *self.ancestors(pid)) if predicate(candidate)), None)
 
+    def descendants(self, pid: int) -> tuple[ProcessRow, ...]:
+        children: dict[int, list[ProcessRow]] = {}
+        for row in self.rows.values():
+            children.setdefault(row.ppid, []).append(row)
+        found: list[ProcessRow] = []
+        seen = {pid}
+        pending = [pid]
+        while pending:
+            for child in children.get(pending.pop(), ()):
+                if child.pid not in seen:
+                    seen.add(child.pid)
+                    found.append(child)
+                    pending.append(child.pid)
+        return tuple(found)
+
 
 def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
     try:
