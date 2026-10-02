@@ -51,6 +51,7 @@ GUARDED_WORD: re.Pattern[str] = re.compile(GUARDED, re.IGNORECASE | re.ASCII)
 QUOTING_CHARS: re.Pattern[str] = re.compile(QUOTING)
 FOLD_TABLE: dict[int, str] = str.maketrans(FOLDS)
 ASSIGNMENT: re.Pattern[str] = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")
+LITERAL_HEAD: re.Pattern[str] = re.compile("[A-Za-z0-9_./~+-]+")
 OPAQUE_SHELL: tuple[str, ...] = ("$(", "`", "<(", ">(")
 SEGMENT_BREAKS: frozenset[str] = frozenset(";\n|()")
 QUOTED_ESCAPES: frozenset[str] = frozenset('$`"\\\n')
@@ -79,7 +80,10 @@ def first_party_command(tool_input: object) -> bool:
     if not isinstance(tool_input, dict):
         return False
     command = cast(dict[object, object], tool_input).get("command")
-    if not isinstance(command, str) or any(opaque in command for opaque in OPAQUE_SHELL):
+    if not isinstance(command, str):
+        return False
+    joined = command.replace("\\\n", "")
+    if any(opaque in joined for opaque in OPAQUE_SHELL):
         return False
     segments = shell_segments(command)
     return segments is not None and all(exempt_segment(words) for words in segments)
@@ -87,8 +91,10 @@ def first_party_command(tool_input: object) -> bool:
 
 def exempt_segment(words: list[tuple[str, str, bool]]) -> bool:
     for raw, cooked, redirect in words:
+        if redirect:
+            return False
         if ASSIGNMENT.match(raw) is None:
-            return not redirect and cooked.rpartition("/")[2] in EXEMPT_HEADS
+            return LITERAL_HEAD.fullmatch(cooked) is not None and cooked.rpartition("/")[2] in EXEMPT_HEADS
     return True
 
 

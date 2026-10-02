@@ -34,6 +34,7 @@ var (
 	quoting     = regexp.MustCompile(guard.Quoting)
 	folds       = loadFolds(guard.Folds)
 	assignment  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	literalHead = regexp.MustCompile(`^[A-Za-z0-9_./~+-]+$`)
 	opaqueShell = []string{"$(", "`", "<(", ">("}
 )
 
@@ -102,7 +103,11 @@ func firstPartyCommand(toolInput any) bool {
 		return false
 	}
 	command, ok := fields["command"].(string)
-	if !ok || slices.ContainsFunc(opaqueShell, func(opaque string) bool { return strings.Contains(command, opaque) }) {
+	if !ok {
+		return false
+	}
+	joined := strings.ReplaceAll(command, "\\\n", "")
+	if slices.ContainsFunc(opaqueShell, func(opaque string) bool { return strings.Contains(joined, opaque) }) {
 		return false
 	}
 	segments, ok := shellSegments(command)
@@ -111,8 +116,12 @@ func firstPartyCommand(toolInput any) bool {
 
 func exemptSegment(words []shellWord) bool {
 	for _, word := range words {
-		if !assignment.MatchString(word.raw) {
-			return !word.redirect && slices.Contains(guard.ExemptHeads, word.cooked[strings.LastIndex(word.cooked, "/")+1:])
+		switch {
+		case word.redirect:
+			return false
+		case !assignment.MatchString(word.raw):
+			return literalHead.MatchString(word.cooked) &&
+				slices.Contains(guard.ExemptHeads, word.cooked[strings.LastIndex(word.cooked, "/")+1:])
 		}
 	}
 	return true

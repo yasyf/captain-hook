@@ -240,6 +240,36 @@
     "mandatory": true
   },
   {
+    "name": "redirection glued to an assignment before the head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "X=x> /tmp/echo kill -TERM 1234"}},
+    "mandatory": true
+  },
+  {
+    "name": "redirection between an assignment and the head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "X=1 >/tmp/echo kill -TERM 1234"}},
+    "mandatory": true
+  },
+  {
+    "name": "line continuation splits a command substitution",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "echo \"$\\\n(kill -TERM 1234)\""}},
+    "mandatory": true
+  },
+  {
+    "name": "word-split variable ahead of a first-party basename",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "x='kill -TERM 1234 '; $x/echo"}},
+    "mandatory": true
+  },
+  {
+    "name": "glob ahead of a first-party basename",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "/tmp/*/echo kill 1"}},
+    "mandatory": true
+  },
+  {
     "name": "unterminated quote after a first-party head",
     "event": "PreToolUse",
     "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x 'kill"}},

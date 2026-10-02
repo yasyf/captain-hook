@@ -334,6 +334,7 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         "QUOTING_CHARS: re.Pattern[str] = re.compile(QUOTING)\n"
         "FOLD_TABLE: dict[int, str] = str.maketrans(FOLDS)\n"
         'ASSIGNMENT: re.Pattern[str] = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")\n'
+        'LITERAL_HEAD: re.Pattern[str] = re.compile("[A-Za-z0-9_./~+-]+")\n'
         'OPAQUE_SHELL: tuple[str, ...] = ("$(", "`", "<(", ">(")\n'
         'SEGMENT_BREAKS: frozenset[str] = frozenset(";\\n|()")\n'
         "QUOTED_ESCAPES: frozenset[str] = frozenset('$`\"\\\\\\n')\n\n\n"
@@ -357,14 +358,19 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         "    if not isinstance(tool_input, dict):\n"
         "        return False\n"
         '    command = cast(dict[object, object], tool_input).get("command")\n'
-        "    if not isinstance(command, str) or any(opaque in command for opaque in OPAQUE_SHELL):\n"
+        "    if not isinstance(command, str):\n"
+        "        return False\n"
+        '    joined = command.replace("\\\\\\n", "")\n'
+        "    if any(opaque in joined for opaque in OPAQUE_SHELL):\n"
         "        return False\n"
         "    segments = shell_segments(command)\n"
         "    return segments is not None and all(exempt_segment(words) for words in segments)\n\n\n"
         "def exempt_segment(words: list[tuple[str, str, bool]]) -> bool:\n"
         "    for raw, cooked, redirect in words:\n"
+        "        if redirect:\n"
+        "            return False\n"
         "        if ASSIGNMENT.match(raw) is None:\n"
-        '            return not redirect and cooked.rpartition("/")[2] in EXEMPT_HEADS\n'
+        '            return LITERAL_HEAD.fullmatch(cooked) is not None and cooked.rpartition("/")[2] in EXEMPT_HEADS\n'
         "    return True\n\n\n"
         "def shell_segments(command: str) -> list[list[tuple[str, str, bool]]] | None:\n"
         "    segments: list[list[tuple[str, str, bool]]] = [[]]\n"
