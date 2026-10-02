@@ -328,11 +328,20 @@ def root_transcript(path: str | Path, events: int) -> LazyTranscript:
 def root_excerpt(path: str | Path, needles: Sequence[str], *, around: int = 2) -> Session:
     """The events of a lane's root session transcript whose line contains any of ``needles``, each with
     ``around`` events either side, streamed from the whole file so an answer far older than the tail
-    still reaches the judge. A needle matches as typed or as its JSON-escaped form.
+    still reaches the judge. A needle matches as typed or JSON-escaped, with or without its non-ASCII escaped.
     """
     from cc_transcript.parser import parse_events_from_bytes
 
-    forms = {form for needle in needles if needle for form in (needle.encode(), json.dumps(needle)[1:-1].encode())}
+    forms = {
+        form
+        for needle in needles
+        if needle
+        for form in (
+            needle.encode(),
+            json.dumps(needle)[1:-1].encode(),
+            json.dumps(needle, ensure_ascii=False)[1:-1].encode(),
+        )
+    }
     kept: list[bytes] = []
     before: deque[bytes] = deque(maxlen=around)
     after = 0

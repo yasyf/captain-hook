@@ -633,7 +633,13 @@ class TestCallLlm:
 
         chatter = [T.user(f"status {i}") for i in range(400)]
         root = fixture_file(
-            [T.user("before"), T.user('Yes, post "this" exact text'), T.user("after"), *chatter, T.user("newest")]
+            [
+                T.user("before"),
+                T.user('Yes, post "this" exact text'),
+                T.user("after"),
+                *chatter,
+                T.user("ship it — now"),
+            ]
         )
         ctx = HookContext(
             session=SessionStore(None),
@@ -646,6 +652,7 @@ class TestCallLlm:
             "user: after\n\nuser: status 0\n</root_excerpt>"
         )
         assert ctx.root_excerpt_block(["never said"]) == ""
+        assert "user: ship it — now" in ctx.root_excerpt_block(["ship it — now"])
         asked = ctx.assemble_prompt(
             Prompt().system("judge"),
             (),
