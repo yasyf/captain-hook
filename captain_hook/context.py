@@ -441,6 +441,7 @@ class HookContext:
         backend: LlmBackend | None = None,
         attempts: int | None = None,
         tools: tuple[str, ...] | None = None,
+        evidence: bool = True,
         response_model: type[M],
         **kwargs: Any,
     ) -> M: ...
@@ -461,6 +462,7 @@ class HookContext:
         backend: LlmBackend | None = None,
         attempts: int | None = None,
         tools: tuple[str, ...] | None = None,
+        evidence: bool = True,
         response_model: None = None,
         **kwargs: Any,
     ) -> str: ...
@@ -480,6 +482,7 @@ class HookContext:
         backend: LlmBackend | None = None,
         attempts: int | None = None,
         tools: tuple[str, ...] | None = None,
+        evidence: bool = True,
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
@@ -489,6 +492,8 @@ class HookContext:
         built-in tools the model may use (``()`` for none); either one routes the call through a
         :class:`spawnllm.RunSpec` of its own, and ``None`` keeps spawnllm's defaults. A deadline
         already passed once the backend is selected raises ``TimeoutError`` without a provider call.
+        ``evidence=False`` records no transcript evidence for the call, so the session transcript is
+        never resolved: the lane for a prompt built from no transcript at all, such as a host event's.
         """
         from spawnllm import BackendCallError, call_sync, extract_sync
 
@@ -508,7 +513,8 @@ class HookContext:
         prompt = self.assemble_prompt(
             template, args, kwargs, transcript=transcript, tool_results=tool_results, budget=budget, diff_text=diff_text
         )
-        self.release_preparation(prompt)
+        if evidence:
+            self.release_preparation(prompt)
         cwd = resolve_project_dir()
         timeout = reqenv.clamp_timeout(timeout)
         try:

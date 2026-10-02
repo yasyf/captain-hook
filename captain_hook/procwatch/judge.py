@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
+from loguru import logger
 from pydantic import BaseModel, ValidationError
 from spawnllm import BackendCallError
 
 from captain_hook.procwatch import screen
 from captain_hook.procwatch.state import claim_judgement, release_judgement, settle_judgement
 from captain_hook.prompt import Prompt
-from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.util import reqenv
 from captain_hook.util.proc import Unreadable
 
@@ -91,15 +91,10 @@ def ask(evt: ResourcePressureEvent, settings: PerformanceSettings, facts: JudgeF
                 response_model=DisposableVerdict,
                 attempts=1,
                 tools=(),
+                evidence=False,
             )
-    except (
-        BackendCallError,
-        ValidationError,
-        TimeoutError,
-        OSError,
-        subprocess.SubprocessError,
-        EvidenceIncomplete,
-    ):
+    except (BackendCallError, ValidationError, TimeoutError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        logger.bind(error=type(exc).__name__).warning("judge call failed; the child is not disposable: {}", exc)
         return False
     return verdict.disposable
 
