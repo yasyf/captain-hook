@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from itertools import takewhile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,7 +29,6 @@ from captain_hook import (
     on,
     workflow_state,
 )
-from captain_hook.annotations import comment_pairs
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -48,8 +46,6 @@ REPEATS = 3
 SCOPE = "tooling_nudge"
 EVIDENCE_CHARS = 240
 RESET = re.compile(r"rate-limited until (?P<at>\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))")
-VERB_WORD = re.compile(r"[a-z][\w-]*")
-RAW_TOOLS = frozenset({"ccx", "gt", "gh", "orca", "cc-slack"})
 
 PROMPT = """You are a senior engineer watching another engineer ("the agent") mid-task. A
 deterministic scan flagged the tool call that just ran as a possible TOOLING DEFECT or
@@ -280,16 +276,6 @@ def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
                 evidence=excerpt(text, found),
                 expires=signature.expires(text),
             )
-    if (
-        evt.command
-        and "raw" in dict(comment_pairs(raw := evt.command.raw))
-        and (call := next((call for call in evt.command.calls() if argv(call)[0] in RAW_TOOLS), None))
-    ):
-        verb = Verb(*list(takewhile(VERB_WORD.fullmatch, argv(call)))[:3])
-        evidence = f"the step ran raw instead: `{raw[:EVIDENCE_CHARS]}`"
-        return f"ccx-raw:{'-'.join(verb.words)}", Refusal(
-            tool="ccx", verbs=(verb.text,), evidence=evidence, expires=None
-        )
     return None
 
 
@@ -479,13 +465,6 @@ QUOTA = Refusal(
     expires=LIVE,
 )
 QUOTA_REFUSED = ToolingRefusals(refusals={"github-quota": QUOTA})
-RAW_REFUSED = ToolingRefusals(
-    refusals={
-        "ccx-raw:gh-pr-edit": Refusal(
-            tool="ccx", verbs=("gh pr edit",), evidence="gh pr edit 9  # ccx:raw", expires=None
-        )
-    }
-)
 SLACK_REFUSED = ToolingRefusals(
     refusals={
         "cc-slack-session": Refusal(
@@ -544,30 +523,13 @@ CC_SLACK_CLI_SYNC = (
             command="ccx code read docs/pr-status.md",
             output="`pr watch` prints `rate-limited until <next probe>` and sleeps until the GraphQL quota resets.",
         ): Allow(),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Warn(pattern=r"`ccx: tooling-lane=ccx-raw:gh-pr-edit`"),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Allow(),
+        Input(command="cd wt && gt submit --no-interactive  # ccx:raw"): Allow(),
         Input(
-            command="gh pr edit 123 --base dev  # ccx:raw",
-            agent_id="a1b2c3",
-            seen={SCOPE: ["ccx-raw:gh-pr-edit:main"]},
-        ): Warn(pattern="report the refusal to your orchestrator"),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw", seen={SCOPE: ["ccx-raw:gh-pr-edit:main"]}): Allow(),
-        Input(command="cat > tests.py <<'PY'\nInput(command='gh pr edit 1  # ccx:raw')\nPY"): Allow(),
-        Input(command="cat notes.md  # ccx:raw"): Allow(),
-        Input(
-            command="cat > tail.py <<A <<B\nLIVE = 1\nA\nInput(command='gh pr edit 1')  # ccx:raw\nB\ngh pr view 1"
+            command="cd /wt && git rebase origin/dev 2>&1 | tail -5; git status -s | head # ccx:raw",
+            output="Could not apply 25737e453d... cc-slack: hand a refused op to the newest local build",
         ): Allow(),
-        Input(command="printf '%s\\n' done\\\n# ccx:raw\ngh pr view 12"): Allow(),
-        Input(command="gh pr edit 123 --base dev", env={"CAPT_HOOK_CCX_RAW": "1"}): Allow(),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw", env={"CAPT_HOOK_CCX_RAW": "1"}): Warn(
-            pattern=r"`ccx: tooling-lane=ccx-raw:gh-pr-edit`"
-        ),
-        Input(command="cd wt && gt submit --no-interactive  # ccx:raw"): Warn(
-            pattern=r"`ccx: tooling-lane=ccx-raw:gt-submit`"
-        ),
-        Input(
-            command="gh pr edit 123 --base dev  # ccx:raw",
-            state=[ToolingRefusals(lanes={"ccx-raw:gh-pr-edit"})],
-        ): Allow(),
+        Input(command="gh pr edit 123 --base dev  # ccx:raw", env={"CAPT_HOOK_CCX_RAW": "1"}): Allow(),
         Input(command="ccx vcs status", output="dev · clean"): Allow(),
         Input(
             command="cc-slack reply --url C1/p12 --text hi",
@@ -604,7 +566,7 @@ def record_refusal(evt: BaseHookEvent) -> HookResult | None:
             tool="Agent",
             tool_input={"prompt": "Fix the GraphQL fallback.", "name": "gh-quota-once-and-for-all"},
         ): Allow(),
-        Input(tool="Agent", tool_input={"prompt": "Fix ccx.\nccx: tooling-lane=ccx-raw:gh-pr-edit"}): Allow(),
+        Input(tool="Agent", tool_input={"prompt": "Fix cc-slack.\nccx: tooling-lane=cc-slack-session"}): Allow(),
     },
 )
 def record_lane(evt: BaseHookEvent) -> HookResult | None:
@@ -671,37 +633,19 @@ def record_lane(evt: BaseHookEvent) -> HookResult | None:
         ): Allow(),
         Input(
             tool="Agent",
-            tool_input={"prompt": "Retarget with gh pr edit 9 --base dev", "subagent_type": "lane"},
-            state=[RAW_REFUSED],
-        ): Block(pattern=r"`ccx: tooling-lane=ccx-raw:gh-pr-edit`"),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Read the PR with gh pr view 9", "subagent_type": "lane"},
-            state=[RAW_REFUSED],
+            tool_input={"prompt": "Post with cc-slack reply.\nccx: tooling-lane=cc-slack-session", "name": "fix"},
+            state=[SLACK_REFUSED],
         ): Allow(),
         Input(
             tool="Agent",
-            tool_input={
-                "prompt": "Teach ccx to retarget.\nccx: tooling-lane=ccx-raw:gh-pr-edit",
-                "subagent_type": "lane",
-            },
-            state=[RAW_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Retarget with gh pr edit 9.\nccx: tooling-lane=ccx-raw:gh-pr-edit", "name": "fix"},
-            state=[RAW_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Retarget with gh pr edit 9.\ntooling-lane: ccx-raw:gh-pr-edit", "name": "fix"},
-            state=[RAW_REFUSED],
+            tool_input={"prompt": "Post with cc-slack reply.\ntooling-lane: cc-slack-session", "name": "fix"},
+            state=[SLACK_REFUSED],
         ): Block(pattern="already refused"),
         Input(
             tool="Agent",
-            tool_input={"prompt": "Retarget with gh pr edit 9.\nccx: tooling-lane=github-quota", "name": "fix"},
-            state=[RAW_REFUSED],
-        ): Block(pattern=r"`ccx: tooling-lane=ccx-raw:gh-pr-edit`"),
+            tool_input={"prompt": "Post with cc-slack reply.\nccx: tooling-lane=github-quota", "name": "fix"},
+            state=[SLACK_REFUSED],
+        ): Block(pattern=r"`ccx: tooling-lane=cc-slack-session`"),
         Input(
             tool="Agent",
             tool_input={"prompt": "Poll `ccx vcs pr status 28999` until it lands.", "name": "pr-28999-watch"},
