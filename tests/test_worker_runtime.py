@@ -4,6 +4,7 @@ import importlib.metadata
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -779,3 +780,21 @@ def test_worker_skips_the_bundled_cli_version_probe(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", raising=False)
     skip_bundled_cli_version_probe()
     assert os.environ["CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK"] == "1"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root forks past RLIMIT_NPROC")
+def test_worker_reads_the_process_table_past_its_spawn_nproc_cap() -> None:
+    script = """
+import resource
+from captain_hook.util import proc
+from captain_hook.worker.__main__ import lift_spawn_nproc_cap
+
+_, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+resource.setrlimit(resource.RLIMIT_NPROC, (1, hard))
+assert proc.process_table() is None
+lift_spawn_nproc_cap()
+soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+assert soft == hard
+assert proc.process_table() is not None
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=30)
