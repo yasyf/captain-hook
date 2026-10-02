@@ -10,6 +10,7 @@ from captain_hook import (
     BaseHookEvent,
     Block,
     Clause,
+    Confirm,
     Event,
     FilePath,
     FromSubagent,
@@ -198,6 +199,7 @@ hook(
         "Drop the `model` pin so the spawn runs opus, or pin `model='sonnet'` when the lane calls for sonnet."
     ),
     block=True,
+    confirm=Confirm(rule="A haiku-pinned spawn whose task needs judgment beyond one mechanical fact per item."),
     tests={
         Input(model="haiku", prompt="implement the retry backoff in the client"): Block(pattern="Drop the `model` pin"),
         Input(model="haiku", prompt="implement the retry backoff"): Block(pattern="single-fact mechanical"),
