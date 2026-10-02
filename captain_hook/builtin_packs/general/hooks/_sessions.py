@@ -123,6 +123,7 @@ KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
 RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
 SPELLING_LIMIT = 60
 PROBE_TIMEOUT = 2.0
+PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 LAST_SCAN = threading.local()
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_TABLE = (
@@ -253,8 +254,18 @@ def probe(argv: tuple[str, ...]) -> str | Unreadable:
         return timeout
     try:
         done = subprocess.run(
-            argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout, check=False
+            argv,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            env=os.environ | {"PATH": os.pathsep.join((os.environ["PATH"], *PROBE_FALLBACK_DIRS))},
         )
+    except FileNotFoundError:
+        return Unreadable(f"`{argv[0]}` is not installed on the hook's PATH")
+    except subprocess.TimeoutExpired:
+        return Unreadable(f"`{argv[0]}` timed out after {timeout:g}s")
     except (OSError, subprocess.SubprocessError):
         return Unreadable(f"`{argv[0]}` could not run")
     return done.stdout if done.returncode == 0 else Unreadable(f"`{argv[0]}` failed")
