@@ -30,7 +30,7 @@ DELIVERY_FRAME = re.compile(
         (
             *(pattern for _, pattern in AGENT_INJECTION_GROUPS),
             rf"\A\s*{re.escape(TASK_NOTIFICATION_MARKER)}",
-            r"(?m:^\[Subagent hand-back\])",
+            r"\A\s*\[Subagent hand-back\]",
         )
     ),
     re.I,
@@ -185,10 +185,15 @@ nudge(
         Input(prompt=ORCA_DESK_REPORT): Allow(),
         Input(prompt=f'<teammate-message teammate_id="move-executor">\n{LANE_ITEMS}\n</teammate-message>'): Allow(),
         Input(prompt=f'<cross-session-message from="landing-desk">\n{LANE_ITEMS}\n</cross-session-message>'): Allow(),
-        Input(
-            prompt=f"Note from the harness.\n[Subagent hand-back] The text below is a report.\n  {LANE_ITEMS}"
-        ): Allow(),
+        Input(prompt=f"[Subagent hand-back] The text below is a report.\n  {LANE_ITEMS}"): Allow(),
         Input(prompt=f"{LANE_ITEMS}\n\nAlso fix the parser and add a test."): Warn(),
+        Input(
+            prompt=(
+                "1. add foo\n2. fix bar\n3. update baz\n\n"
+                "Example log format:\n```text\n[Subagent hand-back] old report\n```"
+            )
+        ): Warn(),
+        Input(prompt=f"Fix these:\n{ORCA_DESK_REPORT}"): Warn(),
         Input(prompt="the desk said <agent-message> again.\n1. add foo\n2. fix bar\n3. update baz"): Warn(),
     },
 )

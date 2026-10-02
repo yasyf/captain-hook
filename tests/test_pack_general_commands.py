@@ -88,9 +88,10 @@ STASH_CORPUS = [
     ("git stash drop -q 2", False),
     ("git stash drop 0c4f3a1", False),
     ("git -C /repo stash apply 0c4f3a1", False),
-    ("git stash drop -q $(git stash list | grep tag | cut -d: -f1)", False),
+    ("git stash drop -q $(git stash list | grep tag | cut -d: -f1)", True),
+    ("git stash drop -q $(git stash list | grep missing-tag | cut -d: -f1)", True),
     ("git stash apply -q $(git stash list --format='%H %gs' | grep tag | cut -d' ' -f1)", False),
-    ("git stash drop `git stash list | grep tag | cut -d: -f1`", False),
+    ("git stash drop `git stash list | grep tag | cut -d: -f1`", True),
     ("git stash pop $(git stash list | grep tag | cut -d: -f1)", True),
     ("git stash $(echo pop)", True),
     ("git stash drop --bogus", True),
@@ -109,7 +110,7 @@ STASH_CORPUS = [
         "ref=$(git stash list --format='%H %gs' | grep \"tcap-check-$$\" | cut -d' ' -f1); "
         "git stash apply -q $ref && git stash drop -q $(git stash list --format='%gd %gs' | "
         "grep \"tcap-check-$$\" | cut -d' ' -f1) && git diff --stat | tail -1",
-        False,
+        True,
     ),
     (
         "cd ~/.claude/worktrees/cc-context/ccx-followups && git stash push -q -m ccx-followups-test -- "
@@ -117,7 +118,7 @@ STASH_CORPUS = [
         "S=$(git stash list --format='%H %gs' | grep ccx-followups-test | cut -d' ' -f1); "
         "git stash apply -q $S && git stash drop -q $(git stash list | grep ccx-followups-test | cut -d: -f1); "
         "git status --short",
-        False,
+        True,
     ),
     ("git status", False),
     ("git stash-helper pop", False),

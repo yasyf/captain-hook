@@ -80,6 +80,13 @@ nudge(
                 weight=1,
             ),
             Signal(pattern=r"(?i)(?<!no change )(?<!no changes )(?:outside|beyond) (?:the )?scope", weight=1),
+            Signal(
+                pattern=(
+                    r"(?i)\b(?:skip(?:ping)? (?:fixing|the fix)|won(?:'|’)?t fix"
+                    r"|(?:not|never) (?:going to )?fix(?:ing)?|leave it)\b"
+                ),
+                weight=1,
+            ),
             NlpSignal(
                 clauses=[Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True)],
                 weight=1,
@@ -306,6 +313,11 @@ nudge(
         Input(
             transcript=[T.assistant("This failure was not caused by my change, and it is outside the scope.")]
         ): Warn(),
+        Input(
+            transcript=[T.assistant("This test failure was not caused by my change, so I will skip fixing it.")]
+        ): Warn(),
+        Input(transcript=[T.assistant("This test failure was not caused by my change, so I won't fix it.")]): Warn(),
+        Input(transcript=[T.assistant("This test failure was not caused by my change; I fixed it anyway.")]): Allow(),
     },
 )
 
