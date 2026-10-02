@@ -27,9 +27,11 @@ func TestHostDaemonValidatesOnBothHalves(t *testing.T) {
 
 func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 	t.Parallel()
+	manager := mustWorkerManager(t)
 	product := &hostProduct{
-		manager: mustWorkerManager(t),
+		manager: manager,
 		hub:     newNotificationHub(),
+		monitor: testResourceMonitor(t, manager),
 	}
 	ctx := context.Background()
 

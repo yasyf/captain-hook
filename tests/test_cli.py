@@ -79,6 +79,20 @@ class TestRunSubcommand:
         result = run_cli("run", "InvalidEvent", hooks_dir=str(hooks_dir), stdin_data="{}")
         assert result.returncode != 0
 
+    def test_run_refuses_the_host_event_before_any_handler(
+        self, hooks_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from click.testing import CliRunner
+
+        from captain_hook import cli as cli_module
+
+        monkeypatch.setattr(cli_module, "dispatch_event", lambda *args, **kwargs: pytest.fail("a handler ran"))
+        result = CliRunner().invoke(
+            cli_module.cli, ["--hooks", str(hooks_dir), "run", "ResourcePressure"], input='{"session_id": "s1"}'
+        )
+        assert result.exit_code == 1
+        assert "ResourcePressure is a host event" in result.output
+
 
 class TestHooksSubcommand:
     def test_repo_local_hooks_print_exact_sorted_rows(self, tmp_path: Path, hooks_dir: Path) -> None:

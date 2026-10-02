@@ -19,6 +19,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
+if TYPE_CHECKING:
+    import threading
+
 from loguru import logger
 
 from captain_hook.util import reqenv
@@ -47,6 +50,9 @@ class RequestContext(Protocol):
     @property
     def deadline_unix_ms(self) -> int: ...
 
+    @property
+    def abandon(self) -> threading.Event: ...
+
 
 @dataclass(slots=True)
 class RequestBuffers:
@@ -70,6 +76,7 @@ def request_scope(req: RequestContext, session_id: str | None) -> Generator[Requ
         client_ppid=req.client.ppid,
         session_id=sid,
         deadline_unix_ms=req.deadline_unix_ms,
+        abandon=req.abandon,
     )
     with reqenv.use_request(overrides):
         session_log_path = str(resolve_log_dir() / f"{sid}.log")

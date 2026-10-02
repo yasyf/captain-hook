@@ -497,9 +497,17 @@ func TestWorkerLateSnapshotCancelDoesNotFailAnotherEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	abandons := make(chan wireproto.Frame, 1)
+	go func() {
+		frame, _ := wireproto.DecodeFrame(server)
+		abandons <- frame
+	}()
 	stop()
 	if err := <-first; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+	if abandon := <-abandons; abandon.Op != wireproto.OpAbandon || abandon.ID != a.ID {
+		t.Fatalf("frame after cancellation = %+v, want the abandon frame for %d", abandon, a.ID)
 	}
 	if err := wireproto.EncodeFrame(server, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotCancel, ID: 71, ParentID: a.ID}); err != nil {
 		t.Fatal(err)

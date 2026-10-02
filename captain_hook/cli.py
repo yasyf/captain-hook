@@ -38,7 +38,7 @@ from captain_hook.pause import pause, resume
 from captain_hook.review.cli import review
 from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
-from captain_hook.types import TOOL_EVENTS, Event
+from captain_hook.types import HOST_EVENTS, TOOL_EVENTS, Event
 from captain_hook.update.cli import update
 from captain_hook.update.launchers import dispatch_launcher_check
 from captain_hook.update.updater import dispatch_update
@@ -364,6 +364,12 @@ def run_event(state: CliState, event_name: str) -> None:
         valid = ", ".join(n for e in Event if (n := e.name))
         print(
             f"Invalid event type: {event_name!r}. Valid event names are: {valid}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if event in HOST_EVENTS:
+        print(
+            f"{event_name} is a host event: only the capt-hookd host raises it, so `capt-hook run` refuses it.",
             file=sys.stderr,
         )
         sys.exit(1)

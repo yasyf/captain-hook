@@ -234,7 +234,7 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	warm := !adm.first && !response.Warmup && !starting && after == epoch
 	m.mu.Lock()
 	entry.served++
-	if err == nil && warm {
+	if err == nil && warm && !isHostDispatch(ctx) {
 		entry.observe(adm.ahead+1, elapsed)
 	}
 	m.mu.Unlock()
@@ -292,6 +292,17 @@ func withMandatory(ctx context.Context, request wireproto.EventRequest) context.
 func isMandatory(ctx context.Context) bool {
 	mandatory, _ := ctx.Value(mandatoryDispatch{}).(bool)
 	return mandatory
+}
+
+type hostDispatch struct{}
+
+func withHostDispatch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, hostDispatch{}, true)
+}
+
+func isHostDispatch(ctx context.Context) bool {
+	host, _ := ctx.Value(hostDispatch{}).(bool)
+	return host
 }
 
 func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, admission, error) {

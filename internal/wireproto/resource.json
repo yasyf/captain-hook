@@ -1,0 +1,15 @@
+{
+  "env_prefix": "HOOKS_PERFORMANCE_",
+  "defaults": {
+    "enabled": true,
+    "sample_interval_seconds": 15,
+    "min_runtime_seconds": 120,
+    "cpu_fraction": 0.5,
+    "sustain_seconds": 60,
+    "disk_bytes_per_second": 52428800,
+    "grace_seconds": 60,
+    "escalate_after_seconds": 30,
+    "max_tracked_per_session": 32,
+    "registry_cap": 512
+  }
+}

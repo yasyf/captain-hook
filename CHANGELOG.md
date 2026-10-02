@@ -358,6 +358,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ccx-raw:gt-submit`. Commands without those tools, including `cat` heredocs, create no raw
   refusal record.
 
+### Changed
+
+- **The resource monitor's judge stage stops when the host stops waiting.** The host now sends the
+  worker an `abandon` frame when it cancels a stage, the worker's hooks unwind at their next checkpoint,
+  and a judge verdict that arrives after that never signals. The judge makes exactly one provider attempt
+  with no tools, inside one absolute deadline cut from the stage deadline and
+  `HOOKS_PERFORMANCE_JUDGE_TIMEOUT_SECONDS`; a backend selection that spends the budget makes no model call.
+  Exclusion screening reads interpreter and launcher options with their values, scans every token for
+  consequential verbs, and refuses a command whose options it cannot classify instead of judging it. Command
+  lines shown to the model and in refusal notices are redacted per argv element, so a credential value
+  containing spaces is masked whole. `capt-hook run ResourcePressure` refuses the host event on the cold path.
+
 ## [12.73.0] - 2026-10-01
 
 ### Added

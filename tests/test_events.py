@@ -15,6 +15,7 @@ from captain_hook.events import (
     PostToolUseFailureEvent,
     PreCompactEvent,
     PreToolUseEvent,
+    ResourcePressureEvent,
     SessionEndEvent,
     SessionStartEvent,
     StopEvent,
@@ -49,6 +50,7 @@ class TestEventClassVar:
             SessionEndEvent: Event.SessionEnd,
             PermissionRequestEvent: Event.PermissionRequest,
             MessageDisplayEvent: Event.MessageDisplay,
+            ResourcePressureEvent: Event.ResourcePressure,
         }
         for cls, expected_event in mapping.items():
             assert cls.event_name is expected_event
