@@ -56,6 +56,13 @@ runs:
         CAPTAIN_TEST_SNAPSHOT_PYTHON: ${{ github.workspace }}/.venv/bin/python
       run: go test -race ./internal/hookd -run TestSnapshotRealPythonOwnerSharesLoadsAcrossClients -count=1 -v
 
+    - name: Test judge cancellation through the real Python event worker
+      if: runner.os == 'macOS' && inputs.shard-index == '0'
+      shell: bash
+      env:
+        CAPTAIN_TEST_EVENT_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      run: go test ./internal/hookd -run TestMonitorRealPythonWorkerAbandonsTheJudgeBeforeItsSignal -count=1 -v
+
     - name: Test shared evidence fixtures
       if: inputs.shard-index == '0'
       shell: bash
