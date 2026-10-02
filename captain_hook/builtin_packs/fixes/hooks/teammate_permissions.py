@@ -7,6 +7,7 @@ from captain_hook import (
     Ask,
     FromSubagent,
     Input,
+    Not,
     SkipPermissions,
     Tool,
     approve,
@@ -111,9 +112,8 @@ approve(
 
 approve(
     "teammate tools under skip-permissions",
-    only_if=[FromSubagent(), SkipPermissions()],
+    only_if=[FromSubagent(), Not(NativeTool("Bash")), SkipPermissions()],
     skip_if=[
-        NativeTool("Bash"),
         DangerousMcpTool(),
         DangerousPayloadCommand(),
     ],

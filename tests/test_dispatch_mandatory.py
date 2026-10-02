@@ -13,13 +13,13 @@ from captain_hook import app
 from captain_hook.app import on
 from captain_hook.cli import dispatch_event
 from captain_hook.context import HookContext
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
 from captain_hook.events import PreToolUseEvent
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import CURRENT_CLIENT, MANDATORY_WORK_SECONDS, EvidenceIncomplete, SnapshotClient
 from captain_hook.transcripts import lazy_transcript
-from captain_hook.types import CustomCondition, Event
+from captain_hook.types import CustomCondition, Event, SkipPermissions
 from captain_hook.util import proc, reqenv
 from captain_hook.worker.runtime import ProductRuntime
 from tests.test_dispatch import FROZEN_NOW, bounded_request, pinch_pool
@@ -65,6 +65,10 @@ def inside_margin() -> reqenv.RequestOverrides:
 
 def outside_margin(seconds: float = 30.0) -> reqenv.RequestOverrides:
     return replace(bounded_request(seconds), client_ppid=HOOK_SHELL)
+
+
+def past_deadline() -> reqenv.RequestOverrides:
+    return replace(bounded_request(-SYNC_DEADLINE_MARGIN_SECONDS - 1.0), client_ppid=HOOK_SHELL)
 
 
 class Exhausted(CustomCondition):
@@ -303,6 +307,42 @@ class TestMandatoryPhase:
             assert dispatch(Event.PreToolUse, evt, advisory=advisory) is None
         assert source.released
         assert source.pins.pending == 0
+
+
+@pytest.mark.usefixtures("frozen_clock")
+class TestAncestryDeadline:
+    def test_a_mandatory_hook_records_no_completion_past_the_deadline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(proc, "process_rows", lambda pids: pytest.fail("no probe past the deadline"))
+
+        @on(Event.PreToolUse, only_if=[SkipPermissions()], mandatory=True)
+        def gate(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        evt = PreToolUseEvent(_raw=DESTRUCTIVE, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = past_deadline()
+        with reqenv.use_request(overrides):
+            assert dispatch(Event.PreToolUse, evt) is None
+        assert overrides.mandatory_completed == []
+        assert overrides.evidence_gaps == []
+
+    def test_an_advisory_hook_is_skipped_with_the_deadline_cause(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(proc, "process_rows", lambda pids: pytest.fail("no probe past the deadline"))
+
+        @on(Event.PreToolUse, only_if=[SkipPermissions()])
+        def advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        evt = PreToolUseEvent(_raw=DESTRUCTIVE, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = past_deadline()
+        with reqenv.use_request(overrides):
+            assert dispatch(Event.PreToolUse, evt) is None
+        assert overrides.evidence_gaps == [
+            f"{app._state.hooks[0].name}: deadline: process ancestry walk reached the caller deadline"
+        ]
 
 
 class TestGuardCompletion:

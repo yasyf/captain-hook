@@ -13,6 +13,12 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
 
 
+@dataclass(slots=True)
+class RequestMemo:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    claude_argv: tuple[str, ...] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class RequestOverrides:
     env: Mapping[str, str]
@@ -24,6 +30,7 @@ class RequestOverrides:
     evidence_gaps: list[str] = field(default_factory=list[str])
     warmups: list[str] = field(default_factory=list[str])
     mandatory_completed: list[str] = field(default_factory=list[str])
+    memo: RequestMemo = field(default_factory=RequestMemo)
 
 
 class Abandoned(BaseException):

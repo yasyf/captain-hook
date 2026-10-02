@@ -21,7 +21,7 @@ from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
 from captain_hook.util.http import github_token
 from captain_hook.util.model_cache import model_sha256, model_version
-from captain_hook.util.proc import _cold_claude_argv
+from captain_hook.util.proc import ANCHORS, _cold_claude_argv
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -110,6 +110,7 @@ def clear_global_caches():
     )
     for cached in caches:
         cached.cache_clear()
+    ANCHORS.clear()
     UNSUPPORTED_MODELS.clear()
     READY_BACKENDS.clear()
     decisions.reset_cached_log()
@@ -117,6 +118,7 @@ def clear_global_caches():
     yield
     for cached in caches:
         cached.cache_clear()
+    ANCHORS.clear()
     UNSUPPORTED_MODELS.clear()
     READY_BACKENDS.clear()
     decisions.reset_cached_log()
