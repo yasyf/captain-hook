@@ -86,6 +86,41 @@
       "title": "Max Retained Bytes",
       "type": "integer"
     },
+    "max_scan_discovery_entries": {
+      "default": 4096,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Scan Discovery Entries",
+      "type": "integer"
+    },
+    "max_scan_events": {
+      "default": 4096,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Scan Events",
+      "type": "integer"
+    },
+    "max_scan_read_bytes": {
+      "default": 8388608,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Scan Read Bytes",
+      "type": "integer"
+    },
+    "max_scan_sources": {
+      "default": 256,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Scan Sources",
+      "type": "integer"
+    },
+    "max_scan_validate_bytes": {
+      "default": 1073741824,
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "title": "Max Scan Validate Bytes",
+      "type": "integer"
+    },
     "max_source_bytes": {
       "default": 536870912,
       "exclusiveMinimum": 0,
