@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Graphite's presubmit review reminder stays quiet in dispatched lanes.** A whole
   `ccx: role=<value>` line in the session's dispatch prompt skips the reminder because the
   parent owns the review pass. The pack uses `Annotated("raw")` for its raw escapes.
+- **The tooling-lane marker moves to the `ccx:` notation, and repeat-dispatch blocks need a
+  confirmed match.** A fix lane declares itself with a whole `ccx: tooling-lane=<key>` line;
+  the old `tooling-lane: <key>` line no longer counts. A raw-fallback refusal is recorded only
+  from a real `# ccx:raw` comment: heredoc bodies, quoted text, and a session-wide
+  `CAPT_HOOK_CCX_RAW=1` record nothing. A dispatch that names a refused verb is blocked only
+  when a small model confidently finds it asks for the refused action itself.
 
 ### Fixed
 
