@@ -20,7 +20,11 @@ from captain_hook import (
 from captain_hook.state import PrimitiveState
 
 ASK_TOOLS = "AskUserQuestion|ExitPlanMode"
-NO_COMMAND_FOR_YOU = r"(?!(?:(?!\n\n)[^.])*?[`\n]!\s)"
+SENTENCE_REST = r"(?:(?!\n\n)[^.])*?"
+NO_COMMAND_FOR_YOU = (
+    rf"(?!(?={SENTENCE_REST}[`\n]!\s)"
+    rf"(?!{SENTENCE_REST}\b(?:choose|choice|pick|decide|either|whether|which|or|rather|prefer)\b))"
+)
 
 PROSE_DECISION = (
     "One decision for you: the firewall rule is what forces three hand-rolled scripts. Keep it, and an "
@@ -369,6 +373,9 @@ in `reasoning`.""",
         ): Allow(),
         Input(transcript=[T.assistant("Shipped the fix; CI is green.")]): Allow(),
         Input(transcript=[T.assistant(SSO_LOGIN)]): Allow(),
+        Input(
+            transcript=[T.assistant("Waiting on you to choose staging or production before running `! aws sso login`.")]
+        ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[T.assistant("The S3 proof is blocked.\n\nWaiting on your SSO login:\n```\n! aws login\n```")]
         ): Allow(),

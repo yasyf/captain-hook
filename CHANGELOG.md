@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`git stash drop $(...)` blocks again.** A substitution that expands to nothing makes git
+  drop `stash@{0}`, so only `apply`, which removes nothing, accepts a substitution operand.
+- **A named command no longer hides a choice from the narrate-then-wait gate.** The "waiting on
+  you" signal drops only when the sentence names a `! <cmd>` command and offers no alternative.
+- **The multi-request nudge skips only prompts that open with a delivery frame.** A quoted
+  `[Subagent hand-back]` line later in a user prompt no longer suppresses it.
+- **"Not caused by my change, so I will skip fixing it" reaches the pre-existing-issue nudge.**
+  An explicit skip or decline-to-fix phrase corroborates the "not caused by my change" clause.
+
 ## [12.76.0] - 2026-10-01
 
 ### Added
