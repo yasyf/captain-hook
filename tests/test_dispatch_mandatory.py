@@ -431,9 +431,10 @@ class TestGuardCompletion:
         assert [error.source for error in app._state.load_errors] == [str(other / "other_beta.py")]
         assert {hook.pack_name for hook in app.get_mandatory_hooks(Event.PreToolUse)} == {"general", "other"}
 
-        healthy = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"orca terminal list --json"}}'
-        for payload in (healthy, self.STOP_PAYLOAD):
-            response = self.respond(payload=payload, event=event)
-            assert response.exit == 0
-            assert response.guard == ""
-        assert '"deny"' not in self.respond(payload=healthy, event=event).stdout
+        healthy = self.respond(
+            payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"orca terminal list --json"}}', event=event
+        )
+        assert (healthy.exit, healthy.guard, healthy.stdout) == (0, "", "")
+        stop = self.respond(payload=self.STOP_PAYLOAD, event=event)
+        assert (stop.exit, stop.guard) == (0, "")
+        assert "`TaskStop` on task `wcn64vfub` cannot be verified" in stop.stdout
