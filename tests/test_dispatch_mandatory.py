@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import shutil
+import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,10 +13,11 @@ from typing import Any
 import pytest
 
 from captain_hook import app
+from captain_hook import dispatch as dispatch_module
 from captain_hook.app import on
 from captain_hook.cli import dispatch_event
 from captain_hook.context import HookContext
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, MandatoryDeadlinePassed, dispatch
 from captain_hook.events import PreToolUseEvent
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
@@ -58,6 +63,22 @@ def session_guards() -> list[str]:
     return names
 
 
+def completed_names(overrides: reqenv.RequestOverrides) -> set[str]:
+    return {key.split(".")[0] for key in overrides.mandatory_completed}
+
+
+@pytest.fixture
+def ticking_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[float], None]:
+    """A deadline clock held at :data:`FROZEN_NOW` that a hook can advance by hand."""
+    now = [FROZEN_NOW]
+    monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: now[0]))
+
+    def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    return advance
+
+
 def inside_margin() -> reqenv.RequestOverrides:
     return replace(bounded_request(-1.0), client_ppid=HOOK_SHELL)
 
@@ -90,7 +111,7 @@ class TestDispatchEvent:
         assert decision(envelope) == "deny"
         assert "pkill" in reason(envelope)
         assert ran == []
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
     def test_a_healthy_guarded_call_records_completion_without_an_envelope(
         self, general_pack: None, frozen_clock: None, tmp_path: Path
@@ -99,7 +120,7 @@ class TestDispatchEvent:
         with reqenv.use_request(overrides):
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
         assert envelope is None
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
     def test_an_advisory_deny_survives_the_guards_allow(
         self, general_pack: None, frozen_clock: None, tmp_path: Path
@@ -113,7 +134,7 @@ class TestDispatchEvent:
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
         assert decision(envelope) == "deny"
         assert reason(envelope) == "advisory says no"
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
     def test_the_guard_runs_with_no_fanout_permit_left(
         self, general_pack: None, frozen_clock: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -129,7 +150,7 @@ class TestDispatchEvent:
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, DESTRUCTIVE, session_dir=None)
         assert decision(envelope) == "deny"
         assert ran == []
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
 
 @pytest.mark.usefixtures("frozen_clock")
@@ -275,10 +296,175 @@ class TestMandatoryPhase:
         assert source.pins.pending == 0
 
 
+@pytest.mark.usefixtures("frozen_clock")
+class TestMandatoryLane:
+    def test_the_guard_completes_while_a_slow_mandatory_hook_still_runs(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        guards = set(session_guards())
+        overrides = outside_margin()
+
+        @on(Event.PreToolUse, only_if=[Exhausted()])
+        def starved_advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slow(evt: Any) -> None:
+            patience = time.monotonic() + 5.0
+            while not completed_names(overrides) >= guards:
+                assert time.monotonic() < patience, "the guards waited behind the slow hook"
+                time.sleep(0.01)
+
+        with reqenv.use_request(overrides):
+            envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
+        assert envelope is None
+        assert completed_names(overrides) == guards | {"slow"}
+        assert overrides.evidence_gaps == ["starved_advisory: deadline: foreground transcript deadline exhausted"]
+
+    def test_mandatory_hooks_run_side_by_side(self, tmp_path: Path) -> None:
+        rendezvous = threading.Barrier(4, timeout=5.0)
+
+        def register(index: int) -> None:
+            def together(evt: Any) -> None:
+                rendezvous.wait()
+
+            together.__name__ = f"together_{index}"
+            on(Event.PreToolUse, mandatory=True)(together)
+
+        for index in range(4):
+            register(index)
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides):
+            assert dispatch(Event.PreToolUse, evt) is None
+        assert len(overrides.mandatory_completed) == 4
+        assert evt.ctx.transcript.pins.pending == 0
+
+    @pytest.mark.parametrize(
+        ("seconds", "clamped"),
+        [
+            pytest.param(30.0, 30, id="outside the margin: the deadline less the margin"),
+            pytest.param(-1.0, 4, id="inside the margin: whatever remains"),
+        ],
+    )
+    def test_an_inner_call_clamps_to_the_mandatory_budget(self, tmp_path: Path, seconds: float, clamped: int) -> None:
+        seen: dict[str, float | int | None] = {}
+
+        @on(Event.PreToolUse, mandatory=True)
+        def guard(evt: Any) -> None:
+            seen["timeout"] = reqenv.clamp_timeout(180)
+            seen["left"] = reqenv.seconds_left()
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin(seconds)
+        with reqenv.use_request(overrides):
+            dispatch(Event.PreToolUse, evt)
+        assert seen == {"timeout": clamped, "left": float(clamped)}
+        assert reqenv.seconds_left() is None
+        with reqenv.use_request(overrides):
+            assert reqenv.seconds_left() == SYNC_DEADLINE_MARGIN_SECONDS + seconds
+
+    def test_registrations_sharing_a_state_key_keep_the_later_deny(self, tmp_path: Path) -> None:
+        def register(verdict: Callable[[Any], Any]) -> None:
+            def guard(evt: Any) -> Any:
+                return verdict(evt)
+
+            on(Event.PreToolUse, mandatory=True, max_fires=1)(guard)
+
+        register(lambda evt: None)
+        register(lambda evt: evt.block("the second registration says no"))
+        assert len({hook.state_key for hook in app._state.hooks}) == 1
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides):
+            envelope = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
+        assert decision(envelope) == "deny"
+        assert reason(envelope) == "the second registration says no"
+        assert len(overrides.mandatory_completed) == 2
+
+    def test_a_hook_ignoring_its_budget_is_the_events_error_at_the_deadline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = ThreadPoolExecutor(max_workers=1)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True)
+        def stuck(evt: Any) -> None:
+            time.sleep(1.0)
+
+        @on(Event.PreToolUse, mandatory=True)
+        def queued(evt: Any) -> None:
+            ran.append("queued")
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin(-4.7)
+        started = time.monotonic()
+        with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="stuck: still running"):
+            dispatch(Event.PreToolUse, evt)
+        assert time.monotonic() - started < 1.0
+        assert overrides.mandatory_completed == []
+        pool.shutdown(wait=True)
+        assert ran == []
+        assert evt.ctx.transcript.pins.pending == 0
+
+    def test_a_hook_queued_past_the_deadline_is_the_whole_events_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ticking_clock: Callable[[float], None]
+    ) -> None:
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+
+        @on(Event.PreToolUse, mandatory=True)
+        def first(evt: Any) -> None:
+            ticking_clock(SYNC_DEADLINE_MARGIN_SECONDS + 31.0)
+
+        @on(Event.PreToolUse, mandatory=True)
+        def queued(evt: Any) -> None:
+            raise AssertionError("handler must not run past the deadline")
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with (
+            reqenv.use_request(overrides),
+            pytest.raises(MandatoryDeadlinePassed, match=r"queued: (the caller's deadline passed|left unrun)"),
+        ):
+            dispatch(Event.PreToolUse, evt)
+        assert overrides.mandatory_completed == [app._state.hooks[0].state_key]
+        assert evt.ctx.transcript.pins.pending == 0
+
+    def test_a_cold_cli_run_stays_unbounded(self, tmp_path: Path) -> None:
+        seen: list[float | None] = []
+
+        @on(Event.PreToolUse, mandatory=True)
+        def guard(evt: Any) -> None:
+            seen.append(reqenv.seconds_left())
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        assert dispatch(Event.PreToolUse, evt) is None
+        assert seen == [None]
+
+    def test_a_timed_out_mandatory_hook_is_the_whole_events_error(
+        self, general_pack: None, tmp_path: Path, ticking_clock: Callable[[float], None]
+    ) -> None:
+        guards = set(session_guards())
+
+        @on(Event.PreToolUse, mandatory=True)
+        def judged(evt: Any) -> None:
+            timeout = reqenv.clamp_timeout(180)
+            ticking_clock(timeout)
+            raise TimeoutError(f"claude-sdk timed out after {timeout}s")
+
+        overrides = outside_margin()
+        with reqenv.use_request(overrides), pytest.raises(TimeoutError, match="timed out after 30s"):
+            dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
+        assert completed_names(overrides) == guards
+
+
 class TestGuardCompletion:
     PAYLOAD = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
 
-    def respond(self, *, mandatory: bool = True) -> Any:
+    def respond(self, *, mandatory: bool = True, payload: str = PAYLOAD, deadline_unix_ms: int = 0) -> Any:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
@@ -286,7 +472,11 @@ class TestGuardCompletion:
             nlp_warmer=lambda: None,
         )
         response, _ = runtime.dispatch(
-            replace(request(payload_raw=self.PAYLOAD, mandatory=mandatory), deadline_unix_ms=0)
+            replace(
+                request(payload_raw=payload, mandatory=mandatory),
+                client_ppid=HOOK_SHELL,
+                deadline_unix_ms=deadline_unix_ms,
+            )
         )
         return response
 
@@ -304,6 +494,45 @@ class TestGuardCompletion:
         assert response.guard == ""
         assert "guard" not in response.message()
         assert '"permissionDecision": "deny"' in response.stdout
+
+    def test_a_protected_session_is_denied_while_advisory_evidence_is_slow(self, general_pack: None) -> None:
+        @on(Event.PreToolUse, only_if=[Exhausted()])
+        def starved_advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        response = self.respond(payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"kill 14575"}}')
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert '"permissionDecision": "deny"' in response.stdout
+        assert "an agent session" in response.stdout
+
+    def test_a_safe_call_is_permitted_beside_a_slow_mandatory_hook(self, general_pack: None) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slow(evt: Any) -> None:
+            time.sleep(0.05)
+
+        response = self.respond(payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"ls"}}')
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert "permissionDecision" not in response.stdout
+
+    def test_a_timed_out_mandatory_hook_is_a_worker_error_without_completion(
+        self, general_pack: None, ticking_clock: Callable[[float], None]
+    ) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def judged(evt: Any) -> None:
+            timeout = reqenv.clamp_timeout(180)
+            ticking_clock(timeout)
+            raise TimeoutError(f"claude-sdk timed out after {timeout}s")
+
+        response = self.respond(
+            payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"ls"}}',
+            deadline_unix_ms=int((FROZEN_NOW + 30.0) * 1000),
+        )
+        assert response.exit == 1
+        assert response.guard == ""
+        assert "permissionDecision" not in response.stdout
+        assert "TimeoutError: claude-sdk timed out after 25s" in response.stderr
 
     def test_a_crashed_mandatory_hook_is_a_worker_error_without_completion(self) -> None:
         @on(Event.PreToolUse, mandatory=True)

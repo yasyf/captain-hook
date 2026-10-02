@@ -1,5 +1,6 @@
-"""Lint hook files against the authoring bar: a message states the rule, then the remediation, and
-the hook code uses the declarative surface instead of hand-rolled parsing."""
+"""Lint hook files against the authoring bar: a message states the rule, then the remediation, the
+hook code uses the declarative surface instead of hand-rolled parsing, and a mandatory hook stays
+evidence-free."""
 
 from __future__ import annotations
 
@@ -70,6 +71,12 @@ TEXT_PARSERS = REGEX_METHODS | frozenset(
 )
 CONTEXT_TOOLS = frozenset({"Agent", "Task", "Skill", "Read", "Grep", "Glob"})
 ALLOWED_COMMENT = re.compile(r"#!|#\s*(?:TODO|FIXME|WORKAROUND|noqa|type:|pyright:|ruff:|fmt:|pragma)")
+LLM_CALLS = frozenset({"llm_evaluate", "llm", "llm_gate", "llm_nudge", "prompt_check"})
+TRANSCRIPT_ATTRIBUTES = frozenset({"t", "transcript"})
+MANDATORY_EVIDENCE = (
+    "a mandatory hook is evidence-free; move the LLM or transcript check into an advisory hook registered "
+    "without mandatory=True"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +327,85 @@ def code_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
             yield Finding(path, getattr(node, "lineno", 1), "code", violation)
 
 
+def registers_mandatory(call: ast.Call, registrars: frozenset[str]) -> bool:
+    return callee(call) in registrars or any(
+        keyword.arg == "mandatory" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+        for keyword in call.keywords
+    )
+
+
+def import_aliases(tree: ast.Module) -> dict[str, str]:
+    """Local names bound by ``import ... as`` or ``from ... import ... as``, mapped to the names they stand for."""
+    return {
+        alias.asname: alias.name.rsplit(".", 1)[-1]
+        for node in tree.body
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        for alias in node.names
+        if alias.asname
+    }
+
+
+def local_registrars(tree: ast.Module) -> frozenset[str]:
+    """Module names bound to a registrar carrying ``mandatory=True``: ``guard = partial(on, ..., mandatory=True)``."""
+    return frozenset(
+        target.id
+        for node in tree.body
+        for target, value in bindings(node)
+        if isinstance(target, ast.Name) and isinstance(value, ast.Call) and registers_mandatory(value, frozenset())
+    )
+
+
+def imported_registrars(path: Path, tree: ast.Module) -> frozenset[str]:
+    """Names imported from a sibling module that binds them as mandatory registrars, under their local names."""
+    return frozenset(
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module
+        if (sibling := path.parent / f"{node.module.rsplit('.', 1)[-1]}.py").is_file()
+        for exported in [local_registrars(ast.parse(sibling.read_text(), filename=str(sibling)))]
+        for alias in node.names
+        if alias.name in exported
+    )
+
+
+def mandatory_handlers(
+    path: Path, tree: ast.Module, functions: dict[str, ast.FunctionDef]
+) -> Iterator[ast.FunctionDef]:
+    registrars = local_registrars(tree) | imported_registrars(path, tree)
+    for node in ast.walk(tree):
+        match node:
+            case ast.FunctionDef(decorator_list=decorators) if any(
+                isinstance(call, ast.Call) and registers_mandatory(call, registrars) for call in decorators
+            ):
+                yield node
+            case ast.Call(func=ast.Call() as registration, args=[ast.Name(id=name)]) if (
+                name in functions and registers_mandatory(registration, registrars)
+            ):
+                yield functions[name]
+
+
+def evidence_reads(
+    function: ast.FunctionDef, functions: dict[str, ast.FunctionDef], aliases: dict[str, str], seen: set[str]
+) -> Iterator[tuple[ast.AST, str]]:
+    seen.add(function.name)
+    for node in ast.walk(function):
+        match node:
+            case ast.Call() if (name := aliases.get(called := callee(node) or "", called)) in LLM_CALLS:
+                yield node, f"calls {name}"
+            case ast.Attribute(attr=attr, value=ast.Attribute(attr="ctx")) if attr in TRANSCRIPT_ATTRIBUTES:
+                yield node, f"reads {ast.unparse(node)}"
+            case ast.Call() if (name := callee(node)) in functions and name not in seen:
+                yield from evidence_reads(functions[name], functions, aliases, seen)
+
+
+def mandatory_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    aliases = import_aliases(tree)
+    for handler in mandatory_handlers(path, tree, functions):
+        for node, read in evidence_reads(handler, functions, aliases, set()):
+            yield Finding(path, node.lineno, "code", f"mandatory hook {handler.name} {read}; {MANDATORY_EVIDENCE}")
+
+
 def comment_findings(path: Path, source: str) -> Iterator[Finding]:
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
         if token.type == tokenize.COMMENT and not ALLOWED_COMMENT.match(token.string):
@@ -334,6 +420,7 @@ def lint_source(path: Path, source: str) -> list[Finding]:
             *copy_findings(path, tree),
             *code_findings(path, tree),
             *escape_findings(path, tree),
+            *mandatory_findings(path, tree),
             *comment_findings(path, source),
         ],
         key=lambda finding: (finding.line, finding.rule, finding.detail),

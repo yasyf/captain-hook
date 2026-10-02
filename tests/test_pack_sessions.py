@@ -16,6 +16,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_LOGIN,
     INLINE_OWNER_ANSWER,
     INLINE_OWNER_TERMINAL,
+    Scan,
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
@@ -471,6 +472,19 @@ class TestSnapshotBudget:
             message = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
         assert message is not None
         assert "the caller deadline is too close to read the process table" in message
+
+    def test_interleaved_payloads_each_keep_their_own_scan(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[float] = []
+        monkeypatch.setattr(proc, "process_table", lambda **kw: (seen.append(kw["timeout"]), MAC)[1])
+        first = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        other = input_to_event(Event.PreToolUse, Input(command="renice -n 5 -p 31337", cwd="/w", session_id="s1"))
+        with reqenv.use_request(overrides()):
+            scans = [Scan.of(first), Scan.of(other), Scan.of(first)]
+            for scan in scans:
+                assert scan.facts.ownership is scan.facts.ownership
+        assert scans[0] is scans[2]
+        assert scans[1] is not scans[0]
+        assert seen == [2.0, 2.0]
 
 
 @pytest.fixture
