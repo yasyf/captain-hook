@@ -75,6 +75,13 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
       run: uv run --no-sync python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 
+    - name: Test judge cancellation through the real Python event worker
+      if: runner.os == 'macOS' && inputs.shard-index == '0'
+      shell: bash
+      env:
+        CAPTAIN_TEST_EVENT_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      run: go test ./internal/hookd -run TestMonitorRealPythonWorkerAbandonsTheJudgeBeforeItsSignal -count=1 -v
+
     - name: Test
       shell: bash
       env:

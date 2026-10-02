@@ -95,11 +95,12 @@ artifacts = [
     "captain_hook/guard_literal.py",
     "captain_hook/guard_literal.sh",
     "capt_hook_client/guard_literal.py",
+    "captain_hook/resource_defaults.py",
 ]
 exclude = ["captain_hook/bin", "captain_hook/linux"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["captain_hook", "capt_hook_client", "hatch_build.py", "internal/wireproto/guard.json"]
+only-include = ["captain_hook", "capt_hook_client", "hatch_build.py", "internal/wireproto/guard.json", "internal/wireproto/resource.json"]
 exclude = ["captain_hook/bin", "captain_hook/linux"]
 
 [tool.pytest.ini_options]

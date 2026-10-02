@@ -465,7 +465,6 @@ class TestCallLlm:
         [
             pytest.param(0, 180, id="unbounded"),
             pytest.param(1_012_500, 12, id="clamped-to-deadline"),
-            pytest.param(999_000, 1, id="deadline-passed"),
             pytest.param(1_900_000, 180, id="deadline-beyond-timeout"),
         ],
     )
@@ -486,6 +485,46 @@ class TestCallLlm:
         with reqenv.use_request(overrides), patch("spawnllm.call_sync", return_value="ok") as mock_call:
             ctx.call_llm("test prompt")
         assert mock_call.call_args.kwargs["timeout"] == expected
+
+    def test_evidence_false_skips_the_preparation_release(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        prepared: list[str] = []
+        monkeypatch.setattr(HookContext, "release_preparation", lambda self, prompt: prepared.append(prompt))
+        with patch("spawnllm.select_backend", return_value=CLAUDE), patch("spawnllm.call_sync", return_value="ok"):
+            assert ctx.call_llm("test prompt", evidence=False) == "ok"
+            assert ctx.call_llm("test prompt") == "ok"
+        assert prepared == ["test prompt"]
+        assert ctx.prepared_evidence is None
+
+    def test_a_deadline_passed_after_backend_selection_makes_no_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from types import SimpleNamespace
+
+        from captain_hook import context
+        from captain_hook.util import reqenv
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        clock = [1_000.0]
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock[0]))
+
+        def slow_selection(specialty: object, model: object) -> MagicMock:
+            clock[0] += 5.0
+            return CLAUDE
+
+        monkeypatch.setattr(context, "ready_backend", slow_selection)
+        overrides = reqenv.RequestOverrides(
+            env={}, cwd="/tmp", client_ppid=1, session_id="s", deadline_unix_ms=1_001_000
+        )
+        with (
+            reqenv.use_request(overrides),
+            patch("spawnllm.call_sync") as served,
+            patch("spawnllm.run_sync") as ran,
+            pytest.raises(TimeoutError, match="deadline passed before the model call"),
+        ):
+            ctx.call_llm("test prompt", attempts=1)
+        assert served.call_count == 0
+        assert ran.call_count == 0
 
     def test_an_abandoned_hook_never_starts_a_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import threading

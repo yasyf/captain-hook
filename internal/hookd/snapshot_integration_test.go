@@ -26,6 +26,25 @@ func pythonSnapshotOwner(t *testing.T) *snapshotOwner {
 	if python == "" {
 		t.Skip("requires the exact candidate Python environment in CI")
 	}
+	config, err := snapshots.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(config, &settings); err != nil {
+		t.Fatal(err)
+	}
+	settings["max_read_bytes_per_step"] = 512
+	settings["max_events_per_step"] = 1
+	config, err = json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return spawnPythonSnapshotOwner(t, python, config)
+}
+
+func spawnPythonSnapshotOwner(t *testing.T, python string, config []byte) *snapshotOwner {
+	t.Helper()
 	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -62,20 +81,6 @@ func pythonSnapshotOwner(t *testing.T) *snapshotOwner {
 			t.Errorf("isolated snapshot owner did not exit on pipe EOF\n%s", stderr.String())
 		}
 	})
-	config, err := snapshots.DefaultConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(config, &settings); err != nil {
-		t.Fatal(err)
-	}
-	settings["max_read_bytes_per_step"] = 512
-	settings["max_events_per_step"] = 1
-	config, err = json.Marshal(settings)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	owner, err := handshakeSnapshotOwner(ctx, conn, config)

@@ -57,6 +57,10 @@ def event(
     }
 
 
+def abandon(request_id: int) -> dict[str, object]:
+    return {"protocol": 1, "op": "abandon", "id": request_id}
+
+
 def responses(raw: bytes) -> list[dict[str, object]]:
     stream = io.BytesIO(raw)
     found: list[dict[str, object]] = []
@@ -323,6 +327,51 @@ def test_expired_deadline_is_refused_without_dispatch() -> None:
     assert by_id[3]["op"] == "error"
     assert by_id[3]["error"] == "deadline passed before dispatch"
     assert by_id[4]["op"] == "result"
+
+
+def test_abandon_frame_sets_the_request_flag_and_the_reply_is_still_written() -> None:
+    input_stream = io.BytesIO(frame(event(5)) + frame(abandon(5)))
+    output_stream = io.BytesIO()
+    seen: list[bool] = []
+
+    def dispatch(request: EventRequest) -> tuple[EventResponse, None]:
+        seen.append(request.abandon.wait(timeout=5))
+        return EventResponse(stdout="late\n"), None
+
+    WorkerService(input_stream, output_stream, dispatch=dispatch).run()
+
+    assert seen == [True]
+    (received,) = responses(output_stream.getvalue())
+    assert (received["op"], received["id"]) == ("result", 5)
+
+
+def test_abandon_frame_for_an_unknown_request_is_ignored() -> None:
+    input_stream = io.BytesIO(frame(abandon(9)) + frame(event(6)))
+    output_stream = io.BytesIO()
+    flags: list[bool] = []
+
+    def dispatch(request: EventRequest) -> tuple[EventResponse, None]:
+        flags.append(request.abandon.is_set())
+        return EventResponse(), None
+
+    WorkerService(input_stream, output_stream, dispatch=dispatch).run()
+
+    assert flags == [False]
+    assert [message["id"] for message in responses(output_stream.getvalue())] == [6]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param({"protocol": 1, "op": "abandon"}, id="missing-id"),
+        pytest.param({"protocol": 1, "op": "abandon", "id": 0}, id="zero-id"),
+        pytest.param({"protocol": 1, "op": "abandon", "id": 3, "request": {}}, id="extra-field"),
+        pytest.param({"protocol": 2, "op": "abandon", "id": 3}, id="wrong-protocol"),
+    ],
+)
+def test_malformed_abandon_frames_fail_the_protocol(message: dict[str, object]) -> None:
+    with pytest.raises(ProtocolError, match="invalid abandon frame"):
+        WorkerService(io.BytesIO(frame(message)), io.BytesIO(), dispatch=lambda _: served(EventResponse())).run()
 
 
 def test_build_mismatch_fails_the_handshake() -> None:

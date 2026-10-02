@@ -4,7 +4,7 @@ import importlib.resources
 import json
 from typing import Any
 
-from captain_hook.types import Event
+from captain_hook.types import CLAUDE_EVENTS, Event
 
 PLUGIN_PREFIX = '"${CLAUDE_PLUGIN_ROOT}/bin/hook"'
 MCP_SERVER_NAME = "capt-hook"
@@ -38,11 +38,11 @@ class TestPluginHooksJson:
         assert (importlib.resources.files("captain_hook") / "hooks" / "hooks.json").is_file()
 
     def test_covers_every_event_enum_member(self) -> None:
-        assert set(load_plugin_hooks()["hooks"]) == {name for e in Event if (name := e.name)}
+        assert set(load_plugin_hooks()["hooks"]) == {name for e in CLAUDE_EVENTS if (name := e.name)}
 
     def test_every_event_registers_exactly_the_binrun_hook(self) -> None:
         hooks = load_plugin_hooks()["hooks"]
-        for name in (n for e in Event if (n := e.name)):
+        for name in (n for e in CLAUDE_EVENTS if (n := e.name)):
             [group] = hooks[name]
             timeout = {"timeout": 10} if name == Event.MessageDisplay.name else {}
             assert group["hooks"] == [{"type": "command", "command": expected_command(name)} | timeout]

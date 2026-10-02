@@ -55,6 +55,7 @@ the `CommandCondition` alias to keep the two apart.
 | `SessionEnd` | Session ends | Cleanup, audit logging |
 | `PermissionRequest` | A permission dialog would be shown | Auto-answer dialogs (allow/deny/rewrite); no decision means the dialog shows |
 | `MessageDisplay` | Each streamed chunk of an assistant reply | Rewrite the displayed text (`displayContent`); no rewrite shows the chunk as-is |
+| `ResourcePressure` | Host-fired by capt-hookd, not Claude Code: a child process stays resource-heavy (`evt.stage`) | Warn the session, judge and stop disposable children; warn or allow acknowledges the stage |
 <!-- /gen:events -->
 
 ## Registration

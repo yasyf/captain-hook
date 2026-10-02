@@ -20,6 +20,7 @@ class RequestOverrides:
     client_ppid: int
     session_id: str
     deadline_unix_ms: int = 0
+    abandon: threading.Event = field(default_factory=threading.Event)
     abandoned: list[str] = field(default_factory=list[str])
     evidence_gaps: list[str] = field(default_factory=list[str])
     warmups: list[str] = field(default_factory=list[str])
@@ -98,6 +99,11 @@ def deadline_in(seconds: float) -> Generator[None]:
         return
     with use_request(replace(ov, deadline_unix_ms=int((time.time() + seconds) * 1000))):
         yield
+
+
+def abandon_signal() -> threading.Event:
+    """The flag the host sets once it stops waiting on the bound request's reply; a fresh flag for the cold CLI."""
+    return threading.Event() if (ov := _OVERRIDES.get()) is None else ov.abandon
 
 
 def abandoned() -> list[str]:
