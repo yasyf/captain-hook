@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cc_transcript.context import ContextWindow
 from cc_transcript.corrections import Correction
@@ -21,6 +21,9 @@ from cc_transcript.mining.signals import MiningSignal
 
 from captain_hook.snapshots.client import MAX_RESULT_BYTES, EvidenceIncomplete
 from captain_hook.snapshots.client import client_scope as review_client
+
+if TYPE_CHECKING:
+    from captain_hook.review.scan import CorrectionLedger
 
 REVIEW_POLICY = {"id": "captain-review", "version": "1"}
 
@@ -382,30 +385,29 @@ async def prepare_corrections(snapshot: Any, request: Mapping[str, Any]) -> dict
     return {"kind": "corrections", "corrections": drafts}
 
 
-async def record_correction_drafts(drafts: Sequence[Mapping[str, Any]]) -> None:
-    from cc_transcript.corrections import CorrectionLog
+async def record_correction_drafts(drafts: Sequence[Mapping[str, Any]], *, ledger: CorrectionLedger) -> None:
     from cc_transcript.extract.correct import CorrectionPick, usable_backend
     from spawnllm import extract
 
     if not drafts:
         return
     backend = usable_backend()
-    async with await CorrectionLog.open() as log:
-        for draft in drafts:
-            anchor = draft["anchor"]
-            if await log.for_anchor(anchor["session_id"], anchor["event_uuid"]):
+    log = await ledger.handle()
+    for draft in drafts:
+        anchor = draft["anchor"]
+        if await log.for_anchor(anchor["session_id"], anchor["event_uuid"]):
+            continue
+        choices = draft["choices"]
+        if not choices:
+            continue
+        if backend is None:
+            chosen = max(choices, key=lambda choice: choice["overlap"])
+        else:
+            pick = await extract(draft["prompt"], CorrectionPick, backend=backend, model="medium")
+            if pick.candidate is None or not 1 <= pick.candidate <= len(choices):
                 continue
-            choices = draft["choices"]
-            if not choices:
-                continue
-            if backend is None:
-                chosen = max(choices, key=lambda choice: choice["overlap"])
-            else:
-                pick = await extract(draft["prompt"], CorrectionPick, backend=backend, model="medium")
-                if pick.candidate is None or not 1 <= pick.candidate <= len(choices):
-                    continue
-                chosen = choices[pick.candidate - 1]
-            await log.append(Correction(**json.loads(chosen["correction_json"])))
+            chosen = choices[pick.candidate - 1]
+        await log.append(Correction(**json.loads(chosen["correction_json"])))
 
 
 @dataclass(frozen=True, slots=True)

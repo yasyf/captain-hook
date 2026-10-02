@@ -107,13 +107,14 @@ def sweep_hook() -> None:
 @click.option("--transcript", required=True, type=click.Path(path_type=Path), help="The ended session's transcript")
 @click.option("--cwd", "cwd", default=None, help="The session's working directory (default: the process cwd)")
 @click.option("--sweep", is_flag=True, default=False, help="Run the throttled sweep (no PR sync, no brain)")
-def spawn(transcript: Path, cwd: str | None, sweep: bool) -> None:
+@click.option("--pending-fd", type=int, default=None, help="The inherited pending-pass lock descriptor")
+def spawn(transcript: Path, cwd: str | None, sweep: bool, pending_fd: int | None) -> None:
     """Run the detached reviewer pass over one ended session (spawned by ``review run``)."""
     import asyncio
 
     from captain_hook.review.pipeline import spawn_session
 
-    click.echo(asyncio.run(spawn_session(transcript, cwd=cwd or os.getcwd(), sweep=sweep)))
+    click.echo(asyncio.run(spawn_session(transcript, cwd=cwd or os.getcwd(), sweep=sweep, pending_fd=pending_fd)))
 
 
 @review.command()
