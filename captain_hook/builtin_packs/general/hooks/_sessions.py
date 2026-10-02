@@ -122,6 +122,7 @@ VERIFY = "Verify a pid you started with `ps -o pid,ppid,pgid,lstart,command -p <
 KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
 RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
 SPELLING_LIMIT = 60
+SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
 PROBE_TIMEOUT = 2.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 LAST_SCAN = threading.local()
@@ -148,9 +149,14 @@ INLINE_TABLE = (
 )
 INLINE_TERMINALS = {"term_idle": 15000, "term_agent": 16000, "term_shim": 17000, "term_gone": 18000}
 INLINE_OWNER_ANSWER = "0207568"
+INLINE_SESSION = "c0ffee00-0000-4000-8000-000000000000"
 INLINE_OWNER_TERMINAL = "term_c59a87bf-0000-4000-8000-000000000000"
 INLINE_COMMANDS = {
     "ps -A -ww -o": INLINE_TABLE,
+    "ps -E -ww -o lstart=,command= -p": "",
+    "ps -E -ww -o lstart=,command= -p 31337": (
+        f"Thu Jan  1 00:00:00 2026 sleep 60 CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
+    ),
     "orca terminal show": "{}",
     **{
         f"orca terminal show --terminal {handle} --json": json.dumps(
@@ -303,6 +309,15 @@ def answer_names(answer: str, handle: str, cwd: Path | None) -> bool | Unreadabl
 
 
 class Facts:
+    def __init__(self, session: str | None = None) -> None:
+        self.session = session
+
+    def started_here(self, row: ProcessRow) -> bool:
+        if self.session is None or isinstance(timeout := probe_timeout("read a process environment"), Unreadable):
+            return False
+        shown = proc.environment(row, timeout=timeout)
+        return shown is not None and set(SESSION_ENV.findall(shown)) == {self.session}
+
     @cached_property
     def ownership(self) -> Ownership | Unreadable:
         if isinstance(timeout := probe_timeout("read the process table"), Unreadable):
@@ -352,7 +367,7 @@ def describe_target(word: Word, value: Scalar | None) -> str:
             return f"target `{clip(word.raw, 40)}` is not a literal positive pid"
 
 
-def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str:
+def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str | None:
     ownership = facts.ownership
     if isinstance(ownership, Unreadable):
         return unresolvable(spelling, ownership.reason, fix)
@@ -366,6 +381,8 @@ def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str:
             f"BLOCKED: {describe(row)} is {process_class(row) or 'an ancestor of a protected process'}, which no "
             "session may signal, stop, reprioritize, or restart. Ask the owner to end it."
         )
+    if facts.started_here(row):
+        return None
     if ownership.owner is None:
         return (
             f"BLOCKED: ownership of {describe(row)} is unproven because the guard cannot resolve this session's own "
@@ -600,7 +617,7 @@ class Scan:
         last: Scan | None = getattr(LAST_SCAN, "scan", None)
         if last is not None and last.raw is evt._raw:
             return last
-        scan = cls(evt._raw)
+        scan = cls(evt._raw, Facts(evt._raw.get("session_id")))
         for text in filter(names_guarded, candidate_texts(evt)):
             scan.read(text.encode(errors="replace").decode(), f"this `{evt.tool_name}` payload", evt.cwd)
         LAST_SCAN.scan = scan

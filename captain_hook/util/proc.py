@@ -17,7 +17,9 @@ if TYPE_CHECKING:
 MAX_WALK = 20
 PS_TABLE_ARGV = ("ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,command=")
 PS_TABLE_ENV = {"LC_ALL": "C", "TZ": "UTC"}
-PS_TABLE_ROW = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\w{3} \w{3}\s+\d{1,2} \d\d:\d\d:\d\d \d{4})\s+(.*)$")
+LSTART = r"(\w{3} \w{3}\s+\d{1,2} \d\d:\d\d:\d\d \d{4})"
+PS_TABLE_ROW = re.compile(rf"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+{LSTART}\s+(.*)$")
+PS_ENVIRONMENT_ROW = re.compile(rf"^\s*{LSTART}\s+(.*)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +98,40 @@ def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
             int(ppid),
             int(pgid),
             int(uid),
-            datetime.strptime(" ".join(started.split()), "%a %b %d %H:%M:%S %Y"),
+            started_at(started),
             command,
         )
     return ProcessTable(rows)
+
+
+def started_at(lstart: str) -> datetime:
+    return datetime.strptime(" ".join(lstart.split()), "%a %b %d %H:%M:%S %Y")
+
+
+def environment(row: ProcessRow, *, timeout: float = 2.0) -> str | None:
+    """The environment ``ps -E`` prints after *row*'s command, or ``None`` once *row*'s pid runs another process.
+
+    The start time and command must both match *row*, so a pid recycled since the table was read never lends
+    *row* another process's environment.
+    """
+    try:
+        done = subprocess.run(
+            ("ps", "-E", "-ww", "-o", "lstart=,command=", "-p", str(row.pid)),
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            env=os.environ | PS_TABLE_ENV,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0 or (match := PS_ENVIRONMENT_ROW.match(done.stdout.rstrip("\n"))) is None:
+        return None
+    started, shown = match.groups()
+    if started_at(started) != row.started or not shown.startswith(row.command):
+        return None
+    return shown.removeprefix(row.command)
 
 
 def process_start_time(pid: int) -> str | None:
