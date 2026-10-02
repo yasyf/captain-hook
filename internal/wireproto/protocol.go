@@ -236,24 +236,32 @@ func EncodeFrame(writer io.Writer, frame Frame) error {
 }
 
 func EncodeFrameLimit(writer io.Writer, frame Frame, limit int) error {
-	payload, err := Marshal(frame)
+	encoded, err := EncodeFrameBytes(frame, limit)
 	if err != nil {
-		return fmt.Errorf("captain: encode worker frame: %w", err)
+		return err
 	}
-	if len(payload) > limit {
-		return fmt.Errorf(
-			"%w: worker frame is %d bytes; limit is %d", ErrPayloadTooLarge, len(payload), limit,
-		)
-	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
-	if err := writeAll(writer, header[:]); err != nil {
-		return fmt.Errorf("captain: write worker frame header: %w", err)
-	}
-	if err := writeAll(writer, payload); err != nil {
-		return fmt.Errorf("captain: write worker frame payload: %w", err)
+	if err := writeAll(writer, encoded); err != nil {
+		return fmt.Errorf("captain: write worker frame: %w", err)
 	}
 	return nil
+}
+
+func EncodeFrameBytes(frame Frame, limit int) ([]byte, error) {
+	buffer := bytes.NewBuffer(make([]byte, 4, 4+4096))
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(frame); err != nil {
+		return nil, fmt.Errorf("captain: encode worker frame: %w", err)
+	}
+	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	payloadLen := len(encoded) - 4
+	if payloadLen > limit {
+		return nil, fmt.Errorf(
+			"%w: worker frame is %d bytes; limit is %d", ErrPayloadTooLarge, payloadLen, limit,
+		)
+	}
+	binary.BigEndian.PutUint32(encoded, uint32(payloadLen))
+	return encoded, nil
 }
 
 func writeAll(writer io.Writer, payload []byte) error {

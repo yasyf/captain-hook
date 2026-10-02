@@ -501,6 +501,8 @@ def test_owner_binds_registry_content_without_changing_authority():
     owner = object.__new__(Owner)
     owner.store = SimpleNamespace(register_tool_registry=register, request=native_call)
     owner.incomplete_type = type("SnapshotIncomplete", (Exception,), {})
+    owner.registry_generations = {}
+    owner.registry_guard = threading.Lock()
     scope = context()
     authority = scope["authority"].copy()
     owner.call(request()["snapshot"]["request"], scope, object(), specs)

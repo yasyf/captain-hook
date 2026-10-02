@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -42,5 +43,32 @@ func TestSnapshotEncodedLimitIncludesEnvelope(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatal("oversized snapshot partially written")
+	}
+}
+
+func TestEncodeFrameBytesMatchesStreamEncoding(t *testing.T) {
+	frame := Frame{Protocol: Schema, Op: OpSnapshotRequest, ID: 7, Snapshot: json.RawMessage(`{"request":{"id":"one"}}`)}
+	encoded, err := EncodeFrameBytes(frame, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := EncodeFrameLimit(&output, frame, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, output.Bytes()) {
+		t.Fatalf("bytes=%q stream=%q", encoded, output.Bytes())
+	}
+	decoded, err := DecodeFrameLimit(bytes.NewReader(encoded), 1<<20)
+	if err != nil || decoded.ID != frame.ID || !bytes.Equal(decoded.Snapshot, frame.Snapshot) {
+		t.Fatalf("decoded=%+v err=%v", decoded, err)
+	}
+}
+
+func TestEncodeFrameBytesRefusesOversizedEnvelope(t *testing.T) {
+	frame := Frame{Protocol: Schema, Op: OpSnapshotRequest, ID: 1, Snapshot: json.RawMessage(`"` + strings.Repeat("x", 1<<20-2) + `"`)}
+	encoded, err := EncodeFrameBytes(frame, 1<<20)
+	if !errors.Is(err, ErrPayloadTooLarge) || encoded != nil {
+		t.Fatalf("encoded=%d err=%v", len(encoded), err)
 	}
 }

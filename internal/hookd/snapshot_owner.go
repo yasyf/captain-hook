@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -65,7 +64,7 @@ func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawM
 	return owner, nil
 }
 
-func (o *snapshotOwner) write(ctx context.Context, frame wireproto.Frame) error {
+func (o *snapshotOwner) write(ctx context.Context, encoded []byte) error {
 	o.writeMu.Lock()
 	defer o.writeMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -79,7 +78,8 @@ func (o *snapshotOwner) write(ctx context.Context, frame wireproto.Frame) error 
 		return err
 	}
 	defer o.conn.SetWriteDeadline(time.Time{})
-	return wireproto.EncodeFrameLimit(o.conn, frame, snapshots.MaxFrameBytes)
+	_, err := o.conn.Write(encoded)
+	return err
 }
 
 func (o *snapshotOwner) call(ctx context.Context, request json.RawMessage, callContext snapshots.CallContext, settled func()) (json.RawMessage, error) {
@@ -102,8 +102,8 @@ func (o *snapshotOwner) call(ctx context.Context, request json.RawMessage, callC
 	o.nextID++
 	id := o.nextID
 	o.mu.Unlock()
-	frame := wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotRequest, ID: id, Snapshot: request, SnapshotContext: encodedContext}
-	if err := wireproto.EncodeFrameLimit(io.Discard, frame, snapshots.MaxFrameBytes); err != nil {
+	frame, err := wireproto.EncodeFrameBytes(wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotRequest, ID: id, Snapshot: request, SnapshotContext: encodedContext}, snapshots.MaxFrameBytes)
+	if err != nil {
 		settled()
 		return nil, err
 	}
@@ -141,7 +141,11 @@ func (o *snapshotOwner) call(ctx context.Context, request json.RawMessage, callC
 	case <-ctx.Done():
 		cancelCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
 		defer cancel()
-		if err := o.write(cancelCtx, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotCancel, ID: id}); err != nil {
+		cancelFrame, err := wireproto.EncodeFrameBytes(wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotCancel, ID: id}, snapshots.MaxFrameBytes)
+		if err == nil {
+			err = o.write(cancelCtx, cancelFrame)
+		}
+		if err != nil {
 			o.fail(err)
 		}
 		go o.awaitCancellation(id, pending.done)

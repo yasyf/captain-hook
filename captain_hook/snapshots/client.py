@@ -57,6 +57,24 @@ def foreground_seconds(event: str) -> float:
     return GATE_WORK_SECONDS if event in GATE_EVENTS else GRAPH_WORK_SECONDS
 
 
+SCALAR_QUERY_KINDS = frozenset(
+    {
+        "user_text",
+        "first_prompt",
+        "event_count",
+        "turn_count",
+        "tool_count",
+        "message_count",
+        "unresolved_tools",
+        "failures",
+        "workflow_text",
+        "pending_named_task",
+    }
+)
+SCALAR_MISS = object()
+type ScalarKey = tuple[str, tuple[tuple[str, str], ...], SnapshotClient, PreparedGraphEvidence | None, str, str]
+
+
 def graph_limits() -> dict[str, int]:
     limits = DEFAULT_LIMITS.copy()
     limits["max_discovery_entries"] = min(limits["max_discovery_entries"], GRAPH_DISCOVERY_ENTRIES)
@@ -482,6 +500,7 @@ class Lease:
         self.guard = threading.Lock()
         self.subagent_guard = threading.Lock()
         self.subagent_views: dict[str, RemoteSubagentIndex] = {}
+        self.scalar_results: dict[ScalarKey, Any] = {}
 
     def renewable_by(self, client: SnapshotClient) -> bool:
         return (deadline := client.foreground_deadline_unix_ms) is None or self.expires_unix_ms < deadline
@@ -500,12 +519,15 @@ class Lease:
 
     def release(self) -> None:
         with self.subagent_guard:
-            with ExitStack() as cleanup:
-                cleanup.callback(self._release)
-                for index in self.subagent_views.values():
-                    for item in index:
-                        cleanup.callback(item.session.release)
-            self.subagent_views.clear()
+            try:
+                with ExitStack() as cleanup:
+                    cleanup.callback(self._release)
+                    for index in self.subagent_views.values():
+                        for item in index:
+                            cleanup.callback(item.session.release)
+            finally:
+                self.subagent_views.clear()
+                self.scalar_results.clear()
 
     def _release(self) -> None:
         with self.guard:
@@ -923,13 +945,38 @@ class RemoteSession:
         return f"transcript:{handle['owner_epoch']}:{handle['snapshot_id']}:{handle['generation']}"
 
     def query(self, query: Mapping[str, object]) -> Any:
-        values: list[Any] = []
         deep = query.get("subagents") is True or query["kind"] in {
             "deep_predicate_inputs",
             "sidechain_membership",
         }
         if deep and query["kind"] == "sidechain_membership":
             raise EvidenceIncomplete("invalid_request", "sidechain membership has no prepared graph projection")
+        scalar = query["kind"] in SCALAR_QUERY_KINDS or str(query["kind"]).startswith("has_")
+        if not scalar:
+            return self._query(query, deep=deep)
+        key: ScalarKey = (
+            self.evidence_ref,
+            tuple(sorted(self.classifier.items())),
+            self.client,
+            self.graph if deep else None,
+            json.dumps(self.selectors, sort_keys=True, separators=(",", ":")),
+            json.dumps(query, sort_keys=True, separators=(",", ":")),
+        )
+        self.lease.require()
+        if (cached := self.lease.scalar_results.get(key, SCALAR_MISS)) is not SCALAR_MISS:
+            if deep:
+                self.graph.require(self)
+            return cached
+        values = self._query(query, deep=deep)
+        if len(values) != 1:
+            raise SnapshotProtocolError("scalar query returned a non-scalar result")
+        with self.lease.guard:
+            if not self.lease.closed:
+                self.lease.scalar_results[key] = values[0]
+        return values[0]
+
+    def _query(self, query: Mapping[str, object], *, deep: bool) -> list[Any]:
+        values: list[Any] = []
         pages = (
             self.graph.query_pages(self, query)
             if deep
@@ -954,21 +1001,6 @@ class RemoteSession:
                         raise EvidenceIncomplete(exc.status, exc.reason) from exc
                 case _:
                     raise SnapshotProtocolError("query returned an unexpected projection")
-        if query["kind"] in {
-            "user_text",
-            "first_prompt",
-            "event_count",
-            "turn_count",
-            "tool_count",
-            "message_count",
-            "unresolved_tools",
-            "failures",
-            "workflow_text",
-            "pending_named_task",
-        } or str(query["kind"]).startswith("has_"):
-            if len(values) != 1:
-                raise SnapshotProtocolError("scalar query returned a non-scalar result")
-            return values[0]
         return values
 
     def __len__(self) -> int:

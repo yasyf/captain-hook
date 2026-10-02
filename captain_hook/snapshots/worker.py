@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -23,6 +24,7 @@ from captain_hook.snapshots.client import (
     read_exact,
 )
 from captain_hook.snapshots.validation import checked, parse_exact, validator
+from captain_hook.util.caching import LRUDict
 
 if TYPE_CHECKING:
     from cc_transcript.snapshots import CallContext
@@ -42,6 +44,9 @@ OWNER_ADMISSION = {
     "release": (4, 32),
     "warm": (1, 4),
 }
+MAX_REGISTRY_GENERATIONS = 64
+
+RegistryKey = tuple[str, str, bytes]
 
 
 def read_frame(stream: BinaryIO, record_bytes: Callable[[int], None] | None = None) -> dict[str, Any] | None:
@@ -58,6 +63,18 @@ def read_frame(stream: BinaryIO, record_bytes: Callable[[int], None] | None = No
     if not isinstance(result, dict):
         raise SnapshotProtocolError("snapshot frame must be an object")
     return result
+
+
+def canonical(value: object) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+
+
+def registry_key(tool_registry: list[dict[str, Any]], context: CallContext) -> RegistryKey:
+    return (
+        hashlib.sha256(canonical(sorted(tool_registry, key=canonical))).hexdigest(),
+        context["admission"],
+        canonical(context["authority"]),
+    )
 
 
 def empty_usage() -> dict[str, int]:
@@ -99,6 +116,8 @@ class Owner:
         self.incomplete_type = SnapshotIncomplete
         self.policy = ReviewPolicy()
         self.runner: asyncio.Runner | None = None
+        self.registry_generations: LRUDict[RegistryKey, str] = LRUDict(MAX_REGISTRY_GENERATIONS)
+        self.registry_guard = threading.Lock()
 
     def _run_policy(self, snapshot: Any, request: dict[str, Any]) -> dict[str, Any]:
         if self.runner is None:
@@ -165,12 +184,22 @@ class Owner:
             return {"id": "captain-conductor", "version": "1"}
         return {"id": "native", "version": "1"}
 
+    def registry_generation(self, tool_registry: list[dict[str, Any]], context: CallContext) -> str:
+        key = registry_key(tool_registry, context)
+        with self.registry_guard:
+            if key in self.registry_generations:
+                return self.registry_generations[key]
+        generation = self.store.register_tool_registry(tool_registry, context=context)
+        with self.registry_guard:
+            self.registry_generations[key] = generation
+        return generation
+
     def call(
         self, request: dict[str, Any], context: CallContext, token: Any, tool_registry: list[dict[str, Any]]
     ) -> dict[str, Any]:
         usage: dict[str, int] | None = None
         try:
-            context["registry_generation"] = self.store.register_tool_registry(tool_registry, context=context)
+            context["registry_generation"] = self.registry_generation(tool_registry, context)
             if request["schema"] == CORE_SCHEMA:
                 if request["operation"] == "resume":
                     page = self.store.resume_projection(request["cursor"], context=context, cancellation=token)
