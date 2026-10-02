@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The session guard's `ccn` and `orca` probes find the binary on a launchd worker's `PATH`
+  and name why a probe failed.** A worker that kept launchd's `/usr/bin:/bin:/usr/sbin:/sbin`
+  never resolved `ccn`, so an owner-authorized `orca terminal close` was refused with
+  "`ccn` could not run". The probes now search `/opt/homebrew/bin`, `/usr/local/bin`, and
+  `~/.local/bin` after the inherited `PATH`. A missing binary reads "is not installed on the
+  hook's PATH" and a timeout reads "timed out after 2s", where both used to read "could not run".
 - **The native prefilter flags `TaskStop`, so the host fails closed.** Go and generated
   Python match the exact tool name before the Bash first-party check. A stop request is
   mandatory under load and fails closed on host or transport failure. The worker names the

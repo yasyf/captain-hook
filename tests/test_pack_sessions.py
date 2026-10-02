@@ -11,6 +11,7 @@ import pytest
 
 import captain_hook
 from captain_hook.app import on
+from captain_hook.builtin_packs.general.hooks import _sessions
 from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_COMMANDS,
     INLINE_LOGIN,
@@ -377,6 +378,29 @@ class TestStopTool:
         assert decide_input(output, tmp_path, event=Event.PermissionRequest) is None
 
 
+class TestAnswerNames:
+    def test_ccn_is_found_with_a_minimal_worker_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        (ccn := tmp_path / "ccn").write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"body": "close term_x"}\'\n')
+        ccn.chmod(0o755)
+        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path),))
+
+        assert _sessions.answer_names("abc", "term_x", None) is True
+
+    def test_a_missing_ccn_names_the_hook_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("PATH", str(tmp_path / "path"))
+        monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path / "fallback"),))
+
+        assert _sessions.answer_names("abc", "term_x", None) == _sessions.Unreadable(
+            "`ccn` is not installed on the hook's PATH"
+        )
+
+    def test_a_ccn_timeout_names_its_duration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 2.0))
+
+        assert _sessions.answer_names("abc", "term_x", None) == _sessions.Unreadable("`ccn` timed out after 2s")
+
+
 class TestTerminalClose:
     def test_the_owner_answer_allows_only_the_terminal_it_names(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -389,9 +413,12 @@ class TestTerminalClose:
         assert OWNER_FIX in message
 
     @pytest.mark.parametrize(
-        "error",
-        [FileNotFoundError("ccn"), PermissionError("ccn"), subprocess.TimeoutExpired("ccn", 2.0)],
-        ids=["missing", "unexecutable", "timeout"],
+        ("error", "explanation"),
+        [
+            pytest.param(FileNotFoundError("ccn"), "`ccn` is not installed on the hook's PATH", id="missing"),
+            pytest.param(PermissionError("ccn"), "`ccn` could not run", id="unexecutable"),
+            pytest.param(subprocess.TimeoutExpired("ccn", 2.0), "`ccn` timed out after 2s", id="timeout"),
+        ],
     )
     def test_an_unavailable_ccn_denies(
         self,
@@ -400,11 +427,12 @@ class TestTerminalClose:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         error: BaseException,
+        explanation: str,
     ) -> None:
         failing_run(monkeypatch, "ccn", error)
         message = decide(OWNER_CLOSE, tmp_path)
         assert message is not None
-        assert f"cc-notes answer `{INLINE_OWNER_ANSWER}` was not read (`ccn` could not run)" in message
+        assert f"cc-notes answer `{INLINE_OWNER_ANSWER}` was not read ({explanation})" in message
         assert OWNER_FIX in message
 
     def test_a_failing_ccn_denies(
@@ -453,7 +481,7 @@ class TestTerminalClose:
         failing_run(monkeypatch, "orca", FileNotFoundError("orca"))
         message = decide(IDLE_CLOSE, tmp_path)
         assert message is not None
-        assert "terminal `term_idle` (`orca` could not run)" in message
+        assert "terminal `term_idle` (`orca` is not installed on the hook's PATH)" in message
 
     def test_an_unreadable_process_table_denies_without_asking_orca(
         self,
