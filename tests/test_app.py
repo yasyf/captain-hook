@@ -495,6 +495,27 @@ class TestRepeatedDiscovery:
         assert len(_state.hooks) == 1
         assert _state.hooks[0].handler is not None
 
+    @pytest.mark.parametrize("helper", ["_stack", "zz_stack"])
+    def test_rediscovery_rebinds_an_edited_import(self, tmp_path: Path, helper: str) -> None:
+        d = tmp_path / f"dhooks_edited_{helper.strip('_')}"
+        d.mkdir()
+        (d / "__init__.py").write_text("")
+        (d / f"{helper}.py").write_text("def pushed():\n    return 'upstream'\n")
+        (d / "verify.py").write_text(
+            "from captain_hook.app import hook\n"
+            "from captain_hook.types import Event\n"
+            f"from .{helper} import pushed\n"
+            "hook(Event.Stop, message=pushed())\n"
+        )
+
+        discover_hooks(d)
+        assert [h.spec.message for h in _state.hooks if h.spec.message] == ["upstream"]
+
+        (d / f"{helper}.py").write_text("def pushed():\n    return 'ls-remote origin'\n")
+        reset()
+        discover_hooks(d)
+        assert [h.spec.message for h in _state.hooks if h.spec.message] == ["ls-remote origin"]
+
 
 class TestMultiModuleInterImports:
     def test_transitive_import_during_discovery_no_duplicate(self, tmp_path: Path) -> None:

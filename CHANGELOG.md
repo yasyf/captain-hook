@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PreToolUse` and `PermissionRequest` for every guard, including `kill`, `pkill`,
   `orca terminal close`, and `TaskStop`. Non-mandatory events are unchanged: they still
   exit `1` with the error on stderr.
+- **Hook rediscovery picks up edits to imported helpers and sibling hooks.** Previously,
+  `discover_hooks()` reloaded discovered hook modules while `_`-prefixed helpers stayed cached in
+  `sys.modules` for the worker's lifetime. An importer could also bind a sibling's old definitions
+  when that sibling sorted later in the reload order. This left a monorepo Stop hook reporting
+  unpushed commits after the corrected `_stack.pushed()` was already on disk. Discovery now evicts
+  every cached `<pkg>.*` submodule and uses `importlib.import_module`, so dependencies load from
+  disk before their importers bind them and run once per pass. Plugin packs still load files
+  with `spec_from_file_location` each pass and are unchanged.
 - **A mandatory hook that reads the transcript gets a 15 s evidence budget, not the tool call's
   0.75 s.** The foreground evidence budget for a `PreToolUse` dispatch is 0.75 s, shared by every
   snapshot call the dispatch makes. On a loaded host a mandatory gate that reads the lane and root

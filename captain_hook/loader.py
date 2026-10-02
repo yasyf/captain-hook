@@ -51,17 +51,9 @@ def is_skip_marked(path: Path) -> bool:
     return path.is_file() and bool(re.search(r"^__capt_hook_skip__\s*=\s*True\b", path.read_text(), re.MULTILINE))
 
 
-def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
-    if fqn in fresh_this_pass:
-        return sys.modules[fqn]
-    before = set(sys.modules)
-    if fqn in sys.modules:
-        mod = importlib.reload(sys.modules[fqn])
-    else:
-        mod = importlib.import_module(fqn)
-    fresh_this_pass.update(set(sys.modules) - before)
-    fresh_this_pass.add(fqn)
-    return mod
+def evict_submodules(pkg: str) -> None:
+    for fqn in [name for name in sys.modules if name.startswith(f"{pkg}.")]:
+        del sys.modules[fqn]
 
 
 def discover_hooks(hooks_dir: str | Path) -> None:
@@ -72,12 +64,12 @@ def discover_hooks(hooks_dir: str | Path) -> None:
         sys.path.insert(0, str(hooks_path.parent))
 
     pkg = hooks_path.name
-    fresh_this_pass: set[str] = set()
+    evict_submodules(pkg)
 
     top_level = {info.name for info in pkgutil.iter_modules([str(hooks_path)]) if not info.name.startswith("_")}
 
     if CONF_MODULE in top_level:
-        conf_module = import_or_reload(f"{pkg}.{CONF_MODULE}", fresh_this_pass)
+        conf_module = importlib.import_module(f"{pkg}.{CONF_MODULE}")
         _state.settings = build_settings(conf_module)
         if classifier := getattr(conf_module, "classifier", None):
             _state.classifier = classifier
@@ -96,7 +88,7 @@ def discover_hooks(hooks_dir: str | Path) -> None:
         # ``state.load_errors`` so ``capt-hook test`` fails on it, never silently swallowed.
         before = len(_state.hooks)
         try:
-            import_or_reload(fqn, fresh_this_pass)
+            importlib.import_module(fqn)
         except Exception as exc:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
             _state.load_errors.append(LoadError(fqn, exc))
