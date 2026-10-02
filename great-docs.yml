@@ -175,7 +175,6 @@ reference:
       - PreCompactEvent
       - NotificationEvent
       - MessageDisplayEvent
-      - ResourcePressureEvent
       - SessionStartEvent
       - SessionEndEvent
       - HookContext
