@@ -438,6 +438,39 @@ class TestTranscriptWiring:
         raw = json.dumps(json.loads(result.stdout))
         assert "transcript has 4 messages" in raw, f"expected the lane transcript (4 msgs), got: {raw}"
 
+    def test_cli_lane_reads_its_root_transcript(self, tmp_path: Path, hooks_dir: Path) -> None:
+        parent_transcript = tmp_path / "parent.jsonl"
+        parent_transcript.write_text(json.dumps(raw_text("user", "the owner approved it")) + "\n")
+
+        lane_transcript = tmp_path / "parent" / "subagents" / "agent-tm1.jsonl"
+        lane_transcript.parent.mkdir(parents=True)
+        self._make_transcript_jsonl(lane_transcript)
+
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import on
+            from captain_hook.types import Event, Action, HookResult
+
+
+            @on(Event.PreToolUse)
+            def check_root_transcript(evt):
+                return HookResult(action=Action.warn, message=evt.ctx.root_transcript_block(window=5) or "no root")
+        """,
+        )
+
+        lane = stdin_json(
+            tool_name="Bash", tool_input={"command": "echo hi"}, transcript_path=str(parent_transcript), agent_id="tm1"
+        )
+        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=lane)
+        assert result.returncode == 0
+        assert "user: the owner approved it" in json.dumps(json.loads(result.stdout))
+
+        root = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"}, transcript_path=str(parent_transcript))
+        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=root)
+        assert result.returncode == 0
+        assert "no root" in json.dumps(json.loads(result.stdout))
+
     def test_cli_agent_transcript_path_beats_lane_derivation(self, tmp_path: Path, hooks_dir: Path) -> None:
         parent_transcript = tmp_path / "parent.jsonl"
         parent_transcript.write_text(json.dumps(raw_text("user", "parent")) + "\n")

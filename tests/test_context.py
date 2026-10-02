@@ -616,6 +616,39 @@ class TestCallLlm:
             f"<transcript>\nuser: post it\n{'x' * 2_000}\n</transcript>"
         )
 
+    def test_root_transcript_block_renders_the_lane_root_and_is_empty_outside_a_lane(self) -> None:
+        from captain_hook.testing.helpers import fixture_session
+
+        lane = fixture_session([T.user("<agent-message>post the fix</agent-message>")])
+        root = fixture_session([T.user("first"), T.user("send it to the thread"), T.user("reply there without asking")])
+        ctx = HookContext(session=SessionStore(None), transcript=lane, settings=None, root_transcript=root)
+        assert ctx.root_transcript_block(window=2) == (
+            "<root_transcript>\nuser: send it to the thread\n\nuser: reply there without asking\n</root_transcript>"
+        )
+        assert HookContext(session=SessionStore(None), transcript=lane, settings=None).root_transcript_block() == ""
+
+    def test_assemble_prompt_leads_with_the_root_window_only_when_asked(self) -> None:
+        from captain_hook.prompt import Prompt
+        from captain_hook.testing.helpers import fixture_session
+
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([T.user("lane brief")]),
+            settings=None,
+            root_transcript=fixture_session([T.user("the owner said yes")]),
+        )
+        asked = ctx.assemble_prompt(
+            Prompt().system("judge"), (), {}, transcript=5, tool_results=False, diff_text=None, root_transcript=5
+        )
+        assert asked.startswith("<root_transcript>\nuser: the owner said yes\n</root_transcript>\n\n<transcript>\n")
+        assert "user: lane brief" in asked
+        plain = ctx.assemble_prompt(Prompt().system("judge"), (), {}, transcript=5, tool_results=False, diff_text=None)
+        assert "the owner said yes" not in plain
+        root_only = ctx.assemble_prompt(
+            Prompt().system("judge"), (), {}, transcript=False, tool_results=False, diff_text=None, root_transcript=5
+        )
+        assert root_only.startswith("<root_transcript>") and "<transcript>" not in root_only
+
     def test_call_llm_renders_the_transcript_under_the_given_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from cc_transcript.render import Budget
 

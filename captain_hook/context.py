@@ -94,6 +94,21 @@ def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int
             return events
 
 
+def render_window(
+    transcript: Session | RemoteSession, *, window: int | None, tool_results: bool, budget: Budget | None
+) -> str:
+    from cc_transcript.render import Budget, render_turn
+
+    src = transcript if window is None else transcript.recent_messages(window)
+    if isinstance(src, RemoteSession):
+        return src.render(budget=budget or Budget(), tool_results=tool_results)
+    return "\n\n".join(
+        rendered
+        for turn in src.turns
+        if (rendered := render_turn(turn, budget=budget or Budget(), tool_results=tool_results))
+    )
+
+
 @dataclass(frozen=True)
 class HookEvidence:
     source_ref: str | None
@@ -109,13 +124,16 @@ class HookEvidence:
 class HookContext:
     """Runtime context injected into every hook event.
 
-    Holds session state, the transcript ``Session``, settings, and LLM/CLI helpers.
+    Holds session state, the transcript ``Session``, settings, and LLM/CLI helpers. Inside a
+    subagent or teammate lane, ``transcript`` is the lane's own and ``root_transcript`` tails the
+    session that spawned it, where the user's own words live; it is ``None`` everywhere else.
     """
 
     session: SessionStore
     transcript: Session | RemoteSession | LazyTranscript
     settings: HooksSettings | None
     project_root: Path | None = None
+    root_transcript: Session | RemoteSession | LazyTranscript | None = None
     signal_evidence: dict[tuple[int | Literal["turn"], str, bool], tuple[str, ...]] = field(
         default_factory=dict, init=False
     )
@@ -238,16 +256,7 @@ class HookContext:
             tool_results: Render each tool result after its call, as ``result:`` or ``failed:``.
             budget: Character budgets for prose, tool calls and answer previews; ``None`` is cc-transcript's default.
         """
-        from cc_transcript.render import Budget, render_turn
-
-        src = self.t if window is None else self.t.recent_messages(window)
-        if isinstance(src, RemoteSession):
-            return src.render(budget=budget or Budget(), tool_results=tool_results)
-        return "\n\n".join(
-            rendered
-            for turn in src.turns
-            if (rendered := render_turn(turn, budget=budget or Budget(), tool_results=tool_results))
-        )
+        return render_window(self.t, window=window, tool_results=tool_results, budget=budget)
 
     def transcript_block(
         self, *, window: int | None = RECENT_WINDOW, tool_results: bool = False, budget: Budget | None = None
@@ -256,6 +265,19 @@ class HookContext:
         if isinstance(self.t, RemoteSession):
             return f'<transcript evidence="{self.t.evidence_ref}">\n{rendered}\n</transcript>'
         return f"<transcript>\n{rendered}\n</transcript>"
+
+    def root_transcript_block(
+        self, *, window: int | None = RECENT_WINDOW, tool_results: bool = False, budget: Budget | None = None
+    ) -> str:
+        """The lane's root session rendered like ``transcript_block`` as ``<root_transcript>``; empty outside a lane."""
+        from captain_hook.transcripts import LazyTranscript
+
+        if self.root_transcript is None:
+            return ""
+        root = self.root_transcript
+        src = root.resolve() if isinstance(root, LazyTranscript) else root
+        rendered = render_window(src, window=window, tool_results=tool_results, budget=budget)
+        return f"<root_transcript>\n{rendered}\n</root_transcript>"
 
     def call_cli(
         self,
@@ -453,16 +475,29 @@ class HookContext:
         tool_results: bool,
         budget: Budget | None = None,
         diff_text: str | None,
+        root_transcript: bool | int | Literal["recent", "full"] = False,
     ) -> str:
-        window = transcript_window(transcript) if transcript else None
-        block = self.transcript_block(window=window, tool_results=tool_results, budget=budget) if transcript else ""
+        block = "\n\n".join(
+            rendered
+            for rendered in (
+                self.root_transcript_block(
+                    window=transcript_window(root_transcript), tool_results=tool_results, budget=budget
+                )
+                if root_transcript
+                else "",
+                self.transcript_block(window=transcript_window(transcript), tool_results=tool_results, budget=budget)
+                if transcript
+                else "",
+            )
+            if rendered
+        )
         match template:
             case Prompt():
                 prompt = str(template.context("diff", diff_text))
-                if not transcript:
+                if not block:
                     return prompt
                 return f"{block}\n\n<task>\n{prompt}\n</task>"
             case str():
-                wrapped = f"{{transcript}}\n\n<task>\n{template}\n</task>" if transcript else template
+                wrapped = f"{{transcript}}\n\n<task>\n{template}\n</task>" if block else template
                 body = wrapped.format(*args, **kwargs, transcript=block)
                 return f"<diff>\n{diff_text}\n</diff>\n\n{body}" if diff_text is not None else body

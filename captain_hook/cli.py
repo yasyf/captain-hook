@@ -278,7 +278,13 @@ def dispatch_event(
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
-    from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_sources
+    from captain_hook.transcripts import (
+        ROOT_TAIL_EVENTS,
+        lane_transcript_path,
+        lazy_transcript,
+        registered_sources,
+        root_transcript,
+    )
     from captain_hook.util import reqenv
 
     record_heartbeat(event, raw)
@@ -293,11 +299,13 @@ def dispatch_event(
         attach=lambda: registered_sources(session_dir),
     )
     background_transcript = transcript.fork()
+    parent = raw.get("transcript_path")
     ctx = HookContext(
         session=SessionStore(session_dir),
         transcript=transcript,
         settings=_state.settings,
         project_root=root,
+        root_transcript=root_transcript(parent, ROOT_TAIL_EVENTS) if parent and resolved_path != parent else None,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
     within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)

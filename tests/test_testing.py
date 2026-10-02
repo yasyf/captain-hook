@@ -233,6 +233,20 @@ class TestInputToEvent:
         evt = input_to_event(Event.PreToolUse, inp)
         assert len(evt.ctx.transcript) == 1
 
+    def test_input_to_event_with_root_transcript(self):
+        from captain_hook import T
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        lane = input_to_event(
+            Event.PreToolUse,
+            Input(
+                tool="Bash", command="ls", agent_id="tm1", transcript=[T.user("brief")], root_transcript=[T.user("go")]
+            ),
+        )
+        assert lane.ctx.root_transcript_block() == "<root_transcript>\nuser: go\n</root_transcript>"
+        assert input_to_event(Event.PreToolUse, Input(tool="Bash", command="ls")).ctx.root_transcript is None
+
     def test_input_to_event_none_transcript(self):
         from captain_hook.testing.types import Input
         from tests.helpers import input_to_event
