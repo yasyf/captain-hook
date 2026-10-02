@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
     from captain_hook.events import PreToolUseEvent
 
+SCRATCH_GLOB_LIMIT = 2000
+
 
 @dataclass(frozen=True)
 class Recoverable:
@@ -99,11 +101,18 @@ def check_target(
             f"The glob '{token}' is too broad to verify before deleting. "
             "Narrow the pattern or run `rm -r <dir>` on a specific directory."
         )
-    if len(expansion) > GLOB_LIMIT and not scratch_glob(target):
-        return evt.block(
-            f"The glob '{token}' matches more than {GLOB_LIMIT} files. "
-            f"Run `ls {token}`, then narrow the pattern or run `rm -r <dir>` on a named directory."
-        )
+    if len(expansion) > GLOB_LIMIT:
+        if not scratch_glob(target):
+            return evt.block(
+                f"The glob '{token}' matches more than {GLOB_LIMIT} files. "
+                f"Run `ls {token}`, then narrow the pattern or run `rm -r <dir>` on a named directory."
+            )
+        expansion = target.expand(limit=SCRATCH_GLOB_LIMIT)
+        if expansion.exhausted or len(expansion) > SCRATCH_GLOB_LIMIT:
+            return evt.block(
+                f"The glob '{token}' matches more than {SCRATCH_GLOB_LIMIT} files, too many to check before "
+                "deleting. Run `rm -r <dir>` on a named scratch directory instead."
+            )
     recovery: Recoverable | None = None
     for match in expansion:
         result = check_resolved(evt, Target(match, match, cwd), rewritable=rewritable)
@@ -164,6 +173,9 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command="rm -rf $d/*", cwd="/"): Block(pattern="built at run time"),
         Input(command='X="/tmp/x /"; rm -rf $X', cwd="/"): ROOT_RM,
         Input(command='X="/tmp/x /outside"; rm -rf $X', cwd="/"): RECOVERABLE_RM,
+        Input(command='X="/tmp/a /Users/yasyf /tmp/b"; rm -rf $X"$X"', cwd="/"): Block(pattern="repository"),
+        Input(command='read IFS <<<:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): Block(pattern="repository"),
+        Input(command='IFS=:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): Block(pattern="repository"),
         Input(command="rm -f /tmp/../etc/*", cwd="/"): Block(),
         Input(command="rm /outside/{a,b}", cwd="/"): Block(pattern="repository"),
         Input(command="rm foo\\\nbar", cwd="/"): Block(pattern="repository"),

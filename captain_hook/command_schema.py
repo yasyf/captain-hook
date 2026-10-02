@@ -263,7 +263,7 @@ class PathMatches:
         path = Path(value)
         if not path.is_absolute():
             if target.cwd is None:
-                return False
+                return self.unresolved
             path = target.cwd / path
         return any(self.matches(candidate) for candidate in (path, glob_prefix(path)))
 

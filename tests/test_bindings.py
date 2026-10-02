@@ -41,7 +41,8 @@ class TestKnownBindings:
             ("X=pkill; cat <<-EOF\n\tEOF\nX=echo\nEOF\n$X", "$X", ("echo",)),
             ("X=echo; f() { echo }; $X claude; }; X=pkill; f", "$X claude", None),
             ("X=pkill; X=echo >/dev/null true; $X", "$X", ("pkill",)),
-            ("for X in *.sh; do $X; done", "$X", ("*.sh",)),
+            ("X=echo; R=echo; $R X; $X", "$X", ("echo",)),
+            ("X=echo; S=~/.claude/scratch; $S/run.sh X; $X", "$X", ("echo",)),
         ],
     )
     def test_resolves_literal_unconditional_assignments(
@@ -99,6 +100,19 @@ class TestUnknownBindings:
             ("X=1 2>/dev/null; $X", "$X"),
             ("set -- a b; $1", "$1"),
             ("X=${Y:-z}; $X", "$X"),
+            ("for X in *.sh; do $X; done", "$X"),
+            ("for P in /usr/bin/[p]kill; do $P; done", "$P"),
+            ('X=echo; V=X; read "$V" <<<pkill; $X', "$X"),
+            ('X=echo; V=X; printf -v "$V" pkill; $X', "$X"),
+            ("X=echo; V=X; unset $V; $X", "$X"),
+            ("X=echo; R=read; $R X <<<pkill; $X", "$X"),
+            ("X=echo; R=$(echo read); $R X <<<pkill; $X", "$X"),
+            ("X=echo; $UNBOUND X; $X", "$X"),
+            ("X=echo; read IFS <<<:; $X", "$X"),
+            ("X=echo; export IFS=:; $X", "$X"),
+            ("X=echo; unset IFS; $X", "$X"),
+            ("X=echo; for IFS in :; do :; done; $X", "$X"),
+            ('X=echo; : "${IFS:=:}"; $X', "$X"),
         ],
     )
     def test_stays_unresolved(self, text: str, word: str) -> None:
@@ -142,6 +156,15 @@ class TestCallResolution:
     def test_unquoted_candidates_split_into_targets(self) -> None:
         evt = evt_for("X='/tmp/x /'; rm -rf $X", cwd="/")
         assert [target.value for target in evt.cmd.call("rm").targets] == ["/tmp/x", "/"]
+
+    def test_any_unquoted_occurrence_makes_the_word_splittable(self) -> None:
+        evt = evt_for('X="/tmp/a /Users/yasyf /tmp/b"; rm -rf $X"$X"', cwd="/")
+        assert all(target.value is None for target in evt.cmd.call("rm").targets)
+
+    def test_escaped_dollar_in_a_double_quoted_payload_never_resolves(self) -> None:
+        evt = evt_for('P=/tmp; sh -c "P=/; rm -rf \\$P"', cwd="/")
+        (target,) = evt.cmd.calls("rm")[0].targets
+        assert target.value is None
 
     def test_relative_candidate_needs_a_cwd(self) -> None:
         (target,) = evt_for("X=src; rm -rf $X").cmd.call("rm").targets

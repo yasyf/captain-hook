@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from cc_transcript.command import PAYLOAD_DEPTH_LIMIT
 
 from captain_hook import Allow, Block
-from captain_hook.bindings import Ref, segments
+from captain_hook.bindings import Resolved
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
     GUARDED_PROGRAMS,
@@ -34,18 +34,49 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     spell,
     unresolvable,
 )
-from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SIGNAL_FLAGS, SOFTWAREUPDATE, TMUX
+from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.guard_literal import QUOTING_CHARS
 from captain_hook.util.shell import SHELLS
 
 if TYPE_CHECKING:
+    from cc_transcript.command import Word
+
     from captain_hook import HookResult, ToolRewriteEvent
     from captain_hook.builtin_packs.general.hooks._sessions import Facts, Unparsed
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Arguments, Scalar
 
 CRITERIA_PROGRAMS = frozenset({"pkill", "killall", "killall5", "skill", "snice", "kill-port"})
-SIGNAL_FLAGS_SET = frozenset(SIGNAL_FLAGS)
+PKILL_CRITERIA_SHORT = frozenset("fxnoiluUgGtPacvF")
+PKILL_CRITERIA_LONG = frozenset(
+    {
+        "--full",
+        "--exact",
+        "--newest",
+        "--oldest",
+        "--ignore-case",
+        "--inverse",
+        "--count",
+        "--list-name",
+        "--list-full",
+        "--euid",
+        "--uid",
+        "--group",
+        "--pgroup",
+        "--session",
+        "--terminal",
+        "--parent",
+        "--ns",
+        "--nslist",
+        "--pidfile",
+        "--logpidfile",
+        "--cgroup",
+        "--runstates",
+        "--ignore-ancestors",
+        "--require-handler",
+    }
+)
+ORCA_VM_RUN_FLAGS = frozenset({"--provision", "--connect"})
 PACKAGE_RUNNERS = frozenset({"npx", "bunx", "pnpx", "pnpm", "yarn"})
 CRITERIA_FIX = (
     "Find the pid with `pgrep -fl <pattern>`, verify it with `ps -o pid,ppid,pgid,lstart,command -p <pid>`, and "
@@ -138,10 +169,25 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
 @guard(
     tests={
         guarded(command="read p; $p sleep; ls ~/.orca"): Block(pattern="named at run time"),
-        guarded(command="p=$(echo pkill); $p sleep"): Block(pattern="from text that names `pkill`"),
+        guarded(command="p=$(echo pkill); $p sleep"): Block(pattern="built from text the guard cannot read"),
         guarded(command='P=$(ls | head -1); [ -z "$P" ] && P=$(find ~ -name python); "$P" -c x'): Block(
-            pattern="from text that names"
+            pattern="text the guard cannot read"
         ),
+        guarded(command="C=$(printf '%s%s' pk ill); \"$C\" claude; orca status"): Block(
+            pattern="text the guard cannot read"
+        ),
+        guarded(command='X=echo; V=X; read "$V" <<<pkill; "$X" claude; ls ~/.orca'): Block(pattern="named at run time"),
+        guarded(command='X=echo; V=X; printf -v "$V" pkill; "$X" claude; ls ~/.orca'): Block(
+            pattern="named at run time"
+        ),
+        guarded(command='X=echo; R=read; $R X <<<pkill; "$X" claude; ls ~/.orca'): Block(pattern="named at run time"),
+        guarded(command='X=echo; R=$(echo read); $R X <<<pkill; "$X" claude; ls ~/.orca'): Block(
+            pattern="named at run time"
+        ),
+        guarded(command='for P in /usr/bin/[p]kill; do "$P" -f claude; done'): Block(
+            pattern="text the guard cannot read"
+        ),
+        guarded(command='P=echo; sh -c "P=pkill; \\$P claude"'): Block(pattern="named at run time"),
         guarded(command="$W kill 14575"): Block(pattern="`kill` among its arguments"),
         guarded(command="W=timeout; $W 5 kill 14575"): Block(pattern="among its arguments"),
         guarded(command="$SHELL -c 'kill 14575'"): Block(pattern="among its arguments"),
@@ -149,11 +195,11 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
         guarded(command='$W "$1"; ls ~/.orca'): Block(pattern='`"\\$1"` among its arguments'),
         guarded(command="W='timeout 5'; $W pkill sleep"): Block(pattern="`pkill` among its arguments"),
         guarded(command="f() { $CMD 14575; }; CMD=kill; f"): Block(pattern="named at run time"),
-        guarded(command="p=ls; (p=kill); $p 14575"): Block(pattern="from text that names"),
-        guarded(command="false && p=kill; $p 14575"): Block(pattern="from text that names"),
+        guarded(command="p=ls; (p=kill); $p 14575"): Block(pattern="text the guard cannot read"),
+        guarded(command="false && p=kill; $p 14575"): Block(pattern="text the guard cannot read"),
         guarded(command="eval 'p=ls'; $p 14575; ls ~/.orca"): Block(pattern="named at run time"),
         guarded(command='[ -z "$P" ] && kill -l'): Allow(),
-        guarded(command="false && p=ls; $p 14575; ls ~/.orca"): Allow(),
+        guarded(command="false && p=ls; $p 14575; ls ~/.orca"): Block(pattern="text the guard cannot read"),
         guarded(command="cat <<'EOF'\np=ls\nEOF\n$p kill 14575"): Block(),
         guarded(command="{kill,14575}"): Block(pattern="expands at run time"),
         guarded(command="{pkill,-x,sleep}"): Block(),
@@ -185,6 +231,13 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
                 'skills/codex/1.14.0/skills/codex/../../bin/codex-ask"; "$CA" --lane review --schema findings - '
                 "<<'Q' 2>&1 | tail -40\nReview the builtin packs.\nQ"
             )
+        ): Block(pattern="text the guard cannot read"),
+        guarded(
+            command=(
+                'CA="/Users/yasyf/.claude/plugins/cache/skills/codex/1.14.0/skills/codex/../../bin/codex-ask"; '
+                'cd ~/.claude/worktrees/captain-hook/hook-lint-builtins && "$CA" --lane review --schema findings - '
+                "<<'Q' 2>&1 | tail -40\nReview the builtin packs.\nQ"
+            )
         ): Allow(),
         guarded(
             command=(
@@ -203,21 +256,21 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
                 "cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/v3-incident-api-1n80-fix-base && "
                 "B=$(realpath ../v3-incident-api-1n7z-fix-base/node_modules/.bin/biome); $B --version"
             )
-        ): Allow(),
+        ): Block(pattern="text the guard cannot read"),
         guarded(command='timeout 20 "$CP" outcomes --no-doc --session d0bf 2>&1; ls ~/.orca'): Allow(),
         guarded(
             command=(
                 "B=$(ls /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole/node_modules/.bin/biome 2>/dev/null || "
                 "command -v biome) && $B check infra/ci/src/verbs/release-stacks.ts 2>&1 | tail -25"
             )
-        ): Allow(),
+        ): Block(pattern="text the guard cannot read"),
         guarded(
             command=(
                 'for c in "bun infra/graph.ts" "bun infra/k8s.ts delivery"; do eval $c || echo "FAILED $c"; done; '
                 "ls ~/.orca"
             )
         ): Allow(),
-        guarded(command="X=echo; X[0]=pkill; $X claude"): Block(pattern="from text that names `pkill`"),
+        guarded(command="X=echo; X[0]=pkill; $X claude"): Block(pattern="text the guard cannot read"),
         guarded(command="X=echo; printf -v X pkill; $X claude"): Block(pattern="named at run time"),
         guarded(command="X=echo; read 'X' <<<pkill; $X claude"): Block(pattern="named at run time"),
         guarded(command="X=echo; declare -n Y=X; Y=pkill; $X claude"): Block(pattern="named at run time"),
@@ -228,7 +281,7 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
         guarded(command="X='{p,q}kill'; $X -x claude"): Block(pattern="expands at run time"),
         guarded(command='X=echo; function f() { "$X" claude; }; X=pkill; f'): Block(pattern="named at run time"),
         guarded(command='X=echo; f() { echo }; "$X" claude; }; X=pkill; f'): Block(pattern="named at run time"),
-        guarded(command='for X in {echo,pkill}; do "$X" claude; done'): Block(pattern="from text that names"),
+        guarded(command='for X in {echo,pkill}; do "$X" claude; done'): Block(pattern="text the guard cannot read"),
         guarded(command="PWD=/tmp; cd /; $PWD/kill 14575"): Block(pattern="named at run time"),
         guarded(command='cd ~/.orca/workspaces/x && for g in a.ts b.ts; do eval "timeout 120 bun $g"; done'): Allow(),
         guarded(command="~/bin/kill 14575"): Allow(),
@@ -261,10 +314,12 @@ def unread_reason(call: Call, arguments: Arguments) -> str:
     return "it names an option or signal at run time"
 
 
-def one_variable(raw: str) -> bool:
-    match segments(raw):
-        case [Ref()]:
-            return True
+def probe_pid(call: Call, word: Word, value: Scalar | None) -> bool:
+    if literal_pid(word, value) is not None:
+        return True
+    match call.resolve(word):
+        case Resolved(candidates, _):
+            return all(candidate.isdecimal() for candidate in candidates)
         case _:
             return False
 
@@ -286,10 +341,7 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         return None
     targets = tuple(zip(arguments.words.get("targets", ()), values.get("targets", ()), strict=True))
     probing = ("probe" in values and "signal" not in values) or values.get("signal") == ("0",)
-    if probing and (
-        all(literal_pid(word, value) is not None for word, value in targets)
-        or (len(targets) == 1 and (double_quoted(targets[0][0].raw) or one_variable(targets[0][0].raw)))
-    ):
+    if probing and all(probe_pid(call, word, value) for word, value in targets):
         return None
     if not targets:
         return deny("a wrapper supplies its targets") if call.wrappers else None
@@ -299,7 +351,7 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
     if probing:
         return (
             f"BLOCKED: `{spelling}` cannot be verified: {describe_target(word, value)}, so the probe could expand "
-            f'into a real signal. Pass one double-quoted word (`"{clip(word.raw, 40)}"`) or the literal pid.'
+            "into a real signal. Pass the literal pid, or a variable the same line sets to one."
         )
     return deny(describe_target(word, value))
 
@@ -350,7 +402,17 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         guarded(command="kill -STOP 14575"): Block(),
         guarded(command="kill -s KILL 14575"): Block(),
         guarded(command="kill -0 -9 14575"): Block(),
+        guarded(command="kill -0 14575 -9"): Block(),
         guarded(command="PID='-s 9 14575'; kill -0 $PID"): Block(pattern="an agent session"),
+        guarded(command='bash -c \'PID=$(printf "%s" "-s KILL 14575"); kill -0 $PID\''): Block(
+            pattern="probe could expand into a real signal"
+        ),
+        guarded(command='kill -0 "$worker" 2>/dev/null || break'): Block(pattern="probe could expand"),
+        guarded(command="kill -0 ${PID}"): Block(pattern="probe could expand"),
+        guarded(command="PID=$(awk '{print $2}' /tmp/apply.pid); kill -0 $PID 2>/dev/null && echo alive"): Block(
+            pattern="probe could expand"
+        ),
+        guarded(command="PID=14575x; kill -0 $PID"): Block(pattern="probe could expand"),
         guarded(command="X=-9; kill $X $(printf 14575)"): Block(pattern="command substitution"),
         guarded(command="kill -0 $pid 14575"): Block(pattern="probe could expand into a real signal"),
         guarded(command="kill -0 $pid$x"): Block(pattern="probe could expand into a real signal"),
@@ -369,15 +431,9 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         guarded(tool="mcp__runner__exec", tool_input={"argv": ["kill", 14575]}): Block(pattern="an agent session"),
         guarded(tool="mcp__x__exec", tool_input={"command": "kill 14575 \udc80"}): Block(),
         guarded(command="kill -0 14575"): Allow(),
-        guarded(command='kill -0 "$worker" 2>/dev/null || break'): Allow(),
-        guarded(
-            command=(
-                "LOG=~/.claude/scratch/release-v3/sandsql-aig-migration/apply-a9922c25.log; PID=$(awk '{print $2}' "
-                "~/.claude/scratch/release-v3/sandsql-aig-migration/apply.pid); kill -0 $PID 2>/dev/null && echo alive"
-            )
-        ): Allow(),
-        guarded(command="kill -0 ${PID}"): Allow(),
         guarded(command="PID=31337; kill -0 $PID"): Allow(),
+        guarded(command='PID=31337; kill -0 "$PID" 2>/dev/null || break'): Allow(),
+        guarded(command="for p in 31337 31338; do kill -0 $p; done"): Allow(),
         guarded(command="kill -s 0 14575"): Allow(),
         guarded(command="kill -l"): Allow(),
         guarded(command="kill -l 9"): Allow(),
@@ -437,7 +493,17 @@ def renice_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:
 
 
 def probes_only(call: Call) -> bool:
-    return call.args[:1] == ("-0",) and SIGNAL_FLAGS_SET.isdisjoint(call.args[1:])
+    if call.args[:1] != ("-0",):
+        return False
+    for arg in call.args[1:]:
+        if not arg.startswith("-"):
+            continue
+        flag = arg.partition("=")[0]
+        if flag in PKILL_CRITERIA_LONG:
+            continue
+        if flag.startswith("--") or len(flag) < 2 or not set(flag[1:]) <= PKILL_CRITERIA_SHORT:
+            return False
+    return True
 
 
 def criteria_program(call: Call) -> str | None:
@@ -481,6 +547,12 @@ def criteria_verdict(call: Call) -> str | None:
         guarded(command="X=pkill; cat <<EOF\n\tEOF\nX=echo\nEOF\n$X claude"): Block(pattern="signals every process"),
         guarded(command="X=pkill; cat <<-EOF\n\tEOF\nX=echo\nEOF\n$X claude"): Allow(),
         guarded(command="pkill node"): Block(),
+        guarded(command="pkill -0 --signal KILL -f claude"): Block(pattern="signals every process matching"),
+        guarded(command="pkill -0 --signal=KILL -f claude"): Block(),
+        guarded(command="pkill -0 -s KILL -f claude"): Block(),
+        guarded(command="pkill -0 -SIGKILL -f claude"): Block(),
+        guarded(command="pkill -0 -fs KILL claude"): Block(),
+        guarded(command="pkill -0 -e claude"): Block(),
         guarded(command="pkill -0 -9 x"): Block(),
         guarded(command="pkill -f -0 x"): Block(),
         guarded(command="pkill -TERM -0 x"): Block(),
@@ -516,6 +588,7 @@ def criteria_verdict(call: Call) -> str | None:
         guarded(command="fuser -v 3000/tcp"): Allow(),
         guarded(command="gh api rate_limit -q '.resources.core' ; date +%s; pkill -0 x 2>/dev/null; echo"): Allow(),
         guarded(command="pkill -0 -f 'ledger.py watch'"): Allow(),
+        guarded(command="pkill -0 -fx --newest claude"): Allow(),
         guarded(command="pgrep -f claude"): Allow(),
         guarded(command="echo pkill -f never"): Allow(),
         guarded(tool="mcp__runner__exec", tool_input={"cmd": "pgrep -f claude"}): Allow(),
@@ -624,8 +697,17 @@ def orca_ending_verdict(call: Call) -> str | None:
             )
         case (str() as group_name, str() as verb_name) if verb_name in ORCA_ENDINGS.get(group_name, ()):
             return orca_ending(spelling, group_name, verb_name, arguments)
+        case ("vm", verb_name) if (flag := orca_vm_run_flag(call)) is not None or verb_name != "recipe":
+            return (
+                f"BLOCKED: `{spelling}` passes `{flag or verb_name}`, which runs a recipe's commands on a VM, and a "
+                "recipe may end sessions. Run `orca vm recipe doctor <recipe-id>` without `--provision` or `--connect`."
+            )
         case _:
             return None
+
+
+def orca_vm_run_flag(call: Call) -> str | None:
+    return next((arg for arg in call.args if arg.partition("=")[0] in ORCA_VM_RUN_FLAGS), None)
 
 
 @guard(
@@ -678,6 +760,15 @@ def orca_ending_verdict(call: Call) -> str | None:
         guarded(command="orca nuke everything"): Block(pattern="does not know"),
         guarded(command="orca orchestration worker-release --help 2>&1 | head -15"): Block(pattern="worker-release"),
         guarded(command="orca terminal close --help"): Block(pattern="closes the current terminal"),
+        guarded(
+            command="orca vm recipe doctor guard-probe --provision --repo-path /Users/yasyf/.claude/scratch/x/vm-probe"
+        ): Block(pattern="passes `--provision`"),
+        guarded(command="orca vm recipe doctor guard-probe --connect --json"): Block(pattern="passes `--connect`"),
+        guarded(command="orca vm recipe doctor guard-probe --provision=true"): Block(
+            pattern="passes `--provision=true`"
+        ),
+        guarded(command="orca vm create guard-probe"): Block(pattern="passes `create`"),
+        guarded(command="orca vm recipe doctor cloud-sandbox --repo-path /path/to/repo --json"): Allow(),
         guarded(command="'orca' terminal close"): Block(),
         guarded(
             tool="mcp__runner__exec", tool_input={"command": "orca", "args": ["terminal", "close", "--terminal", "t"]}

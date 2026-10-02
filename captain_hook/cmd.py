@@ -580,7 +580,7 @@ class Cmd:
             return self.scope, None
         quote = call.occurrence.quote_contexts[-1:]
         if quote == ('"',):
-            return host_scope, host_offset
+            return (self.scope, None) if "\\$" in payload.raw else (host_scope, host_offset)
         within = None if word.span is None else self.char_offset(word.span[0]) - self.char_offset(payload.span[0])
         if quote == ("'",) and payload.value is not None:
             text, start = payload.value, 1
