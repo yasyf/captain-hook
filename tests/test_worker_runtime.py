@@ -268,6 +268,29 @@ def test_guard_stays_empty_when_dispatch_fails() -> None:
     assert response.guard == ""
 
 
+def test_a_failed_mandatory_phase_denies_even_when_every_completion_was_noted() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+
+    def lost_at_the_cutoff(*_: object, **__: object) -> tuple[None, object]:
+        reqenv.note_mandatory_completed(completion_key(state.hooks[0], 0))
+        reqenv.mandatory_phase().conclude("failed")
+        raise ValueError("verdict lost at the cutoff")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state),
+        dispatcher=lost_at_the_cutoff,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    response, _ = runtime.dispatch(request())
+    assert response.exit == 0
+    assert response.guard == ""
+    assert '"permissionDecision": "deny"' in response.stdout
+    assert "guard_sessions did not complete (ValueError: verdict lost at the cutoff)" in response.stdout
+    assert "ValueError: verdict lost at the cutoff" in response.stderr
+
+
 def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) -> None:
     def dispatch(root: object, event: object, raw: object, **kwargs: object) -> tuple[None, object]:
         reqenv.abandoned().append("straggler")

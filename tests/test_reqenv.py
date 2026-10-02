@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import threading
 from pathlib import Path
 
 import pytest
@@ -127,7 +126,7 @@ class TestCheckpoint:
         reqenv.checkpoint()
 
     def test_passes_until_the_flag_is_set_then_raises(self) -> None:
-        flag = threading.Event()
+        flag = reqenv.Cutoff()
         with reqenv.abandonable(flag):
             reqenv.checkpoint()
             flag.set()
@@ -140,7 +139,7 @@ class TestCheckpoint:
         from captain_hook.util.vcs import scanned_names
 
         (tmp_path / "nested").mkdir()
-        flag = threading.Event()
+        flag = reqenv.Cutoff()
         flag.set()
         with reqenv.abandonable(flag):
             with pytest.raises(reqenv.Abandoned):
@@ -151,6 +150,17 @@ class TestCheckpoint:
 
     def test_abandoned_escapes_a_handlers_broad_except(self) -> None:
         assert not issubclass(reqenv.Abandoned, Exception)
+
+    def test_publish_runs_until_the_cutoff_closes_then_refuses(self) -> None:
+        cutoff = reqenv.Cutoff()
+        published: list[str] = []
+        with reqenv.abandonable(cutoff):
+            assert reqenv.publish(lambda: published.append("verdict")) is None
+            cutoff.close()
+            with pytest.raises(reqenv.Abandoned):
+                reqenv.publish(lambda: published.append("late"))
+        assert published == ["verdict"]
+        assert reqenv.publish(lambda: "unbound") == "unbound"
 
 
 class TestAbandoned:

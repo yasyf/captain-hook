@@ -9,6 +9,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
 from copy import copy
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,7 +28,7 @@ from captain_hook.util import reqenv
 from captain_hook.util.caching import once
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from captain_hook.events import BaseHookEvent
 
@@ -41,6 +42,7 @@ BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
 
 type Envelope = dict[str, Any] | str
+type Settle = Callable[[HookResult | None], None]
 
 _SURFACE_HANDLER_ERRORS: ContextVar[bool] = ContextVar("captain_hook_surface_handler_errors", default=False)
 
@@ -71,7 +73,7 @@ class Fanout:
     """
 
     def __init__(self, groups: int) -> None:
-        self.abandoned = threading.Event()
+        self.abandoned = reqenv.Cutoff()
         self.pool = ThreadPoolExecutor(max_workers=groups, thread_name_prefix="capt-hook-hook")
         self._budget = fanout_budget()
         self._held = 0
@@ -92,7 +94,7 @@ class Fanout:
         self._budget.release()
 
     def close(self) -> None:
-        self.abandoned.set()
+        self.abandoned.close()
         with self._guard:
             held, self._held = self._held, 0
         for _ in range(held):
@@ -193,11 +195,13 @@ def execute_hook(
     entry: RegisteredHook,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
+    *,
+    settle: Settle | None = None,
 ) -> HookResult | None:
     from captain_hook.transcripts import release_transcript
 
     try:
-        return _execute_hook(entry, evt, session_dir)
+        return _execute_hook(entry, evt, session_dir, settle)
     finally:
         release_transcript(evt.ctx.transcript)
 
@@ -205,7 +209,8 @@ def execute_hook(
 def _execute_hook(
     entry: RegisteredHook,
     evt: BaseHookEvent,
-    session_dir: Path | None = None,
+    session_dir: Path | None,
+    settle: Settle | None,
 ) -> HookResult | None:
     """Execute a single registered hook under a reserve-then-release ``max_fires`` protocol.
 
@@ -217,8 +222,11 @@ def _execute_hook(
     (``SystemExit``/``KeyboardInterrupt``), which releases and then re-propagates so the abort is
     not silently swallowed. A truthy result reached once nobody waits on it any more (the caller's
     deadline passed, or dispatch gave up on the event) is not delivered either: :func:`deliver`
-    unwinds it as :class:`captain_hook.util.reqenv.Abandoned` before any ledger write, so the slot
-    comes back the same way. Uncapped hooks (``max_fires is None``) skip the lock entirely.
+    publishes the ledger write and the caller's *settle* under
+    :func:`captain_hook.util.reqenv.publish`, which unwinds as
+    :class:`captain_hook.util.reqenv.Abandoned` instead once the event closed, so the slot comes
+    back the same way and a closure never splits an accepted verdict from its record. Uncapped
+    hooks (``max_fires is None``) skip the lock entirely.
     """
     hook_session_dir = (session_dir / entry.state_key / (evt.agent_id or "main")) if session_dir else None
     if hook_session_dir:
@@ -226,16 +234,16 @@ def _execute_hook(
     store = SessionStore(hook_session_dir)
 
     if entry.spec.max_fires is None:
-        return deliver(entry, evt, run_handler(entry, evt))
+        return deliver(entry, evt, run_handler(entry, evt), settle)
 
     with store[HookState].mutate() as hook_state:
         if hook_state.fire_count >= entry.spec.max_fires:
-            return None
+            return deliver(entry, evt, None, settle)
         hook_state.fire_count += 1
 
     delivered: HookResult | None = None
     try:
-        delivered = deliver(entry, evt, run_handler(entry, evt))
+        delivered = deliver(entry, evt, run_handler(entry, evt), settle)
         return delivered
     finally:
         if delivered is None:
@@ -243,11 +251,16 @@ def _execute_hook(
                 hook_state.fire_count -= 1
 
 
-def deliver(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult | None) -> HookResult | None:
-    if not result:
-        return None
-    reqenv.checkpoint()
-    record_fire(entry, evt, result)
+def deliver(
+    entry: RegisteredHook, evt: BaseHookEvent, result: HookResult | None, settle: Settle | None
+) -> HookResult | None:
+    def accept() -> None:
+        if result:
+            record_fire(entry, evt, result)
+        if settle is not None:
+            settle(result)
+
+    reqenv.publish(accept)
     return result
 
 
@@ -690,34 +703,41 @@ def run_mandatory(
     session_dir: Path | None,
     ordinal: int,
     bound: MandatoryBound,
-) -> HookResult | None:
-    """Run one mandatory hook under the event's :class:`MandatoryBound` and record its completion.
+    future: Future[HookResult | None],
+) -> None:
+    """Run one mandatory hook under the event's :class:`MandatoryBound`, then publish its completion into *future*.
 
-    Incomplete transcript evidence leaves the hook unrun and records nothing; a cutoff already
-    passed when the hook starts or reached by the time it returns, or any other exception, is the
-    whole event's and propagates through the hook's future.
+    The completion and the settlement are one :func:`captain_hook.util.reqenv.publish` with the
+    hook's ledger write, under the cutoff's closure lock: a verdict is accepted whole before the
+    collector closes the event or refused whole after it, never half-recorded. Incomplete
+    transcript evidence leaves the hook unrun, settling the future with no completion; a cutoff
+    already passed when the hook starts or closed by the time it publishes, or any other
+    exception, is the whole event's and propagates through the future.
     """
     if bound.cutoff.is_set():
         raise MandatoryDeadlinePassed(f"{entry.name}: the caller's deadline passed while the hook was queued")
+    key = completion_key(entry, ordinal)
+
+    def settle(result: HookResult | None) -> None:
+        reqenv.note_mandatory_completed(key)
+        future.set_result(result)
+
     try:
-        with bound.deadline(), surfacing_handler_errors(), foreground_evidence(MANDATORY_WORK_SECONDS):
-            result = (
-                execute_hook(entry, evt, session_dir)
-                if not skips_event(entry.spec, evt) and matches_conditions(entry.spec, evt)
-                else None
+        try:
+            with bound.deadline(), surfacing_handler_errors(), foreground_evidence(MANDATORY_WORK_SECONDS):
+                if skips_event(entry.spec, evt) or not matches_conditions(entry.spec, evt):
+                    reqenv.publish(partial(settle, None))
+                else:
+                    execute_hook(entry, evt, session_dir, settle=settle)
+        except EvidenceIncomplete as exc:
+            if not fails_open(exc):
+                raise
+            logger.bind(hook=entry.name, status=exc.status, reason=exc.reason).warning(
+                "mandatory hook left unrun: evidence incomplete"
             )
-        reqenv.checkpoint()
+            reqenv.publish(partial(future.set_result, None))
     except reqenv.Abandoned:
         raise MandatoryDeadlinePassed(f"{entry.name}: finished past the caller's deadline") from None
-    except EvidenceIncomplete as exc:
-        if not fails_open(exc):
-            raise
-        logger.bind(hook=entry.name, status=exc.status, reason=exc.reason).warning(
-            "mandatory hook left unrun: evidence incomplete"
-        )
-        return None
-    reqenv.note_mandatory_completed(completion_key(entry, ordinal))
-    return result
 
 
 def run_mandatory_group(
@@ -741,7 +761,7 @@ def run_mandatory_group(
             if not future.set_running_or_notify_cancel():
                 continue
             try:
-                future.set_result(run_mandatory(entries[index], events[index], session_dir, index, bound))
+                run_mandatory(entries[index], events[index], session_dir, index, bound, future)
             except BaseException as exc:
                 future.set_exception(exc)
                 for later in group[position + 1 :]:
@@ -752,17 +772,22 @@ def run_mandatory_group(
 def collect_mandatory(
     entries: Sequence[RegisteredHook], futures: Sequence[Future[HookResult | None]], cutoff: reqenv.Cutoff
 ) -> None:
-    """Wait for every mandatory future until *cutoff*, then raise the first failure in registration order.
+    """Wait for every mandatory future until *cutoff*, close it, then conclude the phase from what settled.
 
-    Past the cutoff every hook not yet started is cancelled and every one still running is the
-    event's failure, and the cutoff is set: a hook that ignores its budget keeps its thread until
-    it returns, but a verdict nobody waited for records no completion and keeps no fire slot. A
-    hook that raised dooms the event the same way.
+    The closure comes first and takes the cutoff's lock, so every publication that beat it is a
+    settled future and none can follow it; only then is each future read, and the phase recorded
+    in :func:`captain_hook.util.reqenv.mandatory_phase` as settled or failed, exactly once. Past
+    the cutoff every hook not yet started is cancelled and every one still running is the
+    event's failure: a hook that ignores its budget keeps its thread until it returns, but a
+    verdict nobody waited for records no completion and keeps no fire slot. A hook that raised
+    dooms the event the same way.
     """
+    phase = reqenv.mandatory_phase()
+    wait(futures, timeout=cutoff.seconds_left())
+    cutoff.close()
+    for future in futures:
+        future.cancel()
     try:
-        wait(futures, timeout=cutoff.seconds_left())
-        for future in futures:
-            future.cancel()
         for entry, future in zip(entries, futures, strict=True):
             if future.cancelled():
                 raise MandatoryDeadlinePassed(f"{entry.name}: left unrun at the caller's deadline")
@@ -770,8 +795,9 @@ def collect_mandatory(
                 raise MandatoryDeadlinePassed(f"{entry.name}: still running at the caller's deadline")
             future.result()
     except BaseException:
-        cutoff.set()
+        phase.conclude("failed")
         raise
+    phase.conclude("settled")
 
 
 def dispatch_mandatory(
@@ -794,6 +820,9 @@ def dispatch_mandatory(
     contract, so a fail-open skip leaves it unrun — and any other exception, a handler's included,
     is the whole event's: a crashed mandatory hook must read as no completion, never as a verdict.
     The settled futures fold into :func:`combine` at the hooks' own registration positions.
+    The worker turns a failed phase into the event's deny only when it recognizes the failure
+    and its reply reaches the client; a transport that goes silent is the client's call, which
+    retries a timed-out guard once and then warns.
     """
     from captain_hook.transcripts import fork_transcript, release_transcript
 

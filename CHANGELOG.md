@@ -226,6 +226,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hook error. A request the prefilter did flag still reports no completion, so the client's own
   deny stands. The worker's reserved request lane also serves any event the loaded registry
   guards, not only the requests the client flagged.
+- **A verdict racing the mandatory deadline is accepted whole or refused whole.** A mandatory
+  hook's ledger row, completion, and settled future are published together under the cutoff's
+  closure lock, and the phase's outcome is recorded once that closure is in place, so the worker
+  denies on a failed phase whatever the completion list says and a refused verdict spends no
+  `max_fires` slot. The worker's deny reaches the client only when the worker recognizes the
+  failure and its reply arrives; transport silence stays the client's call, which retries a
+  timed-out guard once and then warns.
 
 ### Changed
 

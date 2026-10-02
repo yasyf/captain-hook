@@ -554,12 +554,11 @@ def test_parse_is_deferred_until_first_touch(transcript_path: Path, transcript_o
 
 
 def test_an_abandoned_hook_never_starts_the_parse(transcript_path: Path, transcript_owner: FixtureOwner) -> None:
-    import threading
 
     from captain_hook.util import reqenv
 
     proxy = lazy_transcript(transcript_path, loader=transcript_owner.load)
-    flag = threading.Event()
+    flag = reqenv.Cutoff()
     flag.set()
     with reqenv.abandonable(flag), pytest.raises(reqenv.Abandoned):
         bool(proxy)

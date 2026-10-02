@@ -254,7 +254,8 @@ def _guard_completion(event: Event) -> GuardCompletion:
 
 def unfinished_mandatory(required: Mapping[str, RegisteredHook]) -> list[RegisteredHook]:
     completed = Counter(reqenv.mandatory_completed())
-    return [hook for key, hook in required.items() if completed[key] != 1]
+    unfinished = [hook for key, hook in required.items() if completed[key] != 1]
+    return unfinished or (list(required.values()) if reqenv.mandatory_phase().failed else [])
 
 
 def mandatory_denial(event: Event, unfinished: Sequence[RegisteredHook], cause: str) -> Envelope | None:
