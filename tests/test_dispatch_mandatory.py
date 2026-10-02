@@ -386,3 +386,34 @@ class TestGuardCompletion:
         assert "permissionDecision" not in response.stdout
         for surviving in (self.PAYLOAD, self.STOP_PAYLOAD):
             assert self.respond(payload=surviving).guard == ""
+
+    def test_another_packs_guard_cannot_complete_for_a_general_pack_with_no_surviving_guard(
+        self, isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda *args: None)
+        hooks = tmp_path / "hooks"
+        shutil.copytree(PACKS_DIR / "general" / "hooks", hooks)
+        guard_modules = ("sessions.py", "stops.py")
+        for guard_module in guard_modules:
+            with (hooks / guard_module).open("a") as source:
+                source.write("\nraise ImportError('broken copy')\n")
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "other_guard.py").write_text(
+            "from captain_hook import Event, on\n\n\n"
+            "@on(Event.PreToolUse | Event.PermissionRequest, mandatory=True)\n"
+            "def other_guard(evt):\n"
+            "    return None\n"
+        )
+        discover_pack("general", hooks)
+        discover_pack("other", other)
+        assert sorted(error.source for error in app._state.load_errors) == sorted(
+            str(hooks / guard_module) for guard_module in guard_modules
+        )
+        assert [hook.pack_name for hook in app.get_mandatory_hooks(Event.PreToolUse)] == ["other"]
+
+        for payload in (self.PAYLOAD, self.STOP_PAYLOAD):
+            response = self.respond(payload=payload)
+            assert response.exit == 0
+            assert response.guard == ""
+            assert "permissionDecision" not in response.stdout

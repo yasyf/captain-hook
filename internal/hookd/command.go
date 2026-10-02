@@ -137,11 +137,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if err != nil {
 		if request.Mandatory {
-			kind := failureKind(err, client != nil)
-			if kind == "transport-timeout" {
-				return passTimedOut(stdout, stderr, request.Event, timeout)
-			}
-			return denyMandatory(stdout, stderr, request.Event, kind)
+			return denyMandatory(stdout, stderr, request.Event, failureKind(err, client != nil))
 		}
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -195,26 +191,6 @@ func dispatch(client eventClient, request wireproto.EventRequest, timeout time.D
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return client.Event(ctx, request)
-}
-
-// passTimedOut lets a mandatory event through after the host timed out on it
-// twice, and says so: a wedged host is reported, never silently denying every
-// guarded call.
-func passTimedOut(stdout, stderr io.Writer, event string, timeout time.Duration) int {
-	message := fmt.Sprintf(
-		"capt-hook: the session guard timed out twice (%s each) on this %s, so it ran unchecked. "+
-			"The Captain Hook host is not answering; run `capt-hook helper status` to check it.",
-		timeout, event)
-	envelope, err := wireproto.Marshal(map[string]any{"systemMessage": message})
-	if err != nil {
-		panic(fmt.Sprintf("captain: encode timeout warning: %v", err))
-	}
-	if _, err := io.WriteString(stdout, string(envelope)+"\n"); err != nil {
-		fmt.Fprintf(stderr, "capt-hookd: write result: %v\n", err)
-		return 1
-	}
-	fmt.Fprintln(stderr, "capt-hookd: the session guard did not complete (transport-timeout); allowed with a warning")
-	return 0
 }
 
 func failureKind(err error, opened bool) string {

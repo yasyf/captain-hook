@@ -111,33 +111,35 @@ func (c *flakyClient) Event(_ context.Context, _ wireproto.EventRequest) (wirepr
 
 func (c *flakyClient) Close() error { return nil }
 
-func TestRunRetriesATimedOutGuardOnceThenWarnsInsteadOfDenying(t *testing.T) {
+func TestRunRetriesATimedOutGuardOnceThenDenies(t *testing.T) {
 	deny := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}` + "\n"
 	completed := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: deny, Guard: wireproto.GuardCompleted}
 	for _, event := range []string{"PreToolUse", "PermissionRequest"} {
-		t.Run(event+" retried", func(t *testing.T) {
-			client := &flakyClient{timeouts: 1, response: completed}
-			previous := openEventClient
-			openEventClient = func() (eventClient, error) { return client, nil }
-			t.Cleanup(func() { openEventClient = previous })
-			code, stdout, stderr := runEvent(t, event, destructivePayload)
-			if code != 0 || stdout != deny || stderr != "" || client.requests != 2 {
-				t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d, want the retry's verdict", code, stdout, stderr, client.requests)
-			}
-		})
-		t.Run(event+" timed out twice", func(t *testing.T) {
-			client := &flakyClient{timeouts: 2}
-			previous := openEventClient
-			openEventClient = func() (eventClient, error) { return client, nil }
-			t.Cleanup(func() { openEventClient = previous })
-			code, stdout, stderr := runEvent(t, event, destructivePayload)
-			if code != 0 || client.requests != 2 || strings.Contains(stdout, "deny") ||
-				!strings.Contains(stdout, `"systemMessage"`) || !strings.Contains(stdout, "timed out twice") ||
-				!strings.Contains(stderr, "(transport-timeout); allowed with a warning") {
-				t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d, want a warning and no deny after two timeouts",
-					code, stdout, stderr, client.requests)
-			}
-		})
+		for name, payload := range map[string]string{"guarded program": destructivePayload, "stop tool": stopPayload} {
+			t.Run(event+" retried / "+name, func(t *testing.T) {
+				client := &flakyClient{timeouts: 1, response: completed}
+				previous := openEventClient
+				openEventClient = func() (eventClient, error) { return client, nil }
+				t.Cleanup(func() { openEventClient = previous })
+				code, stdout, stderr := runEvent(t, event, payload)
+				if code != 0 || stdout != deny || stderr != "" || client.requests != 2 {
+					t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d, want the retry's verdict", code, stdout, stderr, client.requests)
+				}
+			})
+			t.Run(event+" timed out twice / "+name, func(t *testing.T) {
+				client := &flakyClient{timeouts: 2}
+				previous := openEventClient
+				openEventClient = func() (eventClient, error) { return client, nil }
+				t.Cleanup(func() { openEventClient = previous })
+				code, stdout, stderr := runEvent(t, event, payload)
+				want := wireproto.DenyEnvelope(event, "transport-timeout") + "\n"
+				if code != 0 || client.requests != 2 || stdout != want ||
+					stderr != "capt-hookd: the session guard did not complete (transport-timeout); denied\n" {
+					t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d, want exit 0 with %q after two timeouts",
+						code, stdout, stderr, client.requests, want)
+				}
+			})
+		}
 	}
 }
 

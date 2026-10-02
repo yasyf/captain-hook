@@ -24,11 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The native prefilter flags `TaskStop`, so the host fails closed.** Go and generated
   Python match the exact tool name before the Bash first-party check. A stop request is
-  mandatory under load and fails closed on host or transport failure. A guard module that
-  fails to load leaves the guard completion empty even when a sibling guard module loaded, so
-  the host keeps denying rather than trusting the survivor. The unproven-child remedy in
-  `pid_verdict` now says "Let it finish, or ask the owner to end it." instead of directing
-  the caller to the harness's stop tool.
+  mandatory under load and fails closed on host or transport failure. The worker names the
+  required `general` guard pack independently of registrations. Any load error in that pack
+  or absence of its mandatory hooks withholds completion, even if another pack's hook
+  completes. All registered mandatory hooks, including other packs' hooks, must still
+  complete. The unproven-child remedy in `pid_verdict` now says "Let it finish, or ask the
+  owner to end it." instead of directing the caller to the harness's stop tool.
+- **The native client now denies after two timeouts for every mandatory guard.** After
+  one retry, a second timeout previously printed a warning and let the call run unchecked.
+  The retry stays, but its timeout now produces a `transport-timeout` deny envelope on
+  `PreToolUse` and `PermissionRequest` for every guard, including `kill`, `pkill`,
+  `orca terminal close`, and `TaskStop`. Non-mandatory events are unchanged: they still
+  exit `1` with the error on stderr.
 - **A mandatory hook that reads the transcript gets a 15 s evidence budget, not the tool call's
   0.75 s.** The foreground evidence budget for a `PreToolUse` dispatch is 0.75 s, shared by every
   snapshot call the dispatch makes. On a loaded host a mandatory gate that reads the lane and root
