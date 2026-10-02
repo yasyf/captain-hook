@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import os
 from collections import deque
 from collections.abc import Callable, Collection
@@ -69,14 +70,24 @@ class Arguments:
     cwd: Path | None
     complete: bool
     operands_complete: bool
+    call: Call
     unread: tuple[Word, ...] = ()
 
     def paths(self, name: str) -> Targets:
-        """Return the named role as path targets with the invocation's working directory."""
+        """Return the named role as path targets with the invocation's working directory.
+
+        A word with a same-line expansion the call can resolve contributes one target per
+        candidate value; one it cannot stays unverified.
+        """
         return Targets(
             tuple(
-                Target(value if isinstance(value, str) else None, word.raw, self.cwd)
+                target
                 for word, value in zip(self.words.get(name, ()), self.values.get(name, ()), strict=True)
+                for target in (
+                    self.call.word_targets(word)
+                    if word.value is None
+                    else (Target(value if isinstance(value, str) else None, word.raw, self.cwd),)
+                )
             ),
             complete=self.operands_complete,
         )
@@ -161,6 +172,7 @@ class CommandSchema:
                 if self.options_end_operands and not option.prefix:
                     accept_operands = False
                 if option.until:
+                    values.setdefault(option.name, []).append(True)
                     suffix: deque[str | None] = deque(maxlen=max(map(len, option.until)))
                     for argument in stream:
                         suffix.append(argument.value)
@@ -217,8 +229,19 @@ class CommandSchema:
             call.cwd,
             complete and not positional,
             operands_complete,
+            call,
             unread,
         )
+
+
+def glob_prefix(path: Path) -> Path:
+    """The literal directory a glob path walks from: its parts up to the first one with glob magic."""
+    literal = list(path.parts)
+    for index, part in enumerate(path.parts):
+        if glob.has_magic(part):
+            literal = path.parts[:index]
+            break
+    return Path(*literal) if literal else Path(".")
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +265,9 @@ class PathMatches:
             if target.cwd is None:
                 return False
             path = target.cwd / path
+        return any(self.matches(candidate) for candidate in (path, glob_prefix(path)))
+
+    def matches(self, path: Path) -> bool:
         lexical = PurePath(os.path.normpath(path))
         return any(
             candidate.full_match(os.path.expanduser(pattern))

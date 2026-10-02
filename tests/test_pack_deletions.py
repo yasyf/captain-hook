@@ -160,10 +160,7 @@ class TestBlockRiskyRm:
         over.mkdir()
         for index in range(11):
             (over / f"{index}.txt").write_text("")
-        oversized = decision("rm *.txt", over)
-        assert oversized is not None
-        assert oversized["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "more than 10 files" in oversized["hookSpecificOutput"]["permissionDecisionReason"]
+        assert decision("rm *.txt", over) is None
 
         boundary = tmp_path / "boundary"
         boundary.mkdir()
@@ -176,10 +173,7 @@ class TestBlockRiskyRm:
             path = recursive / str(index % 2) / f"{index}.txt"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("")
-        recursive_out = decision("rm **/*.txt", recursive)
-        assert recursive_out is not None
-        assert recursive_out["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "more than 10 files" in recursive_out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert decision("rm **/*.txt", recursive) is None
 
         hidden = tmp_path / "hidden"
         hidden.mkdir()
@@ -193,6 +187,41 @@ class TestBlockRiskyRm:
         empty.mkdir()
         assert decision("rm *.txt", empty) is None
         assert decision("rm $FOO", empty) is None
+
+    def test_glob_limit_outside_scratch(
+        self, isolate_modules: None, no_scratch: None, no_trash: None, tmp_path: Path
+    ) -> None:
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
+
+        def decision(command: str, cwd: Path) -> dict[str, Any] | None:
+            evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd)))
+            return dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
+
+        over = tmp_path / "over"
+        over.mkdir()
+        for index in range(11):
+            (over / f"{index}.txt").write_text("")
+        oversized = decision("rm *.txt", over)
+        assert oversized is not None
+        assert oversized["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "more than 10 files" in oversized["hookSpecificOutput"]["permissionDecisionReason"]
+
+        recursive = tmp_path / "recursive"
+        for index in range(11):
+            path = recursive / str(index % 2) / f"{index}.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+        recursive_out = decision("rm **/*.txt", recursive)
+        assert recursive_out is not None
+        assert "more than 10 files" in recursive_out["hookSpecificOutput"]["permissionDecisionReason"]
+
+        entries = tmp_path / "entries"
+        entries.mkdir()
+        for index in range(15):
+            (entries / f"file-{index}.txt").write_text("")
+        all_entries = decision("rm *", entries)
+        assert all_entries is not None
+        assert all_entries["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_glob_preserves_trailing_slash(
         self,
@@ -213,9 +242,7 @@ class TestBlockRiskyRm:
         for index in range(15):
             (entries / f"file-{index}.txt").write_text("")
         assert decision("rm */", entries) is None
-        all_entries = decision("rm *", entries)
-        assert all_entries is not None
-        assert all_entries["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert decision("rm *", entries) is None
 
     def test_unknown_user_tilde(
         self,

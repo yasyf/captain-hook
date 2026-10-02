@@ -237,7 +237,7 @@ def test_quoted_literal_stays_distinct_from_expansion() -> None:
     assert not predicate(literal)
     assert predicate(expansion)
     assert literal.paths("roots").targets[0].raw == "'$HOME'"
-    assert expansion.paths("roots").targets[0].value is None
+    assert expansion.paths("roots").targets[0].value == "~"
 
 
 def test_path_patterns_match_segments_and_resolve_aliases(tmp_path: Path) -> None:

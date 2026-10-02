@@ -7,15 +7,18 @@ import shlex
 import threading
 from dataclasses import dataclass, field
 from functools import cached_property, partial, reduce
+from itertools import product
+from pathlib import PurePath
 from typing import TYPE_CHECKING
 
 from cc_transcript.tools import BashCall
 
 from captain_hook import Event, Input, LambdaCondition, on
+from captain_hook.bindings import Resolved, Unresolved
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import OSASCRIPT
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
-from captain_hook.guard_literal import QUOTING_CHARS, names_guarded
+from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
 from captain_hook.util import proc, reqenv
 from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
@@ -71,6 +74,10 @@ LAUNCHERS = (
 )
 GUARDED_PROGRAM = re.compile(rf"\b({'|'.join(GUARDED_PROGRAMS)})\b", re.IGNORECASE)
 QUOTED_WORD = re.compile(r'"(?:[^"\\]|\\.)*"')
+ARG_TOKEN_BREAK = re.compile(r"[\s;|&()<>=`]+")
+TEST_BUILTINS = frozenset({"[", "[["})
+UNQUOTABLE = re.compile(r"""[\s'"\\$`;&|<>()#]""")
+VARIANT_LIMIT = 16
 NEGATIVE_TARGET = re.compile(r"-\d+")
 DO_SHELL_SCRIPT = re.compile(r'(?i)\bdo\s+shell\s+script\b\s*(?:"((?:[^"\\]|\\.)*)")?')
 APPLESCRIPT_ESCAPE = re.compile(r"\\(.)")
@@ -260,7 +267,122 @@ def literal_head(call: Call) -> bool:
 
 
 def expands_name(head: Word) -> bool:
-    return head.expandable and head.value is not None and ("{" in head.value or glob.has_magic(head.value))
+    return (
+        head.expandable
+        and head.value is not None
+        and head.value not in TEST_BUILTINS
+        and ("{" in head.value or glob.has_magic(head.value))
+    )
+
+
+def guarded_token(token: str) -> bool:
+    name = PurePath(QUOTING_CHARS.sub("", token)).name.translate(FOLD_TABLE)
+    return GUARDED_WORD.fullmatch(name) is not None
+
+
+def guarded_program_token(token: str) -> str | None:
+    name = QUOTING_CHARS.sub("", PurePath(token).name if "/" in token else token)
+    return None if (match := GUARDED_PROGRAM.search(name)) is None else match.group(1)
+
+
+def names_guarded_program(text: str) -> str | None:
+    return next((name for token in ARG_TOKEN_BREAK.split(text) if (name := guarded_program_token(token))), None)
+
+
+def guarded_word_token(token: str) -> str | None:
+    name = QUOTING_CHARS.sub("", PurePath(token).name if "/" in token else token).translate(FOLD_TABLE)
+    return None if (match := GUARDED_WORD.search(name)) is None else match.group(1)
+
+
+def names_guarded_word(text: str) -> str | None:
+    return next((name for token in ARG_TOKEN_BREAK.split(text) if (name := guarded_word_token(token))), None)
+
+
+def guarded_argument(call: Call) -> str | None:
+    if call.substituted:
+        return "a command substitution"
+    for word in call.command.words[1:]:
+        if word.value is not None:
+            texts: tuple[str, ...] = (word.value,)
+        else:
+            match call.resolve(word):
+                case Resolved(candidates, _):
+                    texts = candidates
+                case Unresolved(None):
+                    return f"`{clip(word.raw, 40)}`"
+                case Unresolved(source):
+                    if names_guarded_word(source) is not None:
+                        return f"`{clip(word.raw, 40)}`"
+                    continue
+        if any(guarded_token(token) for text in texts for token in ARG_TOKEN_BREAK.split(text)):
+            return f"`{clip(word.raw, 40)}`"
+    return None
+
+
+def head_reason(call: Call) -> str | None:
+    if not (words := call.command.words) or (head := words[0]).value is not None and not expands_name(head):
+        return None
+    spelling = spell(call)
+    if expands_name(head):
+        return (
+            f"BLOCKED: `{spelling}` runs a command whose name the shell expands at run time "
+            f"(`{clip(head.raw, 40)}`), so the guard cannot tell what runs. Spell the command name literally."
+        )
+    if (argument := guarded_argument(call)) is not None:
+        return (
+            f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) with {argument} "
+            "among its arguments, which runs instead if the name expands to nothing. Spell the command name literally."
+        )
+    match call.resolve(head):
+        case Resolved():
+            return None
+        case Unresolved(None):
+            return (
+                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`), so the guard "
+                "cannot tell what runs. Spell the command name literally."
+            )
+        case Unresolved(source) if (named := names_guarded_word(source)) is not None:
+            return (
+                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) from text "
+                f"that names `{named}` (`{clip(source, 40)}`). Spell the command name literally."
+            )
+        case _:
+            return None
+
+
+def emitted_piece(piece: str) -> str:
+    return piece if UNQUOTABLE.search(piece) is None else shlex.quote(piece)
+
+
+def emitted(resolution: Resolved, candidate: str) -> str:
+    return " ".join(map(emitted_piece, candidate.split())) if resolution.splittable else shlex.quote(candidate)
+
+
+def variants(call: Call) -> tuple[str, ...] | None:
+    if (
+        not (words := call.source.words)
+        or call.substituted
+        or (call.command.words[0].value is None and head_reason(call) is not None)
+    ):
+        return None
+    spellings: list[tuple[str, ...]] = []
+    resolved = False
+    for word in words:
+        if word.value is not None:
+            spellings.append((word.raw,))
+            continue
+        match call.resolve(word):
+            case Resolved(candidates, _) as resolution:
+                spellings.append(tuple(emitted(resolution, candidate) for candidate in candidates))
+                resolved = True
+            case Unresolved(_):
+                spellings.append((word.raw,))
+    if not resolved:
+        return None
+    combinations = list(product(*spellings))
+    if len(combinations) > VARIANT_LIMIT:
+        return None
+    return tuple(" ".join(part for part in combination if part) for combination in combinations)
 
 
 def first_operand(call: Call) -> Word | None:
@@ -331,10 +453,14 @@ class Scan:
     def read(self, text: str, source: str, cwd: Path | str | None) -> None:
         line = safe_parse_command_line(text)
         if not (calls := () if line is None else Cmd(line, raw=text, cwd=cwd).calls()):
-            if (named := GUARDED_PROGRAM.search(QUOTING_CHARS.sub("", text))) is not None:
-                self.unparsed.append(Unparsed(source, named.group(1)))
+            if (named := names_guarded_program(text)) is not None:
+                self.unparsed.append(Unparsed(source, named))
             return
         for call in calls:
+            if (resolved := variants(call)) is not None:
+                for variant in resolved:
+                    self.read(variant, source, call.cwd)
+                continue
             self.calls.append(call)
             if literal_head(call):
                 for payload, origin in payloads(call):
