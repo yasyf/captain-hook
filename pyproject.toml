@@ -44,7 +44,7 @@ dependencies = [
     "filelock>=3",
     "pathspec>=0.12",
     "loguru>=0.7.3",
-    "spawnllm[sdk]>=0.14.0,<0.15",
+    "spawnllm[sdk]>=0.15.0,<0.16",
     "mcp>=2.0,<3",
 ]
 
