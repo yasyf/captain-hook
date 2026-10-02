@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from cc_transcript.command import PAYLOAD_DEPTH_LIMIT
 
 from captain_hook import Allow, Block
-from captain_hook.bindings import Resolved
+from captain_hook.bindings import Ref, Resolved, segments
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
     GUARDED_PROGRAMS,
@@ -130,6 +130,7 @@ ORCA_PAYLOADS = {
     "set-value": "value",
     "perform-secondary-action": "action",
 }
+HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
 KEY_ALIASES = {
     "command": "cmd",
@@ -260,6 +261,43 @@ STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
         guarded(command='timeout 20 "$CP" outcomes --no-doc --session d0bf 2>&1; ls ~/.orca'): Allow(),
         guarded(
             command=(
+                "cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole; L=/Users/yasyf/.claude/plugins/cache/skills/"
+                "long-running/0.6.49/bin/ledger.py; S=$(date +%s); $L refresh --ledger 829f --repo Forge-AI/monorepo "
+                "</dev/null 2>&1 | tail -5; $L reconcile --ledger 829f --checkout $PWD </dev/null 2>&1 | tail -25; "
+                'echo "dur=$(( $(date +%s)-S ))s"'
+            )
+        ): Allow(),
+        guarded(command="cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole; $L reconcile --checkout $PWD"): Block(
+            pattern="`\\$PWD` among its arguments"
+        ),
+        guarded(command="L=; $L ./run.sh $PWD; ls ~/.orca"): Block(pattern="`\\$PWD` among its arguments"),
+        guarded(command='W=timeout; $W "$1"; ls ~/.orca'): Block(pattern="named at run time"),
+        guarded(command='read -r K <<< kill; W=env; $W "$K" 14575'): Block(pattern="named at run time"),
+        guarded(command="read <<<kill; W=env; $W $REPLY 14575"): Block(pattern="named at run time"),
+        guarded(command='read -r K <<< kill; W=caffeinate; $W "$K" 14575'): Block(pattern="among its arguments"),
+        guarded(command='PWD="i /bin/kill 14575"; W=caffeinate; $W -$PWD'): Block(pattern="among its arguments"),
+        guarded(command="read -r K <<< kill; W=find; $W /tmp -exec \"$K\" 14575 ';'"): Block(
+            pattern="among its arguments"
+        ),
+        guarded(
+            command=(
+                'read N <<<"; -exec /bin/kill 14575 ; -exec echo"; W=find; $W /tmp -maxdepth 1 -exec echo $N {} ";"'
+            )
+        ): Block(pattern="among its arguments"),
+        guarded(command='PWD="exec /bin/kill 14575 ;"; W=find; $W /tmp -$PWD'): Block(pattern="among its arguments"),
+        guarded(command='cd /; W=find; $W "$PWD" -name x'): Block(pattern="among its arguments"),
+        guarded(command='read -r K <<< kill; W=bash; $W -c "$K 14575"'): Block(),
+        guarded(
+            command=("for A in a b c d e f g h kill; do for B in 1 2 3 4 5 6 7 8 14575; do $A $B; done; done")
+        ): Block(pattern="more than 64 command lines"),
+        guarded(
+            command=(
+                "for d in selection dag judge trailers targets stacks images pipeline prcheck reach reads record "
+                "platy render slack hold bake ledger canvas finish; do $d/run.sh; done; ls ~/.orca"
+            )
+        ): Allow(),
+        guarded(
+            command=(
                 "B=$(ls /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole/node_modules/.bin/biome 2>/dev/null || "
                 "command -v biome) && $B check infra/ci/src/verbs/release-stacks.ts 2>&1 | tail -25"
             )
@@ -384,6 +422,9 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         guarded(command="kill -9 14575 -L"): Block(),
         guarded(command="sudo kill 1743 -l"): Block(),
         guarded(command="kill 1743"): Block(pattern="the Orca PTY daemon"),
+        guarded(command="for A in a b c kill; do for B in 1 2 3 4 14575; do $A $B; done; done"): Block(
+            pattern="pid 1 "
+        ),
         guarded(command="kill 1445"): Block(pattern="the Orca app"),
         guarded(command="kill -9 14575"): Block(pattern="an agent session"),
         guarded(command="kill 14545"): Block(pattern="a terminal host"),
@@ -656,12 +697,21 @@ def orca_ending(spelling: str, group: str, verb: str, arguments: Arguments) -> s
     return f"BLOCKED: `{spelling}` {action}, which ends the agent session living there. {ORCA_READ}"
 
 
+def help_only(call: Call, values: dict[str, tuple[Scalar | None, ...]]) -> bool:
+    if "help" not in values or any(word.value is None for word in call.command.words):
+        return False
+    path = [arg for arg in call.args if arg not in HELP_FLAGS]
+    return len(path) == len(call.args) - 1 and len(path) <= 2 and (not path or path[0] in ORCA_GROUPS)
+
+
 def orca_ending_verdict(call: Call) -> str | None:
     if call.name != "orca":
         return None
     spelling = spell(call)
     arguments = ORCA.bind(call)
     values = arguments.values
+    if help_only(call, values):
+        return None
     found = next(
         (
             (group, verb)
@@ -673,8 +723,6 @@ def orca_ending_verdict(call: Call) -> str | None:
     )
     if found is not None:
         return orca_ending(spelling, *found, arguments)
-    if "help" in values:
-        return None
     group = values.get("group", ())
     verb = values.get("verb", ())
     if None in group or None in verb:
@@ -758,8 +806,26 @@ def orca_vm_run_flag(call: Call) -> str | None:
         guarded(command="orca --bogus terminal close"): Block(),
         guarded(command="orca --bogus status"): Block(pattern="hides its orca group or verb behind `--bogus`"),
         guarded(command="orca nuke everything"): Block(pattern="does not know"),
-        guarded(command="orca orchestration worker-release --help 2>&1 | head -15"): Block(pattern="worker-release"),
-        guarded(command="orca terminal close --help"): Block(pattern="closes the current terminal"),
+        guarded(
+            command=(
+                "for d in ctx_c9c192f997b0 ctx_84420bceb40d; do orca orchestration worker-show --dispatch $d --json "
+                "2>&1 | jq -c --arg d $d '{d:$d, s:.result.dispatch.status}'; done; "
+                "orca orchestration worker-release --help 2>&1 | head -15"
+            )
+        ): Allow(),
+        guarded(command="orca orchestration worker-release --dispatch ctx-1 --help"): Block(),
+        guarded(command="orca agent-teams-tmux kill-pane --help -t %2 terminal close"): Block(),
+        guarded(command="orca agent-teams-tmux kill-pane --help"): Block(),
+        guarded(command="orca orchestration worker-release -- --help"): Block(pattern="worker-release"),
+        guarded(command="orca terminal close --help"): Allow(),
+        guarded(command="orca terminal close -h"): Allow(),
+        guarded(command="orca terminal close --terminal --help"): Block(pattern="closes terminal `--help`"),
+        guarded(command="orca --bogus terminal close --help"): Block(),
+        guarded(command="read OPT <<<'--terminal'; orca terminal close \"$OPT\" -h --terminal="): Block(),
+        guarded(command="orca terminal close -h $T"): Block(),
+        guarded(command="orca terminal close --help; orca terminal close"): Block(
+            pattern="closes the current terminal"
+        ),
         guarded(
             command="orca vm recipe doctor guard-probe --provision --repo-path /Users/yasyf/.claude/scratch/x/vm-probe"
         ): Block(pattern="passes `--provision`"),
@@ -1204,8 +1270,24 @@ def guarded_program_in(args: tuple[str, ...]) -> str | None:
     )
 
 
+def hidden_target(words: tuple[Word, ...]) -> Word | None:
+    return next((word for word in words if word.value is None), None)
+
+
+def unquoted_expansion(word: Word) -> bool:
+    parts = segments(word.raw)
+    return parts is None or any(isinstance(part, Ref) and not part.quoted for part in parts)
+
+
 def launcher_verdict(call: Call) -> str | None:
-    if call.name not in LAUNCHERS or (inner := guarded_program_in(call.args)) is None:
+    if call.name not in LAUNCHERS:
+        return None
+    if (hidden := hidden_target(call.command.words[1:])) is not None:
+        return (
+            f"BLOCKED: `{spell(call)}` runs a command named at run time (`{clip(hidden.raw, 40)}`) through "
+            f"`{call.name}`, which hides its target from the guard. Spell the command name literally."
+        )
+    if (inner := guarded_program_in(call.args)) is None:
         return None
     return (
         f"BLOCKED: `{spell(call)}` runs `{inner}` through `{call.name}`, which hides its target from the guard. Run "
@@ -1232,6 +1314,11 @@ def launcher_verdict(call: Call) -> str | None:
         guarded(command="arch -arm64 make test-kill"): Allow(),
         guarded(command="caffeinate -i make -C /tmp/ws/x test"): Allow(),
         guarded(command="caffeinate -i make test"): Allow(),
+        guarded(command='read -r K <<< kill; caffeinate "$K" 14575'): Block(pattern="named at run time"),
+        guarded(command="read N; caffeinate -i make -j$N; ls ~/.orca"): Block(pattern="named at run time"),
+        guarded(command='PWD="i /bin/kill 14575"; caffeinate -$PWD'): Block(pattern="named at run time"),
+        guarded(command="N=4; caffeinate -i make -j$N; ls ~/.orca"): Allow(),
+        guarded(command="X=echo; caffeinate $X 14575; ls ~/.orca"): Allow(),
     }
 )
 def launcher_hides_target(evt: ToolRewriteEvent) -> HookResult | None:
@@ -1241,8 +1328,24 @@ def launcher_hides_target(evt: ToolRewriteEvent) -> HookResult | None:
 def find_exec_verdict(call: Call) -> str | None:
     if call.name != "find":
         return None
+    if (
+        loose := next(
+            (word for word in call.command.words[1:] if word.value is None and unquoted_expansion(word)), None
+        )
+    ) is not None:
+        return (
+            f"BLOCKED: `{spell(call)}` expands `{clip(loose.raw, 40)}` unquoted inside a find expression, where it "
+            "can add an `-exec` the guard cannot see. Quote it or spell it literally."
+        )
     start = next((index for index, arg in enumerate(call.args) if arg in FIND_EXEC), None)
-    if start is None or (inner := guarded_program_in(call.args[start + 1 :])) is None:
+    if start is None:
+        return None
+    if (program := hidden_target(call.command.words[start + 2 : start + 3])) is not None:
+        return (
+            f"BLOCKED: `{spell(call)}` runs a command named at run time (`{clip(program.raw, 40)}`) through "
+            "`find -exec`, on targets the guard cannot see. Spell the command name literally."
+        )
+    if (inner := guarded_program_in(call.args[start + 1 :])) is None:
         return None
     return (
         f"BLOCKED: `{spell(call)}` runs `{inner}` once per matched file through `find -exec`, on targets the guard "
@@ -1257,6 +1360,15 @@ def find_exec_verdict(call: Call) -> str | None:
         guarded(command="find . -exec sh -c 'kill $1' _ {} \\;"): Block(),
         guarded(command="find . -name '*kill*' -exec cat {} +"): Allow(),
         guarded(command="find ./orca -name x -exec cat {} +"): Allow(),
+        guarded(command="read -r K <<< kill; find /tmp -exec \"$K\" 14575 ';'"): Block(pattern="named at run time"),
+        guarded(command="read N; find /tmp -maxdepth 1 -exec echo \"$N\" {} ';'; ls ~/.orca"): Allow(),
+        guarded(command="read N; find /tmp -maxdepth 1 -exec echo $N {} ';'; ls ~/.orca"): Block(
+            pattern="unquoted inside a find expression"
+        ),
+        guarded(
+            command='read N <<<"; -exec /bin/kill 14575 ; -exec echo"; find /tmp -maxdepth 1 -exec echo $N {} ";"'
+        ): Block(pattern="unquoted inside a find expression"),
+        guarded(command="read D; find $D -name x"): Block(pattern="unquoted inside a find expression"),
         guarded(command="find . -name '*.pyc' -delete"): Allow(),
     }
 )

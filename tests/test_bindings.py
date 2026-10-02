@@ -139,8 +139,12 @@ class TestLimits:
         assert isinstance(resolve(text, "$X"), Unresolved)
 
     def test_too_many_combinations_stay_unresolved(self) -> None:
-        text = "for a in 1 2 3 4 5; do for b in 1 2 3 4 5; do echo $a$b; done; done"
+        text = "for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do echo $a$b; done; done"
         assert isinstance(resolve(text, "$a$b"), Unresolved)
+
+    def test_a_long_literal_list_resolves(self) -> None:
+        text = "for d in " + " ".join(f"d{n}" for n in range(20)) + "; do find $d -name '*.go'; done | head"
+        assert candidates(text, "$d") == tuple(f"d{n}" for n in range(20))
 
     @pytest.mark.parametrize("text", ['X="$(' * 600, "X='" + "(" * 5000, "'" * 3, "\x00$X\x00", "é" * 10 + "$X"])
     def test_pathological_text_never_raises(self, text: str) -> None:

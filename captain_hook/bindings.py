@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=")
 MUTATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?=|\(\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|\+\+|--|[-+*/%]=)")
+REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 SPECIAL_PARAMETER = re.compile(r"[0-9@*#?$!_-]")
 WORD_BREAK = frozenset(" \t\n;&|()<>")
 OPERATORS = (
@@ -55,7 +56,7 @@ MUTATORS = READERS | DECLARERS | UNREADABLE_BINDERS | frozenset({"unset", "expor
 UNREADABLE_IN_SUBSTITUTION = ("#", "<<", "case")
 SHELL_OWNED = frozenset({"PWD", "OLDPWD", "RANDOM", "SECONDS", "LINENO", "REPLY", "IFS", "BASH_COMMAND", "PIPESTATUS"})
 ENVIRONMENT = {"HOME": "~"}
-CANDIDATE_LIMIT = 16
+CANDIDATE_LIMIT = 64
 CANDIDATE_LENGTH = 4096
 
 
@@ -311,6 +312,11 @@ def tokens(text: str) -> Iterator[Token]:
             yield Token(text[index:end], index, end, False)
             index = end
             word_start = False
+
+
+def references(raw: str) -> frozenset[str]:
+    """Every name ``raw`` expands with ``$NAME`` or ``${NAME``, substitution bodies included."""
+    return frozenset(match.group(1) for match in REFERENCE.finditer(raw))
 
 
 def unreadable_substitution(value: str) -> bool:

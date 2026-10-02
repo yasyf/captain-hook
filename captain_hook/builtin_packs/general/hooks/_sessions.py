@@ -8,13 +8,14 @@ import threading
 from dataclasses import dataclass, field
 from functools import cached_property, partial, reduce
 from itertools import product
+from math import prod
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
 from cc_transcript.tools import BashCall
 
 from captain_hook import Event, Input, LambdaCondition, on
-from captain_hook.bindings import Resolved, Unresolved
+from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import OSASCRIPT
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
@@ -77,7 +78,7 @@ QUOTED_WORD = re.compile(r'"(?:[^"\\]|\\.)*"')
 ARG_TOKEN_BREAK = re.compile(r"[\s;|&()<>=`]+")
 TEST_BUILTINS = frozenset({"[", "[["})
 UNQUOTABLE = re.compile(r"""[\s'"\\$`;&|<>()#]""")
-VARIANT_LIMIT = 16
+VARIANT_LIMIT = 64
 NEGATIVE_TARGET = re.compile(r"-\d+")
 DO_SHELL_SCRIPT = re.compile(r'(?i)\bdo\s+shell\s+script\b\s*(?:"((?:[^"\\]|\\.)*)")?')
 APPLESCRIPT_ESCAPE = re.compile(r"\\(.)")
@@ -298,7 +299,13 @@ def names_guarded_word(text: str) -> str | None:
     return next((name for token in ARG_TOKEN_BREAK.split(text) if (name := guarded_word_token(token))), None)
 
 
-def guarded_argument(call: Call) -> str | None:
+def names_program(resolution: Resolution) -> bool:
+    return isinstance(resolution, Resolved) and all(
+        candidate.split() and guarded_word_token(program_name(candidate)) is None for candidate in resolution.candidates
+    )
+
+
+def guarded_argument(call: Call, *, named: bool) -> str | None:
     if call.substituted:
         return "a command substitution"
     for word in call.command.words[1:]:
@@ -308,6 +315,8 @@ def guarded_argument(call: Call) -> str | None:
             match call.resolve(word):
                 case Resolved(candidates, _):
                     texts = candidates
+                case Unresolved(None) if named:
+                    continue
                 case Unresolved(None):
                     return f"`{clip(word.raw, 40)}`"
                 case Unresolved(source):
@@ -328,12 +337,18 @@ def head_reason(call: Call) -> str | None:
             f"BLOCKED: `{spelling}` runs a command whose name the shell expands at run time "
             f"(`{clip(head.raw, 40)}`), so the guard cannot tell what runs. Spell the command name literally."
         )
-    if (argument := guarded_argument(call)) is not None:
+    resolution = call.resolve(head)
+    if (argument := guarded_argument(call, named=names_program(resolution))) is not None:
         return (
             f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) with {argument} "
             "among its arguments, which runs instead if the name expands to nothing. Spell the command name literally."
         )
-    match call.resolve(head):
+    match resolution:
+        case Resolved() if (spelled := spellings(call)) is not None and spelled.count > VARIANT_LIMIT:
+            return (
+                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) that expands to "
+                f"more than {VARIANT_LIMIT} command lines, more than the guard reads. Spell the command name literally."
+            )
         case Resolved():
             return None
         case Unresolved(None):
@@ -358,31 +373,54 @@ def emitted(resolution: Resolved, candidate: str) -> str:
     return " ".join(map(emitted_piece, candidate.split())) if resolution.splittable else shlex.quote(candidate)
 
 
-def variants(call: Call) -> tuple[str, ...] | None:
-    if (
-        not (words := call.source.words)
-        or call.substituted
-        or (call.command.words[0].value is None and head_reason(call) is not None)
-    ):
+@dataclass(frozen=True, slots=True)
+class Spelled:
+    """Each source word's candidate spellings, plus the names the words kept unresolved still reference."""
+
+    words: tuple[tuple[str, ...], ...]
+    unread: frozenset[str]
+
+    @property
+    def count(self) -> int:
+        return prod(map(len, self.words))
+
+
+@dataclass(frozen=True, slots=True)
+class Variants:
+    texts: tuple[str, ...]
+    unread: frozenset[str]
+
+
+def spellings(call: Call) -> Spelled | None:
+    if not (words := call.source.words) or call.substituted:
         return None
-    spellings: list[tuple[str, ...]] = []
+    spelled: list[tuple[str, ...]] = []
+    unread: set[str] = set()
     resolved = False
     for word in words:
         if word.value is not None:
-            spellings.append((word.raw,))
+            spelled.append((word.raw,))
             continue
         match call.resolve(word):
             case Resolved(candidates, _) as resolution:
-                spellings.append(tuple(emitted(resolution, candidate) for candidate in candidates))
+                spelled.append(tuple(emitted(resolution, candidate) for candidate in candidates))
                 resolved = True
             case Unresolved(_):
-                spellings.append((word.raw,))
-    if not resolved:
+                spelled.append((word.raw,))
+                unread |= references(word.raw)
+    return Spelled(tuple(spelled), frozenset(unread)) if resolved else None
+
+
+def variants(call: Call) -> Variants | None:
+    if (
+        not call.command.words
+        or (call.command.words[0].value is None and head_reason(call) is not None)
+        or (spelled := spellings(call)) is None
+        or spelled.count > VARIANT_LIMIT
+    ):
         return None
-    combinations = list(product(*spellings))
-    if len(combinations) > VARIANT_LIMIT:
-        return None
-    return tuple(" ".join(part for part in combination if part) for combination in combinations)
+    texts = tuple(" ".join(part for part in combination if part) for combination in product(*spelled.words))
+    return Variants(texts, spelled.unread)
 
 
 def first_operand(call: Call) -> Word | None:
@@ -450,16 +488,17 @@ class Scan:
         LAST_SCAN.scan = scan
         return scan
 
-    def read(self, text: str, source: str, cwd: Path | str | None) -> None:
+    def read(self, text: str, source: str, cwd: Path | str | None, unread: frozenset[str] = frozenset()) -> None:
         line = safe_parse_command_line(text)
-        if not (calls := () if line is None else Cmd(line, raw=text, cwd=cwd).calls()):
+        bindings = dict.fromkeys(unread, Unknown(None))
+        if not (calls := () if line is None else Cmd(line, raw=text, cwd=cwd, bindings=bindings).calls()):
             if (named := names_guarded_program(text)) is not None:
                 self.unparsed.append(Unparsed(source, named))
             return
         for call in calls:
             if (resolved := variants(call)) is not None:
-                for variant in resolved:
-                    self.read(variant, source, call.cwd)
+                for variant in resolved.texts:
+                    self.read(variant, source, call.cwd, unread | resolved.unread)
                 continue
             self.calls.append(call)
             if literal_head(call):
