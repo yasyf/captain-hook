@@ -20,6 +20,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     NEGATIVE_TARGET,
     RENICE_FIX,
     Scan,
+    TimedOut,
     Unreadable,
     answer_names,
     applescripts,
@@ -765,8 +766,11 @@ def closes_one_terminal(call: Call) -> bool:
     return call.name == "orca" and closed_terminal(call, ORCA.bind(call)) is not None
 
 
-def single_close(call: Call, scan: Scan) -> bool:
-    return all(other is not call for other in scan.respelled) and sum(map(closes_one_terminal, scan.literal_calls)) == 1
+def verifiable_close(call: Call, scan: Scan, evt: ToolRewriteEvent) -> bool:
+    authorized = isinstance(evt.annotations.get("owner-authorized"), str)
+    return all(other is not call for other in scan.respelled) and (
+        authorized or sum(map(closes_one_terminal, scan.literal_calls)) == 1
+    )
 
 
 def terminal_close_denied(spelling: str, handle: str, detail: str) -> str:
@@ -776,9 +780,13 @@ def terminal_close_denied(spelling: str, handle: str, detail: str) -> str:
 def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewriteEvent) -> str | None:
     deny = partial(terminal_close_denied, clip(call.source.raw, 50), handle)
     if isinstance(answer := evt.annotations.get("owner-authorized"), str):
-        match answer_names(answer, handle, evt.cwd):
+        match answer_names(answer, handle, evt.cwd, evt._raw.get("session_id")):
             case True:
                 return None
+            case TimedOut(seconds=seconds):
+                return deny(
+                    f", and reading cc-notes answer `{clip(answer, 20)}` timed out after {seconds:g}s; retry the close"
+                )
             case Unreadable(reason):
                 return deny(f", and cc-notes answer `{clip(answer, 20)}` was not read ({reason})")
             case _:
@@ -801,7 +809,7 @@ def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | 
     values = arguments.values
     if help_only(call, values):
         return None
-    if (handle := closed_terminal(call, arguments)) is not None and single_close(call, scan):
+    if (handle := closed_terminal(call, arguments)) is not None and verifiable_close(call, scan, evt):
         return terminal_close_verdict(call, handle, scan, evt)
     found = next(
         (
@@ -905,10 +913,16 @@ def orca_vm_run_flag(call: Call) -> str | None:
         ): Block(),
         guarded(
             command=(
-                "orca terminal close --terminal term_agent; orca terminal close --terminal term_agent "
+                f"orca terminal close --terminal {INLINE_OWNER_TERMINAL}; orca terminal close --terminal term_agent "
                 f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
             )
-        ): Block(pattern="leave ending them to the owner"),
+        ): Allow(),
+        guarded(
+            command=(
+                f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} && orca terminal close --terminal term_idle "
+                f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+            )
+        ): Block(pattern="closes terminal `term_idle`, and cc-notes answer `0207568` does not name it"),
         guarded(
             command=f"timeout 5 orca terminal close --terminal term_agent # ccx:owner-authorized={INLINE_OWNER_ANSWER}"
         ): Block(),

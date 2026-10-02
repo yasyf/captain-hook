@@ -124,8 +124,10 @@ RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
 SPELLING_LIMIT = 60
 SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
 PROBE_TIMEOUT = 2.0
+ANSWER_TIMEOUT = 30.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 LAST_SCAN = threading.local()
+ANSWER_BODIES: dict[tuple[str | None, str, str | None], str] = {}
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_TABLE = (
     "    1     0     1    0 Thu Jan  1 00:00:00 2026 /sbin/launchd\n"
@@ -229,6 +231,11 @@ class Unreadable:
 
 
 @dataclass(frozen=True, slots=True)
+class TimedOut(Unreadable):
+    seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class Ownership:
     table: ProcessTable
     owner: ProcessRow | None
@@ -246,17 +253,17 @@ class Ownership:
         return cls(table, table.nearest(start, is_agent), protected)
 
 
-def probe_timeout(reason: str) -> float | Unreadable:
+def probe_timeout(reason: str, ceiling: float = PROBE_TIMEOUT) -> float | Unreadable:
     budget = collect_budget(SYNC_DEADLINE_MARGIN_SECONDS)
     if budget is None:
-        return PROBE_TIMEOUT
+        return ceiling
     if budget < 0.5:
         return Unreadable(f"the caller deadline is too close to {reason}")
-    return min(PROBE_TIMEOUT, budget - 0.25)
+    return min(ceiling, budget - 0.25)
 
 
-def probe(argv: tuple[str, ...]) -> str | Unreadable:
-    if isinstance(timeout := probe_timeout(f"run `{argv[0]}`"), Unreadable):
+def probe(argv: tuple[str, ...], ceiling: float = PROBE_TIMEOUT) -> str | Unreadable:
+    if isinstance(timeout := probe_timeout(f"run `{argv[0]}`", ceiling), Unreadable):
         return timeout
     try:
         done = subprocess.run(
@@ -271,7 +278,7 @@ def probe(argv: tuple[str, ...]) -> str | Unreadable:
     except FileNotFoundError:
         return Unreadable(f"`{argv[0]}` is not installed on the hook's PATH")
     except subprocess.TimeoutExpired:
-        return Unreadable(f"`{argv[0]}` timed out after {timeout:g}s")
+        return TimedOut(f"`{argv[0]}` timed out after {timeout:g}s", timeout)
     except (OSError, subprocess.SubprocessError):
         return Unreadable(f"`{argv[0]}` could not run")
     return done.stdout if done.returncode == 0 else Unreadable(f"`{argv[0]}` failed")
@@ -296,16 +303,28 @@ def terminal_pid(handle: str) -> int | Unreadable:
         return Unreadable("Orca reports no process for the terminal")
 
 
-def answer_names(answer: str, handle: str, cwd: Path | None) -> bool | Unreadable:
+def answer_body(answer: str, cwd: Path | None, session: str | None) -> str | Unreadable:
+    key = (session, answer, None if cwd is None else str(cwd))
+    if (cached := ANSWER_BODIES.get(key)) is not None:
+        return cached
     location = () if cwd is None else ("-R", str(cwd))
-    shown = probe(("ccn", "answer", "show", answer, "--json", *location))
+    shown = probe(("ccn", "answer", "show", answer, "--json", *location), ANSWER_TIMEOUT)
     if isinstance(shown, Unreadable):
         return shown
     try:
         body = json.loads(shown)["body"]
     except (ValueError, TypeError, KeyError):
         return Unreadable("it has no body")
-    return isinstance(body, str) and re.search(rf"(?<![\w-]){re.escape(handle)}(?![\w-])", body) is not None
+    if not isinstance(body, str):
+        return Unreadable("it has no body")
+    ANSWER_BODIES[key] = body
+    return body
+
+
+def answer_names(answer: str, handle: str, cwd: Path | None, session: str | None) -> bool | Unreadable:
+    if isinstance(body := answer_body(answer, cwd, session), Unreadable):
+        return body
+    return re.search(rf"(?<![\w-]){re.escape(handle)}(?![\w-])", body) is not None
 
 
 class Facts:
