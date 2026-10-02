@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -125,6 +126,11 @@ def environs(monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable
     shown: dict[int, str] = {}
     monkeypatch.setattr(proc, "environment", lambda row, **kw: shown.get(row.pid))
     return shown
+
+
+@pytest.fixture(autouse=True)
+def unread_answers() -> None:
+    _sessions.ANSWER_BODIES.clear()
 
 
 @pytest.fixture
@@ -443,6 +449,18 @@ class TestStopTool:
         assert decide_input(output, tmp_path, event=Event.PermissionRequest) is None
 
 
+def answer_reads(monkeypatch: pytest.MonkeyPatch, body: str = "close term_x") -> list[float]:
+    timeouts: list[float] = []
+
+    def run(args: Sequence[str], *pargs: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert args[:3] == ("ccn", "answer", "show")
+        timeouts.append(kwargs["timeout"])
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"body": body}), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return timeouts
+
+
 class TestAnswerNames:
     def test_ccn_is_found_with_a_minimal_worker_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         (ccn := tmp_path / "ccn").write_text("#!/bin/sh\nprintf '%s\\n' '{\"body\": \"close term_x\"}'\n")
@@ -450,20 +468,51 @@ class TestAnswerNames:
         monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path),))
 
-        assert _sessions.answer_names("abc", "term_x", None) is True
+        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
 
     def test_a_missing_ccn_names_the_hook_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("PATH", str(tmp_path / "path"))
         monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path / "fallback"),))
 
-        assert _sessions.answer_names("abc", "term_x", None) == _sessions.Unreadable(
+        assert _sessions.answer_names("abc", "term_x", None, "s1") == _sessions.Unreadable(
             "`ccn` is not installed on the hook's PATH"
         )
 
     def test_a_ccn_timeout_names_its_duration(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 2.0))
+        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 30.0))
 
-        assert _sessions.answer_names("abc", "term_x", None) == _sessions.Unreadable("`ccn` timed out after 2s")
+        assert _sessions.answer_names("abc", "term_x", None, "s1") == _sessions.TimedOut(
+            "`ccn` timed out after 30s", 30.0
+        )
+
+    def test_the_read_waits_up_to_thirty_seconds_within_the_caller_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        timeouts = answer_reads(monkeypatch)
+        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
+        with reqenv.use_request(overrides()), reqenv.deadline_in(60):
+            assert _sessions.answer_names("abd", "term_x", None, "s1") is True
+        with reqenv.use_request(overrides()), reqenv.deadline_in(15):
+            assert _sessions.answer_names("abe", "term_x", None, "s1") is True
+        assert timeouts[:2] == [30.0, 30.0]
+        assert 9.0 < timeouts[2] <= 9.75
+
+    def test_a_read_body_is_cached_per_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        timeouts = answer_reads(monkeypatch)
+        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
+        assert _sessions.answer_names("abc", "term_y", None, "s1") is False
+        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
+        assert len(timeouts) == 1
+        assert _sessions.answer_names("abc", "term_x", None, "s2") is True
+        assert _sessions.answer_names("abc", "term_x", Path("/elsewhere"), "s1") is True
+        assert len(timeouts) == 3
+
+    def test_a_failed_read_is_not_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 30.0))
+        assert isinstance(_sessions.answer_names("abc", "term_x", None, "s1"), _sessions.TimedOut)
+        timeouts = answer_reads(monkeypatch)
+        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
+        assert len(timeouts) == 1
 
 
 class TestTerminalClose:
@@ -482,7 +531,6 @@ class TestTerminalClose:
         [
             pytest.param(FileNotFoundError("ccn"), "`ccn` is not installed on the hook's PATH", id="missing"),
             pytest.param(PermissionError("ccn"), "`ccn` could not run", id="unexecutable"),
-            pytest.param(subprocess.TimeoutExpired("ccn", 2.0), "`ccn` timed out after 2s", id="timeout"),
         ],
     )
     def test_an_unavailable_ccn_denies(
@@ -499,6 +547,34 @@ class TestTerminalClose:
         assert message is not None
         assert f"cc-notes answer `{INLINE_OWNER_ANSWER}` was not read ({explanation})" in message
         assert OWNER_FIX in message
+
+    def test_a_timed_out_read_asks_for_a_retry(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 30.0))
+        message = decide(OWNER_CLOSE, tmp_path)
+        assert message is not None
+        assert f"reading cc-notes answer `{INLINE_OWNER_ANSWER}` timed out after 30s; retry the close" in message
+
+    def test_a_batch_of_closes_under_one_answer_reads_it_once(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        timeouts = answer_reads(monkeypatch, f"close {INLINE_OWNER_TERMINAL} and term_agent")
+        batch = (
+            f"orca terminal close --terminal {INLINE_OWNER_TERMINAL}; orca terminal close --terminal term_agent "
+            f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+        )
+        assert decide(batch, tmp_path) is None
+        assert decide(OWNER_CLOSE, tmp_path) is None
+        assert len(timeouts) == 1
 
     def test_a_failing_ccn_denies(
         self,

@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An owner-authorized `orca terminal close` survives a loaded machine.** The guard gave
+  `ccn answer show` 2 s, and at a load average above 600 the read took 11–13 s, so every close
+  under a valid answer was denied. The read now waits up to 30 s, bounded by the caller's
+  deadline. A hook worker caches each answer body it reads for the session, so a batch of closes
+  under one answer costs one read. A timed-out read says so and asks for a retry. With the
+  `# ccx:owner-authorized=<answer id>` marker, each literal single-terminal close in a `;` or `&&`
+  chain is checked against the answer on its own, where the guard denied any chain with more
+  than one close.
 - **A session may kill or renice a process it started.** The session guard reads the target's
   environment with `ps -E` and allows a literal `kill <pid>` or `renice -p <pid>` when its
   `CLAUDE_CODE_SESSION_ID` names the calling session, including a process reparented to
