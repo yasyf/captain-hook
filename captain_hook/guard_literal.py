@@ -15,6 +15,20 @@ GUARDED: str = (
     "|halt|poweroff|renice|tmux|softwareupdate|pmset|caffeinate|setsid|builtin|noglob|stdbuf|unbuffer|scr"
     "ipt|watch|parallel|chrt|ionice|taskset|arch|su|chroot|find)\\b"
 )
+EXEMPT_HEADS: tuple[str, ...] = (
+    "cc-slack",
+    "ccn",
+    "cc-notes",
+    "cc-present",
+    "cc-transcript",
+    "cat",
+    "echo",
+    "grep",
+    "head",
+    "jq",
+    "tail",
+    "wc",
+)
 FOLDS: dict[str, str] = {"\u0130": "i", "\u0131": "i", "\u017f": "s", "\u212a": "k"}
 KINDS: tuple[str, ...] = (
     "host-unavailable",
@@ -36,6 +50,11 @@ PASS_EXIT: int = 3
 GUARDED_WORD: re.Pattern[str] = re.compile(GUARDED, re.IGNORECASE | re.ASCII)
 QUOTING_CHARS: re.Pattern[str] = re.compile(QUOTING)
 FOLD_TABLE: dict[int, str] = str.maketrans(FOLDS)
+ASSIGNMENT: re.Pattern[str] = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")
+LITERAL_HEAD: re.Pattern[str] = re.compile("[A-Za-z0-9_./~+-]+")
+OPAQUE_SHELL: tuple[str, ...] = ("$(", "`", "<(", ">(")
+SEGMENT_BREAKS: frozenset[str] = frozenset(";\n|()")
+QUOTED_ESCAPES: frozenset[str] = frozenset('$`"\\\n')
 
 
 def names_guarded(text: str) -> bool:
@@ -57,6 +76,94 @@ def names_guarded_value(value: object) -> bool:
     return False
 
 
+def first_party_command(tool_input: object) -> bool:
+    if not isinstance(tool_input, dict):
+        return False
+    command = cast(dict[object, object], tool_input).get("command")
+    if not isinstance(command, str):
+        return False
+    joined = command.replace("\\\n", "")
+    if any(opaque in joined for opaque in OPAQUE_SHELL):
+        return False
+    segments = shell_segments(command)
+    return segments is not None and all(exempt_segment(words) for words in segments)
+
+
+def exempt_segment(words: list[tuple[str, str, bool]]) -> bool:
+    for raw, cooked, redirect in words:
+        if redirect:
+            return False
+        if ASSIGNMENT.match(raw) is None:
+            return LITERAL_HEAD.fullmatch(cooked) is not None and cooked.rpartition("/")[2] in EXEMPT_HEADS
+    return True
+
+
+def shell_segments(command: str) -> list[list[tuple[str, str, bool]]] | None:
+    segments: list[list[tuple[str, str, bool]]] = [[]]
+    raw: list[str] = []
+    cooked: list[str] = []
+    started = redirect = after_redirect = False
+
+    def end_word() -> None:
+        nonlocal started, redirect
+        if started:
+            segments[-1].append(("".join(raw), "".join(cooked), redirect))
+        raw.clear()
+        cooked.clear()
+        started = redirect = False
+
+    index = 0
+    while index < len(command):
+        char = command[index]
+        redirecting = False
+        if char == "\\" and index + 1 == len(command):
+            raw.append(char)
+            cooked.append(char)
+            started = True
+        elif char == "\\":
+            index += 1
+            if command[index] != "\n":
+                raw.append(command[index - 1 : index + 1])
+                cooked.append(command[index])
+                started = True
+        elif char == "'":
+            end = command.find("'", index + 1)
+            if end < 0:
+                return None
+            raw.append(command[index : end + 1])
+            cooked.append(command[index + 1 : end])
+            started = True
+            index = end
+        elif char == '"':
+            end = index + 1
+            while end < len(command) and command[end] != '"':
+                escaped = command[end] == "\\" and end + 1 < len(command) and command[end + 1] in QUOTED_ESCAPES
+                end += escaped
+                if not (escaped and command[end] == "\n"):
+                    cooked.append(command[end])
+                end += 1
+            if end == len(command):
+                return None
+            raw.append(command[index : end + 1])
+            started = True
+            index = end
+        elif char in " \t":
+            end_word()
+        elif char in SEGMENT_BREAKS or (char == "&" and not after_redirect and command[index + 1 : index + 2] != ">"):
+            end_word()
+            segments.append([])
+        else:
+            raw.append(char)
+            cooked.append(char)
+            started = True
+            redirecting = char in "<>"
+            redirect = redirect or redirecting
+        after_redirect = redirecting
+        index += 1
+    end_word()
+    return segments
+
+
 def mandatory(event: str, payload: bytes) -> bool:
     if event not in EVENTS:
         return False
@@ -67,6 +174,8 @@ def mandatory(event: str, payload: bytes) -> bool:
     if not isinstance(fields, dict):
         return False
     payload_fields = cast(dict[object, object], fields)
+    if payload_fields.get("tool_name") == "Bash" and first_party_command(payload_fields.get("tool_input")):
+        return False
     return names_guarded_value(payload_fields.get("tool_name")) or names_guarded_value(payload_fields.get("tool_input"))
 
 

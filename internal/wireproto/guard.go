@@ -21,6 +21,7 @@ type guardSpec struct {
 	Events        []string          `json:"events"`
 	Quoting       string            `json:"quoting"`
 	Guarded       string            `json:"guarded"`
+	ExemptHeads   []string          `json:"exempt_heads"`
 	Folds         map[string]string `json:"folds"`
 	Kinds         []string          `json:"kinds"`
 	Reason        string            `json:"reason"`
@@ -32,6 +33,14 @@ var (
 	guardedWord = regexp.MustCompile("(?i)" + guard.Guarded)
 	quoting     = regexp.MustCompile(guard.Quoting)
 	folds       = loadFolds(guard.Folds)
+	assignment  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	literalHead = regexp.MustCompile(`^[A-Za-z0-9_./~+-]+$`)
+	opaqueShell = []string{"$(", "`", "<(", ">("}
+)
+
+const (
+	segmentBreaks = ";\n|()"
+	quotedEscapes = "$`\"\\\n"
 )
 
 func loadGuard() guardSpec {
@@ -61,10 +70,10 @@ func Kinds() []string {
 }
 
 // Mandatory reports whether the guard's prefilter covers this event: the
-// payload decodes, and its tool name or any string anywhere under tool_input —
-// dict values, list items, and every all-string list joined — names a guarded
-// program once the guard's quoting characters are stripped and its case folds
-// applied. A payload the worker could not decode either is not mandatory.
+// payload decodes, it is no Bash call whose every command head is exempt, and
+// its tool name or any string under tool_input — dict values, list items, and
+// every all-string list joined — names a guarded program once quoting is
+// stripped and case folds applied.
 func Mandatory(event string, payload []byte) bool {
 	if !slices.Contains(guard.Events, event) {
 		return false
@@ -76,7 +85,120 @@ func Mandatory(event string, payload []byte) bool {
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		return false
 	}
+	if fields.ToolName == "Bash" && firstPartyCommand(fields.ToolInput) {
+		return false
+	}
 	return namesGuardedValue(fields.ToolName) || namesGuardedValue(fields.ToolInput)
+}
+
+type shellWord struct {
+	raw      string
+	cooked   string
+	redirect bool
+}
+
+func firstPartyCommand(toolInput any) bool {
+	fields, ok := toolInput.(map[string]any)
+	if !ok {
+		return false
+	}
+	command, ok := fields["command"].(string)
+	if !ok {
+		return false
+	}
+	joined := strings.ReplaceAll(command, "\\\n", "")
+	if slices.ContainsFunc(opaqueShell, func(opaque string) bool { return strings.Contains(joined, opaque) }) {
+		return false
+	}
+	segments, ok := shellSegments(command)
+	return ok && !slices.ContainsFunc(segments, func(words []shellWord) bool { return !exemptSegment(words) })
+}
+
+func exemptSegment(words []shellWord) bool {
+	for _, word := range words {
+		switch {
+		case word.redirect:
+			return false
+		case !assignment.MatchString(word.raw):
+			return literalHead.MatchString(word.cooked) &&
+				slices.Contains(guard.ExemptHeads, word.cooked[strings.LastIndex(word.cooked, "/")+1:])
+		}
+	}
+	return true
+}
+
+func shellSegments(command string) ([][]shellWord, bool) {
+	text := []rune(command)
+	segments := [][]shellWord{nil}
+	var raw, cooked strings.Builder
+	started, redirect, afterRedirect := false, false, false
+	endWord := func() {
+		if started {
+			segments[len(segments)-1] = append(segments[len(segments)-1], shellWord{raw.String(), cooked.String(), redirect})
+		}
+		raw.Reset()
+		cooked.Reset()
+		started, redirect = false, false
+	}
+	for index := 0; index < len(text); index++ {
+		char := text[index]
+		redirecting := false
+		switch {
+		case char == '\\' && index+1 == len(text):
+			raw.WriteRune(char)
+			cooked.WriteRune(char)
+			started = true
+		case char == '\\':
+			index++
+			if text[index] != '\n' {
+				raw.WriteString(string(text[index-1 : index+1]))
+				cooked.WriteRune(text[index])
+				started = true
+			}
+		case char == '\'':
+			end := slices.Index(text[index+1:], '\'')
+			if end < 0 {
+				return nil, false
+			}
+			end += index + 1
+			raw.WriteString(string(text[index : end+1]))
+			cooked.WriteString(string(text[index+1 : end]))
+			started = true
+			index = end
+		case char == '"':
+			end := index + 1
+			for ; end < len(text) && text[end] != '"'; end++ {
+				if text[end] == '\\' && end+1 < len(text) && strings.ContainsRune(quotedEscapes, text[end+1]) {
+					end++
+					if text[end] == '\n' {
+						continue
+					}
+				}
+				cooked.WriteRune(text[end])
+			}
+			if end == len(text) {
+				return nil, false
+			}
+			raw.WriteString(string(text[index : end+1]))
+			started = true
+			index = end
+		case char == ' ' || char == '\t':
+			endWord()
+		case strings.ContainsRune(segmentBreaks, char) ||
+			char == '&' && !afterRedirect && (index+1 == len(text) || text[index+1] != '>'):
+			endWord()
+			segments = append(segments, nil)
+		default:
+			raw.WriteRune(char)
+			cooked.WriteRune(char)
+			started = true
+			redirecting = char == '<' || char == '>'
+			redirect = redirect || redirecting
+		}
+		afterRedirect = redirecting
+	}
+	endWord()
+	return segments, true
 }
 
 func namesGuarded(text string) bool {

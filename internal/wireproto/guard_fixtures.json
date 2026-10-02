@@ -108,12 +108,6 @@
     "mandatory": true
   },
   {
-    "name": "echo pkill is mandatory but healthy",
-    "event": "PreToolUse",
-    "payload": {"tool_name": "Bash", "tool_input": {"command": "echo pkill -f never"}},
-    "mandatory": true
-  },
-  {
     "name": "new workspace hotkey is mandatory but healthy",
     "event": "PreToolUse",
     "payload": {"tool_name": "Bash", "tool_input": {"command": "orca computer hotkey --app Orca --key CmdOrCtrl+N"}},
@@ -142,6 +136,192 @@
     "event": "PreToolUse",
     "payload": {"tool_name": "Bash", "tool_input": {"command": "Killall Orca"}},
     "mandatory": true
+  },
+  {
+    "name": "first-party head then an escaped pkill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x; p\\kill node"}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party head and then kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x && kill 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party head then kill on the next line",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x\nkill 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party head piped to xargs kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x | xargs kill"}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party head with a command substitution",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x \"$(kill 1)\""}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party head with a backtick substitution",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x `kill 1`"}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party head with a process substitution",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cat <(pkill node)"}},
+    "mandatory": true
+  },
+  {
+    "name": "variable head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "$CS reply --channel C1 --no-watch"}},
+    "mandatory": true
+  },
+  {
+    "name": "env launches the first-party head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "env cc-slack reply --channel C1 --no-watch"}},
+    "mandatory": true
+  },
+  {
+    "name": "subshell kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "(kill 1)"}},
+    "mandatory": true
+  },
+  {
+    "name": "brace group kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "{ kill 1; }"}},
+    "mandatory": true
+  },
+  {
+    "name": "background first-party head then pkill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "ccn task list --watch & pkill node"}},
+    "mandatory": true
+  },
+  {
+    "name": "fd duplication then a backgrounding ampersand",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x 2>&1&kill 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "quoted redirect character leaves the ampersand a separator",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "echo \">\"&kill 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "redirection glued to a guarded head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "kill&>/tmp/echo 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "segment starting with a redirection",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "2>/dev/null cat kill.log"}},
+    "mandatory": true
+  },
+  {
+    "name": "escaped backslash closes the double quote before kill",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack reply --text \"a\\\\\"; kill 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "redirection glued to an assignment before the head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "X=x> /tmp/echo kill -TERM 1234"}},
+    "mandatory": true
+  },
+  {
+    "name": "redirection between an assignment and the head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "X=1 >/tmp/echo kill -TERM 1234"}},
+    "mandatory": true
+  },
+  {
+    "name": "line continuation splits a command substitution",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "echo \"$\\\n(kill -TERM 1234)\""}},
+    "mandatory": true
+  },
+  {
+    "name": "word-split variable ahead of a first-party basename",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "x='kill -TERM 1234 '; $x/echo"}},
+    "mandatory": true
+  },
+  {
+    "name": "glob ahead of a first-party basename",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "/tmp/*/echo kill 1"}},
+    "mandatory": true
+  },
+  {
+    "name": "unterminated quote after a first-party head",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack x 'kill"}},
+    "mandatory": true
+  },
+  {
+    "name": "first-party command outside Bash keeps the rule",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Monitor", "tool_input": {"command": "ccn task list --watch", "description": "x"}},
+    "mandatory": true
+  },
+  {
+    "name": "cc-slack reply naming --no-watch",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "AWS_PROFILE=core-auto /Users/yasyf/.claude/plugins/data/cc-slack-forge/bin/cc-slack reply --channel C09G3N98YM6 --thread 1790901035.467689 --no-watch --text '<@U0B0KH3CVPT> no, this was a permission gap ... each one'\"'\"'s default key, and <https://buildkite.com/forge/deploy/builds/1498|deploy 1498> stopped ...' 2>&1 | tail -2", "description": "Reply in the deploy thread"}},
+    "mandatory": false
+  },
+  {
+    "name": "cc-slack reply naming --no-watch as a permission request",
+    "event": "PermissionRequest",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "AWS_PROFILE=core-auto /Users/yasyf/.claude/plugins/data/cc-slack-forge/bin/cc-slack reply --channel C09G3N98YM6 --thread 1790901035.467689 --no-watch --text '<@U0B0KH3CVPT> no, this was a permission gap ... each one'\"'\"'s default key, and <https://buildkite.com/forge/deploy/builds/1498|deploy 1498> stopped ...' 2>&1 | tail -2"}},
+    "mandatory": false
+  },
+  {
+    "name": "cc-slack grant quoting watch piped to tail",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack grant --channel C1 --thread 1.2 --quote 'watch this' 2>&1 | tail -1"}},
+    "mandatory": false
+  },
+  {
+    "name": "ccn task list --watch",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "ccn task list --watch"}},
+    "mandatory": false
+  },
+  {
+    "name": "echo pkill is first-party only",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "echo pkill -f never"}},
+    "mandatory": false
+  },
+  {
+    "name": "escaped double quote keeps the separator quoted",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack reply --text \"a\\\"; kill 1\" --no-watch"}},
+    "mandatory": false
+  },
+  {
+    "name": "line continuation inside a first-party command",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "cc-slack reply --channel C1 \\\n  --no-watch"}},
+    "mandatory": false
   },
   {
     "name": "git status",
