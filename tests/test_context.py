@@ -655,9 +655,9 @@ class TestCallLlm:
         )
         assert ctx.root_excerpt_block(["never said"]) == ""
         assert "user: ship it — now" in ctx.root_excerpt_block(["ship it — now"])
-        newest = root_excerpt(root, ["status"], around=0, limit=3)
-        assert render_window(newest, window=None, tool_results=False, budget=None) == (
-            "user: status 397\n\nuser: status 398\n\nuser: status 399"
+        capped = root_excerpt(root, ["status"], around=0, limit=3)
+        assert render_window(capped, window=None, tool_results=False, budget=None) == (
+            "user: status 0\n\nuser: status 1\n\nuser: status 2\n\nuser: status 397\n\nuser: status 398\n\nuser: status 399"
         )
         asked = ctx.assemble_prompt(
             Prompt().system("judge"),
@@ -671,6 +671,29 @@ class TestCallLlm:
         assert asked.startswith("<root_excerpt>\nuser: before") and "status 7" not in asked
         outside = HookContext(session=SessionStore(None), transcript=ctx.transcript, settings=None)
         assert outside.root_excerpt(["x"]) is None
+
+    def test_root_excerpt_keeps_an_answer_that_later_agent_echoes_outnumber(self) -> None:
+        from captain_hook.testing.helpers import fixture_file
+        from captain_hook.transcripts import root_excerpt
+
+        label = "Yes: reply in any #alerts-api / #alerts-runs alert thread (Recommended)"
+        question = "Standing grant for incident threads?"
+        questions = [{"question": question, "header": "Alert grant", "multiSelect": False, "options": [{"label": label}]}]
+        ask = T.tool("AskUserQuestion", questions=questions)
+        root = fixture_file(
+            [
+                T.user("go"),
+                T.assistant(ask),
+                T.user(
+                    T.result(f'The user answered: "{question}"="{label}".', of=ask),
+                    toolUseResult={"questions": questions, "answers": {question: label}, "annotations": {}},
+                ),
+                *(T.assistant(f"Owner granted: {label} ({i})") for i in range(40)),
+            ]
+        )
+        uses = [use for turn in root_excerpt(root, [label]).recent_messages(60).turns for use in turn.tool_uses]
+        answered = [use for use in uses if use.call.name == "AskUserQuestion" and use.result is not None]
+        assert answered[0].result.tool_use_result["answers"] == {question: label}
 
     def test_assemble_prompt_leads_with_the_root_window_only_when_asked(self) -> None:
         from captain_hook.prompt import Prompt
