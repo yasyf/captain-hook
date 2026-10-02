@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Hooks share one `ccx:` annotation notation for escapes and intent.**
   Real Bash comments carry `ccx:<key>[=<value>]` tokens; Agent/Task prompts and Skill args
   carry a whole `ccx: <key>[=<value>] ...` line. `Annotated` matches keys and optional values
-  in `only_if` or `skip_if`; `scope="session"` also reads the session's dispatch prompt.
+  in `only_if` or `skip_if`; `scope="session"` reads only the session's dispatch prompt.
   Handlers read the mapping through `evt.annotations`, parsed once per event.
 - **Deterministic blocks can ask a small model to confirm the match.** Pass `Confirm(rule=...)`
   to `hook(..., block=True, confirm=...)` or `evt.block(..., confirm=...)`. Only a confident

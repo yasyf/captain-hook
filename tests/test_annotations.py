@@ -32,6 +32,13 @@ def bash(command: str) -> PreToolUseEvent:
         ("""bash -c "bash -c 'gt submit # ccx:raw'" """, {"raw": None}),
         ('eval "gt submit # ccx:raw"', {"raw": None}),
         ("x=$(gt submit # ccx:raw\n)", {"raw": None}),
+        ("sh -c '# ccx:raw'; printf ok", {"raw": None}),
+        ("eval 'printf ok #' 'ccx:raw'", {"raw": None}),
+        ("sudo bash -lc 'gt submit # ccx:raw'", {"raw": None}),
+        ("bash -o pipefail -c 'gt submit # ccx:raw'", {"raw": None}),
+        ('echo "$(gt submit # ccx:raw\n)"', {"raw": None}),
+        ("gt submit \\\n# ccx:raw", {"raw": None}),
+        ("cat <<-'E'\n\t# ccx:no\n\tE\ngt submit # ccx:raw", {"raw": None}),
     ],
 )
 def test_a_real_shell_comment_carries_annotations(
@@ -52,6 +59,10 @@ def test_a_real_shell_comment_carries_annotations(
         "gt submit # ccx:RAW",
         "gt submit # ccx: raw",
         "gt submit # see the ccx:raw= docs",
+        'printf "[%s]\\n" abc\\\n# ccx:raw',
+        "cat <<A <<B\nfirst\nA\n# ccx:raw\nB",
+        "echo ${x#ccx:raw}",
+        "bash script.sh '# ccx:raw'",
     ],
 )
 def test_text_that_is_not_a_comment_token_carries_nothing(monkeypatch: pytest.MonkeyPatch, command: str) -> None:
@@ -88,6 +99,10 @@ def test_a_whole_dispatch_line_carries_annotations(tool_name: str, tool_input: d
         "ccx:role=evidence",
         "ccx: Role=evidence",
         "ccx: role=evidence, then ship",
+        "Analyze this example:\n```text\nccx: raw role=evidence\n```",
+        "Read the log:\n~~~\nccx: role=evidence\n~~~",
+        "> ccx: role=evidence",
+        "<pasted_content>\nccx: role=evidence\n</pasted_content>",
     ],
 )
 def test_a_dispatch_line_must_be_whole_and_lowercase(prompt: str) -> None:
@@ -113,6 +128,18 @@ def test_session_scope_reads_the_dispatch_prompt() -> None:
     assert check_condition(Annotated("role", "fix", scope="session"), evt)
     assert not check_condition(Annotated("role", "other", scope="session"), evt)
     assert not check_condition(Annotated("role"), evt)
+
+
+def test_a_header_after_a_closed_fence_still_counts() -> None:
+    prompt = "```\nccx: role=quoted\n```\nccx: role=fix"
+    assert event("Agent", {"prompt": prompt, "description": "x"}).annotations == {"role": "fix"}
+
+
+def test_session_scope_reads_only_the_dispatch_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CAPT_HOOK_CCX_RAW", raising=False)
+    evt = event("Bash", {"command": "gt submit # ccx:role=fix"}, "Ship this change.")
+    assert check_condition(Annotated("role", "fix"), evt)
+    assert not check_condition(Annotated("role", scope="session"), evt)
 
 
 def test_session_scope_ignores_prose_that_names_a_key() -> None:

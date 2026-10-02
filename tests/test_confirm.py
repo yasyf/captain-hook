@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from filelock import FileLock
 
 from captain_hook import Annotated, Confirm, ConfirmVerdict, Event, hook
 from captain_hook.app import _state
-from captain_hook.dispatch import execute_hook
+from captain_hook.confirm import ConfirmVerdicts
+from captain_hook.dispatch import OFFLOAD_THREADS, execute_hook
 from captain_hook.events import BaseHookEvent, PreToolUseEvent
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
 from tests.helpers import make_ctx
@@ -78,10 +81,43 @@ def test_a_retried_identical_call_reuses_the_verdict(tmp_path: Path) -> None:
     ctx = answering(tmp_path, block=True, confident=True)
     guard = entry(Confirm(rule=RULE))
     assert execute_hook(guard, push(ctx, "git push origin feat")).action is Action.block
-    assert execute_hook(guard, push(ctx, "git  push   origin feat")).action is Action.block
+    assert execute_hook(guard, push(ctx, "git push origin feat")).action is Action.block
     assert ctx.call_llm.call_count == 1
-    execute_hook(guard, push(ctx, "git push origin other"))
+
+
+def test_inputs_that_differ_only_in_whitespace_pay_separately(tmp_path: Path) -> None:
+    ctx = answering(tmp_path, block=False, confident=True)
+    guard = entry(Confirm(rule=RULE))
+    execute_hook(guard, push(ctx, "printf allowed # printf blocked"))
+    execute_hook(guard, push(ctx, "printf allowed #\nprintf blocked"))
     assert ctx.call_llm.call_count == 2
+
+
+def test_stuck_calls_never_starve_a_later_confirm(tmp_path: Path) -> None:
+    release = threading.Event()
+    stuck = make_ctx(tmp_path / "stuck")
+    stuck.call_llm = MagicMock(side_effect=lambda *_, **__: release.wait(5))  # type: ignore[method-assign]
+    try:
+        for index in range(OFFLOAD_THREADS + 1):
+            execute_hook(entry(Confirm(rule=RULE, timeout_s=0.03)), push(stuck, f"git push origin stuck-{index}"))
+        result = execute_hook(
+            entry(Confirm(rule=RULE, timeout_s=1.0)), push(answering(tmp_path / "fast", block=True, confident=True))
+        )
+    finally:
+        release.set()
+    assert result == HookResult(action=Action.block, message=MESSAGE)
+
+
+def test_a_busy_verdict_cache_never_outlasts_the_timeout(tmp_path: Path) -> None:
+    ctx = answering(tmp_path, block=True, confident=True)
+    lock = FileLock(f"{ctx.session[ConfirmVerdicts].path}.lock")
+    tmp_path.mkdir(exist_ok=True)
+    with lock:
+        started = time.monotonic()
+        result = execute_hook(entry(Confirm(rule=RULE, timeout_s=0.05)), push(ctx))
+        elapsed = time.monotonic() - started
+    assert elapsed < 0.5
+    assert result == HookResult(action=Action.block, message=MESSAGE)
 
 
 def test_the_model_sees_the_rule_message_and_input(tmp_path: Path) -> None:

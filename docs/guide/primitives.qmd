@@ -273,7 +273,8 @@ Choose the carrier for the call:
 | The hook process's environment | `export CAPT_HOOK_CCX_RAW=1` |
 
 Bash annotations come from the shell parse. Comments inside nested `sh -c`, `bash -c`, and
-`eval` payloads count; quoted text such as `echo '# ccx:raw'` and heredoc bodies do not.
+`eval` payloads count; quoted text such as `echo '# ccx:raw'`, heredoc bodies, and a `#` that a
+backslash-newline joins onto the previous word do not.
 Dispatch lines must occupy the whole line and use lowercase keys and values; leading and
 trailing whitespace is allowed. The environment contributes `raw` only for `1`, `true`, or
 `yes`. Matching ignores case and surrounding whitespace. `0` and `false` do not count.
@@ -294,8 +295,9 @@ hook(
 
 `Annotated("role")` accepts any value, including a bare flag; `Annotated("role", "fix")`
 requires that value. The default `scope="event"` reads the current call. With
-`scope="session"`, the condition also reads the session's first prompt, so a lane briefed
-with a whole `ccx: role=fix` line matches on every call.
+`scope="session"`, the condition reads only the session's first prompt, so a lane briefed
+with a whole `ccx: role=fix` line matches on every call and a command's own `# ccx:role=fix`
+never does.
 
 In a handler, read `evt.annotations` directly. It parses once per event and maps each key
 to its value, or `None` for a bare flag; session-prompt annotations belong to the condition's

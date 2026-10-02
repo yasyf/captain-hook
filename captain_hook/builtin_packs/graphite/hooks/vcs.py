@@ -139,6 +139,9 @@ hook(
         in_graphite_repo(
             'ccx vcs ship -m "fix: x" --new-branch=hooks/x', transcript=[T.user("Give this lane role=fix and ship.")]
         ): Warn(pattern="review pass"),
+        in_graphite_repo("gt submit # ccx:role=fix", transcript=[T.user("Ship this change.")]): Warn(
+            pattern="review pass"
+        ),
         in_graphite_repo(
             "gt submit", transcript=[T.assistant(T.tool("Skill", skill="cc-review:start")), T.user("ship it")]
         ): Allow(),

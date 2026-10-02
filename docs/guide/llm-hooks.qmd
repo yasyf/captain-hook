@@ -171,8 +171,9 @@ of `additionalContext` naming the hook and reason, such as
 flow in charge.
 
 `timeout_s` defaults to three seconds. The framework enforces that wall-clock limit itself,
-stops waiting, and abandons a late answer. Verdicts are cached per session by hook,
-whitespace-normalized tool input, and message, so an identical retry reuses the answer.
+stops waiting, and leaves a late answer to a thread of its own, so a stuck backend never delays
+the next confirm. Verdicts are cached per session by hook, exact tool input, and message, so an
+identical retry reuses the answer.
 Timeouts and errors are not cached.
 
 The measured default is Cerebras `gpt-oss-120b` with low reasoning effort; compare backends
