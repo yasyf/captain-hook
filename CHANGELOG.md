@@ -67,9 +67,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Skill, Read, Grep, or Glob with neither an `Annotated` escape nor `confirm=`. The
   authoring-hooks skill documents the notation.
 - **`capt-hook lint` flags a mandatory hook that reads evidence.** A hook registered with
-  `mandatory=True` whose handler calls `llm_evaluate`, `evt.llm`, `llm_gate`, `llm_nudge`, or
-  `prompt_check`, or reads `evt.ctx.t` or `evt.ctx.transcript`, is reported with the split to make:
-  a mandatory hook is evidence-free, so the LLM or transcript check moves to an advisory hook.
+  `mandatory=True` whose handler calls `llm_evaluate`, `evt.llm`, `evt.ctx.call_llm`, `llm_gate`,
+  `llm_nudge`, or `prompt_check`, or reads `evt.ctx.t` or `evt.ctx.transcript`, is reported with the
+  split to make: a mandatory hook is evidence-free, so the LLM or transcript check moves to an
+  advisory hook. The finding names what the static pass follows (helpers in the file, registrars
+  imported from a sibling module, import aliases) and what it cannot see (a helper imported from
+  another package, dynamic dispatch).
+- **A mandatory hook that does not complete denies the call, whether or not the client flagged
+  it.** A `mandatory=True` hook that raises, times out, is left queued at the deadline, or is left
+  unrun on incomplete evidence makes the worker answer the event's own deny envelope, exit 0, with
+  a reason naming the hook and the cause, so a custom policy on a request the builtin prefilter
+  did not mark mandatory (a Slack message, say) fails closed instead of reading as a non-blocking
+  hook error. A request the prefilter did flag still reports no completion, so the client's own
+  deny stands. The worker's reserved request lane also serves any event the loaded registry
+  guards, not only the requests the client flagged.
 
 ### Changed
 
@@ -99,6 +110,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scan are shared across those threads and kept per payload across interleaved events. In the
   worker, a guarded event takes a reserved lane of four request threads, so a burst of slow
   advisory events holding every worker thread no longer queues it past the client's deadline.
+  The bound is absolute: the hooks' deadline and the collector's cutoff are fixed from the
+  caller's deadline when the event starts, so a pause between reading the clock and binding never
+  extends them, and a verdict reached after the cutoff is the event's error rather than a late
+  completion. Each registration records its own completion, so two registrations sharing a state
+  key cannot stand in for one another, and a verdict nobody waited for gives its `max_fires`
+  slot back and writes no ledger entry.
 - **`llm_evaluate` no longer retries into a deadline it cannot meet.** A failed call is not retried
   once the caller's deadline is inside five seconds; it raises instead of re-asking with a
   one-second clamp.

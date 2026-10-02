@@ -187,7 +187,6 @@ def llm_evaluate[M: BaseModel](
 
 
 def retry_affordable() -> bool:
-    """Whether the caller's deadline leaves :data:`LLM_RETRY_FLOOR_SECONDS` for another call; the cold CLI can."""
     return not reqenv.deadline_within(LLM_RETRY_FLOOR_SECONDS)
 
 

@@ -80,11 +80,13 @@ class WorkerService:
         output_stream: BinaryIO,
         *,
         dispatch: Dispatch,
+        guarded: Callable[[EventRequest], bool] = lambda request: request.mandatory,
         max_workers: int = REQUEST_THREADS,
     ) -> None:
         self._input = input_stream
         self._output = output_stream
         self._dispatch = dispatch
+        self._guarded = guarded
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="capt-hook-worker")
         self._mandatory_executor = ThreadPoolExecutor(
             max_workers=MANDATORY_REQUEST_THREADS, thread_name_prefix="capt-hook-mandatory-request"
@@ -134,10 +136,9 @@ class WorkerService:
         self._write(adopt_message(pid, lifetime_ms))
 
     def _submit(self, request: EventRequest) -> None:
-        """Queue one event; a guarded one takes the reserved lane so a burst of slow advisory events never holds it."""
         with self._guard:
             self._outstanding += 1
-        executor = self._mandatory_executor if request.mandatory else self._executor
+        executor = self._mandatory_executor if self._guarded(request) else self._executor
         future = executor.submit(self._serve, request)
         future.add_done_callback(self._done)
 

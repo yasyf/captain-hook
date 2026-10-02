@@ -71,11 +71,12 @@ TEXT_PARSERS = REGEX_METHODS | frozenset(
 )
 CONTEXT_TOOLS = frozenset({"Agent", "Task", "Skill", "Read", "Grep", "Glob"})
 ALLOWED_COMMENT = re.compile(r"#!|#\s*(?:TODO|FIXME|WORKAROUND|noqa|type:|pyright:|ruff:|fmt:|pragma)")
-LLM_CALLS = frozenset({"llm_evaluate", "llm", "llm_gate", "llm_nudge", "prompt_check"})
+LLM_CALLS = frozenset({"llm_evaluate", "llm", "call_llm", "llm_gate", "llm_nudge", "prompt_check"})
 TRANSCRIPT_ATTRIBUTES = frozenset({"t", "transcript"})
 MANDATORY_EVIDENCE = (
     "a mandatory hook is evidence-free; move the LLM or transcript check into an advisory hook registered "
-    "without mandatory=True"
+    "without mandatory=True (the lint follows helpers in this file, registrars imported from a sibling module, "
+    "and import aliases; a helper imported from another package or reached by dynamic dispatch is not seen)"
 )
 
 
@@ -335,7 +336,6 @@ def registers_mandatory(call: ast.Call, registrars: frozenset[str]) -> bool:
 
 
 def import_aliases(tree: ast.Module) -> dict[str, str]:
-    """Local names bound by ``import ... as`` or ``from ... import ... as``, mapped to the names they stand for."""
     return {
         alias.asname: alias.name.rsplit(".", 1)[-1]
         for node in tree.body
@@ -346,7 +346,6 @@ def import_aliases(tree: ast.Module) -> dict[str, str]:
 
 
 def local_registrars(tree: ast.Module) -> frozenset[str]:
-    """Module names bound to a registrar carrying ``mandatory=True``: ``guard = partial(on, ..., mandatory=True)``."""
     return frozenset(
         target.id
         for node in tree.body
@@ -356,7 +355,6 @@ def local_registrars(tree: ast.Module) -> frozenset[str]:
 
 
 def imported_registrars(path: Path, tree: ast.Module) -> frozenset[str]:
-    """Names imported from a sibling module that binds them as mandatory registrars, under their local names."""
     return frozenset(
         alias.asname or alias.name
         for node in tree.body

@@ -327,6 +327,34 @@ def test_a_mandatory_request_is_served_while_every_worker_thread_is_held() -> No
     assert not [thread for thread in threading.enumerate() if thread.name.startswith("capt-hook-mandatory-request")]
 
 
+def test_a_request_the_loaded_registry_guards_takes_the_reserved_lane() -> None:
+    from captain_hook import app
+    from captain_hook.types import Event, HookSpec, RegisteredHook
+    from captain_hook.worker.runtime import ProductRuntime
+    from tests.test_worker_runtime import FakeRegistry
+
+    state = app.State()
+    state.hooks.append(RegisteredHook(spec=HookSpec(events=Event.PreToolUse, mandatory=True), name="slack_policy"))
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state),
+        dispatcher=lambda *_, **__: (None, lambda: None),
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    lanes: dict[int, str] = {}
+
+    def dispatch(request: EventRequest) -> tuple[EventResponse, Callable[[], None] | None]:
+        lanes[request.id] = threading.current_thread().name
+        return runtime.dispatch(request)
+
+    for request_id in (1, 2):
+        input_stream = io.BytesIO(frame(event(request_id)))
+        WorkerService(input_stream, io.BytesIO(), dispatch=dispatch, guarded=runtime.guarded).run()
+
+    assert lanes[1].startswith("capt-hook-worker")
+    assert lanes[2].startswith("capt-hook-mandatory-request")
+
+
 def test_dispatch_failure_is_top_level_error_with_same_id() -> None:
     output_stream = io.BytesIO()
 

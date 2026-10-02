@@ -297,7 +297,6 @@ class Facts:
 
     @property
     def ownership(self) -> Ownership | Unreadable:
-        """The process table read once per event, however many guards ask for it from their own threads."""
         with self._guard:
             if self._ownership is None:
                 self._ownership = read_ownership()
@@ -601,12 +600,6 @@ class Scan:
 
     @classmethod
     def of(cls, evt: BaseHookEvent) -> Scan:
-        """One scan per payload, shared by every guard of the event across the threads they run on.
-
-        Keyed by the payload's identity and kept alive with it for the last :data:`SCAN_CACHE_LIMIT`
-        payloads, so interleaved events each keep their own scan, and read once under the scan's
-        own lock, so the guards that find it first block on the parse instead of repeating it.
-        """
         with cls.LOCK:
             scan = cls.CACHE.get(id(evt._raw))
             if scan is None or scan.raw is not evt._raw:

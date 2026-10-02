@@ -210,6 +210,16 @@ class TestStaticLint:
             ),
             pytest.param(
                 """
+                def handler(evt):
+                    return evt.ctx.call_llm("judge", "is this safe?", bool)
+
+                on(Event.PreToolUse, mandatory=True)(handler)
+                """,
+                "mandatory hook handler calls call_llm",
+                id="call-form registration asking evt.ctx.call_llm",
+            ),
+            pytest.param(
+                """
                 def judge(evt):
                     return prompt_check(evt, "judge", prefix="guard")
 
@@ -258,10 +268,10 @@ class TestStaticLint:
         ],
     )
     def test_a_mandatory_hook_reading_evidence_is_flagged(self, source: str, detail: str) -> None:
-        assert [text for rule, text in findings(source) if rule == "code"] == [
-            f"{detail}; a mandatory hook is evidence-free; move the LLM or transcript check into an advisory hook "
-            "registered without mandatory=True"
-        ]
+        assert [text for rule, text in findings(source) if rule == "code"] == [f"{detail}; {MANDATORY_EVIDENCE}"]
+
+    def test_the_evidence_finding_names_what_the_traversal_cannot_see(self) -> None:
+        assert "a helper imported from another package or reached by dynamic dispatch is not seen" in MANDATORY_EVIDENCE
 
     @pytest.mark.parametrize(
         "source",
