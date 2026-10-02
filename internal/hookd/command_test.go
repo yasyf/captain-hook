@@ -47,6 +47,7 @@ func scriptClient(t *testing.T, client *scriptedClient, open error) {
 func runEvent(t *testing.T, event, payload string) (int, string, string) {
 	t.Helper()
 	t.Setenv("CLAUDE_PROJECT_DIR", "/project")
+	t.Setenv("CAPTAIN_HOOK_STATE_DIR", t.TempDir())
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"run", event}, strings.NewReader(payload), &stdout, &stderr)
 	return code, stdout.String(), stderr.String()

@@ -188,9 +188,9 @@ def test_reviewer_spawn_is_import_isolated() -> None:
 
 def test_update_spawn_is_import_isolated() -> None:
     # updater.detach() spawns from the session's repo too, so it needs the same isolation.
-    from captain_hook.update.updater import update_argv
+    from captain_hook.update.updater import run_args, update_argv
 
-    assert update_argv(apply=True)[:4] == [sys.executable, "-P", "-m", "captain_hook"]
+    assert update_argv(*run_args(apply=True))[:4] == [sys.executable, "-P", "-m", "captain_hook"]
 
 
 def recording_probe(value: str, timeouts: list[float]) -> object:

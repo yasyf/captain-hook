@@ -319,7 +319,7 @@ def test_dispatch_checks_an_agent_session_without_letting_it_apply(monkeypatch: 
     updater.dispatch_update()
 
     assert detaches == [False]
-    assert updater.update_argv(apply=False)[-1] == "--check-only"
+    assert updater.update_argv(*updater.run_args(apply=False))[-1] == "--check-only"
 
 
 def test_the_check_only_flag_reaches_run_update(monkeypatch: pytest.MonkeyPatch) -> None:

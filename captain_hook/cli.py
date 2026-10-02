@@ -33,11 +33,13 @@ from captain_hook.loader import (
 )
 from captain_hook.log import setup_logging
 from captain_hook.packs import manager, plugins
+from captain_hook.pause import pause, resume
 from captain_hook.review.cli import review
 from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
 from captain_hook.types import TOOL_EVENTS, Event
 from captain_hook.update.cli import update
+from captain_hook.update.launchers import dispatch_launcher_check
 from captain_hook.update.updater import dispatch_update
 
 if TYPE_CHECKING:
@@ -339,6 +341,11 @@ def after_reply(event: Event, evt: BaseHookEvent, raw: dict[str, Any], session_d
         except Exception as exc:
             logger.exception("native update dispatch failed")
             faults.record("update dispatch", exc, raw.get("cwd"))
+        try:
+            dispatch_launcher_check()
+        except Exception as exc:
+            logger.exception("native launcher check dispatch failed")
+            faults.record("launcher check dispatch", exc, raw.get("cwd"))
         try:
             cleanup_stale(exclude=SessionId(sid) if (sid := raw.get("session_id")) else None)
         except Exception:
@@ -1051,6 +1058,8 @@ def mcp() -> None:
 cli.add_command(review)
 cli.add_command(helper)
 cli.add_command(update)
+cli.add_command(pause)
+cli.add_command(resume)
 
 
 main = cli

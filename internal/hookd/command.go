@@ -106,6 +106,15 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: capt-hookd run EVENT")
 		return 1
 	}
+	if p, paused := activePause(time.Now()); paused {
+		if args[0] == "SessionStart" {
+			if _, err := io.WriteString(stdout, pauseBanner(p)); err != nil {
+				fmt.Fprintf(stderr, "capt-hookd: write result: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	}
 	timeout := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", defaultRequestTimeout)
 	if timeout <= 0 {
 		fmt.Fprintf(stderr, "capt-hookd: request timeout %s must be positive\n", timeout)

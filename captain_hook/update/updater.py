@@ -240,18 +240,23 @@ def run_update(*, apply: bool = True) -> None:
     notify(kind="update_failed", title="Captain Hook update failed", body=f"Could not upgrade the host to {latest}.")
 
 
-def update_argv(*, apply: bool) -> list[str]:
-    # -P: detach() runs this from the session's repo, and `-m` would otherwise put that repo at the
+def update_argv(*args: str) -> list[str]:
+    # -P: spawn() runs this from the session's repo, and `-m` would otherwise put that repo at the
     # head of sys.path, where a directory sharing a dependency's name shadows the installed one.
-    return [sys.executable, "-P", "-m", "captain_hook", "update", "run", *([] if apply else ["--check-only"])]
+    return [sys.executable, "-P", "-m", "captain_hook", "update", *args]
 
 
-def detach(*, apply: bool) -> None:
+def run_args(*, apply: bool) -> list[str]:
+    return ["run", *([] if apply else ["--check-only"])]
+
+
+def spawn(args: list[str]) -> None:
+    command = " ".join(["update", *args])
     try:
         (log_path := update_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
             subprocess.Popen(
-                update_argv(apply=apply),
+                update_argv(*args),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
@@ -260,15 +265,19 @@ def detach(*, apply: bool) -> None:
                 env=reqenv.env_map() | {SPAWNED_ENV: "1"},
             )
     except OSError:
-        breadcrumb("detach failed: update run")
+        breadcrumb(f"detach failed: {command}")
         return
-    breadcrumb(f"spawned update run{'' if apply else ' (check only)'}")
+    breadcrumb(f"spawned {command}")
 
 
-def claim(stamp: str, settings: UpdateSettings) -> bool:
+def detach(*, apply: bool) -> None:
+    spawn(run_args(apply=apply))
+
+
+def claim(stamp: str, window: timedelta) -> bool:
     try:
         (stamps := update_dir()).mkdir(parents=True, exist_ok=True)
-        return _claim_stamp(stamps / stamp, timedelta(minutes=settings.interval_minutes))
+        return _claim_stamp(stamps / stamp, window)
     except OSError:
         return False
 
@@ -292,11 +301,12 @@ def dispatch_update() -> None:
         breadcrumb("update skip: CAPT_HOOK_SPAWNED set")
         return
     apply = not reqenv.is_headless()
+    window = timedelta(minutes=settings.interval_minutes)
     if apply and pending() is not None:
-        if not claim(APPLY_STAMP, settings):
+        if not claim(APPLY_STAMP, window):
             breadcrumb("update skip: a deferred update is already claimed")
             return
-    elif not claim(UPDATE_STAMP, settings):
+    elif not claim(UPDATE_STAMP, window):
         breadcrumb("update skip: throttled")
         return
     detach(apply=apply)
