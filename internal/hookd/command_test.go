@@ -17,6 +17,7 @@ import (
 const (
 	destructivePayload = `{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}`
 	benignPayload      = `{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"git status"}}`
+	slackPayload       = `{"cwd":"/r","tool_name":"mcp__slack__send_message","tool_input":{"channel":"C1","text":"hello"}}`
 )
 
 type scriptedClient struct {
@@ -160,6 +161,24 @@ func TestRunPassesACompletedGuardThroughUnchanged(t *testing.T) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q, want 0 %q %q", code, stdout, stderr, tc.stdout, tc.stderr)
 			}
 		})
+	}
+}
+
+func TestRunEmitsTheWorkersDenyForARequestThePrefilterDidNotFlag(t *testing.T) {
+	deny := `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", ` +
+		`"permissionDecisionReason": "BLOCKED: the mandatory hook slack_policy did not complete ` +
+		`(MandatoryDeadlinePassed: slack_policy: still running at the caller's deadline), so this call could not ` +
+		`be checked and stays denied. Retry once the hook answers, or ask the owner to run the call themselves."}}` + "\n"
+	client := scriptedClient{response: wireproto.EventResponse{
+		Schema: wireproto.Schema, Status: "ok", Stdout: deny, Stderr: "Traceback (most recent call last):\n",
+	}}
+	scriptClient(t, &client, nil)
+	code, stdout, stderr := runEvent(t, "PreToolUse", slackPayload)
+	if code != 0 || stdout != deny || stderr != client.response.Stderr {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want 0 %q %q", code, stdout, stderr, deny, client.response.Stderr)
+	}
+	if len(client.requests) != 1 || client.requests[0].Mandatory {
+		t.Fatalf("requests = %+v, want one non-mandatory request", client.requests)
 	}
 }
 

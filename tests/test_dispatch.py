@@ -101,7 +101,7 @@ def bounded_request(seconds: float) -> reqenv.RequestOverrides:
 
 
 class TestPools:
-    @pytest.mark.parametrize("getter", ["background_pool", "offload_pool"])
+    @pytest.mark.parametrize("getter", ["background_pool", "offload_pool", "mandatory_pool"])
     def test_concurrent_first_calls_build_one_executor(self, monkeypatch: pytest.MonkeyPatch, getter: str) -> None:
         pool_getter = getattr(dispatch_module, getter)
         built: list[ThreadPoolExecutor] = []

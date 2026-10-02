@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
 import shutil
+import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,10 +14,17 @@ from typing import Any
 import pytest
 
 from captain_hook import app
+from captain_hook import dispatch as dispatch_module
 from captain_hook.app import on
 from captain_hook.cli import dispatch_event
 from captain_hook.context import HookContext
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import (
+    SYNC_DEADLINE_MARGIN_SECONDS,
+    MandatoryBound,
+    MandatoryDeadlinePassed,
+    completion_key,
+    dispatch,
+)
 from captain_hook.events import PreToolUseEvent
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
@@ -40,6 +52,33 @@ def reason(envelope: dict[str, Any] | None) -> str:
     return envelope["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def replied(response: Any) -> dict[str, Any]:
+    return json.loads(response.stdout.splitlines()[-1])
+
+
+def paused_before_publish(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    reached, release = threading.Event(), threading.Event()
+    original = reqenv.publish
+
+    def publish(fn: Callable[[], Any]) -> Any:
+        reached.set()
+        assert release.wait(timeout=5.0)
+        return original(fn)
+
+    monkeypatch.setattr(reqenv, "publish", publish)
+    return reached, release
+
+
+def closing_once(monkeypatch: pytest.MonkeyPatch, reached: threading.Event) -> None:
+    original = dispatch_module.wait
+
+    def wait_for_the_barrier(futures: Any, timeout: float | None = None) -> Any:
+        assert reached.wait(timeout=5.0)
+        return original(futures, timeout=0)
+
+    monkeypatch.setattr(dispatch_module, "wait", wait_for_the_barrier)
+
+
 @pytest.fixture
 def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: FROZEN_NOW))
@@ -56,6 +95,22 @@ def session_guards() -> list[str]:
     names = [hook.name for hook in app.get_mandatory_hooks(Event.PreToolUse)]
     assert {"kill_unverified_pid", "signal_by_criteria"} <= set(names)
     return names
+
+
+def completed_names(overrides: reqenv.RequestOverrides) -> set[str]:
+    return {key.split(".")[0] for key in overrides.mandatory_completed}
+
+
+@pytest.fixture
+def ticking_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[[float], None]:
+    """A deadline clock held at :data:`FROZEN_NOW` that a hook can advance by hand."""
+    now = [FROZEN_NOW]
+    monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: now[0]))
+
+    def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    return advance
 
 
 def inside_margin() -> reqenv.RequestOverrides:
@@ -90,7 +145,7 @@ class TestDispatchEvent:
         assert decision(envelope) == "deny"
         assert "pkill" in reason(envelope)
         assert ran == []
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
     def test_a_healthy_guarded_call_records_completion_without_an_envelope(
         self, general_pack: None, frozen_clock: None, tmp_path: Path
@@ -99,7 +154,7 @@ class TestDispatchEvent:
         with reqenv.use_request(overrides):
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
         assert envelope is None
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
     def test_an_advisory_deny_survives_the_guards_allow(
         self, general_pack: None, frozen_clock: None, tmp_path: Path
@@ -113,7 +168,7 @@ class TestDispatchEvent:
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
         assert decision(envelope) == "deny"
         assert reason(envelope) == "advisory says no"
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
     def test_the_guard_runs_with_no_fanout_permit_left(
         self, general_pack: None, frozen_clock: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -129,7 +184,7 @@ class TestDispatchEvent:
             envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, DESTRUCTIVE, session_dir=None)
         assert decision(envelope) == "deny"
         assert ran == []
-        assert [key.split(".")[0] for key in overrides.mandatory_completed] == session_guards()
+        assert completed_names(overrides) == set(session_guards())
 
 
 @pytest.mark.usefixtures("frozen_clock")
@@ -169,7 +224,7 @@ class TestMandatoryPhase:
         overrides = outside_margin()
         with reqenv.use_request(overrides):
             assert dispatch(Event.PreToolUse, evt) is None
-        assert overrides.mandatory_completed == [app._state.hooks[0].state_key]
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
 
     def test_a_mandatory_block_dooms_only_the_handlers_registered_after_it(self, tmp_path: Path) -> None:
         ran: list[str] = []
@@ -252,7 +307,7 @@ class TestMandatoryPhase:
         overrides = outside_margin()
         with reqenv.use_request(overrides):
             assert dispatch(Event.PreToolUse, evt) is None
-        assert overrides.mandatory_completed == [app._state.hooks[0].state_key]
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
 
     @pytest.mark.parametrize("advisory", [True, False])
     def test_every_transcript_branch_is_released(self, tmp_path: Path, advisory: bool) -> None:
@@ -275,10 +330,364 @@ class TestMandatoryPhase:
         assert source.pins.pending == 0
 
 
+@pytest.mark.usefixtures("frozen_clock")
+class TestMandatoryLane:
+    def test_the_guard_completes_while_a_slow_mandatory_hook_still_runs(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        guards = set(session_guards())
+        overrides = outside_margin()
+
+        @on(Event.PreToolUse, only_if=[Exhausted()])
+        def starved_advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slow(evt: Any) -> None:
+            patience = time.monotonic() + 5.0
+            while not completed_names(overrides) >= guards:
+                assert time.monotonic() < patience, "the guards waited behind the slow hook"
+                time.sleep(0.01)
+
+        with reqenv.use_request(overrides):
+            envelope, _ = dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
+        assert envelope is None
+        assert completed_names(overrides) == guards | {"slow"}
+        assert overrides.evidence_gaps == ["starved_advisory: deadline: foreground transcript deadline exhausted"]
+
+    def test_mandatory_hooks_run_side_by_side(self, tmp_path: Path) -> None:
+        rendezvous = threading.Barrier(4, timeout=5.0)
+
+        def register(index: int) -> None:
+            def together(evt: Any) -> None:
+                rendezvous.wait()
+
+            together.__name__ = f"together_{index}"
+            on(Event.PreToolUse, mandatory=True)(together)
+
+        for index in range(4):
+            register(index)
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides):
+            assert dispatch(Event.PreToolUse, evt) is None
+        assert len(overrides.mandatory_completed) == 4
+        assert evt.ctx.transcript.pins.pending == 0
+
+    @pytest.mark.parametrize(
+        ("seconds", "clamped"),
+        [
+            pytest.param(30.0, 30, id="outside the margin: the deadline less the margin"),
+            pytest.param(-1.0, 4, id="inside the margin: whatever remains"),
+        ],
+    )
+    def test_an_inner_call_clamps_to_the_mandatory_budget(self, tmp_path: Path, seconds: float, clamped: int) -> None:
+        seen: dict[str, float | int | None] = {}
+
+        @on(Event.PreToolUse, mandatory=True)
+        def guard(evt: Any) -> None:
+            seen["timeout"] = reqenv.clamp_timeout(180)
+            seen["left"] = reqenv.seconds_left()
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin(seconds)
+        with reqenv.use_request(overrides):
+            dispatch(Event.PreToolUse, evt)
+        assert seen == {"timeout": clamped, "left": float(clamped)}
+        assert reqenv.seconds_left() is None
+        with reqenv.use_request(overrides):
+            assert reqenv.seconds_left() == SYNC_DEADLINE_MARGIN_SECONDS + seconds
+
+    def test_registrations_sharing_a_state_key_keep_the_later_deny(self, tmp_path: Path) -> None:
+        def register(verdict: Callable[[Any], Any]) -> None:
+            def guard(evt: Any) -> Any:
+                return verdict(evt)
+
+            on(Event.PreToolUse, mandatory=True, max_fires=1)(guard)
+
+        register(lambda evt: None)
+        register(lambda evt: evt.block("the second registration says no"))
+        assert len({hook.state_key for hook in app._state.hooks}) == 1
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides):
+            envelope = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
+        assert decision(envelope) == "deny"
+        assert reason(envelope) == "the second registration says no"
+        assert len(overrides.mandatory_completed) == 2
+
+    def test_a_hook_ignoring_its_budget_is_the_events_error_at_the_deadline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = ThreadPoolExecutor(max_workers=1)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True)
+        def stuck(evt: Any) -> None:
+            time.sleep(1.0)
+
+        @on(Event.PreToolUse, mandatory=True)
+        def queued(evt: Any) -> None:
+            ran.append("queued")
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin(-4.7)
+        started = time.monotonic()
+        with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="stuck: still running"):
+            dispatch(Event.PreToolUse, evt)
+        assert time.monotonic() - started < 1.0
+        assert overrides.mandatory_completed == []
+        pool.shutdown(wait=True)
+        assert overrides.mandatory_completed == []
+        assert ran == []
+        assert evt.ctx.transcript.pins.pending == 0
+
+    def test_a_late_verdict_records_no_completion_and_refunds_its_fire_slot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = ThreadPoolExecutor(max_workers=1)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True, max_fires=1)
+        def stuck(evt: Any) -> Any:
+            ran.append("stuck")
+            time.sleep(0.6)
+            return evt.block("too late")
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        overrides = outside_margin(-4.7)
+        with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="stuck: still running"):
+            dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        pool.shutdown(wait=True)
+        assert overrides.mandatory_completed == []
+        assert ran == ["stuck"]
+
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides):
+            envelope = dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        assert ran == ["stuck", "stuck"]
+        assert decision(envelope) == "deny"
+        assert reason(envelope) == "too late"
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+
+    def test_a_verdict_racing_the_closure_is_refused_whole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded: list[str] = []
+        monkeypatch.setattr(dispatch_module, "record_fire", lambda entry, evt, result: recorded.append(entry.name))
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True, max_fires=1)
+        def policy(evt: Any) -> Any:
+            ran.append("policy")
+            return evt.block("permission denied")
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        overrides = outside_margin()
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            reached, release = paused_before_publish(racing)
+            closing_once(racing, reached)
+            with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="policy: still running"):
+                dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+            assert overrides.mandatory_phase.failed
+            assert overrides.mandatory_completed == []
+            release.set()
+            pool.shutdown(wait=True)
+        assert overrides.mandatory_completed == []
+        assert recorded == []
+
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+        retried = outside_margin()
+        with reqenv.use_request(retried):
+            envelope = dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        assert ran == ["policy", "policy"]
+        assert reason(envelope) == "permission denied"
+        assert recorded == ["policy"]
+        assert retried.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+        assert retried.mandatory_phase.outcome == "settled"
+
+    def test_a_verdict_published_before_the_closure_is_delivered_whole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reached, release = threading.Event(), threading.Event()
+        recorded: list[str] = []
+
+        def recording_under_the_lock(entry: Any, evt: Any, result: Any) -> None:
+            recorded.append(entry.name)
+            reached.set()
+            assert release.wait(timeout=5.0)
+
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True, max_fires=1)
+        def policy(evt: Any) -> Any:
+            ran.append("policy")
+            return evt.block("permission denied")
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        overrides = outside_margin()
+
+        def dispatched() -> Any:
+            with reqenv.use_request(overrides):
+                return dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            racing.setattr(dispatch_module, "record_fire", recording_under_the_lock)
+            closing_once(racing, reached)
+            with ThreadPoolExecutor(max_workers=1) as collector:
+                verdict = collector.submit(dispatched)
+                assert reached.wait(timeout=5.0)
+                release.set()
+                envelope = verdict.result(timeout=5.0)
+            pool.shutdown(wait=True)
+        assert reason(envelope) == "permission denied"
+        assert recorded == ["policy"]
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+        assert overrides.mandatory_phase.outcome == "settled"
+
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+        spent = outside_margin()
+        with reqenv.use_request(spent):
+            assert dispatch(Event.PreToolUse, event(), session_dir=tmp_path) is None
+        assert ran == ["policy"]
+        assert spent.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+
+    def test_a_verdict_reached_after_the_cutoff_is_the_events_error(
+        self, tmp_path: Path, ticking_clock: Callable[[float], None]
+    ) -> None:
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True, max_fires=1)
+        def slow(evt: Any) -> Any:
+            ran.append("slow")
+            ticking_clock(31.0 if len(ran) == 1 else 0.0)
+            return evt.block("too late")
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        overrides = outside_margin()
+        with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="slow: finished past"):
+            dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        assert overrides.mandatory_completed == []
+
+        ticking_clock(-31.0)
+        with reqenv.use_request(overrides):
+            envelope = dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        assert ran == ["slow", "slow"]
+        assert decision(envelope) == "deny"
+
+    @pytest.mark.parametrize(
+        ("seconds", "inner"),
+        [
+            pytest.param(30.0, 30.0, id="outside the margin: the caller's deadline less the margin"),
+            pytest.param(-1.0, 4.0, id="inside the margin: the caller's own deadline"),
+        ],
+    )
+    def test_the_bound_is_absolute_however_the_clock_moves_between_reads(
+        self, monkeypatch: pytest.MonkeyPatch, seconds: float, inner: float
+    ) -> None:
+        reads = iter(range(100))
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: FROZEN_NOW + next(reads)))
+        overrides = outside_margin(seconds)
+        original = overrides.deadline_unix_ms
+        with reqenv.use_request(overrides):
+            bound = MandatoryBound.of(SYNC_DEADLINE_MARGIN_SECONDS)
+            with bound.deadline():
+                assert reqenv.current() is not None
+                assert reqenv.current().deadline_unix_ms == bound.deadline_unix_ms
+                first, second = reqenv.seconds_left(), reqenv.seconds_left()
+                assert first is not None and second is not None and second == first - 1.0
+                assert reqenv.current().deadline_unix_ms == bound.deadline_unix_ms
+        assert next(reads) >= 3
+        assert bound.deadline_unix_ms == int((FROZEN_NOW + inner) * 1000)
+        assert bound.deadline_unix_ms <= original
+        assert bound.cutoff.deadline_unix_ms == min(original, bound.deadline_unix_ms + 250)
+
+    def test_registrations_sharing_a_state_key_each_owe_their_own_completion(self, tmp_path: Path) -> None:
+        def register(only_if: list[Any]) -> None:
+            def guard(evt: Any) -> None:
+                return None
+
+            on(Event.PreToolUse, mandatory=True, only_if=only_if)(guard)
+
+        register([Exhausted()])
+        register([])
+        assert len({hook.state_key for hook in app._state.hooks}) == 1
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides):
+            assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[1], 1)]
+
+    def test_a_hook_queued_past_the_deadline_is_the_whole_events_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ticking_clock: Callable[[float], None]
+    ) -> None:
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+
+        @on(Event.PreToolUse, mandatory=True)
+        def first(evt: Any) -> None:
+            ticking_clock(SYNC_DEADLINE_MARGIN_SECONDS + 31.0)
+
+        @on(Event.PreToolUse, mandatory=True)
+        def queued(evt: Any) -> None:
+            raise AssertionError("handler must not run past the deadline")
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        overrides = outside_margin()
+        with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="first: finished past"):
+            dispatch(Event.PreToolUse, evt)
+        assert overrides.mandatory_completed == []
+        assert evt.ctx.transcript.pins.pending == 0
+
+    def test_a_cold_cli_run_stays_unbounded(self, tmp_path: Path) -> None:
+        seen: list[float | None] = []
+
+        @on(Event.PreToolUse, mandatory=True)
+        def guard(evt: Any) -> None:
+            seen.append(reqenv.seconds_left())
+
+        evt = PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        assert dispatch(Event.PreToolUse, evt) is None
+        assert seen == [None]
+
+    def test_a_timed_out_mandatory_hook_is_the_whole_events_error(
+        self, general_pack: None, tmp_path: Path, ticking_clock: Callable[[float], None]
+    ) -> None:
+        guards = set(session_guards())
+
+        @on(Event.PreToolUse, mandatory=True)
+        def judged(evt: Any) -> None:
+            timeout = reqenv.clamp_timeout(180)
+            ticking_clock(timeout)
+            raise TimeoutError(f"claude-sdk timed out after {timeout}s")
+
+        overrides = outside_margin()
+        with reqenv.use_request(overrides), pytest.raises(TimeoutError, match="timed out after 30s"):
+            dispatch_event(tmp_path, Event.PreToolUse, HEALTHY, session_dir=None)
+        assert completed_names(overrides) == guards
+
+
 class TestGuardCompletion:
     PAYLOAD = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
 
-    def respond(self, *, mandatory: bool = True) -> Any:
+    def respond(self, *, mandatory: bool = True, payload: str = PAYLOAD, deadline_unix_ms: int = 0) -> Any:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
@@ -286,7 +695,11 @@ class TestGuardCompletion:
             nlp_warmer=lambda: None,
         )
         response, _ = runtime.dispatch(
-            replace(request(payload_raw=self.PAYLOAD, mandatory=mandatory), deadline_unix_ms=0)
+            replace(
+                request(payload_raw=payload, mandatory=mandatory),
+                client_ppid=HOOK_SHELL,
+                deadline_unix_ms=deadline_unix_ms,
+            )
         )
         return response
 
@@ -305,16 +718,67 @@ class TestGuardCompletion:
         assert "guard" not in response.message()
         assert '"permissionDecision": "deny"' in response.stdout
 
-    def test_a_crashed_mandatory_hook_is_a_worker_error_without_completion(self) -> None:
+    def test_a_protected_session_is_denied_while_advisory_evidence_is_slow(self, general_pack: None) -> None:
+        @on(Event.PreToolUse, only_if=[Exhausted()])
+        def starved_advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        response = self.respond(payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"kill 14575"}}')
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert '"permissionDecision": "deny"' in response.stdout
+        assert "an agent session" in response.stdout
+
+    def test_a_safe_call_is_permitted_beside_a_slow_mandatory_hook(self, general_pack: None) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slow(evt: Any) -> None:
+            time.sleep(0.05)
+
+        response = self.respond(payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"ls"}}')
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert "permissionDecision" not in response.stdout
+
+    def test_a_timed_out_mandatory_hook_is_denied_without_completion(
+        self, general_pack: None, ticking_clock: Callable[[float], None]
+    ) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def judged(evt: Any) -> None:
+            timeout = reqenv.clamp_timeout(180)
+            ticking_clock(timeout)
+            raise TimeoutError(f"claude-sdk timed out after {timeout}s")
+
+        response = self.respond(
+            payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"ls"}}',
+            deadline_unix_ms=int((FROZEN_NOW + 30.0) * 1000),
+        )
+        assert response.exit == 0
+        assert response.guard == ""
+        assert decision(replied(response)) == "deny"
+        assert "judged did not complete (TimeoutError: claude-sdk timed out after 25s)" in response.stdout
+        assert "TimeoutError: claude-sdk timed out after 25s" in response.stderr
+
+    def test_a_crashed_mandatory_hook_is_denied_without_completion(self) -> None:
         @on(Event.PreToolUse, mandatory=True)
         def broken(evt: Any) -> None:
             raise RuntimeError("guard crashed")
 
         response = self.respond()
+        assert response.exit == 0
+        assert response.guard == ""
+        assert decision(replied(response)) == "deny"
+        assert "broken did not complete (RuntimeError: guard crashed)" in response.stdout
+        assert "RuntimeError: guard crashed" in response.stderr
+
+    def test_a_failure_after_every_mandatory_hook_completed_stays_a_worker_error(self, general_pack: None) -> None:
+        @on(Event.PreToolUse, only_if=[Exhausted("invalid_request")])
+        def advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        response = self.respond(payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"ls"}}')
         assert response.exit == 1
         assert response.guard == ""
         assert "permissionDecision" not in response.stdout
-        assert "RuntimeError: guard crashed" in response.stderr
 
     def test_a_broken_guard_module_leaves_the_completion_empty(
         self, isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -331,4 +795,129 @@ class TestGuardCompletion:
         response = self.respond()
         assert response.exit == 0
         assert response.guard == ""
+        assert "permissionDecision" not in response.stdout
+
+
+SLACK = '{"cwd":"/w","tool_name":"mcp__slack__send_message","tool_input":{"channel":"C1","text":"hello"}}'
+
+
+@pytest.mark.usefixtures("frozen_clock")
+class TestMandatoryDenial:
+    def respond(self, *, event: str = "PreToolUse", deadline_unix_ms: int = 0) -> Any:
+        runtime = ProductRuntime(
+            registry_factory=lambda _: FakeRegistry(app.current_state()),
+            transcript_loader=lambda path: None,
+            install_writer=False,
+            nlp_warmer=lambda: None,
+        )
+        response, _ = runtime.dispatch(
+            replace(
+                request(event=event, payload_raw=SLACK, mandatory=False),
+                client_ppid=HOOK_SHELL,
+                deadline_unix_ms=deadline_unix_ms,
+            )
+        )
+        assert response.guard == ""
+        assert "guard" not in response.message()
+        return response
+
+    def test_a_hook_ignoring_its_budget_denies_the_call_at_the_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pool = ThreadPoolExecutor(max_workers=1)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> None:
+            time.sleep(0.6)
+
+        response = self.respond(deadline_unix_ms=int((FROZEN_NOW + 0.3) * 1000))
+        pool.shutdown(wait=True)
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in reason(envelope)
+
+    def test_a_verdict_racing_the_closure_is_denied_not_errored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded: list[str] = []
+        pool = ThreadPoolExecutor(max_workers=1)
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            return evt.block("permission denied")
+
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            racing.setattr(dispatch_module, "record_fire", lambda entry, evt, result: recorded.append(entry.name))
+            reached, release = paused_before_publish(racing)
+            closing_once(racing, reached)
+            response = self.respond(deadline_unix_ms=int((FROZEN_NOW + 30.0) * 1000))
+            release.set()
+            pool.shutdown(wait=True)
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in reason(envelope)
+        assert "permission denied" not in response.stdout
+        assert recorded == []
+
+    def test_a_raising_hook_denies_the_call(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> None:
+            raise RuntimeError("policy backend down")
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert reason(envelope).startswith(
+            "BLOCKED: the mandatory hook slack_policy did not complete (RuntimeError: policy backend down), "
+            "so this call could not be checked and stays denied."
+        )
+        assert "RuntimeError: policy backend down" in response.stderr
+
+    def test_a_hook_left_unrun_denies_the_call(self) -> None:
+        @on(Event.PreToolUse, only_if=[Exhausted()], mandatory=True)
+        def slack_policy(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "slack_policy did not complete (left unrun)" in reason(envelope)
+        assert "Traceback" not in response.stderr
+
+    def test_a_permission_request_is_denied_in_its_own_shape(self) -> None:
+        @on(Event.PermissionRequest, mandatory=True)
+        def slack_policy(evt: Any) -> None:
+            raise RuntimeError("policy backend down")
+
+        response = self.respond(event="PermissionRequest")
+        assert response.exit == 0
+        output = replied(response)["hookSpecificOutput"]
+        assert output["hookEventName"] == "PermissionRequest"
+        assert output["decision"]["behavior"] == "deny"
+        assert "slack_policy did not complete (RuntimeError: policy backend down)" in output["decision"]["message"]
+
+    def test_same_key_registrations_with_one_unrun_deny_the_call(self) -> None:
+        def register(only_if: list[Any]) -> None:
+            def slack_policy(evt: Any) -> None:
+                return None
+
+            on(Event.PreToolUse, mandatory=True, only_if=only_if)(slack_policy)
+
+        register([Exhausted()])
+        register([])
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "slack_policy did not complete (left unrun)" in reason(envelope)
+
+    def test_a_completed_policy_lets_the_call_through(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> None:
+            return None
+
+        response = self.respond()
+        assert response.exit == 0
         assert "permissionDecision" not in response.stdout

@@ -7,10 +7,28 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import Callable, Generator, Mapping
+
+
+@dataclass(slots=True)
+class MandatoryPhase:
+    """How the bound request's mandatory phase ended: ``settled`` with every verdict in hand, or ``failed``.
+
+    Concluded exactly once, after the phase's cutoff closed, so the worker reads the phase's own
+    verdict rather than inferring one from the completions a racing hook may still publish.
+    """
+
+    outcome: Literal["", "settled", "failed"] = ""
+
+    @property
+    def failed(self) -> bool:
+        return self.outcome == "failed"
+
+    def conclude(self, outcome: Literal["settled", "failed"]) -> None:
+        self.outcome = outcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +42,7 @@ class RequestOverrides:
     evidence_gaps: list[str] = field(default_factory=list[str])
     warmups: list[str] = field(default_factory=list[str])
     mandatory_completed: list[str] = field(default_factory=list[str])
+    mandatory_phase: MandatoryPhase = field(default_factory=MandatoryPhase)
 
 
 class Abandoned(BaseException):
@@ -34,8 +53,39 @@ class Abandoned(BaseException):
     """
 
 
+class Cutoff(threading.Event):
+    """The signal that nobody waits on the running hooks any more: closed by the collector, or reached on the clock.
+
+    A :func:`checkpoint` under it unwinds once the collector gave up, or once the absolute
+    *deadline_unix_ms* passed while a descheduled collector had not yet said so. :meth:`close`
+    and :meth:`publish` share one lock, so whatever a hook publishes (its ledger row, its
+    completion, its settled future) either lands whole before the closure or not at all.
+    """
+
+    def __init__(self, deadline_unix_ms: int | None = None) -> None:
+        super().__init__()
+        self.deadline_unix_ms = deadline_unix_ms
+        self._closure = threading.Lock()
+
+    def is_set(self) -> bool:
+        return super().is_set() or (self.deadline_unix_ms is not None and time.time() * 1000 >= self.deadline_unix_ms)
+
+    def seconds_left(self) -> float | None:
+        return None if self.deadline_unix_ms is None else max(0.0, self.deadline_unix_ms / 1000 - time.time())
+
+    def close(self) -> None:
+        with self._closure:
+            self.set()
+
+    def publish[T](self, fn: Callable[[], T]) -> T:
+        with self._closure:
+            if self.is_set():
+                raise Abandoned
+            return fn()
+
+
 _OVERRIDES: ContextVar[RequestOverrides | None] = ContextVar("captain_hook_request", default=None)
-_ABANDONED: ContextVar[threading.Event | None] = ContextVar("captain_hook_abandoned", default=None)
+_ABANDONED: ContextVar[Cutoff | None] = ContextVar("captain_hook_abandoned", default=None)
 
 
 def is_whitelisted(key: str) -> bool:
@@ -100,6 +150,16 @@ def deadline_in(seconds: float) -> Generator[None]:
         yield
 
 
+@contextmanager
+def deadline_at(unix_ms: int) -> Generator[None]:
+    """Rebind the current request's deadline to the absolute *unix_ms*; the cold CLI stays unbounded."""
+    if (ov := _OVERRIDES.get()) is None:
+        yield
+        return
+    with use_request(replace(ov, deadline_unix_ms=unix_ms)):
+        yield
+
+
 def abandoned() -> list[str]:
     """The hooks whose verdicts the bound request's dispatch gave up on; a scratch list for the cold CLI."""
     return [] if (ov := _OVERRIDES.get()) is None else ov.abandoned
@@ -128,8 +188,13 @@ def note_mandatory_completed(state_key: str) -> None:
     mandatory_completed().append(state_key)
 
 
+def mandatory_phase() -> MandatoryPhase:
+    """The bound request's mandatory phase outcome; a scratch record for the cold CLI."""
+    return MandatoryPhase() if (ov := _OVERRIDES.get()) is None else ov.mandatory_phase
+
+
 @contextmanager
-def abandonable(flag: threading.Event) -> Generator[None]:
+def abandonable(flag: Cutoff) -> Generator[None]:
     """Bind *flag* as the signal that stops the hooks running in this context at their next :func:`checkpoint`."""
     token = _ABANDONED.set(flag)
     try:
@@ -142,6 +207,16 @@ def checkpoint() -> None:
     """Unwind the running hook once its verdict can no longer be delivered; a no-op outside a hook fan-out."""
     if (flag := _ABANDONED.get()) is not None and flag.is_set():
         raise Abandoned
+
+
+def publish[T](fn: Callable[[], T]) -> T:
+    """Run *fn* while the running hook's verdict can still be delivered, atomically with that decision.
+
+    Under a bound :class:`Cutoff` the check and the call share the cutoff's closure lock, so a
+    closure cannot slip between them; outside a hook fan-out *fn* simply runs.
+    """
+    flag = _ABANDONED.get()
+    return fn() if flag is None else flag.publish(fn)
 
 
 def is_headless() -> bool:
