@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside a subagent or teammate lane, whose own transcript never holds the user's words.
   `evt.ctx.root_transcript` is that root session, tailed from its last 256 events, and `None`
   outside a lane; inline tests seed it with `Input(root_transcript=...)`.
+- **`capt-hook pause` quiets every hook for a while, guards included.** Pass `--for 30m` and
+  an optional `--reason`; `--status` shows the pause and `capt-hook resume` lifts it early.
+  The signed host skips dispatch across all sessions, regardless of their pinned plugin version,
+  and a `SessionStart` banner names the expiry and how to resume. Pauses last at most one hour and
+  expire by themselves; malformed or over-cap files leave hooks running. Requires the signed
+  host from this release. Quiet hooks only through `capt-hook pause`; never edit the plugin cache.
+- **Changed plugin launchers are restored from what their version shipped in git.** An async
+  `SessionStart` check, at most once per ten minutes, compares `bin/hook` in installed and live
+  in-use versions by mode and git blob id, preserving shipped symlinks. Repairs are atomic,
+  leave a `launcher restored:` line in the update log, and raise a `plugin launcher` fault for
+  the next `SessionStart`. Run `capt-hook update launchers` by hand to check and repair now.
 
 ### Changed
 
