@@ -376,5 +376,47 @@
     "event": "PreToolUse",
     "payload": {"tool_name": "Bash"},
     "mandatory": false
+  },
+  {
+    "name": "stop tool by task id",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "TaskStop", "tool_input": {"task_id": "wcn64vfub"}},
+    "mandatory": true
+  },
+  {
+    "name": "stop tool on permission request",
+    "event": "PermissionRequest",
+    "payload": {"tool_name": "TaskStop", "tool_input": {"task_id": "wcn64vfub"}},
+    "mandatory": true
+  },
+  {
+    "name": "stop tool by retired shell id",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "TaskStop", "tool_input": {"shell_id": "bash_3"}},
+    "mandatory": true
+  },
+  {
+    "name": "stop tool with no target",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "TaskStop", "tool_input": {}},
+    "mandatory": true
+  },
+  {
+    "name": "task output is not a stop",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "TaskOutput", "tool_input": {"task_id": "wcn64vfub"}},
+    "mandatory": false
+  },
+  {
+    "name": "mcp tool named like the stop tool",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "mcp__orca__TaskStop", "tool_input": {"task_id": "wcn64vfub"}},
+    "mandatory": false
+  },
+  {
+    "name": "stop tool name inside command text",
+    "event": "PreToolUse",
+    "payload": {"tool_name": "Bash", "tool_input": {"command": "printf 'TaskStop wcn64vfub'"}},
+    "mandatory": false
   }
 ]

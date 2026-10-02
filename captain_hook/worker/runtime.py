@@ -40,6 +40,9 @@ if TYPE_CHECKING:
         def get(self) -> Any: ...
 
 
+GUARD_PACKS = frozenset({"general"})
+
+
 @dataclass(frozen=True, slots=True)
 class _Client:
     ppid: int
@@ -217,9 +220,15 @@ class ProductRuntime:
 
 
 def _guard_completion(event: Event) -> GuardCompletion:
-    required = [hook.state_key for hook in app.get_mandatory_hooks(event)]
+    state = app.current_state()
+    guard_packs = GUARD_PACKS | {hook.pack_name for hook in state.hooks if hook.spec.mandatory and hook.pack_name}
+    if any(error.pack in guard_packs for error in state.load_errors):
+        return ""
+    guards = app.get_mandatory_hooks(event)
+    if not any(hook.pack_name in GUARD_PACKS for hook in guards):
+        return ""
     completed = reqenv.mandatory_completed()
-    return GUARD_COMPLETED if required and all(key in completed for key in required) else ""
+    return GUARD_COMPLETED if all(hook.state_key in completed for hook in guards) else ""
 
 
 def _run_detached(background: Background, session_id: str | None) -> None:

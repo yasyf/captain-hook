@@ -364,7 +364,7 @@ def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str:
     holder = f"under {agent.argv0} {agent.pid}" if agent is not None else "with no agent ancestor to vouch for it"
     return (
         f"BLOCKED: {describe(row)} runs {holder}, and no recorded per-task creation identity ties it to this task. "
-        "Stop a background task you started with the harness's stop tool, or wait for it to exit."
+        "Let it finish, or ask the owner to end it."
     )
 
 

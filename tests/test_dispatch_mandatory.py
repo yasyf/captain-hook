@@ -55,7 +55,7 @@ def general_pack(isolate_modules: None, monkeypatch: pytest.MonkeyPatch) -> None
 
 def session_guards() -> list[str]:
     names = [hook.name for hook in app.get_mandatory_hooks(Event.PreToolUse)]
-    assert {"kill_unverified_pid", "signal_by_criteria"} <= set(names)
+    assert {"kill_unverified_pid", "signal_by_criteria", "stop_unverified_task"} <= set(names)
     return names
 
 
@@ -307,8 +307,9 @@ class TestMandatoryPhase:
 
 class TestGuardCompletion:
     PAYLOAD = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
+    STOP_PAYLOAD = '{"cwd":"/w","tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}'
 
-    def respond(self, *, mandatory: bool = True) -> Any:
+    def respond(self, *, payload: str = PAYLOAD, mandatory: bool = True, event: str = "PreToolUse") -> Any:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
@@ -316,7 +317,7 @@ class TestGuardCompletion:
             nlp_warmer=lambda: None,
         )
         response, _ = runtime.dispatch(
-            replace(request(payload_raw=self.PAYLOAD, mandatory=mandatory), deadline_unix_ms=0)
+            replace(request(event=event, payload_raw=payload, mandatory=mandatory), deadline_unix_ms=0)
         )
         return response
 
@@ -325,6 +326,14 @@ class TestGuardCompletion:
         assert response.exit == 0
         assert response.guard == "completed"
         assert '"permissionDecision": "deny"' in response.stdout
+
+    @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
+    def test_the_general_pack_completes_the_guard_for_a_stop_tool(self, general_pack: None, event: str) -> None:
+        response = self.respond(payload=self.STOP_PAYLOAD, event=event)
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert '"deny"' in response.stdout
+        assert "`TaskStop` on task `wcn64vfub` cannot be verified" in response.stdout
 
     def test_a_request_the_client_did_not_flag_gets_the_verdict_without_the_completion(
         self, general_pack: None
@@ -346,19 +355,86 @@ class TestGuardCompletion:
         assert "permissionDecision" not in response.stdout
         assert "RuntimeError: guard crashed" in response.stderr
 
+    @pytest.mark.parametrize(
+        ("broken", "payload"),
+        [
+            pytest.param("sessions.py", PAYLOAD, id="sessions"),
+            pytest.param("stops.py", STOP_PAYLOAD, id="stops"),
+        ],
+    )
     def test_a_broken_guard_module_leaves_the_completion_empty(
+        self, isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken: str, payload: str
+    ) -> None:
+        monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda *args: None)
+        hooks = tmp_path / "hooks"
+        shutil.copytree(PACKS_DIR / "general" / "hooks", hooks)
+        with (hooks / broken).open("a") as source:
+            source.write("\nraise ImportError('broken copy')\n")
+        discover_pack("general", hooks)
+        assert [error.source for error in app._state.load_errors] == [str(hooks / broken)]
+        assert any(hook.spec.mandatory for hook in app._state.hooks)
+
+        response = self.respond(payload=payload)
+        assert response.exit == 0
+        assert response.guard == ""
+        assert "permissionDecision" not in response.stdout
+        for surviving in (self.PAYLOAD, self.STOP_PAYLOAD):
+            assert self.respond(payload=surviving).guard == ""
+
+    def test_another_packs_guard_cannot_complete_for_a_general_pack_with_no_surviving_guard(
         self, isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda *args: None)
         hooks = tmp_path / "hooks"
         shutil.copytree(PACKS_DIR / "general" / "hooks", hooks)
-        with (hooks / "sessions.py").open("a") as source:
-            source.write("\nraise ImportError('broken copy')\n")
+        guard_modules = ("sessions.py", "stops.py")
+        for guard_module in guard_modules:
+            with (hooks / guard_module).open("a") as source:
+                source.write("\nraise ImportError('broken copy')\n")
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "other_guard.py").write_text(
+            "from captain_hook import Event, on\n\n\n"
+            "@on(Event.PreToolUse | Event.PermissionRequest, mandatory=True)\n"
+            "def other_guard(evt):\n"
+            "    return None\n"
+        )
         discover_pack("general", hooks)
-        assert [error.source for error in app._state.load_errors] == [str(hooks / "sessions.py")]
-        assert not any(hook.spec.mandatory for hook in app._state.hooks)
+        discover_pack("other", other)
+        assert sorted(error.source for error in app._state.load_errors) == sorted(
+            str(hooks / guard_module) for guard_module in guard_modules
+        )
+        assert [hook.pack_name for hook in app.get_mandatory_hooks(Event.PreToolUse)] == ["other"]
 
-        response = self.respond()
-        assert response.exit == 0
-        assert response.guard == ""
-        assert "permissionDecision" not in response.stdout
+        for payload in (self.PAYLOAD, self.STOP_PAYLOAD):
+            response = self.respond(payload=payload)
+            assert response.exit == 0
+            assert response.guard == ""
+            assert "permissionDecision" not in response.stdout
+
+    @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
+    def test_a_pack_losing_one_of_two_mandatory_modules_leaves_the_completion_empty(
+        self, general_pack: None, tmp_path: Path, event: str
+    ) -> None:
+        other = tmp_path / "other"
+        other.mkdir()
+        for name in ("other_alpha", "other_beta"):
+            (other / f"{name}.py").write_text(
+                "from captain_hook import Event, on\n\n\n"
+                "@on(Event.PreToolUse | Event.PermissionRequest, mandatory=True)\n"
+                f"def {name}(evt):\n"
+                "    return None\n"
+            )
+        with (other / "other_beta.py").open("a") as source:
+            source.write("\nraise ImportError('broken copy')\n")
+        discover_pack("other", other)
+        assert [error.source for error in app._state.load_errors] == [str(other / "other_beta.py")]
+        assert {hook.pack_name for hook in app.get_mandatory_hooks(Event.PreToolUse)} == {"general", "other"}
+
+        healthy = self.respond(
+            payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"orca terminal list --json"}}', event=event
+        )
+        assert (healthy.exit, healthy.guard, healthy.stdout) == (0, "", "discovered out\n")
+        stop = self.respond(payload=self.STOP_PAYLOAD, event=event)
+        assert (stop.exit, stop.guard) == (0, "")
+        assert "`TaskStop` on task `wcn64vfub` cannot be verified" in stop.stdout

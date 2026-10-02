@@ -310,6 +310,7 @@ def wrapped_literal(value: str, *, width: int = 100) -> str:
 
 def render_guard_literal(definition: dict[str, Any]) -> str:
     events = ", ".join(literal(event) for event in definition["events"])
+    tools = ", ".join(literal(tool) for tool in definition["tools"])
     folds = ", ".join(f"{rune_literal(source)}: {literal(target)}" for source, target in definition["folds"].items())
     kinds = "".join(f"    {literal(kind)},\n" for kind in definition["kinds"])
     exempt_heads = "".join(f"    {literal(head)},\n" for head in definition["exempt_heads"])
@@ -322,6 +323,7 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         "import sys\n"
         "from typing import BinaryIO, cast\n\n"
         f"EVENTS: frozenset[str] = frozenset({{{events}}})\n"
+        f"TOOLS: frozenset[str] = frozenset({{{tools}}})\n"
         f"QUOTING: str = {wrapped_literal(definition['quoting'])}\n"
         f"GUARDED: str = {wrapped_literal(definition['guarded'])}\n"
         f"EXEMPT_HEADS: tuple[str, ...] = (\n{exempt_heads})\n"
@@ -446,10 +448,12 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         "    if not isinstance(fields, dict):\n"
         "        return False\n"
         "    payload_fields = cast(dict[object, object], fields)\n"
-        '    if payload_fields.get("tool_name") == "Bash" and first_party_command(payload_fields.get("tool_input")):\n'
+        '    tool = payload_fields.get("tool_name")\n'
+        "    if isinstance(tool, str) and tool in TOOLS:\n"
+        "        return True\n"
+        '    if tool == "Bash" and first_party_command(payload_fields.get("tool_input")):\n'
         "        return False\n"
-        '    return names_guarded_value(payload_fields.get("tool_name")) or '
-        'names_guarded_value(payload_fields.get("tool_input"))\n\n\n'
+        '    return names_guarded_value(tool) or names_guarded_value(payload_fields.get("tool_input"))\n\n\n'
         "def deny_envelope(event: str, kind: str) -> str:\n"
         "    if kind not in KINDS:\n"
         '        raise ValueError(f"unknown guard kind {kind!r}")\n'

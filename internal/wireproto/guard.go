@@ -19,6 +19,7 @@ var guardDefinition []byte
 
 type guardSpec struct {
 	Events        []string          `json:"events"`
+	Tools         []string          `json:"tools"`
 	Quoting       string            `json:"quoting"`
 	Guarded       string            `json:"guarded"`
 	ExemptHeads   []string          `json:"exempt_heads"`
@@ -70,10 +71,10 @@ func Kinds() []string {
 }
 
 // Mandatory reports whether the guard's prefilter covers this event: the
-// payload decodes, it is no Bash call whose every command head is exempt, and
-// its tool name or any string under tool_input — dict values, list items, and
-// every all-string list joined — names a guarded program once quoting is
-// stripped and case folds applied.
+// payload decodes, and its tool name is a guarded tool exactly, or it is no
+// Bash call whose every command head is exempt and its tool name or any
+// string under tool_input names a guarded program once quoting is stripped
+// and case folds applied.
 func Mandatory(event string, payload []byte) bool {
 	if !slices.Contains(guard.Events, event) {
 		return false
@@ -84,6 +85,9 @@ func Mandatory(event string, payload []byte) bool {
 	}
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		return false
+	}
+	if name, ok := fields.ToolName.(string); ok && slices.Contains(guard.Tools, name) {
+		return true
 	}
 	if fields.ToolName == "Bash" && firstPartyCommand(fields.ToolInput) {
 		return false

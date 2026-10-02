@@ -132,12 +132,24 @@ def reason(envelope: dict[str, Any] | None) -> str | None:
     return output["decision"]["message"] if output["decision"]["behavior"] == "deny" else None
 
 
+def decide_input(
+    inp: Input, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
+) -> str | None:
+    evt = input_to_event(event, inp)
+    with reqenv.use_request(overrides(client_ppid)):
+        return reason(dispatch(event, evt, session_dir=tmp_path))
+
+
 def decide(
     command: str, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
 ) -> str | None:
-    evt = input_to_event(event, Input(command=command, cwd="/w", session_id="s1"))
-    with reqenv.use_request(overrides(client_ppid)):
-        return reason(dispatch(event, evt, session_dir=tmp_path))
+    return decide_input(
+        Input(command=command, cwd="/w", session_id="s1"), tmp_path, event=event, client_ppid=client_ppid
+    )
+
+
+def stop(tool_input: dict[str, Any], **fields: Any) -> Input:
+    return Input(tool="TaskStop", tool_input=tool_input, cwd="/w", session_id="s1", **fields)
 
 
 def failing_run(monkeypatch: pytest.MonkeyPatch, program: str, error: BaseException) -> None:
@@ -172,7 +184,7 @@ class TestUnprovenChildren:
         assert message is not None
         assert "pid 31337 (`sleep 60`) runs under claude 14575" in message
         assert "no recorded per-task creation identity ties it to this task" in message
-        assert "Stop a background task you started with the harness's stop tool" in message
+        assert message.endswith("Let it finish, or ask the owner to end it.")
 
     @pytest.mark.parametrize(
         ("command", "holder"),
@@ -193,7 +205,7 @@ class TestUnprovenChildren:
         message = decide(command, tmp_path)
         assert message is not None
         assert f"runs {holder}, and no recorded per-task creation identity ties it to this task" in message
-        assert "Stop a background task you started with the harness's stop tool" in message
+        assert message.endswith("Let it finish, or ask the owner to end it.")
 
     def test_a_protected_process_inside_this_session_stays_protected(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -314,6 +326,55 @@ class TestFailClosed:
         assert "no recorded per-task creation identity" in (
             decide("kill 31337", tmp_path, event=Event.PermissionRequest) or ""
         )
+
+
+STOP_DENIED = (
+    "BLOCKED: `TaskStop` on task `wcn64vfub` cannot be verified: a bare id does not tell a disposable shell task "
+    "from a workflow, agent, or teammate session, which no session may stop, its own children included. "
+    "Let it finish, or ask the owner to end it."
+)
+
+
+class TestStopTool:
+    def test_the_observed_bare_task_id_is_denied(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+
+    @pytest.mark.parametrize(
+        "task_id",
+        [
+            pytest.param("wf_f79d45a5-908", id="workflow"),
+            pytest.param("a7e6a10ac1f61999f", id="background_agent"),
+            pytest.param("daemonkit-cache-impl", id="teammate"),
+            pytest.param("b1a2c3d4", id="shell_like"),
+        ],
+    )
+    def test_no_id_shape_proves_a_disposable_shell(self, general_pack: None, tmp_path: Path, task_id: str) -> None:
+        assert decide_input(stop({"task_id": task_id}), tmp_path) == STOP_DENIED.replace("wcn64vfub", task_id)
+
+    def test_the_retired_shell_id_alias_is_denied(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(stop({"shell_id": "bash_3"}), tmp_path) == STOP_DENIED.replace(
+            "task `wcn64vfub`", "shell `bash_3`"
+        )
+
+    def test_a_stop_naming_no_target_is_denied(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(stop({}), tmp_path) == STOP_DENIED.replace("task `wcn64vfub`", "an unnamed target")
+
+    def test_a_subagent_stopping_its_own_child_is_denied(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(stop({"task_id": "wcn64vfub"}, agent_id="sub-1"), tmp_path) == STOP_DENIED
+
+    def test_permission_request_denies_too(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path, event=Event.PermissionRequest) == STOP_DENIED
+
+    def test_the_verdict_needs_no_process_table(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = None
+        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+
+    def test_reading_task_output_is_allowed(self, general_pack: None, tmp_path: Path) -> None:
+        output = Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}, cwd="/w", session_id="s1")
+        assert decide_input(output, tmp_path) is None
+        assert decide_input(output, tmp_path, event=Event.PermissionRequest) is None
 
 
 class TestTerminalClose:

@@ -9,6 +9,7 @@ import sys
 from typing import BinaryIO, cast
 
 EVENTS: frozenset[str] = frozenset({"PreToolUse", "PermissionRequest"})
+TOOLS: frozenset[str] = frozenset({"TaskStop"})
 QUOTING: str = "[\\\\'\"\\[\\]]"
 GUARDED: str = (
     "\\b(kill|pkill|killall|killall5|fuser|skill|snice|kill-port|orca|launchctl|osascript|shutdown|reboot"
@@ -174,9 +175,12 @@ def mandatory(event: str, payload: bytes) -> bool:
     if not isinstance(fields, dict):
         return False
     payload_fields = cast(dict[object, object], fields)
-    if payload_fields.get("tool_name") == "Bash" and first_party_command(payload_fields.get("tool_input")):
+    tool = payload_fields.get("tool_name")
+    if isinstance(tool, str) and tool in TOOLS:
+        return True
+    if tool == "Bash" and first_party_command(payload_fields.get("tool_input")):
         return False
-    return names_guarded_value(payload_fields.get("tool_name")) or names_guarded_value(payload_fields.get("tool_input"))
+    return names_guarded_value(tool) or names_guarded_value(payload_fields.get("tool_input"))
 
 
 def deny_envelope(event: str, kind: str) -> str:

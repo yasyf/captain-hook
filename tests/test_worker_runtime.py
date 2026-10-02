@@ -123,8 +123,10 @@ def test_dispatch_writes_a_plain_text_envelope_verbatim() -> None:
     assert response.stdout == "discovered out\nKeep the plan path.\n"
 
 
-def mandatory_hook(name: str, events: Event = Event.PreToolUse) -> RegisteredHook:
-    return RegisteredHook(spec=HookSpec(events=events, mandatory=True), name=name, source_file=f"/hooks/{name}.py")
+def mandatory_hook(name: str, events: Event = Event.PreToolUse, pack: str | None = "general") -> RegisteredHook:
+    return RegisteredHook(
+        spec=HookSpec(events=events, mandatory=True), name=name, source_file=f"/hooks/{name}.py", pack_name=pack
+    )
 
 
 def runtime_with(state: app.State, complete: list[str]) -> ProductRuntime:
@@ -173,6 +175,46 @@ def test_guard_stays_empty_unless_every_mandatory_hook_completed(hooks: list[str
     completed = [hook.state_key for hook in state.hooks if hook.name in complete]
     response, _ = runtime_with(state, completed).dispatch(request(mandatory=True))
     assert response.guard == ""
+
+
+def test_guard_stays_empty_without_a_registered_general_guard() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("other_guard", pack="other"))
+    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    assert response.guard == ""
+
+
+def test_guard_stays_empty_while_the_general_pack_has_a_load_error() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+    state.load_errors.append(app.LoadError("/hooks/stops.py", ImportError("broken copy"), pack="general"))
+    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    assert response.guard == ""
+
+
+def test_guard_counts_another_packs_mandatory_hook_beside_the_general_guard() -> None:
+    state = app.State()
+    state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("other_guard", pack="other")))
+    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    assert response.guard == ""
+    response, _ = runtime_with(state, [hook.state_key for hook in state.hooks]).dispatch(request(mandatory=True))
+    assert response.guard == "completed"
+
+
+def test_guard_stays_empty_while_a_pack_with_mandatory_hooks_has_a_load_error() -> None:
+    state = app.State()
+    state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("other_guard", pack="other")))
+    state.load_errors.append(app.LoadError("/hooks/other_sibling.py", ImportError("broken copy"), pack="other"))
+    response, _ = runtime_with(state, [hook.state_key for hook in state.hooks]).dispatch(request(mandatory=True))
+    assert response.guard == ""
+
+
+def test_guard_ignores_a_load_error_in_a_pack_without_mandatory_hooks() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+    state.load_errors.append(app.LoadError("/hooks/advisory.py", ImportError("broken copy"), pack="advisory"))
+    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    assert response.guard == "completed"
 
 
 def test_guard_counts_only_the_mandatory_hooks_registered_for_the_event() -> None:
