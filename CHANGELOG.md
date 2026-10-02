@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Printed prose no longer records a GitHub quota refusal.** The quota signature reads only a
+  failed call's error or the tool's stderr, so a `gh pr view` that prints a PR body quoting
+  "GitHub GraphQL quota exhausted" records nothing.
 - **`git stash drop $(...)` blocks again.** A substitution that expands to nothing makes git
   drop `stash@{0}`, so only `apply`, which removes nothing, accepts a substitution operand.
 - **A named command no longer hides a choice from the narrate-then-wait gate.** The "waiting on
