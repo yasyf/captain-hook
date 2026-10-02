@@ -324,11 +324,18 @@ func (w *workerClient) release(n int) {
 
 func (w *workerClient) abandon(id uint64) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if _, ok := w.pending[id]; ok {
+	_, pending := w.pending[id]
+	if pending {
 		delete(w.pending, id)
 		w.abandoned[id] = struct{}{}
 	}
+	w.mu.Unlock()
+	if !pending {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
+	defer cancel()
+	_ = w.write(ctx, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpAbandon, ID: id})
 }
 
 func (w *workerClient) fail(err error) {

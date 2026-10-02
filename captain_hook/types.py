@@ -152,6 +152,7 @@ class Event(Flag):
     SessionEnd = auto()
     PermissionRequest = auto()
     MessageDisplay = auto()
+    ResourcePressure = auto()
 
     @property
     def event_class(self) -> type[BaseHookEvent]:
@@ -163,6 +164,7 @@ class Event(Flag):
             PostToolUseFailureEvent,
             PreCompactEvent,
             PreToolUseEvent,
+            ResourcePressureEvent,
             SessionEndEvent,
             SessionStartEvent,
             StopEvent,
@@ -185,6 +187,7 @@ class Event(Flag):
             Event.SessionEnd: SessionEndEvent,
             Event.PermissionRequest: PermissionRequestEvent,
             Event.MessageDisplay: MessageDisplayEvent,
+            Event.ResourcePressure: ResourcePressureEvent,
         }
         if cls := mapping.get(self):
             return cls
@@ -193,6 +196,8 @@ class Event(Flag):
 
 TOOL_EVENTS: Event = Event.PreToolUse | Event.PostToolUse | Event.PostToolUseFailure | Event.PermissionRequest
 ALL_EVENTS: Event = reduce(or_, Event)
+HOST_EVENTS: Event = Event.ResourcePressure
+CLAUDE_EVENTS: Event = ALL_EVENTS & ~HOST_EVENTS
 
 
 class Action(StrEnum):

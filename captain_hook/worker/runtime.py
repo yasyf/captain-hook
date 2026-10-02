@@ -51,6 +51,7 @@ class _ScopedRequest:
     cwd: str
     client: _Client
     deadline_unix_ms: int
+    abandon: threading.Event
 
 
 class ProductRuntime:
@@ -118,6 +119,7 @@ class ProductRuntime:
             cwd=request.cwd,
             client=_Client(request.client_ppid),
             deadline_unix_ms=request.deadline_unix_ms,
+            abandon=request.abandon,
         )
         with request_scope(scoped, session_id) as buffers:
             if parse_error is not None:

@@ -29,7 +29,17 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   dialogs and scratch-file writes when the session ran with `--dangerously-skip-permissions`.
 - `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
   pre-existing issue, don't chase trivial type noise, don't swap the requested fix for docs.
-- `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs.
+- `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs, plus a
+  subprocess resource monitor. One host ticker in `capt-hookd` samples the children of each registered
+  session. When a child runs past `min_runtime_seconds` at sustained CPU or disk pressure, the monitor warns
+  the session through its next hook event and a desktop notification, then waits out the grace period.
+  It then asks the small-tier judge whether the child is disposable. If the judge says yes, the monitor sends
+  one targeted `SIGTERM` after it revalidates the pid, parent, process group, start time, command, working
+  directory, and session ownership. Deploys, releases, publishes, database clients and migrators, and
+  anything protected are never signaled, and neither are their ancestors. Protected means agent sessions,
+  terminal hosts, PTY daemons, Orca, launchd, and the Captain Hook host. The judge cannot override those
+  exclusions. See [Tune the subprocess resource monitor](#tune-the-subprocess-resource-monitor) to
+  change the thresholds or turn the monitor off.
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo.
   Every hook checks for `.git/.graphite_repo_config` across worktrees and honors `ccx.nogt`.
   That git-config key opts a repo out of the gt lane, so a stale marker cannot activate the pack.
@@ -92,7 +102,7 @@ uvx capt-hook pack list
   builtin:fixes                      builtin  2 hooks
   builtin:general                    builtin  13 hooks
   builtin:graphite                   builtin  1 hooks
-  builtin:performance                builtin  1 hooks
+  builtin:performance                builtin  3 hooks
   builtin:python                     builtin  3 hooks
   builtin:steering                   builtin  3 hooks
   plugin:cc-context@cc-context       plugin   32 hooks
@@ -400,6 +410,114 @@ state directories are laid out.
 Where the framework writes its own session logs. The field reads
 `CAPTAIN_HOOK_LOG_DIR` and otherwise falls back to `~/.cache/captain-hook/logs`,
 or to `$XDG_CACHE_HOME/captain-hook/logs` when you set `XDG_CACHE_HOME`.
+
+### Tune the subprocess resource monitor {#tune-the-subprocess-resource-monitor}
+
+The `performance` pack's resource monitor reads `PerformanceSettings`, which uses the
+`HOOKS_PERFORMANCE_` prefix. The defaults live in `internal/wireproto/resource.json`, so the
+Go host and the Python worker read one set of numbers.
+
+The host reads the first ten keys below and the worker reads all fourteen. Where each value comes from
+differs by key:
+
+- **Per session:** the host takes the thresholds, the grace period, the escalation delay, and the per-session
+  cap from the environment of the request that registers the session. Set those in the shell that launches
+  Claude Code.
+- **Per daemon:** the sample interval and the registry cap come from the environment `capt-hookd` started
+  with. The interval also sets how many samples fill the sustain window. A session's own
+  `HOOKS_PERFORMANCE_SAMPLE_INTERVAL_SECONDS` does not change either one.
+- **Worker:** the worker reads its keys from the environment of each hook run, so they follow the session.
+
+| Key | Default | Valid range | Read by | Meaning |
+|-----|---------|-------------|---------|---------|
+| `HOOKS_PERFORMANCE_ENABLED` | `true` | `true` or `false` | host and worker | Turns the monitor on or off |
+| `HOOKS_PERFORMANCE_SAMPLE_INTERVAL_SECONDS` | `15` | 1 to 86400 | host, daemon | Seconds between ticks of the shared sampler |
+| `HOOKS_PERFORMANCE_MIN_RUNTIME_SECONDS` | `120` | 1 to 86400 | host | A child must have run this long before it can raise pressure |
+| `HOOKS_PERFORMANCE_CPU_FRACTION` | `0.5` | above 0, up to 1 | host | CPU use that counts as heavy, as a fraction of one core |
+| `HOOKS_PERFORMANCE_SUSTAIN_SECONDS` | `60` | 1 to 86400 | host | How long CPU or disk use must stay heavy before the warning |
+| `HOOKS_PERFORMANCE_DISK_BYTES_PER_SECOND` | `52428800` | 0 or more | host | Disk throughput that counts as heavy, 50 `MiB` per second |
+| `HOOKS_PERFORMANCE_GRACE_SECONDS` | `60` | 1 to 86400 | host | Wait between the warning and the judge |
+| `HOOKS_PERFORMANCE_ESCALATE_AFTER_SECONDS` | `30` | 0 to 86400 | host | Wait after `SIGTERM` before the escalation stage; `0` disables escalation |
+| `HOOKS_PERFORMANCE_MAX_TRACKED_PER_SESSION` | `32` | 1 or more | host | Children tracked at once per session |
+| `HOOKS_PERFORMANCE_REGISTRY_CAP` | `512` | 1 or more | host, daemon | Sessions the host monitors at once |
+| `HOOKS_PERFORMANCE_TERMINATE` | `true` | `true` or `false` | worker | Whether a disposable verdict ends in a signal |
+| `HOOKS_PERFORMANCE_JUDGE_TIER` | `small` | a model tier | worker | Model tier that rates whether a child is disposable |
+| `HOOKS_PERFORMANCE_JUDGE_TIMEOUT_SECONDS` | `20` | 1 to 300 | worker | Time limit for one judge call |
+| `HOOKS_PERFORMANCE_MAX_JUDGE_CALLS_PER_SESSION` | `10` | 1 or more | worker | Judge calls allowed per session |
+
+An invalid value does not stop the session. If the daemon's own environment holds one, the daemon logs the
+error and runs with the defaults. If a session's environment holds one, the host logs the error and does
+not monitor that session. In the worker, an invalid value makes the stage refuse.
+
+To keep the warnings and never stop a process, set termination off:
+
+```bash
+export HOOKS_PERFORMANCE_TERMINATE=false
+```
+
+The warning then says termination is off, and the judge stage leaves the child running. To switch the
+monitor off entirely, set `HOOKS_PERFORMANCE_ENABLED=false`.
+
+#### What stops a signal
+
+The monitor signals a child only when every check passes. Each of these conditions leaves the process
+running instead:
+
+- The stage has no current qualifying reading, or the process table, the child's row, or the child's working
+  directory is unreadable. A child with no readable working directory is never signaled, and a child whose
+  current readings are all unknown is not signaled at any stage, escalation included.
+- A sample that cannot be read empties the window for that metric. Pressure must then be proven again with
+  fresh readable samples before the child advances.
+- The command line, or an ancestor's, matches an exclusion, or the child or one of its ancestors is protected.
+- The judge times out, returns invalid output, has no backend, runs out of its per-session calls, or does not
+  rate the child disposable.
+- The event payload is malformed, or the session state on disk is corrupt.
+- The host cannot dispatch the stage: it is shed, it expired or was abandoned past its deadline, or the host is closing.
+- The registry is full, or the session's settings are invalid, so the session is never monitored.
+
+Only the warn stage waits for an acknowledgment. The warn hook answers proceed, and the host stops
+tracking the child when the answer is anything else. The judge and escalate stages are fire and forget from the
+host's side: the host does not read the reply. Every refusal in the worker records a notice that the next
+hook event delivers to the session instead.
+
+The host also refuses a `ResourcePressure` event sent by a client, and `capt-hook run ResourcePressure` refuses
+it on the cold path, so only the host raises the event. The host derives the session's anchor from the
+authenticated hook process rather than from the parent pid the request claims.
+
+Escalation sends `SIGKILL` only after the worker recorded its own `SIGTERM` for the same process identity.
+It then repeats the full ownership and exclusion checks and revalidates the identity before it signals.
+The host runs the escalation stage once per child.
+
+#### Limits
+
+- **The judge sees the daemon's environment.** The model command-line client inherits the daemon worker's
+  environment, minus the keys the hooks whitelist. A secret exported into the daemon's own environment is
+  visible to it. The judge prompt carries a redacted command line, and the redaction is a best effort.
+- **macOS validation and signal are separate calls.** The monitor checks the process, then sends the
+  signal with `kill(2)`. In the milliseconds between them the process can exit and its pid be reused,
+  `exec` a different program, or change directory. The monitor reads the working directory first and
+  the identity last to narrow that window, but it cannot close it.
+- **Linux uses `pidfd`.** Signaling through a pidfd rules out pid reuse. An `exec` or a directory change
+  after validation can still happen.
+- **The worker's last identity check is command text, not the argv vector.** The host tracks a child by its
+  pid and sub-second start time at every tick and reads the argv vector it sends fresh at each stage dispatch.
+  Right before a signal the worker checks only what `ps` exposes, which is the parent and group ids, the
+  whole-second start time, the working directory, and the command text with whitespace collapsed. Two argument
+  vectors that join to the same text pass that check, and a process that runs `exec` with such arguments during
+  the judge passes with a verdict about its earlier invocation.
+- **Other users' processes are not signaled.** The sampler rows carry no user id, and Linux can expose a
+  process's CPU use across users. The worker refuses any target whose user id differs from the session's.
+- **Disk pressure can be unknown.** On Linux, a process whose `/proc/<pid>/io` the monitor cannot read
+  has no disk reading, so only its CPU counts.
+- **Children that predate registration are never tracked.** A session registers on its first hook
+  event. Anything already running then stays out of scope. Only processes that first appear afterward and
+  descend from the session's `claude` process are tracked.
+- **Reparented children can drop out.** A process is identified by its pid and start time, so
+  reparenting does not make a new identity. A descendant that leaves the session's process subtree is dropped.
+  The own children of a child the monitor stopped are tracked only if they first appeared after
+  registration and still descend from the session.
+- **A calm child keeps its warning.** A child that drops below the thresholds is not warned a second time
+  for the same run.
 
 ## See also
 

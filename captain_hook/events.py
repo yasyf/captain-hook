@@ -927,3 +927,87 @@ class SessionEndEvent(BaseHookEvent):
     @property
     def reason(self) -> str:
         return self._raw["reason"]
+
+
+@dataclass
+class ResourcePressureEvent(BaseHookEvent):
+    """Fired by the capt-hookd host, not Claude Code, when a session's child process stays resource-heavy.
+
+    ``stage`` is ``"warn"`` on the first sustained sample, ``"judge"`` once the grace period lapses with the
+    child still heavy, and ``"escalate"`` when the child outlives a ``SIGTERM``. ``process`` carries the
+    child's identity (``pid``, ``start_unix``, ``argv``, ``cwd``) and usage; ``metrics`` marks which usage
+    readings were available. Only the warn stage's reply is read: a warn or allow acknowledges it, and any
+    other result makes the host stop tracking the child. The judge and escalate replies are not read.
+
+    The host tracks the child by its pid and sub-second start time at every tick and reads the argv vector it
+    sends fresh at each stage dispatch. The worker verifies again right before a signal with what ``ps``
+    exposes: the parent and group ids, the whole-second start time, the working directory, and the
+    whitespace-normalized joined command text, which is not the argv vector, so two argument vectors that
+    join to the same text compare equal there.
+    """
+
+    event_name: ClassVar[Event] = Event.ResourcePressure
+
+    @property
+    def stage(self) -> Literal["warn", "judge", "escalate"]:
+        return self._raw["stage"]
+
+    @property
+    def process(self) -> Mapping[str, object]:
+        return self._raw["process"]
+
+    @property
+    def pid(self) -> int:
+        return self._raw["process"]["pid"]
+
+    @property
+    def ppid(self) -> int:
+        return self._raw["process"]["ppid"]
+
+    @property
+    def pgid(self) -> int:
+        return self._raw["process"]["pgid"]
+
+    @property
+    def start_unix(self) -> int:
+        return self._raw["process"]["start_unix"]
+
+    @property
+    def start_usec(self) -> int:
+        return self._raw["process"]["start_usec"]
+
+    @property
+    def comm(self) -> str:
+        return self._raw["process"]["comm"]
+
+    @property
+    def argv(self) -> tuple[str, ...]:
+        return tuple(self._raw["process"]["argv"])
+
+    @property
+    def process_cwd(self) -> str | None:
+        return self._raw["process"].get("cwd")
+
+    @property
+    def runtime_s(self) -> float:
+        return self._raw["process"]["runtime_s"]
+
+    @property
+    def cpu_fraction(self) -> float | None:
+        return self._raw["process"]["cpu_fraction"] if self.metrics["cpu"] else None
+
+    @property
+    def disk_bps(self) -> float | None:
+        return self._raw["process"]["disk_bps"] if self.metrics["disk"] else None
+
+    @property
+    def metrics(self) -> Mapping[str, bool]:
+        return self._raw["metrics"]
+
+    @property
+    def claude_pid(self) -> int:
+        return self._raw["claude_pid"]
+
+    @property
+    def claude_start_unix(self) -> int:
+        return self._raw["claude_start_unix"]

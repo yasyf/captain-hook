@@ -60,10 +60,13 @@ class Fanout:
     :func:`captain_hook.util.reqenv.checkpoint`, and a permit it still held is what every other
     session's events would queue behind. The budget therefore bounds the hooks somebody is waiting
     on, and an abandoned one holds a thread of its own event's pool and nothing shared.
+
+    The flag is the request's own :func:`captain_hook.util.reqenv.abandon_signal`, so the host's
+    abandon frame stops the hooks mid-flight the same way the end of the dispatch does.
     """
 
     def __init__(self, groups: int) -> None:
-        self.abandoned = threading.Event()
+        self.abandoned = reqenv.abandon_signal()
         self.pool = ThreadPoolExecutor(max_workers=groups, thread_name_prefix="capt-hook-hook")
         self._budget = fanout_budget()
         self._held = 0
@@ -417,8 +420,12 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
 
     Every event takes a JSON envelope except ``PreCompact``, whose schema has no
     ``hookSpecificOutput``: Claude Code appends each successful hook's raw trimmed stdout to the
-    compaction's custom instructions, so a non-block result renders as its plain message.
+    compaction's custom instructions, so a non-block result renders as its plain message. The host-fired
+    ``ResourcePressure`` takes only the proceed acknowledgement capt-hookd parses: a warn or allow renders it,
+    anything else renders nothing.
     """
+    if event is Event.ResourcePressure:
+        return {"decision": "proceed"} if result.action in (Action.warn, Action.allow) else None
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
     if event is Event.PreCompact:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import glob
 import json
-import os
 import re
 import shlex
 import subprocess
@@ -22,8 +21,9 @@ from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import OSASCRIPT
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
-from captain_hook.util import proc, reqenv
+from captain_hook.util import proc
 from captain_hook.util.payload import command_texts
+from captain_hook.util.proc import Ownership, Unreadable, is_agent, process_class
 from captain_hook.util.shell import safe_parse_command_line
 
 if TYPE_CHECKING:
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from captain_hook import BaseHookEvent, HookResult, ToolRewriteEvent
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Arguments, Scalar
-    from captain_hook.util.proc import ProcessRow, ProcessTable
+    from captain_hook.util.proc import ProcessRow
 
 GUARDED_PROGRAMS = (
     "kill",
@@ -84,39 +84,6 @@ VARIANT_LIMIT = 64
 NEGATIVE_TARGET = re.compile(r"-\d+")
 DO_SHELL_SCRIPT = re.compile(r'(?i)\bdo\s+shell\s+script\b\s*(?:"((?:[^"\\]|\\.)*)")?')
 APPLESCRIPT_ESCAPE = re.compile(r"\\(.)")
-PROCESS_CLASSES = {
-    "claude": "an agent session",
-    "codex": "an agent session",
-    "login": "a terminal host",
-    "sshd": "a terminal host",
-    "tmux": "a terminal multiplexer",
-    "screen": "a terminal multiplexer",
-    "zellij": "a terminal multiplexer",
-    "launchd": "the system service manager",
-    "loginwindow": "the login session",
-    "WindowServer": "the display server",
-    "capt-hookd": "the Captain Hook host",
-    "codex-ask": "the codex-ask channel",
-    "orca-serve-supervisor": "the Orca serve supervisor",
-    "ghostty": "a terminal emulator",
-    "kitty": "a terminal emulator",
-    "wezterm-gui": "a terminal emulator",
-    "Alacritty": "a terminal emulator",
-    "iTerm2": "a terminal emulator",
-    "Terminal": "a terminal emulator",
-}
-COMMAND_MARKERS = {
-    "daemon-entry.js": "the Orca PTY daemon",
-    "Orca Helper": "an Orca helper",
-    "Orca.app/": "the Orca app",
-    "Captain Hook.app/": "the Captain Hook host",
-    "/iTerm.app/": "a terminal emulator",
-    "/Terminal.app/": "a terminal emulator",
-    "/Ghostty.app/": "a terminal emulator",
-    "/kitty.app/": "a terminal emulator",
-    "/WezTerm.app/": "a terminal emulator",
-    "/Alacritty.app/": "a terminal emulator",
-}
 AGENT_SHIM_PREFIXES = ("cc-", "orca-")
 VERIFY = "Verify a pid you started with `ps -o pid,ppid,pgid,lstart,command -p <pid>`"
 KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
@@ -196,47 +163,12 @@ def double_quoted(text: str) -> bool:
     return QUOTED_WORD.fullmatch(text) is not None
 
 
-def process_class(row: ProcessRow) -> str | None:
-    if proc.is_claude(row.command.split()):
-        return PROCESS_CLASSES["claude"]
-    if (label := PROCESS_CLASSES.get(row.argv0)) is not None:
-        return label
-    return next((label for marker, label in COMMAND_MARKERS.items() if marker in row.command), None)
-
-
-def is_agent(row: ProcessRow) -> bool:
-    return proc.is_claude(row.command.split()) or row.argv0 in {"claude", "codex"}
-
-
 def hosts_agent(row: ProcessRow) -> bool:
     return is_agent(row) or process_class(row) is not None or row.argv0.startswith(AGENT_SHIM_PREFIXES)
 
 
 def describe(row: ProcessRow) -> str:
     return f"pid {row.pid} (`{clip(row.command, 40)}`)"
-
-
-@dataclass(frozen=True, slots=True)
-class Unreadable:
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class Ownership:
-    table: ProcessTable
-    owner: ProcessRow | None
-    protected: frozenset[int]
-
-    @classmethod
-    def resolve(cls, table: ProcessTable) -> Ownership:
-        start = ov.client_ppid if (ov := reqenv.current()) is not None else os.getpid()
-        protected = frozenset(
-            pid
-            for row in table.rows.values()
-            if process_class(row) is not None
-            for pid in (row.pid, *(ancestor.pid for ancestor in table.ancestors(row.pid)))
-        )
-        return cls(table, table.nearest(start, is_agent), protected)
 
 
 def probe_timeout(reason: str) -> float | Unreadable:
