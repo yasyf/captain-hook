@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, get_args
 from captain_hook.conditions import matches_conditions
 from captain_hook.state import caller_file, hook_name
 from captain_hook.types import (
+    TOOL_EVENTS,
     CustomCondition,
     Event,
     HookSpec,
@@ -24,6 +25,7 @@ from captain_hook.types import (
 if TYPE_CHECKING:
     from cc_transcript.activity import UserClassifier
 
+    from captain_hook.confirm import Confirm
     from captain_hook.events import BaseHookEvent
     from captain_hook.settings import HooksSettings
     from captain_hook.types import HookResult
@@ -67,6 +69,14 @@ def reject_async_fail_closed(async_: bool, on_incomplete: str | None) -> None:
     """Reject ``on_incomplete`` on an async hook: no reply waits on it, so it has no call to block."""
     if async_ and on_incomplete is not None:
         raise AsyncDecisionError("on_incomplete is invalid with async_=True: an async hook has no call to block.")
+
+
+def reject_confirm_misuse(events: Event, block: bool, confirm: Confirm | None) -> None:
+    """Reject a ``confirm`` with no block to confirm, or on an event with no tool call for the model to judge."""
+    if confirm is not None and not block:
+        raise ValueError("confirm needs block=True: it settles a block, and a warn has nothing to settle.")
+    if confirm is not None and events & ~TOOL_EVENTS:
+        raise ValueError("confirm judges a tool call, so it runs only on tool events.")
 
 
 def reject_transcript_events(transcript_events: int | None) -> None:
@@ -216,6 +226,7 @@ def hook(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     block: bool = False,
+    confirm: Confirm | None = None,
     advisory_on_deny: bool = False,
     respect_gitignore: bool = True,
     max_fires: int | None = None,
@@ -227,6 +238,7 @@ def hook(
 ) -> None:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
+    reject_confirm_misuse(events, block, confirm)
     reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
@@ -238,6 +250,7 @@ def hook(
                 skip_if=tuple(skip_if),
                 message=message,
                 block=block,
+                confirm=confirm,
                 advisory_on_deny=advisory_on_deny,
                 respect_gitignore=respect_gitignore,
                 max_fires=max_fires,

@@ -113,6 +113,77 @@ verdict = evt.llm("Rate the risk of this action.", RiskVerdict)
 risky = evt.llm("Does this diff delete a public API?", bool, diff=True)
 ```
 
+## Confirm a deterministic block {#confirm}
+
+Add `Confirm` when a cheap structural match sometimes blocks calls outside the rule's
+intent. The deterministic hook must block first; confirmation can only remove that block.
+Set `CEREBRAS_API_KEY` in the hook process's environment before using it. Without the key,
+every confirm allows with a `the confirm step failed (...)` note.
+
+Pass `confirm=Confirm(...)` to a blocking tool-event hook, and describe what the block
+protects against in `rule`:
+
+```python
+from captain_hook import Allow, Annotated, Block, Confirm, Event, Input, Runs, Warn, hook
+
+hook(
+    Event.PreToolUse,
+    message="A push to a queued PR can be dropped. Ship a stacked PR instead.",
+    only_if=[Runs("git", "push")],
+    skip_if=[Annotated("raw")],
+    block=True,
+    confirm=Confirm(
+        rule="A push that lands on a branch the merge queue already admitted.",
+        timeout_s=3.0,
+    ),
+    tests={
+        Input(command="git push origin feat"): Block(),
+        Input(command="git push origin feat", llm={"block": False}): Warn(
+            pattern="allowed, the model found the call outside the rule"
+        ),
+        Input(command="git push origin feat # ccx:raw"): Allow(),
+    },
+)
+```
+
+`hook(..., confirm=...)` requires `block=True` and tool events; registration raises
+`ValueError` otherwise. A matching `skip_if` skips both the hook and its model call.
+Use an [annotation](primitives.qmd#annotations) there to honor an explicit escape.
+
+For a handler that already decides when to block, pass `confirm` to `evt.block`:
+
+```python
+from captain_hook import BaseHookEvent, Confirm, Event, HookResult, Runs, on
+
+@on(Event.PreToolUse, only_if=[Runs("git", "push")])
+def queued_push(evt: BaseHookEvent) -> HookResult:
+    return evt.block(
+        "A push to a queued PR can be dropped. Ship a stacked PR instead.",
+        confirm=Confirm(rule="A push that lands on a branch the merge queue already admitted."),
+    )
+```
+
+The model receives the rule, hook message, tool input, and a bounded window of recent tool
+results. The block stands only when its `ConfirmVerdict` has both `block=True` and
+`confident=True`. A timeout, error, unsure answer, or no match allows the call with one line
+of `additionalContext` naming the hook and reason, such as
+`queued_push: allowed, could not confirm in 3 s`. This note leaves Claude Code's permission
+flow in charge.
+
+`timeout_s` defaults to three seconds. The framework enforces that wall-clock limit itself,
+stops waiting, and leaves a late answer to a thread of its own, so a stuck backend never delays
+the next confirm. Verdicts are cached per session by hook, exact tool input, and message, so an
+identical retry reuses the answer.
+Timeouts and errors are not cached.
+
+The measured default is Cerebras `gpt-oss-120b` with low reasoning effort; compare backends
+with [bench/confirm.py](https://github.com/yasyf/captain-hook/blob/main/bench/confirm.py).
+
+Save the first example in `.claude/hooks/queued_push.py` and run `uvx capt-hook test`.
+Inline tests stub the model with a confident block by default; `Input(..., llm={"block": False})`
+exercises the allow note. These tests check conditions and result handling; test the model's
+judgment separately against real calls.
+
 ## Auto-answer permission dialogs {#llm_approve}
 
 `llm_approve` is the fourth LLM primitive, and it answers whether a pending tool call is safe to run without asking. It fires on `PermissionRequest`, the event Claude Code raises when a permission dialog would appear, and sends the pending tool call to a safety judge. A `safe` verdict answers the dialog with *allow*, so the tool runs silently. An unsafe verdict, or any LLM failure, returns nothing, and the real dialog shows; it never auto-denies on a model's say-so.

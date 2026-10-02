@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hooks share one `ccx:` annotation notation for escapes and intent.**
+  Real Bash comments carry `ccx:<key>[=<value>]` tokens; Agent/Task prompts and Skill args
+  carry a whole `ccx: <key>[=<value>] ...` line. `Annotated` matches keys and optional values
+  in `only_if` or `skip_if`; `scope="session"` reads only the session's dispatch prompt.
+  Handlers read the mapping through `evt.annotations`, parsed once per event.
+- **Deterministic blocks can ask a small model to confirm the match.** Pass `Confirm(rule=...)`
+  to `hook(..., block=True, confirm=...)` or `evt.block(..., confirm=...)`. Only a confident
+  match preserves the block; timeout, error, uncertainty, or no match allows with a one-line
+  note naming the hook and reason. The framework enforces a three-second default timeout
+  and caches verdicts per session, excluding timeouts and errors. The measured default,
+  Cerebras `gpt-oss-120b`, requires `CEREBRAS_API_KEY`; a missing key allows with a failure note.
+
+### Changed
+
+- **Graphite's presubmit review reminder stays quiet in dispatched lanes.** A whole
+  `ccx: role=<value>` line in the session's dispatch prompt skips the reminder because the
+  parent owns the review pass. The pack uses `Annotated("raw")` for its raw escapes.
+
 ### Fixed
 
 - **`git stash drop $(...)` blocks again.** A substitution that expands to nothing makes git
@@ -16,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[Subagent hand-back]` line later in a user prompt no longer suppresses it.
 - **"Not caused by my change, so I will skip fixing it" reaches the pre-existing-issue nudge.**
   An explicit skip or decline-to-fix phrase corroborates the "not caused by my change" clause.
+- **`CAPT_HOOK_CCX_RAW=0` no longer enables the raw escape.** Only `1`, `true`, and `yes`
+  count. Matching ignores case and surrounding whitespace. Other non-empty values no
+  longer contribute the `raw` annotation.
 
 ## [12.76.0] - 2026-10-01
 

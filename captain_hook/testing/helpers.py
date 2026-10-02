@@ -46,6 +46,7 @@ from captain_hook.util import reqenv
 
 STUB_FIELD_VALUES: dict[str, Any] = {
     "block": True,
+    "confident": True,
     "fire": True,
     "action": "block",
     "reasoning": "inline test stub",

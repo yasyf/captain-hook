@@ -24,6 +24,7 @@ from cc_transcript.tools import WriteCall as WriteCall
 from captain_hook import file as file
 from captain_hook import style as style
 from captain_hook import util as util
+from captain_hook.annotations import Annotated as Annotated
 from captain_hook.app import hook as hook
 from captain_hook.app import on as on
 from captain_hook.ast_grep import COMMENT_TYPES as COMMENT_TYPES
@@ -55,6 +56,8 @@ from captain_hook.conditions import UserSaid as UserSaid
 from captain_hook.conditions import workflow_opt_matches as workflow_opt_matches
 from captain_hook.conditions import workflow_opt_values as workflow_opt_values
 from captain_hook.conditions import workflow_script_source as workflow_script_source
+from captain_hook.confirm import Confirm as Confirm
+from captain_hook.confirm import ConfirmVerdict as ConfirmVerdict
 from captain_hook.context import HookContext as HookContext
 from captain_hook.contexts import AfterEdit as AfterEdit
 from captain_hook.contexts import BeforeEdit as BeforeEdit

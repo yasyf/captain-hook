@@ -470,6 +470,36 @@ def test_raw_env_runs_every_command_as_written(
     assert dispatch_command("jj new", gt_repo, tmp_path) is None
 
 
+@pytest.mark.parametrize("value", ["0", "false", "no"])
+def test_a_falsy_raw_env_still_steers(
+    isolate_modules: None,
+    ccx_installed: None,
+    gt_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    monkeypatch.setenv("CAPT_HOOK_CCX_RAW", value)
+    result = dispatch_command("gt restack", gt_repo, tmp_path)
+    assert result is not None
+    assert "ccx vcs stack restack" in result["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+@pytest.mark.parametrize(
+    "command", ["gt restack && echo '# ccx:raw'", "gt restack <<'EOF'\n# ccx:raw\nEOF", 'gt restack "# ccx:raw"']
+)
+def test_a_raw_marker_outside_a_comment_still_steers(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command(command, gt_repo, tmp_path)
+    assert result is not None
+    assert "ccx vcs stack restack" in result["hookSpecificOutput"].get("additionalContext", "") + str(
+        result["hookSpecificOutput"].get("updatedInput", "")
+    )
+
+
 @pytest.mark.parametrize(
     "command",
     [

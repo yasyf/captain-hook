@@ -94,6 +94,7 @@ reference:
       - llm_gate
       - llm_nudge
       - prompt_check
+      - Confirm
       - approve
       - deny
       - llm_approve
@@ -110,6 +111,7 @@ reference:
       - GateVerdict
       - NudgeVerdict
       - PromptCheckVerdict
+      - ConfirmVerdict
       - SafetyVerdict
 
   - title: Conditions
@@ -128,6 +130,7 @@ reference:
       - UsedSkill
       - UsedTool
       - UserSaid
+      - Annotated
       - InPlanMode
       - Waiting
       - FromSubagent

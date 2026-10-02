@@ -32,8 +32,10 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
     from spawnllm import TModel, TSpecialty
 
+    from captain_hook.annotations import Annotations
     from captain_hook.ast_grep import Edit
     from captain_hook.cmd import Cmd
+    from captain_hook.confirm import Confirm
     from captain_hook.context import HookContext
     from captain_hook.contexts import PromptContext
     from captain_hook.prompt import Prompt
@@ -289,6 +291,24 @@ class BaseHookEvent:
             event=self if isinstance(self, ToolRewriteEvent) else None,
         )
 
+    @cached_property
+    def annotations(self) -> Annotations:
+        """The ``ccx:`` annotations this event carries, parsed once: each key mapped to its value, or None for a flag.
+
+        Read from a ``ccx:<key>[=<value>]`` token in a real comment of the Bash command (nested ``sh -c`` and
+        ``eval`` payloads included, quoted strings and heredoc bodies never), from a whole
+        ``ccx: <key>[=<value>] ...`` line in an Agent or Task prompt or in Skill args, and from
+        ``CAPT_HOOK_CCX_RAW`` set to ``1``, ``true``, or ``yes``, which contributes ``raw``. Match it in
+        ``skip_if``/``only_if`` with :class:`~captain_hook.Annotated`.
+
+        Example:
+            >>> if "raw" in evt.annotations:
+            ...     return None
+        """
+        from captain_hook.annotations import event_annotations
+
+        return event_annotations(self)
+
     @property
     def command(self) -> Cmd:
         """The event's Bash command as a walkable :class:`~captain_hook.cmd.Cmd` — an alias for :attr:`cmd`.
@@ -530,11 +550,19 @@ class BaseHookEvent:
         """
         return replace(self.warn(*parts, system_message=system_message), approve=False)
 
-    def block(self, message: str, *, system_message: str | None = None) -> HookResult:
+    def block(self, message: str, *, confirm: Confirm | None = None, system_message: str | None = None) -> HookResult:
+        """Block with ``message``; with ``confirm``, only once a small model confirms the match.
+
+        Args:
+            message: The rule the call breaks, then the remediation.
+            confirm: Send the block through :class:`~captain_hook.Confirm` before it lands; the call is
+                allowed with a one-line note when the model times out, fails, is unsure, or finds no match.
+            system_message: Text shown to the user as Claude Code's ``systemMessage``.
+        """
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return replace(HR.of(Action.block, message), system_message=system_message)
+        return replace(HR.of(Action.block, message), confirm=confirm, system_message=system_message)
 
 
 @dataclass

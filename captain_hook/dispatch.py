@@ -16,6 +16,7 @@ from loguru import logger
 
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
 from captain_hook.conditions import matches_conditions
+from captain_hook.confirm import confirmed
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete, fails_open
 from captain_hook.state import HookState
@@ -107,9 +108,9 @@ def offload_pool() -> ThreadPoolExecutor:
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
-    return (
-        HookResult(action=Action.block if spec.block else Action.warn, message=spec.message) if spec.message else None
-    )
+    if not spec.message:
+        return None
+    return HookResult(action=Action.block if spec.block else Action.warn, message=spec.message, confirm=spec.confirm)
 
 
 @contextmanager
@@ -127,7 +128,10 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
     from captain_hook.transcripts import TranscriptLoadError
 
     try:
-        return entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
+        result = entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
+        if result is not None and (confirm := result.confirm) is not None:
+            return confirmed(evt, entry.name, result, confirm)
+        return result
     except (TranscriptLoadError, EvidenceIncomplete):
         raise
     except Exception as exc:
