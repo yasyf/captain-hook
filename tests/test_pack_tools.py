@@ -481,3 +481,51 @@ def test_a_failed_github_call_under_a_live_lane_stays_quiet(tmp_path: Path) -> N
     )
 
     assert record_refusal(evt) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /Users/yasyf/.claude/worktrees/monorepo/cc-slack-reexec-newest && git rebase origin/dev 2>&1 | tail -5; "
+        "git status -s | head # ccx:raw",
+        "gh pr edit 9 --base dev  # ccx:raw",
+        "cd wt && gt submit --no-interactive  # ccx:raw",
+    ],
+)
+def test_a_real_raw_comment_records_and_arms_nothing(tmp_path: Path, command: str) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+
+    ctx = judging(tmp_path, {}, block=True, confident=True)
+    raw = PostToolUseEvent(
+        _raw={"tool_name": "Bash", "tool_input": {"command": command}, "tool_response": {"stdout": "", "stderr": ""}},
+        ctx=ctx,
+    )
+    prompt = "Rebase onto dev with `git rebase origin/dev`, retarget with `gh pr edit 9 --base dev`, then `gt submit`."
+
+    assert "raw" in raw.annotations
+    assert record_refusal(raw) is None
+    assert ToolingRefusals.load(raw).refusals == {}
+    assert execute_hook(repeat_guard(), dispatch(ctx, prompt, "rebase-and-retarget")) is None
+    ctx.call_llm.assert_not_called()
+
+
+def test_a_failed_ccx_refusal_blocks_a_confident_repeat_dispatch(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+    from captain_hook.events import PostToolUseFailureEvent
+
+    ctx = judging(tmp_path, {}, block=True, confident=True)
+    refused = PostToolUseFailureEvent(
+        _raw={
+            "tool_name": "Bash",
+            "tool_input": {"command": "ccx vcs pr status 12"},
+            "error": "Exit code 1\nccx: GitHub GraphQL quota exhausted; rate-limited until 2099-01-01T00:00:00Z",
+        },
+        ctx=ctx,
+    )
+
+    assert record_refusal(refused) is not None
+    assert set(ToolingRefusals.load(refused).refusals) == {"github-quota"}
+    result = execute_hook(repeat_guard(), dispatch(ctx, "Poll `ccx vcs pr status 12` until it lands.", "pr-12-watch"))
+    assert result is not None
+    assert result.action is Action.block
+    assert "`ccx: tooling-lane=github-quota`" in (result.message or "")

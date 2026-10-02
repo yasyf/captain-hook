@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `# ccx:raw` comment no longer records a tooling refusal.** The raw escape is sanctioned,
+  so it no longer arms the repeat-dispatch block or asks for a `ccx-raw:<verb>` tooling lane.
+  Only a first-party tool's own failed output records a refusal now. That covers cc-slack session
+  and `no_watch` refusals and GitHub quota refusals from a failed `ccx`, `gh`, or `stack-enqueue`
+  call.
 - **Adding lines to an over-budget comment blocks again.** The verbose-comment block now covers
   an edit that lengthens a run already over budget; a same-length reword still only warns.
 - **The `git stash` block names a drop it allows.** Its copy resolves the entry's `stash@{N}`
