@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A lane's root excerpt keeps the earliest matches as well as the newest.** `root_excerpt` capped
+  to the newest 20 matching events, so a quote that agents echoed more than 20 times after the user
+  said it lost the user's own answer and a standing-grant mint was refused for a quote the user
+  had given verbatim. It now keeps up to `limit` earliest and `limit` newest matches, merged in
+  transcript order.
 - **A `# ccx:raw` comment no longer records a tooling refusal.** The raw escape is sanctioned,
   so it no longer arms the repeat-dispatch block or asks for a `ccx-raw:<verb>` tooling lane.
   Only a first-party tool's own failed output records a refusal now. That covers cc-slack session

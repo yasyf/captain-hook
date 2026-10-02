@@ -326,10 +326,11 @@ def root_transcript(path: str | Path, events: int) -> LazyTranscript:
 
 
 def root_excerpt(path: str | Path, needles: Sequence[str], *, around: int = 2, limit: int = 20) -> Session:
-    """The newest ``limit`` events of a lane's root session transcript whose line contains any of
-    ``needles``, each with ``around`` events either side, streamed from the whole file so an answer far
-    older than the tail still reaches the judge. A needle matches as typed or JSON-escaped, with or
-    without its non-ASCII escaped.
+    """The earliest and the newest ``limit`` events of a lane's root session transcript whose line contains
+    any of ``needles``, each with ``around`` events either side, streamed from the whole file so an answer
+    far older than the tail still reaches the judge. The earliest are kept because a quote is first said by
+    whoever it came from and echoed by agents after, so the newest alone drop the words and keep the echoes.
+    A needle matches as typed or JSON-escaped, with or without its non-ASCII escaped.
     """
     from cc_transcript.parser import parse_events_from_bytes
 
@@ -343,21 +344,27 @@ def root_excerpt(path: str | Path, needles: Sequence[str], *, around: int = 2, l
             json.dumps(needle, ensure_ascii=False)[1:-1].encode(),
         )
     }
-    hits: deque[list[bytes]] = deque(maxlen=limit)
+    earliest: list[list[bytes]] = []
+    newest: deque[list[bytes]] = deque(maxlen=limit)
     before: deque[bytes] = deque(maxlen=around)
+    window: list[bytes] = []
     after = 0
     reqenv.checkpoint()
     with Path(path).open("rb") as transcript:
         for line in transcript:
             if any(form in line for form in forms):
-                hits.append([*before, line])
+                window = [*before, line]
+                if len(earliest) < limit:
+                    earliest.append(window)
+                newest.append(window)
                 before.clear()
                 after = around
             elif after:
-                hits[-1].append(line)
+                window.append(line)
                 after -= 1
             else:
                 before.append(line)
+    hits = {id(window): window for window in (*earliest, *newest)}.values()
     return lift_session(parse_events_from_bytes(b"".join(line for hit in hits for line in hit)), path=Path(path))
 
 
