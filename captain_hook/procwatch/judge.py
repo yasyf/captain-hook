@@ -94,7 +94,9 @@ def ask(evt: ResourcePressureEvent, settings: PerformanceSettings, facts: JudgeF
                 evidence=False,
             )
     except (BackendCallError, ValidationError, TimeoutError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        logger.bind(error=type(exc).__name__).warning("judge call failed; the child is not disposable: {}", exc)
+        logger.bind(pid=evt.pid, error=type(exc).__name__).warning(
+            "judge call failed; the child is not disposable: {}", exc
+        )
         return False
     return verdict.disposable
 
