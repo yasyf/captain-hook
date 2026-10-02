@@ -400,6 +400,7 @@ class TestJudge:
             "timeout": 20,
             "response_model": DisposableVerdict,
             "attempts": 1,
+            "evidence": False,
             "tools": (),
         }
         assert (state(evt).verdicts, state(evt).judge_calls, state(evt).judging) == ({identity.key: True}, 1, [])
