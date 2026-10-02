@@ -43,8 +43,9 @@ from captain_hook.procwatch.state import (
     take_pending,
 )
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
 from captain_hook.testing.helpers import mock_resource_pressure_event
+from captain_hook.transcripts import LazyTranscript, TranscriptPins
 from captain_hook.types import Action, Event, HookResult
 from captain_hook.util import proc, reqenv
 from captain_hook.util.proc import ProcessTable, Unreadable
@@ -376,6 +377,11 @@ class TestScreen:
         assert screen.redact(f"rg x {Path.home()}/Code") == "rg x ~/Code"
 
 
+class NoExchange:
+    def __getattr__(self, name: str) -> object:
+        pytest.fail(f"the judge reached the snapshot client: {name}")
+
+
 class TestJudge:
     def facts(self, evt: ResourcePressureEvent) -> tuple[ProcessIdentity, JudgeFacts]:
         identity = ProcessIdentity.from_payload(evt.process)
@@ -421,16 +427,49 @@ class TestJudge:
             pytest.param(subprocess.TimeoutExpired("claude", 20), id="subprocess"),
             pytest.param(OSError("spawn"), id="oserror"),
             pytest.param(EvidenceIncomplete("partial", "owner lost"), id="evidence"),
+            pytest.param(RuntimeError("preparation group is closed"), id="runtime"),
         ],
     )
     def test_failures_are_not_disposable(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: bool | Exception
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: bool | Exception, logcap: Any
     ) -> None:
         evt = event(tmp_path, "judge")
         llm(evt, monkeypatch, failure)
         identity, facts = self.facts(evt)
         assert judge.disposable(evt, PerformanceSettings(), identity, facts) is False
         assert state(evt).verdicts == {identity.key: False}
+        failed = [record.message for record in logcap.records if "judge call failed" in record.message]
+        if isinstance(failure, Exception):
+            (message,) = failed
+            assert f"error={type(failure).__name__!r}" in message
+            assert str(failure) in message
+        else:
+            assert failed == []
+
+    def test_judge_resolves_no_transcript_and_records_no_evidence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        evt = event(tmp_path, "judge")
+        evt.ctx.transcript = LazyTranscript(
+            TranscriptPins(lambda: pytest.fail("the judge resolved the session transcript")), seed=True
+        )
+        prepared: list[str] = []
+        monkeypatch.setattr(context.HookContext, "release_preparation", lambda self, prompt: prepared.append(prompt))
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        monkeypatch.setattr(context, "ready_backend", lambda specialty, model: BACKEND)
+        parsed = DisposableVerdict(disposable=True, reasoning="r")
+        monkeypatch.setattr(
+            "spawnllm.run_sync",
+            lambda spec, *, backend: SimpleNamespace(error=None, result=SimpleNamespace(parsed=parsed)),
+        )
+        identity, facts = self.facts(evt)
+        token = CURRENT_CLIENT.set(NoExchange())
+        try:
+            assert judge.disposable(evt, PerformanceSettings(), identity, facts) is True
+        finally:
+            CURRENT_CLIENT.reset(token)
+        assert prepared == []
+        assert evt.ctx.prepared_evidence is None
 
     def test_judge_calls_are_capped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOOKS_PERFORMANCE_MAX_JUDGE_CALLS_PER_SESSION", "2")

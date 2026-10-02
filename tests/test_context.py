@@ -498,6 +498,17 @@ class TestCallLlm:
             ctx.call_llm("test prompt")
         assert mock_call.call_args.kwargs["timeout"] == expected
 
+    def test_evidence_false_skips_the_preparation_release(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        prepared: list[str] = []
+        monkeypatch.setattr(HookContext, "release_preparation", lambda self, prompt: prepared.append(prompt))
+        with patch("spawnllm.select_backend", return_value=CLAUDE), patch("spawnllm.call_sync", return_value="ok"):
+            assert ctx.call_llm("test prompt", evidence=False) == "ok"
+            assert ctx.call_llm("test prompt") == "ok"
+        assert prepared == ["test prompt"]
+        assert ctx.prepared_evidence is None
+
     def test_a_deadline_passed_after_backend_selection_makes_no_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from types import SimpleNamespace
 
