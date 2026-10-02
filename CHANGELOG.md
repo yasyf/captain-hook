@@ -24,9 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The native prefilter flags `TaskStop`, so the host fails closed.** Go and generated
   Python match the exact tool name before the Bash first-party check. A stop request is
-  mandatory under load and fails closed on host or transport failure. The unproven-child
-  remedy in `pid_verdict` now says "Let it finish, or ask the owner to end it." instead of
-  directing the caller to the harness's stop tool.
+  mandatory under load and fails closed on host or transport failure. A guard module that
+  fails to load leaves the guard completion empty even when a sibling guard module loaded, so
+  the host keeps denying rather than trusting the survivor. The unproven-child remedy in
+  `pid_verdict` now says "Let it finish, or ask the owner to end it." instead of directing
+  the caller to the harness's stop tool.
 - **A mandatory hook that reads the transcript gets a 15 s evidence budget, not the tool call's
   0.75 s.** The foreground evidence budget for a `PreToolUse` dispatch is 0.75 s, shared by every
   snapshot call the dispatch makes. On a loaded host a mandatory gate that reads the lane and root

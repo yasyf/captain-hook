@@ -217,9 +217,12 @@ class ProductRuntime:
 
 
 def _guard_completion(event: Event) -> GuardCompletion:
-    required = [hook.state_key for hook in app.get_mandatory_hooks(event)]
+    guards = app.get_mandatory_hooks(event)
+    broken = {error.pack for error in app.current_state().load_errors if error.pack is not None}
+    if not guards or any(hook.pack_name in broken for hook in guards):
+        return ""
     completed = reqenv.mandatory_completed()
-    return GUARD_COMPLETED if required and all(key in completed for key in required) else ""
+    return GUARD_COMPLETED if all(hook.state_key in completed for hook in guards) else ""
 
 
 def _run_detached(background: Background, session_id: str | None) -> None:

@@ -361,19 +361,28 @@ class TestGuardCompletion:
         assert "permissionDecision" not in response.stdout
         assert "RuntimeError: guard crashed" in response.stderr
 
+    @pytest.mark.parametrize(
+        ("broken", "payload"),
+        [
+            pytest.param("sessions.py", PAYLOAD, id="sessions"),
+            pytest.param("stops.py", STOP_PAYLOAD, id="stops"),
+        ],
+    )
     def test_a_broken_guard_module_leaves_the_completion_empty(
-        self, isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken: str, payload: str
     ) -> None:
         monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda *args: None)
         hooks = tmp_path / "hooks"
         shutil.copytree(PACKS_DIR / "general" / "hooks", hooks)
-        with (hooks / "sessions.py").open("a") as source:
+        with (hooks / broken).open("a") as source:
             source.write("\nraise ImportError('broken copy')\n")
         discover_pack("general", hooks)
-        assert [error.source for error in app._state.load_errors] == [str(hooks / "sessions.py")]
-        assert not any(hook.spec.mandatory for hook in app._state.hooks)
+        assert [error.source for error in app._state.load_errors] == [str(hooks / broken)]
+        assert any(hook.spec.mandatory for hook in app._state.hooks)
 
-        response = self.respond()
+        response = self.respond(payload=payload)
         assert response.exit == 0
         assert response.guard == ""
         assert "permissionDecision" not in response.stdout
+        for surviving in (self.PAYLOAD, self.STOP_PAYLOAD):
+            assert self.respond(payload=surviving).guard == ""
