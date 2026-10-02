@@ -8,12 +8,10 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
-from captain_hook import ast_grep
 from captain_hook.util import reqenv
 from captain_hook.util.caching import ttl_cache
 
 GRAPHITE_MARKER = ".graphite_repo_config"
-RAW_MARKER = "ccx:raw"
 # ccx gates its own gt lane on this key parsed by Go's strconv.ParseBool, so these are
 # the exact spellings it accepts. `git config --type=bool` would also take yes/on/off,
 # which would silence a hook here while ccx still rode the gt lane.
@@ -127,10 +125,4 @@ def scanned_names(anchor: Path) -> Iterator[str]:
 def contains_repo(resolved: Path) -> bool:
     return any(
         name in (".git", ".jj") or scanned >= 20_000 for scanned, name in enumerate(scanned_names(resolved), start=1)
-    )
-
-
-def ccx_raw_marked(command: str) -> bool:
-    return any(
-        comment.text.lstrip("#").split(maxsplit=1)[:1] == [RAW_MARKER] for comment in ast_grep.comments(command, "bash")
     )
