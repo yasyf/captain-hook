@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from cc_transcript.tools import BashCall
 
 from captain_hook import Event, Input, LambdaCondition, on
-from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, references
+from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import OSASCRIPT
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
@@ -300,7 +300,9 @@ def names_guarded_word(text: str) -> str | None:
 
 
 def names_program(resolution: Resolution) -> bool:
-    return isinstance(resolution, Resolved) and all(candidate.split() for candidate in resolution.candidates)
+    return isinstance(resolution, Resolved) and all(
+        candidate.split() and guarded_word_token(program_name(candidate)) is None for candidate in resolution.candidates
+    )
 
 
 def guarded_argument(call: Call, *, named: bool) -> str | None:
