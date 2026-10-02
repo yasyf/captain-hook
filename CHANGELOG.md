@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session may kill or renice a process it started.** The session guard reads the target's
+  environment with `ps -E` and allows a literal `kill <pid>` or `renice -p <pid>` when its
+  `CLAUDE_CODE_SESSION_ID` names the calling session, including a process reparented to
+  launchd. The read must match the table row's start time and command, so a recycled pid never
+  inherits the proof. Agent sessions, terminal hosts, and their ancestors stay protected, and
+  every target of a multi-pid `kill` or `renice` must pass, where the guard checked only the
+  first. macOS hides the environment of Apple platform binaries such as `/bin/sleep`, so those
+  stay denied.
 - **A long-lived hook worker can spawn again once the user's process count grows.** daemonkit
   lowers `RLIMIT_NPROC` across each spawn to the user's process count plus 400, and the worker
   kept that cap for life. Hours later every `ps`, `git`, and `claude` spawn from the worker

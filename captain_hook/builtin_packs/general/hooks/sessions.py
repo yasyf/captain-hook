@@ -14,6 +14,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     GUARDED_PROGRAMS,
     INLINE_OWNER_ANSWER,
     INLINE_OWNER_TERMINAL,
+    INLINE_SESSION,
     KILL_FIX,
     LAUNCHERS,
     NEGATIVE_TARGET,
@@ -406,15 +407,17 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         return None
     if not targets:
         return deny("a wrapper supplies its targets") if call.wrappers else None
-    word, value = targets[0]
-    if (pid := literal_pid(word, value)) is not None:
-        return pid_verdict(pid, spelling, facts, KILL_FIX)
-    if probing:
-        return (
-            f"BLOCKED: `{spelling}` cannot be verified: {describe_target(word, value)}, so the probe could expand "
-            "into a real signal. Pass the literal pid, or a variable the same line sets to one."
-        )
-    return deny(describe_target(word, value))
+    for word, value in targets:
+        if (pid := literal_pid(word, value)) is None:
+            if probing:
+                return (
+                    f"BLOCKED: `{spelling}` cannot be verified: {describe_target(word, value)}, so the probe could "
+                    "expand into a real signal. Pass the literal pid, or a variable the same line sets to one."
+                )
+            return deny(describe_target(word, value))
+        if (verdict := pid_verdict(pid, spelling, facts, KILL_FIX)) is not None:
+            return verdict
+    return None
 
 
 @guard(
@@ -496,6 +499,14 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         ),
         guarded(tool="mcp__runner__exec", tool_input={"argv": ["kill", 14575]}): Block(pattern="an agent session"),
         guarded(tool="mcp__x__exec", tool_input={"command": "kill 14575 \udc80"}): Block(),
+        guarded(command="kill 31337", session_id=INLINE_SESSION): Allow(),
+        guarded(command="kill -TERM 31337", session_id=INLINE_SESSION): Allow(),
+        guarded(command="kill 31337 14575", session_id=INLINE_SESSION): Block(pattern="an agent session"),
+        guarded(command="kill 31337 $pid", session_id=INLINE_SESSION): Block(pattern=r"`\$pid` is not a literal"),
+        guarded(command="kill 31337", session_id="0ther000-0000-4000-8000-000000000000"): Block(
+            pattern="ownership of pid 31337"
+        ),
+        guarded(command="kill 15001", session_id=INLINE_SESSION): Block(pattern="pid 15001"),
         guarded(command="kill -0 14575"): Allow(),
         guarded(command="PID=31337; kill -0 $PID"): Allow(),
         guarded(command='PID=31337; kill -0 "$PID" 2>/dev/null || break'): Allow(),
@@ -534,12 +545,12 @@ def renice_verdict(call: Call, facts: Facts) -> str | None:
         if not pairs or pairs[0][1] is None or not str(pairs[0][1]).lstrip("+-").isdecimal():
             return deny("its priority operand is not a literal number")
         pairs = pairs[1:]
-    if not pairs:
-        return None
-    word, value = pairs[0]
-    if (pid := literal_pid(word, value)) is None:
-        return deny(describe_target(word, value))
-    return pid_verdict(pid, spelling, facts, RENICE_FIX)
+    for word, value in pairs:
+        if (pid := literal_pid(word, value)) is None:
+            return deny(describe_target(word, value))
+        if (verdict := pid_verdict(pid, spelling, facts, RENICE_FIX)) is not None:
+            return verdict
+    return None
 
 
 @guard(
@@ -551,6 +562,8 @@ def renice_verdict(call: Call, facts: Facts) -> str | None:
         guarded(command="renice -n 5 -p 99999"): Block(pattern="would reach an unrelated process"),
         guarded(command="command -v renice"): Allow(),
         guarded(command="renice 5"): Allow(),
+        guarded(command="renice -n 5 -p 31337", session_id=INLINE_SESSION): Allow(),
+        guarded(command="renice -n 5 -p 31337 14575", session_id=INLINE_SESSION): Block(pattern="an agent session"),
     }
 )
 def renice_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from datetime import datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from captain_hook.util.proc import (
     claude_disallowed_tools,
     claude_skip_permissions,
     disallowed_tools,
+    environment,
     parent_entry,
     process_table,
 )
@@ -106,6 +108,45 @@ class TestProcessTable:
             lambda args, **kw: subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=""),
         )
         assert process_table() is None
+
+    @pytest.mark.parametrize(
+        ("returncode", "stdout", "expected"),
+        [
+            pytest.param(0, "Wed Sep 30 06:01:05 2026 sleep 60 HOME=/h A=b\n", " HOME=/h A=b", id="environment"),
+            pytest.param(0, "Wed Sep 30 06:01:05 2026 sleep 60\n", "", id="empty_environment"),
+            pytest.param(0, "Wed Sep 30 06:01:06 2026 sleep 60 HOME=/h\n", None, id="recycled_start"),
+            pytest.param(0, "Wed Sep 30 06:01:05 2026 sleep 5 HOME=/h\n", None, id="recycled_command"),
+            pytest.param(1, "", None, id="gone"),
+            pytest.param(0, "garbage\n", None, id="malformed"),
+        ],
+    )
+    def test_environment_belongs_to_the_row(
+        self, monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: str, expected: str | None
+    ) -> None:
+        def fake_run(args: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            assert args == ("ps", "-E", "-ww", "-o", "lstart=,command=", "-p", "31337")
+            assert kwargs["env"] == os.environ | PS_TABLE_ENV
+            return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        assert environment(row(31337, 1, "sleep 60", started="2026-09-30T06:01:05")) == expected
+
+    @pytest.mark.skipif(sys.platform != "darwin", reason="BSD ps prints the environment with -E")
+    def test_environment_reads_a_live_detached_process(self) -> None:
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env=os.environ | {"CLAUDE_CODE_SESSION_ID": "live-probe"},
+            start_new_session=True,
+        )
+        try:
+            snapshot = process_table()
+            assert snapshot is not None
+            shown = environment(snapshot.rows[child.pid])
+            assert shown is not None
+            assert " CLAUDE_CODE_SESSION_ID=live-probe" in shown
+        finally:
+            child.kill()
+            child.wait()
 
     def test_ancestors_are_strict_and_root_most_last(self) -> None:
         snapshot = table(row(1, 0, "/sbin/launchd"), row(10, 1, "login"), row(20, 10, "fish"), row(30, 20, "claude"))

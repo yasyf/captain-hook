@@ -116,7 +116,15 @@ def overrides(client_ppid: int = HOOK_SHELL) -> reqenv.RequestOverrides:
 def fake_table(monkeypatch: pytest.MonkeyPatch) -> dict[str, ProcessTable | None]:
     holder: dict[str, ProcessTable | None] = {"table": MAC}
     monkeypatch.setattr(proc, "process_table", lambda **kw: holder["table"])
+    monkeypatch.setattr(proc, "environment", lambda row, **kw: None)
     return holder
+
+
+@pytest.fixture
+def environs(monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable | None]) -> dict[int, str]:
+    shown: dict[int, str] = {}
+    monkeypatch.setattr(proc, "environment", lambda row, **kw: shown.get(row.pid))
+    return shown
 
 
 @pytest.fixture
@@ -252,6 +260,63 @@ class TestUnprovenChildren:
         assert "runs under claude 14462" in message
 
 
+class TestSessionStartedChildren:
+    def test_a_child_carrying_this_sessions_id_may_be_killed(
+        self, general_pack: None, environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        environs[31337] = " HOME=/Users/dev CLAUDE_CODE_SESSION_ID=s1 CLAUDECODE=1"
+        assert decide("kill 31337", tmp_path) is None
+        assert decide("kill -9 31337", tmp_path) is None
+        assert decide("renice -n 5 -p 31337", tmp_path) is None
+
+    def test_a_detached_process_this_session_started_may_be_killed(
+        self, general_pack: None, environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        environs[7777] = " CLAUDE_CODE_SESSION_ID=s1"
+        assert decide("kill 7777", tmp_path) is None
+        assert decide("kill 7777", tmp_path, client_ppid=424242) is None
+
+    @pytest.mark.parametrize(
+        "shown",
+        [
+            pytest.param(" CLAUDE_CODE_SESSION_ID=s2", id="another_session"),
+            pytest.param(" CLAUDE_CODE_SESSION_ID=s1 CLAUDE_CODE_SESSION_ID=s2", id="two_sessions"),
+            pytest.param(" XCLAUDE_CODE_SESSION_ID=s1", id="another_variable"),
+            pytest.param(" CLAUDE_CODE_SESSION_ID=s10", id="id_prefix"),
+            pytest.param("", id="no_session"),
+        ],
+    )
+    def test_any_other_environment_has_no_creation_proof(
+        self, general_pack: None, environs: dict[int, str], tmp_path: Path, shown: str
+    ) -> None:
+        environs[31337] = shown
+        assert "no recorded per-task creation identity" in (decide("kill 31337", tmp_path) or "")
+
+    def test_a_recycled_or_unreadable_pid_has_no_creation_proof(
+        self, general_pack: None, environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        assert "no recorded per-task creation identity" in (decide("kill 31337", tmp_path) or "")
+
+    def test_a_payload_without_a_session_id_has_no_creation_proof(
+        self, general_pack: None, environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        environs[31337] = " CLAUDE_CODE_SESSION_ID=s1"
+        message = decide_input(Input(command="kill 31337", cwd="/w"), tmp_path)
+        assert "no recorded per-task creation identity" in (message or "")
+
+    def test_a_protected_process_carrying_this_sessions_id_stays_protected(
+        self, general_pack: None, environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        environs.update({14575: " CLAUDE_CODE_SESSION_ID=s1", 40000: " CLAUDE_CODE_SESSION_ID=s1"})
+        assert "is an agent session" in (decide("kill 14575", tmp_path) or "")
+
+    def test_every_target_must_be_proven(self, general_pack: None, environs: dict[int, str], tmp_path: Path) -> None:
+        environs[31337] = " CLAUDE_CODE_SESSION_ID=s1"
+        assert "runs under claude 14462" in (decide("kill 31337 4242", tmp_path) or "")
+        assert "runs under claude 14462" in (decide("kill 4242 31337", tmp_path) or "")
+        assert "runs under claude 14462" in (decide("renice -n 5 -p 31337 4242", tmp_path) or "")
+
+
 class TestProtectedHosts:
     @pytest.mark.parametrize(
         ("command", "label"),
@@ -380,7 +445,7 @@ class TestStopTool:
 
 class TestAnswerNames:
     def test_ccn_is_found_with_a_minimal_worker_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        (ccn := tmp_path / "ccn").write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"body": "close term_x"}\'\n')
+        (ccn := tmp_path / "ccn").write_text("#!/bin/sh\nprintf '%s\\n' '{\"body\": \"close term_x\"}'\n")
         ccn.chmod(0o755)
         monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path),))
