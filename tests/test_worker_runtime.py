@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ import pytest
 
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO, bound_buffers
+from captain_hook.dispatch import completion_key
 from captain_hook.snapshots.client import AttachmentLimit, EvidenceIncomplete, GraphEvidenceExpired
 from captain_hook.types import Event, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -147,7 +148,8 @@ def runtime_with(state: app.State, complete: list[str]) -> ProductRuntime:
 def test_guard_completes_once_every_mandatory_hook_for_the_event_ran() -> None:
     state = app.State()
     state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("second_guard")))
-    response, _ = runtime_with(state, [hook.state_key for hook in state.hooks]).dispatch(request(mandatory=True))
+    completed = [completion_key(hook, ordinal) for ordinal, hook in enumerate(state.hooks)]
+    response, _ = runtime_with(state, completed).dispatch(request(mandatory=True))
     assert response.guard == "completed"
     assert response.message()["guard"] == "completed"
     assert response.stdout == "discovered out\n"
@@ -156,7 +158,7 @@ def test_guard_completes_once_every_mandatory_hook_for_the_event_ran() -> None:
 def test_guard_is_reported_only_to_a_mandatory_request() -> None:
     state = app.State()
     state.hooks.append(mandatory_hook("guard_sessions"))
-    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request())
+    response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)]).dispatch(request())
     assert response.guard == ""
     assert "guard" not in response.message()
 
@@ -173,7 +175,7 @@ def test_guard_is_reported_only_to_a_mandatory_request() -> None:
 def test_guard_stays_empty_unless_every_mandatory_hook_completed(hooks: list[str], complete: list[str]) -> None:
     state = app.State()
     state.hooks.extend(mandatory_hook(name) for name in hooks)
-    completed = [hook.state_key for hook in state.hooks if hook.name in complete]
+    completed = [completion_key(hook, ordinal) for ordinal, hook in enumerate(state.hooks) if hook.name in complete]
     response, _ = runtime_with(state, completed).dispatch(request(mandatory=True))
     assert response.guard == ""
 
@@ -221,12 +223,33 @@ def test_guard_ignores_a_load_error_in_a_pack_without_mandatory_hooks() -> None:
 def test_guard_counts_only_the_mandatory_hooks_registered_for_the_event() -> None:
     state = app.State()
     state.hooks.extend((mandatory_hook("permission_guard", Event.PermissionRequest), mandatory_hook("guard_sessions")))
-    response, _ = runtime_with(state, [state.hooks[1].state_key]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(state, [completion_key(state.hooks[1], 0)]).dispatch(request(mandatory=True))
     assert response.guard == "completed"
-    response, _ = runtime_with(state, [state.hooks[1].state_key]).dispatch(
+    response, _ = runtime_with(state, [completion_key(state.hooks[1], 0)]).dispatch(
         request(event="PermissionRequest", mandatory=True)
     )
     assert response.guard == ""
+
+
+def test_a_completion_recorded_twice_does_not_stand_in_for_a_sibling() -> None:
+    state = app.State()
+    state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("second_guard")))
+    response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)] * 2).dispatch(request(mandatory=True))
+    assert response.guard == ""
+    assert '"permissionDecision": "deny"' in response.stdout
+    assert "second_guard did not complete (left unrun)" in response.stdout
+
+
+def test_the_reserved_lane_follows_the_loaded_registry() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+    runtime = runtime_with(state, [completion_key(state.hooks[0], 0)])
+    assert not runtime.guarded(request())
+    assert runtime.guarded(request(mandatory=True))
+    runtime.dispatch(request())
+    assert runtime.guarded(request())
+    assert not runtime.guarded(request(event="PermissionRequest"))
+    assert not runtime.guarded(replace(request(), root="/elsewhere"))
 
 
 def test_guard_stays_empty_when_dispatch_fails() -> None:
@@ -234,7 +257,7 @@ def test_guard_stays_empty_when_dispatch_fails() -> None:
     state.hooks.append(mandatory_hook("guard_sessions"))
 
     def fail(*_: object, **__: object) -> tuple[None, object]:
-        reqenv.note_mandatory_completed(state.hooks[0].state_key)
+        reqenv.note_mandatory_completed(completion_key(state.hooks[0], 0))
         raise ValueError("broken hook")
 
     runtime = ProductRuntime(

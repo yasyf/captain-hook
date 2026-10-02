@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
 from copy import copy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -215,7 +215,10 @@ def _execute_hook(
     handler runs (reserve); anything but a delivered truthy result gives the slot back under a
     second lock (release) — a falsy result, an ``Exception``, or an abnormal ``BaseException``
     (``SystemExit``/``KeyboardInterrupt``), which releases and then re-propagates so the abort is
-    not silently swallowed. Uncapped hooks (``max_fires is None``) skip the lock entirely.
+    not silently swallowed. A truthy result reached once nobody waits on it any more (the caller's
+    deadline passed, or dispatch gave up on the event) is not delivered either: :func:`deliver`
+    unwinds it as :class:`captain_hook.util.reqenv.Abandoned` before any ledger write, so the slot
+    comes back the same way. Uncapped hooks (``max_fires is None``) skip the lock entirely.
     """
     hook_session_dir = (session_dir / entry.state_key / (evt.agent_id or "main")) if session_dir else None
     if hook_session_dir:
@@ -223,26 +226,29 @@ def _execute_hook(
     store = SessionStore(hook_session_dir)
 
     if entry.spec.max_fires is None:
-        if result := run_handler(entry, evt):
-            record_fire(entry, evt, result)
-        return result
+        return deliver(entry, evt, run_handler(entry, evt))
 
     with store[HookState].mutate() as hook_state:
         if hook_state.fire_count >= entry.spec.max_fires:
             return None
         hook_state.fire_count += 1
 
-    delivered = False
+    delivered: HookResult | None = None
     try:
-        if result := run_handler(entry, evt):
-            delivered = True
-            record_fire(entry, evt, result)
-            return result
-        return None
+        delivered = deliver(entry, evt, run_handler(entry, evt))
+        return delivered
     finally:
-        if not delivered:
+        if delivered is None:
             with store[HookState].mutate() as hook_state:
                 hook_state.fire_count -= 1
+
+
+def deliver(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult | None) -> HookResult | None:
+    if not result:
+        return None
+    reqenv.checkpoint()
+    record_fire(entry, evt, result)
+    return result
 
 
 class FirstBlock:
@@ -635,50 +641,74 @@ def prepare_hook_events(
     return [entries[index] for index in kept], [forks[index] for index in kept]
 
 
-def mandatory_budget(left: float, margin: float) -> float:
-    """Seconds a mandatory hook may run with *left* before the caller's deadline: less *margin* when that fits.
+def completion_key(entry: RegisteredHook, ordinal: int) -> str:
+    return f"{entry.state_key}#{ordinal}"
 
-    Never past the caller's own deadline: a request already inside the margin gets what remains, not a
-    floor that would outlive the transport.
+
+def mandatory_completions(event: Event) -> dict[str, RegisteredHook]:
+    """The completion each of *event*'s ``mandatory=True`` registrations records, keyed per registration.
+
+    Two registrations sharing a state key share one session directory but each owes the event its
+    own verdict, so the key carries the registration's place among the event's mandatory hooks and
+    the worker can hold every registration to exactly one completion.
     """
-    return left - margin if left > margin else left
+    return {completion_key(hook, ordinal): hook for ordinal, hook in enumerate(get_mandatory_hooks(event))}
 
 
-@contextmanager
-def mandatory_deadline(margin: float) -> Iterator[None]:
-    """Bound the running mandatory hook to :func:`mandatory_budget`; an unbounded request stays unbounded.
+@dataclass(frozen=True, slots=True)
+class MandatoryBound:
+    """The absolute deadlines one event's mandatory hooks run under, fixed once when the event starts.
 
-    An inner call that clamps to the deadline (an LLM call, a transcript read) therefore gets a bound
-    that leaves the reply its margin rather than the client's whole timeout.
+    ``deadline_unix_ms`` is the hooks' own: the caller's deadline less the reply margin when that
+    fits, the caller's own once the request is already inside the margin, ``None`` for the cold
+    CLI. ``cutoff`` is where :func:`collect_mandatory` stops waiting,
+    :data:`MANDATORY_COLLECT_SLACK_SECONDS` past the hooks' deadline and never past the caller's;
+    bound as the hooks' abandon signal, a verdict reached after it unwinds at its
+    :func:`captain_hook.util.reqenv.checkpoint` instead of recording a completion or keeping a
+    fire slot. Both are absolute, so a pause between reading the clock and binding never moves
+    either later.
     """
-    if (left := reqenv.seconds_left()) is None:
-        yield
-        return
-    with reqenv.deadline_in(mandatory_budget(left, margin)):
-        yield
+
+    deadline_unix_ms: int | None
+    cutoff: reqenv.Cutoff
+
+    @classmethod
+    def of(cls, margin: float) -> MandatoryBound:
+        if (ov := reqenv.current()) is None or ov.deadline_unix_ms == 0:
+            return cls(None, reqenv.Cutoff())
+        deadline = ov.deadline_unix_ms if reqenv.deadline_within(margin) else ov.deadline_unix_ms - int(margin * 1000)
+        slack = int(MANDATORY_COLLECT_SLACK_SECONDS * 1000)
+        return cls(deadline, reqenv.Cutoff(min(ov.deadline_unix_ms, deadline + slack)))
+
+    def deadline(self) -> AbstractContextManager[None]:
+        return nullcontext() if self.deadline_unix_ms is None else reqenv.deadline_at(self.deadline_unix_ms)
 
 
 def run_mandatory(
     entry: RegisteredHook,
     evt: BaseHookEvent,
     session_dir: Path | None,
-    margin: float,
+    ordinal: int,
+    bound: MandatoryBound,
 ) -> HookResult | None:
-    """Run one mandatory hook under its own deadline and record its completion.
+    """Run one mandatory hook under the event's :class:`MandatoryBound` and record its completion.
 
-    Incomplete transcript evidence leaves the hook unrun and records nothing; a deadline already
-    passed when the hook starts, or any other exception, is the whole event's and propagates
-    through the hook's future.
+    Incomplete transcript evidence leaves the hook unrun and records nothing; a cutoff already
+    passed when the hook starts or reached by the time it returns, or any other exception, is the
+    whole event's and propagates through the hook's future.
     """
-    if reqenv.deadline_within(0.0):
+    if bound.cutoff.is_set():
         raise MandatoryDeadlinePassed(f"{entry.name}: the caller's deadline passed while the hook was queued")
     try:
-        with mandatory_deadline(margin), surfacing_handler_errors(), foreground_evidence(MANDATORY_WORK_SECONDS):
+        with bound.deadline(), surfacing_handler_errors(), foreground_evidence(MANDATORY_WORK_SECONDS):
             result = (
                 execute_hook(entry, evt, session_dir)
                 if not skips_event(entry.spec, evt) and matches_conditions(entry.spec, evt)
                 else None
             )
+        reqenv.checkpoint()
+    except reqenv.Abandoned:
+        raise MandatoryDeadlinePassed(f"{entry.name}: finished past the caller's deadline") from None
     except EvidenceIncomplete as exc:
         if not fails_open(exc):
             raise
@@ -686,7 +716,7 @@ def run_mandatory(
             "mandatory hook left unrun: evidence incomplete"
         )
         return None
-    reqenv.note_mandatory_completed(entry.state_key)
+    reqenv.note_mandatory_completed(completion_key(entry, ordinal))
     return result
 
 
@@ -696,7 +726,7 @@ def run_mandatory_group(
     futures: Sequence[Future[HookResult | None]],
     events: Sequence[BaseHookEvent],
     session_dir: Path | None,
-    margin: float,
+    bound: MandatoryBound,
 ) -> None:
     """Run one state-key group's mandatory hooks in registration order, settling each entry's own future.
 
@@ -705,40 +735,43 @@ def run_mandatory_group(
     then skips, and a deny the second would have rendered is lost. A raising hook settles its own
     future and cancels the rest of its group.
     """
-    for position, index in enumerate(group):
-        future = futures[index]
-        if not future.set_running_or_notify_cancel():
-            continue
-        try:
-            future.set_result(run_mandatory(entries[index], events[index], session_dir, margin))
-        except BaseException as exc:
-            future.set_exception(exc)
-            for later in group[position + 1 :]:
-                futures[later].cancel()
-            return
+    with reqenv.abandonable(bound.cutoff):
+        for position, index in enumerate(group):
+            future = futures[index]
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(run_mandatory(entries[index], events[index], session_dir, index, bound))
+            except BaseException as exc:
+                future.set_exception(exc)
+                for later in group[position + 1 :]:
+                    futures[later].cancel()
+                return
 
 
 def collect_mandatory(
-    entries: Sequence[RegisteredHook], futures: Sequence[Future[HookResult | None]], margin: float
+    entries: Sequence[RegisteredHook], futures: Sequence[Future[HookResult | None]], cutoff: reqenv.Cutoff
 ) -> None:
-    """Wait for every mandatory future inside the caller's deadline, then raise the first failure in registration order.
+    """Wait for every mandatory future until *cutoff*, then raise the first failure in registration order.
 
-    The wait is :func:`mandatory_budget` plus :data:`MANDATORY_COLLECT_SLACK_SECONDS`, never past
-    the caller's deadline, unbounded for the cold CLI. Past it every hook not yet started is
-    cancelled and every one still running is the event's failure: a hook that ignores its budget
-    keeps its thread until it returns, but its late completion is never reported.
+    Past the cutoff every hook not yet started is cancelled and every one still running is the
+    event's failure, and the cutoff is set: a hook that ignores its budget keeps its thread until
+    it returns, but a verdict nobody waited for records no completion and keeps no fire slot. A
+    hook that raised dooms the event the same way.
     """
-    left = reqenv.seconds_left()
-    slack = MANDATORY_COLLECT_SLACK_SECONDS
-    wait(futures, timeout=None if left is None else max(0.0, min(left, mandatory_budget(left, margin) + slack)))
-    for future in futures:
-        future.cancel()
-    for entry, future in zip(entries, futures, strict=True):
-        if future.cancelled():
-            raise MandatoryDeadlinePassed(f"{entry.name}: left unrun at the caller's deadline")
-        if not future.done():
-            raise MandatoryDeadlinePassed(f"{entry.name}: still running at the caller's deadline")
-        future.result()
+    try:
+        wait(futures, timeout=cutoff.seconds_left())
+        for future in futures:
+            future.cancel()
+        for entry, future in zip(entries, futures, strict=True):
+            if future.cancelled():
+                raise MandatoryDeadlinePassed(f"{entry.name}: left unrun at the caller's deadline")
+            if not future.done():
+                raise MandatoryDeadlinePassed(f"{entry.name}: still running at the caller's deadline")
+            future.result()
+    except BaseException:
+        cutoff.set()
+        raise
 
 
 def dispatch_mandatory(
@@ -753,9 +786,10 @@ def dispatch_mandatory(
     :func:`mandatory_pool`, so a slow one never holds the guard registered after it behind it, and
     each hook records its completion in :func:`captain_hook.util.reqenv.mandatory_completed`
     whether its conditions matched, its own opt-outs (:func:`captain_hook.app.skips_event`) left
-    the event alone, or it ran to a verdict. Each hook runs under :func:`mandatory_deadline`, the
-    caller's deadline less *margin*, so an inner call that honors the deadline returns while the
-    reply can still be delivered, and :func:`collect_mandatory` waits no longer than that.
+    the event alone, or it ran to a verdict. Each hook runs under the event's
+    :class:`MandatoryBound`, the caller's deadline less *margin*, so an inner call that honors the
+    deadline returns while the reply can still be delivered, and :func:`collect_mandatory` waits
+    no longer than that.
     Incomplete transcript evidence records nothing — a mandatory hook is evidence-free by
     contract, so a fail-open skip leaves it unrun — and any other exception, a handler's included,
     is the whole event's: a crashed mandatory hook must read as no completion, never as a verdict.
@@ -780,10 +814,11 @@ def dispatch_mandatory(
     futures: list[Future[HookResult | None]] = [Future() for _ in entries]
     for future, fork in zip(futures, forks, strict=True):
         future.add_done_callback(lambda _, transcript=fork.ctx.transcript: release_transcript(transcript))
+    bound = MandatoryBound.of(margin)
     pool = mandatory_pool()
     for group in hook_groups(entries):
-        pool.submit(copy_context().run, run_mandatory_group, group, entries, futures, forks, session_dir, margin)
-    collect_mandatory(entries, futures, margin)
+        pool.submit(copy_context().run, run_mandatory_group, group, entries, futures, forks, session_dir, bound)
+    collect_mandatory(entries, futures, bound.cutoff)
     return entries, futures
 
 

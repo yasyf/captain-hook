@@ -41,6 +41,24 @@ class Abandoned(BaseException):
     """
 
 
+class Cutoff(threading.Event):
+    """The signal that nobody waits on the running hooks any more: set by hand, or reached on the clock.
+
+    A :func:`checkpoint` under it unwinds once the collector gave up, or once the absolute
+    *deadline_unix_ms* passed while a descheduled collector had not yet said so.
+    """
+
+    def __init__(self, deadline_unix_ms: int | None = None) -> None:
+        super().__init__()
+        self.deadline_unix_ms = deadline_unix_ms
+
+    def is_set(self) -> bool:
+        return super().is_set() or (self.deadline_unix_ms is not None and time.time() * 1000 >= self.deadline_unix_ms)
+
+    def seconds_left(self) -> float | None:
+        return None if self.deadline_unix_ms is None else max(0.0, self.deadline_unix_ms / 1000 - time.time())
+
+
 _OVERRIDES: ContextVar[RequestOverrides | None] = ContextVar("captain_hook_request", default=None)
 _ABANDONED: ContextVar[threading.Event | None] = ContextVar("captain_hook_abandoned", default=None)
 
@@ -114,6 +132,16 @@ def deadline_in(seconds: float) -> Generator[None]:
         yield
         return
     with use_request(replace(ov, deadline_unix_ms=int((time.time() + seconds) * 1000))):
+        yield
+
+
+@contextmanager
+def deadline_at(unix_ms: int) -> Generator[None]:
+    """Rebind the current request's deadline to the absolute *unix_ms*; the cold CLI stays unbounded."""
+    if (ov := _OVERRIDES.get()) is None:
+        yield
+        return
+    with use_request(replace(ov, deadline_unix_ms=unix_ms)):
         yield
 
 
