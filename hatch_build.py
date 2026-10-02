@@ -312,6 +312,7 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
     events = ", ".join(literal(event) for event in definition["events"])
     folds = ", ".join(f"{rune_literal(source)}: {literal(target)}" for source, target in definition["folds"].items())
     kinds = "".join(f"    {literal(kind)},\n" for kind in definition["kinds"])
+    exempt_heads = "".join(f"    {literal(head)},\n" for head in definition["exempt_heads"])
     return (
         f"{GUARD_HEADER}\n"
         "from __future__ import annotations\n\n"
@@ -323,6 +324,7 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         f"EVENTS: frozenset[str] = frozenset({{{events}}})\n"
         f"QUOTING: str = {wrapped_literal(definition['quoting'])}\n"
         f"GUARDED: str = {wrapped_literal(definition['guarded'])}\n"
+        f"EXEMPT_HEADS: tuple[str, ...] = (\n{exempt_heads})\n"
         f"FOLDS: dict[str, str] = {{{folds}}}\n"
         f"KINDS: tuple[str, ...] = (\n{kinds})\n"
         f"REASON: str = {wrapped_literal(definition['reason'])}\n"
@@ -330,7 +332,11 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         f"PASS_EXIT: int = {definition['pass_exit']}\n"
         "GUARDED_WORD: re.Pattern[str] = re.compile(GUARDED, re.IGNORECASE | re.ASCII)\n"
         "QUOTING_CHARS: re.Pattern[str] = re.compile(QUOTING)\n"
-        "FOLD_TABLE: dict[int, str] = str.maketrans(FOLDS)\n\n\n"
+        "FOLD_TABLE: dict[int, str] = str.maketrans(FOLDS)\n"
+        'ASSIGNMENT: re.Pattern[str] = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")\n'
+        'OPAQUE_SHELL: tuple[str, ...] = ("$(", "`", "<(", ">(")\n'
+        'SEGMENT_BREAKS: frozenset[str] = frozenset(";\\n|()")\n'
+        "QUOTED_ESCAPES: frozenset[str] = frozenset('$`\"\\\\\\n')\n\n\n"
         "def names_guarded(text: str) -> bool:\n"
         '    return GUARDED_WORD.search(QUOTING_CHARS.sub("", text).translate(FOLD_TABLE)) is not None\n\n\n'
         "# isinstance, not match: the plugin's bin/hook runs this under the first python3 on PATH, stock macOS 3.9 "
@@ -347,6 +353,83 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         "    if isinstance(value, dict):\n"
         "        return any(names_guarded_value(item) for item in cast(dict[object, object], value).values())\n"
         "    return False\n\n\n"
+        "def first_party_command(tool_input: object) -> bool:\n"
+        "    if not isinstance(tool_input, dict):\n"
+        "        return False\n"
+        '    command = cast(dict[object, object], tool_input).get("command")\n'
+        "    if not isinstance(command, str) or any(opaque in command for opaque in OPAQUE_SHELL):\n"
+        "        return False\n"
+        "    segments = shell_segments(command)\n"
+        "    return segments is not None and all(exempt_segment(words) for words in segments)\n\n\n"
+        "def exempt_segment(words: list[tuple[str, str, bool]]) -> bool:\n"
+        "    for raw, cooked, redirect in words:\n"
+        "        if ASSIGNMENT.match(raw) is None:\n"
+        '            return not redirect and cooked.rpartition("/")[2] in EXEMPT_HEADS\n'
+        "    return True\n\n\n"
+        "def shell_segments(command: str) -> list[list[tuple[str, str, bool]]] | None:\n"
+        "    segments: list[list[tuple[str, str, bool]]] = [[]]\n"
+        "    raw: list[str] = []\n"
+        "    cooked: list[str] = []\n"
+        "    started = redirect = after_redirect = False\n\n"
+        "    def end_word() -> None:\n"
+        "        nonlocal started, redirect\n"
+        "        if started:\n"
+        '            segments[-1].append(("".join(raw), "".join(cooked), redirect))\n'
+        "        raw.clear()\n"
+        "        cooked.clear()\n"
+        "        started = redirect = False\n\n"
+        "    index = 0\n"
+        "    while index < len(command):\n"
+        "        char = command[index]\n"
+        "        redirecting = False\n"
+        '        if char == "\\\\" and index + 1 == len(command):\n'
+        "            raw.append(char)\n"
+        "            cooked.append(char)\n"
+        "            started = True\n"
+        '        elif char == "\\\\":\n'
+        "            index += 1\n"
+        '            if command[index] != "\\n":\n'
+        "                raw.append(command[index - 1 : index + 1])\n"
+        "                cooked.append(command[index])\n"
+        "                started = True\n"
+        '        elif char == "\'":\n'
+        '            end = command.find("\'", index + 1)\n'
+        "            if end < 0:\n"
+        "                return None\n"
+        "            raw.append(command[index : end + 1])\n"
+        "            cooked.append(command[index + 1 : end])\n"
+        "            started = True\n"
+        "            index = end\n"
+        "        elif char == '\"':\n"
+        "            end = index + 1\n"
+        "            while end < len(command) and command[end] != '\"':\n"
+        '                escaped = command[end] == "\\\\" and end + 1 < len(command) and '
+        "command[end + 1] in QUOTED_ESCAPES\n"
+        "                end += escaped\n"
+        '                if not (escaped and command[end] == "\\n"):\n'
+        "                    cooked.append(command[end])\n"
+        "                end += 1\n"
+        "            if end == len(command):\n"
+        "                return None\n"
+        "            raw.append(command[index : end + 1])\n"
+        "            started = True\n"
+        "            index = end\n"
+        '        elif char in " \\t":\n'
+        "            end_word()\n"
+        '        elif char in SEGMENT_BREAKS or (char == "&" and not after_redirect and '
+        'command[index + 1 : index + 2] != ">"):\n'
+        "            end_word()\n"
+        "            segments.append([])\n"
+        "        else:\n"
+        "            raw.append(char)\n"
+        "            cooked.append(char)\n"
+        "            started = True\n"
+        '            redirecting = char in "<>"\n'
+        "            redirect = redirect or redirecting\n"
+        "        after_redirect = redirecting\n"
+        "        index += 1\n"
+        "    end_word()\n"
+        "    return segments\n\n\n"
         "def mandatory(event: str, payload: bytes) -> bool:\n"
         "    if event not in EVENTS:\n"
         "        return False\n"
@@ -357,6 +440,8 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         "    if not isinstance(fields, dict):\n"
         "        return False\n"
         "    payload_fields = cast(dict[object, object], fields)\n"
+        '    if payload_fields.get("tool_name") == "Bash" and first_party_command(payload_fields.get("tool_input")):\n'
+        "        return False\n"
         '    return names_guarded_value(payload_fields.get("tool_name")) or '
         'names_guarded_value(payload_fields.get("tool_input"))\n\n\n'
         "def deny_envelope(event: str, kind: str) -> str:\n"

@@ -2,6 +2,7 @@
   "events": ["PreToolUse", "PermissionRequest"],
   "quoting": "[\\\\'\"\\[\\]]",
   "guarded": "\\b(kill|pkill|killall|killall5|fuser|skill|snice|kill-port|orca|launchctl|osascript|shutdown|reboot|halt|poweroff|renice|tmux|softwareupdate|pmset|caffeinate|setsid|builtin|noglob|stdbuf|unbuffer|script|watch|parallel|chrt|ionice|taskset|arch|su|chroot|find)\\b",
+  "exempt_heads": ["cc-slack", "ccn", "cc-notes", "cc-present", "cc-transcript", "cat", "echo", "grep", "head", "jq", "tail", "wc"],
   "folds": {
     "İ": "i",
     "ı": "i",

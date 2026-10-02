@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from capt_hook_client import guard_literal as shim
+from captain_hook import Allow
 from captain_hook import guard_literal as guard
 from captain_hook.app import _state
 from captain_hook.builtin_packs.general.hooks import _sessions as session_guard
@@ -177,6 +178,7 @@ def test_rendered_constants_are_the_definition() -> None:
     assert guard.EVENTS == frozenset(DEFINITION["events"])
     assert guard.QUOTING == DEFINITION["quoting"]
     assert guard.GUARDED == DEFINITION["guarded"]
+    assert guard.EXEMPT_HEADS == tuple(DEFINITION["exempt_heads"])
     assert guard.FOLDS == DEFINITION["folds"]
     assert guard.KINDS == tuple(DEFINITION["kinds"])
     assert guard.REASON == DEFINITION["reason"]
@@ -245,35 +247,40 @@ def test_every_folded_spelling_of_every_guarded_name_matches_as_the_parent_did()
         assert guard.names_guarded(text), text
 
 
-def guard_rows() -> list[Any]:
+def guard_rows() -> list[tuple[Any, object]]:
     _state.hooks.clear()
     importlib.reload(sessions)
     guards = [hook for hook in _state.hooks if hook.spec.mandatory]
     assert len(guards) == len(_state.hooks) > 1
     assert all(hook.spec.tests for hook in guards)
-    return [key for hook in guards for key in hook.spec.tests or {} if not isinstance(key, str)]
+    return [
+        (key, expected)
+        for hook in guards
+        for key, expected in (hook.spec.tests or {}).items()
+        if not isinstance(key, str)
+    ]
 
 
-def test_every_inline_guard_row_the_prefilter_matches_is_mandatory() -> None:
+def test_every_inline_guard_row_the_prefilter_matches_is_mandatory_or_allowed() -> None:
     rows = guard_rows()
     matched = 0
-    for row in rows:
+    for row, expected in rows:
         evt = input_to_event(Event.PreToolUse, row)
         raw = json.dumps(evt._raw).encode()
         if session_guard.names_a_guarded_program(evt):
             matched += 1
-            assert guard.mandatory("PreToolUse", raw), row
-            assert guard.mandatory("PermissionRequest", raw), row
+            assert guard.mandatory("PreToolUse", raw) or isinstance(expected, Allow), row
+            assert guard.mandatory("PermissionRequest", raw) == guard.mandatory("PreToolUse", raw), row
     assert matched > 40
 
 
 @pytest.mark.parametrize("fixture", FIXTURES, ids=[fixture["name"] for fixture in FIXTURES])
-def test_every_fixture_the_prefilter_matches_is_mandatory(fixture: dict[str, Any]) -> None:
+def test_every_fixture_the_prefilter_matches_is_mandatory_or_first_party(fixture: dict[str, Any]) -> None:
     if fixture["event"] not in guard.EVENTS:
         return
     evt = Event[fixture["event"]].event_class(_raw=fixture["payload"], ctx=make_ctx())
     if session_guard.names_a_guarded_program(evt):
-        assert fixture["mandatory"] is True
+        assert fixture["mandatory"] or guard.first_party_command(fixture["payload"]["tool_input"])
 
 
 @pytest.mark.parametrize(
