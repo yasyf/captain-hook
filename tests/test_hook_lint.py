@@ -237,6 +237,32 @@ class TestEscapeNotation:
     def test_hand_parsed_escape_is_flagged(self, source: str) -> None:
         assert ("code", "parses the ccx escape by hand; match it with Annotated(...)") in findings(source)
 
+    @pytest.mark.parametrize(
+        ("message", "escape"),
+        [
+            ("Raw reads stay off the root. Delegate, or end the command with `# root:raw`.", "root:raw"),
+            ("Repeat dispatches need a marker. Start the prompt with a `tooling-lane: <key>` line.", "tooling-lane:"),
+            ("Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=0` to run as written.", "CAPT_HOOK_CCX_RAW=0"),
+            ("Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=on` to run as written.", "CAPT_HOOK_CCX_RAW=on"),
+        ],
+    )
+    def test_retired_escape_in_copy_is_flagged(self, message: str, escape: str) -> None:
+        assert copy_violations(message) == [
+            f"retired escape {escape!r}; offer `# ccx:raw`, `CAPT_HOOK_CCX_RAW=1`, or a `ccx:` line"
+        ]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Stack writes go through ccx. Run `ccx vcs stack submit`, or end the command with `# ccx:raw`.",
+            "Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=1` for the session to run as written.",
+            "Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=true` for the session to run as written.",
+            "Repeat dispatches need a marker. Start the prompt with a `ccx: tooling-lane=<key>` line.",
+        ],
+    )
+    def test_current_escape_in_copy_is_clean(self, message: str) -> None:
+        assert copy_violations(message) == []
+
     def test_escape_in_messages_and_test_inputs_is_clean(self) -> None:
         assert not findings(
             """

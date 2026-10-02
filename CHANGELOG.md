@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-use versions by mode and git blob id, preserving shipped symlinks. Repairs are atomic,
   leave a `launcher restored:` line in the update log, and raise a `plugin launcher` fault for
   the next `SessionStart`. Run `capt-hook update launchers` by hand to check and repair now.
+- **`capt-hook lint` enforces the `ccx:` escape notation.** It flags code that parses an escape
+  marker by hand, a message that offers `# root:raw`, a bare `tooling-lane:` line, or a
+  `CAPT_HOOK_CCX_RAW` value other than `1`, `true`, or `yes`, and a blocking hook on Agent, Task,
+  Skill, Read, Grep, or Glob with neither an `Annotated` escape nor `confirm=`. The
+  authoring-hooks skill documents the notation.
 
 ### Changed
 

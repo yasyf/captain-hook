@@ -26,6 +26,9 @@ PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|etc|vs)\.", re.IGNORECASE)
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 ECHOED_INPUT = re.compile(r"\{[^{}]*\b(?:reasoning|user_prompt|prompt)\b[^{}]*\}")
+RETIRED_ESCAPE = re.compile(
+    r"root:raw|(?<![\w=-])tooling-lane:|CAPT_HOOK_CCX_RAW=(?!(?:1|true|yes)\b)[\w-]*", re.IGNORECASE
+)
 
 COPY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("quoted text", re.compile(r"""(?<!\w)["“'‘][^"”'’\n]*\s[^"”'’\n]*\s[^"”'’\n]*["”'’](?!\w)""")),
@@ -94,6 +97,10 @@ def copy_violations(text: str) -> list[str]:
         *([f"{len(sentences)} sentences; state the rule, then the remediation"] * (len(sentences) > MAX_SENTENCES)),
         *([f"{len(stripped)} chars; keep it to {MAX_CHARS}"] * (len(stripped) > MAX_CHARS)),
         *(["echoes the prompt or the judge's reasoning; state the rule instead"] * bool(ECHOED_INPUT.search(stripped))),
+        *(
+            f"retired escape {match.group(0)!r}; offer `# ccx:raw`, `CAPT_HOOK_CCX_RAW=1`, or a `ccx:` line"
+            for match in RETIRED_ESCAPE.finditer(stripped)
+        ),
         *(f"{name} {match.group(0)!r}" for name, pattern in COPY_RULES if (match := pattern.search(prose))),
     ]
 
