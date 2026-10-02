@@ -66,7 +66,34 @@ Code bar (every registration):
 - [ ] No try/except fallbacks or broad `except`; the dispatcher records a raising hook's fault
 - [ ] Zero comments; `TODO` and `WORKAROUND:` are the only exceptions
 - [ ] Inline tests: one input that fires, one benign neighbor that stays silent
+- [ ] Escapes and intent read through `Annotated(...)` or `evt.annotations`; never by parsing
+      `# ccx:raw`, `tooling-lane:`, or `CAPT_HOOK_CCX_RAW` by hand
+- [ ] Messages offer only the live escapes: `# ccx:raw`, `CAPT_HOOK_CCX_RAW=1`, or a `ccx:` line
+- [ ] A blocking hook names its escape: `skip_if=[Annotated(<key>)]`, `confirm=Confirm(rule=...)`,
+      or both; only security, merge, and session guards block with neither
 ```
+
+### Escape and intent annotations
+
+One notation carries every escape hatch and intent marker. `evt.annotations` maps `ccx:<key>[=<value>]`
+tokens from three carriers: a real comment on a Bash command (`gt submit  # ccx:raw`; quoted text and
+heredoc bodies never count), a whole `ccx: key=value ...` line in an Agent or Task prompt or in Skill
+args, and `CAPT_HOOK_CCX_RAW` set to `1`, `true`, or `yes` for `raw`; any other value, `0` included,
+contributes nothing. Keys in use: `raw` (run the command as written), `tooling-lane=<key>` (this
+dispatch is the tooling lane for `<key>`), and
+`role=<fix|helper|reader|watch|export|evidence|handoff|comms|triage>` (a lane's job).
+
+`# ccx:raw` is the single command escape. `# root:raw` and the bare `tooling-lane: <key>` prompt line
+are retired; a hook neither honors nor offers them.
+
+- Skip on an annotation with `skip_if=[Annotated("raw")]`. `Annotated("role", "evidence",
+  scope="session")` reads only the session's dispatch prompt, so a command can never claim a role.
+- Route a block that tends to misfire through a small model with `confirm=Confirm(rule="<the one
+  sentence the block protects>")` on `hook(...)` or `evt.block(...)`. The block lands only when the
+  model confidently confirms the match; otherwise the call runs with a one-line note.
+- `capt-hook lint` flags hand-parsed escapes, a message that offers a retired escape or a
+  `CAPT_HOOK_CCX_RAW` value other than `1`, `true`, or `yes`, and a blocking hook on Agent, Task,
+  Skill, Read, Grep, or Glob that carries neither an `Annotated` escape nor `confirm=`.
 
 The history behind a rule (who asked for it, when, after which incident) belongs in the
 PR body and the commit message. The agent reading a hook message needs the rule and the

@@ -220,3 +220,89 @@ class TestCli:
         write_hook(hooks_dir, CLEAN_HOOK)
         result = run_cli("test", hooks_dir=str(hooks_dir))
         assert result.returncode == 0, result.stdout
+
+
+class TestEscapeNotation:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "RAW = re.compile(r'#\\s*ccx:raw')",
+            "skip = 'ccx:raw' in evt.command.raw",
+            "skip = evt.command.raw.endswith('# root:raw')",
+            "lane = prompt.partition('tooling-lane:')",
+            "raw = os.environ.get('CAPT_HOOK_CCX_RAW')",
+            "raw = os.environ['CAPT_HOOK_CCX_RAW']",
+        ],
+    )
+    def test_hand_parsed_escape_is_flagged(self, source: str) -> None:
+        assert ("code", "parses the ccx escape by hand; match it with Annotated(...)") in findings(source)
+
+    @pytest.mark.parametrize(
+        ("message", "escape"),
+        [
+            ("Raw reads stay off the root. Delegate, or end the command with `# root:raw`.", "root:raw"),
+            ("Repeat dispatches need a marker. Start the prompt with a `tooling-lane: <key>` line.", "tooling-lane:"),
+            ("Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=0` to run as written.", "CAPT_HOOK_CCX_RAW=0"),
+            ("Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=on` to run as written.", "CAPT_HOOK_CCX_RAW=on"),
+        ],
+    )
+    def test_retired_escape_in_copy_is_flagged(self, message: str, escape: str) -> None:
+        assert copy_violations(message) == [
+            f"retired escape {escape!r}; offer `# ccx:raw`, `CAPT_HOOK_CCX_RAW=1`, or a `ccx:` line"
+        ]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Stack writes go through ccx. Run `ccx vcs stack submit`, or end the command with `# ccx:raw`.",
+            "Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=1` for the session to run as written.",
+            "Stack writes go through ccx. Set `CAPT_HOOK_CCX_RAW=true` for the session to run as written.",
+            "Repeat dispatches need a marker. Start the prompt with a `ccx: tooling-lane=<key>` line.",
+        ],
+    )
+    def test_current_escape_in_copy_is_clean(self, message: str) -> None:
+        assert copy_violations(message) == []
+
+    def test_escape_in_messages_and_test_inputs_is_clean(self) -> None:
+        assert not findings(
+            """
+            hook(
+                Event.PreToolUse,
+                only_if=[Runs("gt", "submit")],
+                skip_if=[Annotated("raw")],
+                message="Stack writes go through ccx. Run `ccx vcs stack submit`, or end the command with `# ccx:raw`.",
+                block=True,
+                tests={Input(command="gt submit  # ccx:raw"): Allow()},
+            )
+            """
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "hook(Event.PreToolUse, only_if=[Tool('Agent|Task')], message='m', block=True)",
+            "@on(Event.PreToolUse, only_if=[Tool('Read')])\ndef guard(evt):\n    return evt.block('m')",
+        ],
+    )
+    def test_unescaped_dispatch_or_read_block_is_flagged(self, source: str) -> None:
+        assert [detail for rule, detail in findings(source) if rule == "code"] == [
+            "blocks a dispatch or read with no escape; add skip_if=[Annotated(...)] or confirm=Confirm(...)"
+        ]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "hook(Event.PreToolUse, only_if=[Tool('Agent')], skip_if=[Annotated('role')], message='m', block=True)",
+            "hook(Event.PreToolUse, only_if=[Tool('Agent')], message='m', block=True, confirm=Confirm(rule='r'))",
+            "hook(Event.PreToolUse, only_if=[Tool('Bash')], message='m', block=True)",
+            "@on(Event.PreToolUse, only_if=[Tool('Task')])\n"
+            "def guard(evt):\n"
+            "    return None if 'role' in evt.annotations else evt.block('m')",
+            "hook(Event.PreToolUse, only_if=[Tool('Agent')], message='m')",
+            "@on(Event.PreToolUse, only_if=[Tool('Read')])\n"
+            "def guard(evt):\n"
+            "    return evt.block('m', confirm=Confirm(rule='r'))",
+        ],
+    )
+    def test_escaped_or_unrelated_blocks_are_clean(self, source: str) -> None:
+        assert not [detail for rule, detail in findings(source) if rule == "code"]

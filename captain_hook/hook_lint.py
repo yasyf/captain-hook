@@ -26,6 +26,9 @@ PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|etc|vs)\.", re.IGNORECASE)
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 ECHOED_INPUT = re.compile(r"\{[^{}]*\b(?:reasoning|user_prompt|prompt)\b[^{}]*\}")
+RETIRED_ESCAPE = re.compile(
+    r"root:raw|(?<![\w=-])tooling-lane:|CAPT_HOOK_CCX_RAW=(?!(?:1|true|yes)\b)[\w-]*", re.IGNORECASE
+)
 
 COPY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("quoted text", re.compile(r"""(?<!\w)["“'‘][^"”'’\n]*\s[^"”'’\n]*\s[^"”'’\n]*["”'’](?!\w)""")),
@@ -61,6 +64,11 @@ COMMAND_TEXT = re.compile(r"\.raw\b|tool_input(?:\[|\.get\()[\"']command[\"']|^(
 TRANSCRIPT_FILES = re.compile(r"\.jsonl\b|\.claude/projects")
 BROAD_EXCEPTIONS = frozenset({"Exception", "BaseException"})
 COMMAND_PATTERN_CALLS = frozenset({"Command", "CommandCondition", "block_command", "warn_command"})
+ESCAPE_MARKERS = re.compile(r"ccx:raw|root:raw|tooling-lane:|^CAPT_HOOK_CCX_RAW$")
+TEXT_PARSERS = REGEX_METHODS | frozenset(
+    {"compile", "startswith", "endswith", "find", "rfind", "index", "count", "partition", "rpartition", "getenv", "get"}
+)
+CONTEXT_TOOLS = frozenset({"Agent", "Task", "Skill", "Read", "Grep", "Glob"})
 ALLOWED_COMMENT = re.compile(r"#!|#\s*(?:TODO|FIXME|WORKAROUND|noqa|type:|pyright:|ruff:|fmt:|pragma)")
 
 
@@ -89,6 +97,10 @@ def copy_violations(text: str) -> list[str]:
         *([f"{len(sentences)} sentences; state the rule, then the remediation"] * (len(sentences) > MAX_SENTENCES)),
         *([f"{len(stripped)} chars; keep it to {MAX_CHARS}"] * (len(stripped) > MAX_CHARS)),
         *(["echoes the prompt or the judge's reasoning; state the rule instead"] * bool(ECHOED_INPUT.search(stripped))),
+        *(
+            f"retired escape {match.group(0)!r}; offer `# ccx:raw`, `CAPT_HOOK_CCX_RAW=1`, or a `ccx:` line"
+            for match in RETIRED_ESCAPE.finditer(stripped)
+        ),
         *(f"{name} {match.group(0)!r}" for name, pattern in COPY_RULES if (match := pattern.search(prose))),
     ]
 
@@ -218,6 +230,90 @@ def code_violation(node: ast.AST) -> str | None:
             return None
 
 
+def keyword(call: ast.Call, name: str) -> ast.expr | None:
+    return next((kw.value for kw in call.keywords if kw.arg == name), None)
+
+
+def calls_named(node: ast.AST | None, name: str) -> list[ast.Call]:
+    return [] if node is None else [n for n in ast.walk(node) if isinstance(n, ast.Call) and callee(n) == name]
+
+
+def tool_names(call: ast.Call) -> set[str]:
+    return {
+        name
+        for tool in calls_named(keyword(call, "only_if"), "Tool")
+        for arg in tool.args
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+        for name in arg.value.split("|")
+    }
+
+
+def escapable(call: ast.Call) -> bool:
+    return keyword(call, "confirm") is not None or any(
+        calls_named(keyword(call, field), "Annotated") for field in ("skip_if", "only_if")
+    )
+
+
+def reads_annotations(node: ast.AST) -> bool:
+    return any(isinstance(n, ast.Attribute) and n.attr == "annotations" for n in ast.walk(node))
+
+
+def unescaped_context_blocks(tree: ast.Module) -> Iterator[ast.AST]:
+    for node in ast.walk(tree):
+        match node:
+            case ast.Call() if (
+                callee(node) == "hook"
+                and isinstance(block := keyword(node, "block"), ast.Constant)
+                and block.value is True
+                and tool_names(node) & CONTEXT_TOOLS
+                and not escapable(node)
+            ):
+                yield node
+            case ast.FunctionDef(decorator_list=decorators):
+                for on in (d for d in decorators if isinstance(d, ast.Call) and callee(d) == "on"):
+                    if tool_names(on) & CONTEXT_TOOLS and not escapable(on) and not reads_annotations(node):
+                        yield from (
+                            block
+                            for block in calls_named(node, "block")
+                            if isinstance(block.func, ast.Attribute) and keyword(block, "confirm") is None
+                        )
+
+
+def parent_map(tree: ast.Module) -> dict[int, ast.AST]:
+    return {id(child): parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+
+def parses_text(node: ast.AST, parent: ast.AST | None) -> bool:
+    match parent:
+        case ast.Compare():
+            return True
+        case ast.Call() if callee(parent) in TEXT_PARSERS:
+            return True
+        case ast.Subscript(value=value) if "environ" in ast.unparse(value):
+            return True
+        case _:
+            return False
+
+
+def escape_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
+    parents = parent_map(tree)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and ESCAPE_MARKERS.search(node.value)
+            and parses_text(node, parents.get(id(node)))
+        ):
+            yield Finding(path, node.lineno, "code", "parses the ccx escape by hand; match it with Annotated(...)")
+    for node in unescaped_context_blocks(tree):
+        yield Finding(
+            path,
+            getattr(node, "lineno", 1),
+            "code",
+            "blocks a dispatch or read with no escape; add skip_if=[Annotated(...)] or confirm=Confirm(...)",
+        )
+
+
 def code_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
     for node in ast.walk(tree):
         if (violation := code_violation(node)) is not None:
@@ -234,7 +330,12 @@ def lint_source(path: Path, source: str) -> list[Finding]:
     """Every finding in one hook file's source, ordered by line."""
     tree = ast.parse(source, filename=str(path))
     return sorted(
-        [*copy_findings(path, tree), *code_findings(path, tree), *comment_findings(path, source)],
+        [
+            *copy_findings(path, tree),
+            *code_findings(path, tree),
+            *escape_findings(path, tree),
+            *comment_findings(path, source),
+        ],
         key=lambda finding: (finding.line, finding.rule, finding.detail),
     )
 
