@@ -118,6 +118,22 @@ class TestProcessTable:
         assert [entry.pid for entry in snapshot.ancestors(5)] == [6, 7]
         assert snapshot.ancestors(8) == ()
 
+    def test_descendants_cover_every_generation_once(self) -> None:
+        snapshot = table(
+            row(1, 0, "/sbin/launchd"),
+            row(10, 1, "login"),
+            row(20, 10, "fish"),
+            row(30, 20, "claude"),
+            row(31, 20, "sleep 5"),
+            row(40, 1, "node server.js"),
+            row(50, 50, "self"),
+        )
+        assert {entry.pid for entry in snapshot.descendants(10)} == {20, 30, 31}
+        assert {entry.pid for entry in snapshot.descendants(1)} == {10, 20, 30, 31, 40}
+        assert snapshot.descendants(30) == ()
+        assert snapshot.descendants(50) == ()
+        assert snapshot.descendants(999) == ()
+
     def test_nearest_checks_the_pid_itself_then_ancestors(self) -> None:
         snapshot = table(row(1, 0, "launchd"), row(10, 1, "claude -p"), row(11, 10, "zsh -c hook"))
         assert (found := snapshot.nearest(11, lambda entry: entry.argv0 == "claude")) is not None

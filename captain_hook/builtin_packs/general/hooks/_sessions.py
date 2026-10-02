@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import shlex
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from functools import cached_property, partial, reduce
@@ -115,26 +117,66 @@ COMMAND_MARKERS = {
     "/WezTerm.app/": "a terminal emulator",
     "/Alacritty.app/": "a terminal emulator",
 }
+AGENT_SHIM_PREFIXES = ("cc-", "orca-")
 VERIFY = "Verify a pid you started with `ps -o pid,ppid,pgid,lstart,command -p <pid>`"
 KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
 RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
 SPELLING_LIMIT = 60
+PROBE_TIMEOUT = 2.0
 LAST_SCAN = threading.local()
+INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_TABLE = (
     "    1     0     1    0 Thu Jan  1 00:00:00 2026 /sbin/launchd\n"
     "  900     1   900  501 Thu Jan  1 00:00:00 2026 /Applications/Captain Hook.app/Contents/Helpers/capt-hookd serve\n"
     " 1445     1  1445  501 Thu Jan  1 00:00:00 2026 /Applications/Orca.app/Contents/MacOS/Orca\n"
     " 1743  1445  1743  501 Thu Jan  1 00:00:00 2026 /Applications/Orca.app/Contents/Frameworks/Orca Helper.app/"
     "Contents/MacOS/Orca Helper /Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/main/daemon-entry.js\n"
-    "14545  1743 14545    0 Thu Jan  1 00:00:00 2026 /usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c "
-    "orca-tcc-login /bin/zsh\n"
+    f"14545  1743 14545    0 Thu Jan  1 00:00:00 2026 {INLINE_LOGIN} /bin/zsh\n"
     "14550 14545 14550  501 Thu Jan  1 00:00:00 2026 -/bin/zsh -l\n"
     "14575 14550 14575  501 Thu Jan  1 00:00:00 2026 claude --dangerously-skip-permissions\n"
     "27103 14575 27103  501 Thu Jan  1 00:00:00 2026 /bin/zsh -c capt-hook run PreToolUse\n"
     "31337 14575 31337  501 Thu Jan  1 00:00:00 2026 sleep 60\n"
+    f"15000  1743 15000    0 Thu Jan  1 00:00:00 2026 {INLINE_LOGIN} /opt/homebrew/bin/fish\n"
+    "15001 15000 15001  501 Thu Jan  1 00:00:00 2026 -/opt/homebrew/bin/fish -l\n"
+    f"16000  1743 16000    0 Thu Jan  1 00:00:00 2026 {INLINE_LOGIN} /opt/homebrew/bin/fish\n"
+    "16001 16000 16001  501 Thu Jan  1 00:00:00 2026 -/opt/homebrew/bin/fish -l\n"
+    "16002 16001 16002  501 Thu Jan  1 00:00:00 2026 claude --dangerously-skip-permissions --effort xhigh\n"
+    f"17000  1743 17000    0 Thu Jan  1 00:00:00 2026 {INLINE_LOGIN} /opt/homebrew/bin/fish\n"
+    "17001 17000 17001  501 Thu Jan  1 00:00:00 2026 -/opt/homebrew/bin/fish -l\n"
+    "17002 17001 17002  501 Thu Jan  1 00:00:00 2026 /Users/dev/.daemonkit/cache/ab/cc-slack watch --channel C1\n"
 )
+INLINE_TERMINALS = {"term_idle": 15000, "term_agent": 16000, "term_shim": 17000, "term_gone": 18000}
+INLINE_OWNER_ANSWER = "0207568"
+INLINE_OWNER_TERMINAL = "term_c59a87bf-0000-4000-8000-000000000000"
+INLINE_COMMANDS = {
+    "ps -A -ww -o": INLINE_TABLE,
+    "orca terminal show": "{}",
+    **{
+        f"orca terminal show --terminal {handle} --json": json.dumps(
+            {"result": {"terminal": {"ptyId": f"pty-{handle}"}}}
+        )
+        for handle in INLINE_TERMINALS
+    },
+    "orca diagnostics memory --json": json.dumps(
+        {
+            "result": {
+                "worktrees": [
+                    {
+                        "sessions": [
+                            {"sessionId": f"pty-{handle}", "pid": pid} for handle, pid in INLINE_TERMINALS.items()
+                        ]
+                    }
+                ]
+            }
+        }
+    ),
+    "ccn answer show": "{}",
+    f"ccn answer show {INLINE_OWNER_ANSWER}": json.dumps(
+        {"body": f"Owner: close exactly {INLINE_OWNER_TERMINAL} and term_agent, nothing else."}
+    ),
+}
 
-guarded = partial(Input, commands={"ps -A -ww -o": INLINE_TABLE})
+guarded = partial(Input, commands=INLINE_COMMANDS)
 
 
 def nested(depth: int, payload: str, *, wrapper: str = "bash -c") -> str:
@@ -166,6 +208,10 @@ def is_agent(row: ProcessRow) -> bool:
     return proc.is_claude(row.command.split()) or row.argv0 in {"claude", "codex"}
 
 
+def hosts_agent(row: ProcessRow) -> bool:
+    return is_agent(row) or process_class(row) is not None or row.argv0.startswith(AGENT_SHIM_PREFIXES)
+
+
 def describe(row: ProcessRow) -> str:
     return f"pid {row.pid} (`{clip(row.command, 40)}`)"
 
@@ -193,14 +239,74 @@ class Ownership:
         return cls(table, table.nearest(start, is_agent), protected)
 
 
+def probe_timeout(reason: str) -> float | Unreadable:
+    budget = collect_budget(SYNC_DEADLINE_MARGIN_SECONDS)
+    if budget is None:
+        return PROBE_TIMEOUT
+    if budget < 0.5:
+        return Unreadable(f"the caller deadline is too close to {reason}")
+    return min(PROBE_TIMEOUT, budget - 0.25)
+
+
+def probe(argv: tuple[str, ...]) -> str | Unreadable:
+    if isinstance(timeout := probe_timeout(f"run `{argv[0]}`"), Unreadable):
+        return timeout
+    try:
+        done = subprocess.run(
+            argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return Unreadable(f"`{argv[0]}` could not run")
+    return done.stdout if done.returncode == 0 else Unreadable(f"`{argv[0]}` failed")
+
+
+def terminal_pid(handle: str) -> int | Unreadable:
+    shown = probe(("orca", "terminal", "show", "--terminal", handle, "--json"))
+    if isinstance(shown, Unreadable):
+        return shown
+    sweep = probe(("orca", "diagnostics", "memory", "--json"))
+    if isinstance(sweep, Unreadable):
+        return sweep
+    try:
+        pty = json.loads(shown)["result"]["terminal"]["ptyId"]
+        pids = {
+            session["sessionId"]: int(session["pid"])
+            for worktree in json.loads(sweep)["result"]["worktrees"]
+            for session in worktree.get("sessions", ())
+        }
+        return pids[pty]
+    except (ValueError, TypeError, KeyError):
+        return Unreadable("Orca reports no process for the terminal")
+
+
+def answer_names(answer: str, handle: str, cwd: Path | None) -> bool | Unreadable:
+    location = () if cwd is None else ("-R", str(cwd))
+    shown = probe(("ccn", "answer", "show", answer, "--json", *location))
+    if isinstance(shown, Unreadable):
+        return shown
+    try:
+        body = json.loads(shown)["body"]
+    except (ValueError, TypeError, KeyError):
+        return Unreadable("it has no body")
+    return isinstance(body, str) and re.search(rf"(?<![\w-]){re.escape(handle)}(?![\w-])", body) is not None
+
+
 class Facts:
     @cached_property
     def ownership(self) -> Ownership | Unreadable:
-        budget = collect_budget(SYNC_DEADLINE_MARGIN_SECONDS)
-        if budget is not None and budget < 0.5:
-            return Unreadable("the caller deadline is too close to read the process table")
-        table = proc.process_table(timeout=2.0 if budget is None else min(2.0, budget - 0.25))
+        if isinstance(timeout := probe_timeout("read the process table"), Unreadable):
+            return timeout
+        table = proc.process_table(timeout=timeout)
         return Unreadable("the process table could not be read") if table is None else Ownership.resolve(table)
+
+    def terminal_tree(self, handle: str) -> tuple[ProcessRow, ...] | Unreadable:
+        if isinstance(ownership := self.ownership, Unreadable):
+            return ownership
+        if isinstance(pid := terminal_pid(handle), Unreadable):
+            return pid
+        if (root := ownership.table.rows.get(pid)) is None:
+            return Unreadable(f"the terminal's process {pid} is not in the process table")
+        return (root, *ownership.table.descendants(pid))
 
 
 def unresolvable(spelling: str, reason: str, fix: str) -> str:
@@ -475,6 +581,7 @@ class Scan:
     raw: object
     facts: Facts = field(default_factory=Facts)
     calls: list[Call] = field(default_factory=list)
+    respelled: list[Call] = field(default_factory=list)
     unparsed: list[Unparsed] = field(default_factory=list)
 
     @classmethod
@@ -488,7 +595,15 @@ class Scan:
         LAST_SCAN.scan = scan
         return scan
 
-    def read(self, text: str, source: str, cwd: Path | str | None, unread: frozenset[str] = frozenset()) -> None:
+    def read(
+        self,
+        text: str,
+        source: str,
+        cwd: Path | str | None,
+        unread: frozenset[str] = frozenset(),
+        *,
+        respelled: bool = False,
+    ) -> None:
         line = safe_parse_command_line(text)
         bindings = dict.fromkeys(unread, Unknown(None))
         if not (calls := () if line is None else Cmd(line, raw=text, cwd=cwd, bindings=bindings).calls()):
@@ -498,12 +613,14 @@ class Scan:
         for call in calls:
             if (resolved := variants(call)) is not None:
                 for variant in resolved.texts:
-                    self.read(variant, source, call.cwd, unread | resolved.unread)
+                    self.read(variant, source, call.cwd, unread | resolved.unread, respelled=True)
                 continue
             self.calls.append(call)
+            if respelled:
+                self.respelled.append(call)
             if literal_head(call):
                 for payload, origin in payloads(call):
-                    self.read(payload, origin, call.cwd)
+                    self.read(payload, origin, call.cwd, respelled=respelled)
 
     @property
     def literal_calls(self) -> list[Call]:
