@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mandatory hook that reads the transcript gets a 15 s evidence budget, not the tool call's
+  0.75 s.** The foreground evidence budget for a `PreToolUse` dispatch is 0.75 s, shared by every
+  snapshot call the dispatch makes. On a loaded host a mandatory gate that reads the lane and root
+  transcripts exhausted it, raised `EvidenceIncomplete`, and the Slack write gate refused with "the
+  judge could not read this session's evidence". Mandatory hooks run first and to a verdict, so each
+  now runs inside a 15 s foreground scope that is handed back as it was for the advisory hooks.
 - **A lane's root excerpt keeps the earliest matches as well as the newest.** `root_excerpt` capped
   to the newest 20 matching events, so a quote that agents echoed more than 20 times after the user
   said it lost the user's own answer and a standing-grant mint was refused for a quote the user

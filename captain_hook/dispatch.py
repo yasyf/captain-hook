@@ -18,7 +18,7 @@ from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registrat
 from captain_hook.conditions import matches_conditions
 from captain_hook.confirm import confirmed
 from captain_hook.session import SessionStore
-from captain_hook.snapshots.client import EvidenceIncomplete, fails_open
+from captain_hook.snapshots.client import MANDATORY_WORK_SECONDS, EvidenceIncomplete, fails_open, foreground_evidence
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -639,7 +639,7 @@ def dispatch_mandatory(
         fork.ctx = evt.ctx.fork(fork_transcript(evt.ctx.transcript, entry.spec.transcript_events))
         fork.__dict__.pop("cmd", None)
         try:
-            with surfacing_handler_errors():
+            with surfacing_handler_errors(), foreground_evidence(MANDATORY_WORK_SECONDS):
                 result = (
                     execute_hook(entry, fork, session_dir)
                     if not skips_event(entry.spec, fork) and matches_conditions(entry.spec, fork)
