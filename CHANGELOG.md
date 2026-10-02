@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Adding lines to an over-budget comment blocks again.** The verbose-comment block now covers
+  an edit that lengthens a run already over budget; a same-length reword still only warns.
+- **The `git stash` block names a drop it allows.** Its copy resolves the entry's `stash@{N}`
+  from `git stash list` first, then applies and drops that literal ref.
+
 ### Added
 
 - **Hooks share one `ccx:` annotation notation for escapes and intent.**
