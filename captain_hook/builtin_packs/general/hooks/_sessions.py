@@ -7,13 +7,14 @@ import re
 import shlex
 import subprocess
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from functools import cached_property, partial, reduce
+from functools import partial, reduce
 from itertools import product
 from math import prod
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from cc_transcript.tools import BashCall
 from loguru import logger
@@ -22,7 +23,6 @@ from captain_hook import Event, Input, LambdaCondition, on
 from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
-from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
 from captain_hook.grants import Allowed, Evidence, Grants, Judge, Proposal, Rulings, StandingRulings
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
 from captain_hook.util import proc, reqenv
@@ -127,7 +127,7 @@ SPELLING_LIMIT = 60
 SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
 PROBE_TIMEOUT = 2.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
-LAST_SCAN = threading.local()
+SCAN_CACHE_LIMIT = 16
 IDLE_WAIT_MS = 1000
 SCREEN_LINES = 40
 PROMPT_WINDOW = 8
@@ -395,8 +395,7 @@ class Ownership:
 
 
 def probe_timeout(reason: str, ceiling: float = PROBE_TIMEOUT) -> float | Unreadable:
-    budget = collect_budget(SYNC_DEADLINE_MARGIN_SECONDS)
-    if budget is None:
+    if (budget := reqenv.seconds_left()) is None:
         return ceiling
     if budget < 0.5:
         return Unreadable(f"the caller deadline is too close to {reason}")
@@ -448,6 +447,8 @@ def terminal_pid(handle: str) -> int | Unreadable:
 class Facts:
     def __init__(self, session: str | None = None) -> None:
         self.session = session
+        self._guard = threading.Lock()
+        self._ownership: Ownership | Unreadable | None = None
 
     def started_here(self, row: ProcessRow) -> bool:
         if self.session is None or isinstance(timeout := probe_timeout("read a process environment"), Unreadable):
@@ -455,12 +456,13 @@ class Facts:
         shown = proc.environment(row, timeout=timeout)
         return shown is not None and set(SESSION_ENV.findall(shown)) == {self.session}
 
-    @cached_property
+    @property
     def ownership(self) -> Ownership | Unreadable:
-        if isinstance(timeout := probe_timeout("read the process table"), Unreadable):
-            return timeout
-        table = proc.process_table(timeout=timeout)
-        return Unreadable("the process table could not be read") if table is None else Ownership.resolve(table)
+        """The process table read once per event, however many guards ask for it from their own threads."""
+        with self._guard:
+            if self._ownership is None:
+                self._ownership = read_ownership()
+            return self._ownership
 
     def terminal_tree(self, handle: str) -> tuple[ProcessRow, ...] | Unreadable:
         if isinstance(ownership := self.ownership, Unreadable):
@@ -470,6 +472,13 @@ class Facts:
         if (root := ownership.table.rows.get(pid)) is None:
             return Unreadable(f"the terminal's process {pid} is not in the process table")
         return (root, *ownership.table.descendants(pid))
+
+
+def read_ownership() -> Ownership | Unreadable:
+    if isinstance(timeout := probe_timeout("read the process table"), Unreadable):
+        return timeout
+    table = proc.process_table(timeout=timeout)
+    return Unreadable("the process table could not be read") if table is None else Ownership.resolve(table)
 
 
 def unresolvable(spelling: str, reason: str, fix: str) -> str:
@@ -743,21 +752,36 @@ class Unparsed:
 
 @dataclass(slots=True)
 class Scan:
+    LOCK: ClassVar[threading.Lock] = threading.Lock()
+    CACHE: ClassVar[OrderedDict[int, Scan]] = OrderedDict()
     raw: object
     facts: Facts = field(default_factory=Facts)
     calls: list[Call] = field(default_factory=list)
     respelled: list[Call] = field(default_factory=list)
     unparsed: list[Unparsed] = field(default_factory=list)
+    guard: threading.Lock = field(default_factory=threading.Lock)
+    scanned: bool = False
 
     @classmethod
     def of(cls, evt: BaseHookEvent) -> Scan:
-        last: Scan | None = getattr(LAST_SCAN, "scan", None)
-        if last is not None and last.raw is evt._raw:
-            return last
-        scan = cls(evt._raw, Facts(evt._raw.get("session_id")))
-        for text in filter(names_guarded, candidate_texts(evt)):
-            scan.read(text.encode(errors="replace").decode(), f"this `{evt.tool_name}` payload", evt.cwd)
-        LAST_SCAN.scan = scan
+        """One scan per payload, shared by every guard of the event across the threads they run on.
+
+        Keyed by the payload's identity and kept alive with it for the last :data:`SCAN_CACHE_LIMIT`
+        payloads, so interleaved events each keep their own scan, and read once under the scan's
+        own lock, so the guards that find it first block on the parse instead of repeating it.
+        """
+        with cls.LOCK:
+            scan = cls.CACHE.get(id(evt._raw))
+            if scan is None or scan.raw is not evt._raw:
+                scan = cls.CACHE[id(evt._raw)] = cls(evt._raw, Facts(evt._raw.get("session_id")))
+            cls.CACHE.move_to_end(id(evt._raw))
+            while len(cls.CACHE) > SCAN_CACHE_LIMIT:
+                cls.CACHE.popitem(last=False)
+        with scan.guard:
+            if not scan.scanned:
+                for text in filter(names_guarded, candidate_texts(evt)):
+                    scan.read(text.encode(errors="replace").decode(), f"this `{evt.tool_name}` payload", evt.cwd)
+                scan.scanned = True
         return scan
 
     def read(

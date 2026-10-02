@@ -211,6 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CAPT_HOOK_CCX_RAW` value other than `1`, `true`, or `yes`, and a blocking hook on Agent, Task,
   Skill, Read, Grep, or Glob with neither an `Annotated` escape nor `confirm=`. The
   authoring-hooks skill documents the notation.
+- **`capt-hook lint` flags a mandatory hook that reads evidence.** A hook registered with
+  `mandatory=True` whose handler calls `llm_evaluate`, `evt.llm`, `llm_gate`, `llm_nudge`, or
+  `prompt_check`, or reads `evt.ctx.t` or `evt.ctx.transcript`, is reported with the split to make:
+  a mandatory hook is evidence-free, so the LLM or transcript check moves to an advisory hook.
 
 ### Changed
 
@@ -243,6 +247,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Printed prose no longer records a GitHub quota refusal.** The quota signature reads only a
   failed call's error or the tool's stderr, so a `gh pr view` that prints a PR body quoting
   "GitHub GraphQL quota exhausted" records nothing.
+- **A slow mandatory hook no longer starves the session guard or the reply.** The event's
+  `mandatory=True` hooks run side by side on a fixed pool of eight threads, one state-key group
+  at a time, under the caller's deadline less the reply margin (inside the margin, whatever
+  remains), so an LLM call inside one clamps to a bound the reply survives instead of the client's
+  whole timeout, and the builtin guard registered after it completes on its own. Dispatch waits
+  no longer than that budget: a hook still queued at the deadline is left unrun and one still
+  running is the event's error, with no completion recorded either way; a hook that ignores its
+  budget keeps its thread until it returns. The guard's one process-table read and one payload
+  scan are shared across those threads and kept per payload across interleaved events. In the
+  worker, a guarded event takes a reserved lane of four request threads, so a burst of slow
+  advisory events holding every worker thread no longer queues it past the client's deadline.
+- **`llm_evaluate` no longer retries into a deadline it cannot meet.** A failed call is not retried
+  once the caller's deadline is inside five seconds; it raises instead of re-asking with a
+  one-second clamp.
 - **`git stash drop $(...)` blocks again.** A substitution that expands to nothing makes git
   drop `stash@{0}`, so only `apply`, which removes nothing, accepts a substitution operand.
 - **A named command no longer hides a choice from the narrate-then-wait gate.** The "waiting on

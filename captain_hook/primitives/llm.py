@@ -29,6 +29,7 @@ from captain_hook.types import (
     TCondition,
     Waiting,
 )
+from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_cache_dir
 
 if TYPE_CHECKING:
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     from captain_hook.contexts import PromptContext
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
+
+LLM_RETRY_FLOOR_SECONDS = 5.0
 
 
 class GateVerdict(BaseModel):
@@ -101,12 +104,14 @@ def llm_evaluate[M: BaseModel](
     signals/when gating, renders ``contexts`` (a ``required`` context with no content skips the call),
     attaches the transcript window and optional diff, then calls the backend — retrying up
     to ``retries`` times, feeding a schema validation failure back to the model on re-ask. Returns
-    ``None`` on a skip; raises when the call still fails after the final retry, and at once when the
-    backend rejects the model itself. ``root_transcript`` takes a window like ``transcript`` and, when
-    the event fires inside a subagent or teammate lane, adds that window of the root session that
-    spawned the lane as ``<root_transcript>``, so a judge can read the user's words a lane never saw.
-    ``root_excerpt`` maps the event to needles (a quote, a thread, the text being judged) and adds every
-    event in the last 16 MiB of the root transcript that mentions one as ``<root_excerpt>``.
+    ``None`` on a skip; raises when the call still fails after the final retry, at once when the
+    backend rejects the model itself, and at once when the caller's deadline is inside
+    :data:`LLM_RETRY_FLOOR_SECONDS`, since a retry clamped to the seconds left cannot finish.
+    ``root_transcript`` takes a window like ``transcript`` and, when the event fires inside a subagent
+    or teammate lane, adds that window of the root session that spawned the lane as
+    ``<root_transcript>``, so a judge can read the user's words a lane never saw. ``root_excerpt``
+    maps the event to needles (a quote, a thread, the text being judged) and adds every event
+    in the last 16 MiB of the root transcript that mentions one as ``<root_excerpt>``.
     """
     from cc_transcript.render import clip
 
@@ -164,7 +169,7 @@ def llm_evaluate[M: BaseModel](
                 response_model=response_model,
             )
         except ValidationError as e:
-            if attempt >= retries:
+            if attempt >= retries or not retry_affordable():
                 raise
             asked = str(
                 Prompt(system_text=dispatched).context(
@@ -176,9 +181,14 @@ def llm_evaluate[M: BaseModel](
         except EvidenceIncomplete:
             raise
         except Exception as e:
-            if attempt >= retries or is_unsupported_model(e):
+            if attempt >= retries or is_unsupported_model(e) or not retry_affordable():
                 raise
             logger.bind(attempt=attempt).opt(exception=True).warning("llm call failed; retrying")
+
+
+def retry_affordable() -> bool:
+    """Whether the caller's deadline leaves :data:`LLM_RETRY_FLOOR_SECONDS` for another call; the cold CLI can."""
+    return not reqenv.deadline_within(LLM_RETRY_FLOOR_SECONDS)
 
 
 def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> list[str] | None:

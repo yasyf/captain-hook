@@ -23,7 +23,8 @@ from captain_hook.worker.protocol import (
     read_message,
     write_message,
 )
-from captain_hook.worker.service import WorkerService, handshake
+from captain_hook.worker.service import REQUEST_THREADS, WorkerService, handshake
+from tests.test_worker_background_lifecycle import RecordingOutput
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -290,6 +291,40 @@ def test_requests_dispatch_concurrently() -> None:
 
     assert peak == 2
     assert {message["id"] for message in responses(output_stream.getvalue())} == {1, 2}
+
+
+def test_a_mandatory_request_is_served_while_every_worker_thread_is_held() -> None:
+    held = range(1, REQUEST_THREADS + 1)
+    frames = [*(frame(event(request_id)) for request_id in held), frame(event(99, mandatory=True))]
+    input_stream = io.BytesIO(b"".join(frames))
+    output_stream = RecordingOutput()
+    release = threading.Event()
+    lanes: dict[int, str] = {}
+
+    def dispatch(request: EventRequest) -> tuple[EventResponse, None]:
+        lanes[request.id] = threading.current_thread().name
+        if not request.mandatory:
+            assert release.wait(timeout=5), "the held requests were never released"
+        return EventResponse(), None
+
+    def answered() -> list[int]:
+        return [frame["id"] for frame in output_stream.frames if frame["op"] == "result"]
+
+    service = WorkerService(input_stream, output_stream, dispatch=dispatch)
+    runner = threading.Thread(target=service.run)
+    runner.start()
+    with output_stream.changed:
+        assert output_stream.changed.wait_for(lambda: 99 in answered(), timeout=5), "the guard queued behind workers"
+        assert answered() == [99]
+    release.set()
+    runner.join(timeout=10)
+    assert not runner.is_alive()
+
+    assert answered()[0] == 99
+    assert sorted(answered()) == [*held, 99]
+    assert lanes[99].startswith("capt-hook-mandatory-request")
+    assert all(lanes[request_id].startswith("capt-hook-worker") for request_id in held)
+    assert not [thread for thread in threading.enumerate() if thread.name.startswith("capt-hook-mandatory-request")]
 
 
 def test_dispatch_failure_is_top_level_error_with_same_id() -> None:

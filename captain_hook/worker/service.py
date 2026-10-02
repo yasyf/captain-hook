@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     type Dispatch = Callable[[EventRequest], tuple[EventResponse, Background | None]]
 
 REQUEST_THREADS = 16
+MANDATORY_REQUEST_THREADS = 4
 MAX_PENDING_SNAPSHOTS = 256
 MAX_PENDING_CLEANUPS = 64
 MAX_WARM_JOBS = 32
@@ -85,6 +86,9 @@ class WorkerService:
         self._output = output_stream
         self._dispatch = dispatch
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="capt-hook-worker")
+        self._mandatory_executor = ThreadPoolExecutor(
+            max_workers=MANDATORY_REQUEST_THREADS, thread_name_prefix="capt-hook-mandatory-request"
+        )
         self._background = ThreadPoolExecutor(max_workers=4, thread_name_prefix="capt-hook-async")
         self._cleanup = ThreadPoolExecutor(max_workers=2, thread_name_prefix="capt-hook-cleanup")
         self._cleanup_slots = threading.BoundedSemaphore(MAX_PENDING_CLEANUPS)
@@ -119,6 +123,7 @@ class WorkerService:
             self._close_snapshots()
             self._drain()
             self._executor.shutdown()
+            self._mandatory_executor.shutdown()
             self._background.shutdown(wait=True)
             self._cleanup.shutdown(wait=True)
             self._warm_executor.shutdown(wait=True)
@@ -129,9 +134,11 @@ class WorkerService:
         self._write(adopt_message(pid, lifetime_ms))
 
     def _submit(self, request: EventRequest) -> None:
+        """Queue one event; a guarded one takes the reserved lane so a burst of slow advisory events never holds it."""
         with self._guard:
             self._outstanding += 1
-        future = self._executor.submit(self._serve, request)
+        executor = self._mandatory_executor if request.mandatory else self._executor
+        future = executor.submit(self._serve, request)
         future.add_done_callback(self._done)
 
     def _serve(self, request: EventRequest) -> None:
