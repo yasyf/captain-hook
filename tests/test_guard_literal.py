@@ -24,7 +24,7 @@ from captain_hook.testing.helpers import input_to_event
 from captain_hook.types import Event
 from captain_hook.worker.protocol import MAX_EVENT_INPUT
 from hatch_build import STATIC_DENY_KIND, render_guard_literal, render_guard_shell
-from tests.helpers import BENIGN_PAYLOAD, DESTRUCTIVE_PAYLOAD, make_ctx
+from tests.helpers import BENIGN_PAYLOAD, DESTRUCTIVE_PAYLOAD, STOP_PAYLOAD, make_ctx
 
 ROOT = Path(__file__).parents[1]
 DEFINITION = json.loads((ROOT / "internal" / "wireproto" / "guard.json").read_text())
@@ -129,6 +129,10 @@ def test_shell_rendering_carries_the_pass_exit_and_the_static_envelopes() -> Non
             ENVELOPES["PermissionRequest"],
             id="destructive PermissionRequest",
         ),
+        pytest.param("PreToolUse", STOP_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="stop tool PreToolUse"),
+        pytest.param(
+            "PermissionRequest", STOP_PAYLOAD, 0, ENVELOPES["PermissionRequest"], id="stop tool PermissionRequest"
+        ),
         pytest.param("PreToolUse", BENIGN_PAYLOAD, guard.PASS_EXIT, "", id="benign"),
     ],
 )
@@ -157,6 +161,8 @@ def test_rendering_parses_under_the_stock_macos_python_grammar() -> None:
     [
         pytest.param("PreToolUse", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="destructive"),
         pytest.param("PermissionRequest", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PermissionRequest"], id="destructive-pr"),
+        pytest.param("PreToolUse", STOP_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="stop"),
+        pytest.param("PermissionRequest", STOP_PAYLOAD, 0, ENVELOPES["PermissionRequest"], id="stop-pr"),
         pytest.param("PreToolUse", BENIGN_PAYLOAD, guard.PASS_EXIT, "", id="benign"),
         pytest.param("Stop", DESTRUCTIVE_PAYLOAD, guard.PASS_EXIT, "", id="unguarded"),
     ],

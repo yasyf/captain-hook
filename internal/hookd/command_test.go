@@ -16,6 +16,7 @@ import (
 
 const (
 	destructivePayload = `{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}`
+	stopPayload        = `{"cwd":"/r","tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}`
 	benignPayload      = `{"cwd":"/r","tool_name":"Bash","tool_input":{"command":"git status"}}`
 )
 
@@ -74,21 +75,23 @@ func TestRunDeniesAMandatoryEventTheGuardDidNotComplete(t *testing.T) {
 		{"permission request", "PermissionRequest", "no-verdict", nil,
 			scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"}}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := tc.client
-			scriptClient(t, &client, tc.open)
-			code, stdout, stderr := runEvent(t, tc.event, destructivePayload)
-			if want := wireproto.DenyEnvelope(tc.event, tc.kind) + "\n"; code != 0 || stdout != want {
-				t.Fatalf("exit=%d stdout=%q, want exit 0 with %q", code, stdout, want)
-			}
-			if !strings.Contains(stderr, "("+tc.kind+")") || strings.Contains(stderr, "/Users") ||
-				strings.Contains(stderr, "boom") || strings.Contains(stderr, "Traceback") {
-				t.Fatalf("stderr = %q, want the kind alone", stderr)
-			}
-			if tc.open == nil && (len(client.requests) != 1 || !client.requests[0].Mandatory) {
-				t.Fatalf("requests = %+v, want one mandatory request", client.requests)
-			}
-		})
+		for name, payload := range map[string]string{"guarded program": destructivePayload, "stop tool": stopPayload} {
+			t.Run(tc.name+" / "+name, func(t *testing.T) {
+				client := tc.client
+				scriptClient(t, &client, tc.open)
+				code, stdout, stderr := runEvent(t, tc.event, payload)
+				if want := wireproto.DenyEnvelope(tc.event, tc.kind) + "\n"; code != 0 || stdout != want {
+					t.Fatalf("exit=%d stdout=%q, want exit 0 with %q", code, stdout, want)
+				}
+				if !strings.Contains(stderr, "("+tc.kind+")") || strings.Contains(stderr, "/Users") ||
+					strings.Contains(stderr, "boom") || strings.Contains(stderr, "Traceback") {
+					t.Fatalf("stderr = %q, want the kind alone", stderr)
+				}
+				if tc.open == nil && (len(client.requests) != 1 || !client.requests[0].Mandatory) {
+					t.Fatalf("requests = %+v, want one mandatory request", client.requests)
+				}
+			})
+		}
 	}
 }
 
