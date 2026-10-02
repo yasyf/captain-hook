@@ -361,6 +361,85 @@ func snapshotFailure(t *testing.T, id string) json.RawMessage {
 	return body
 }
 
+func TestSnapshotOwnerWritesTheSingleRequestEncoding(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	raw := make(chan []byte, 1)
+	go func() {
+		if _, err := wireproto.DecodeFrameLimit(server, snapshots.MaxFrameBytes); err != nil {
+			return
+		}
+		if err := wireproto.EncodeFrameLimit(server, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: Build}, snapshots.MaxFrameBytes); err != nil {
+			return
+		}
+		var header [4]byte
+		if _, err := io.ReadFull(server, header[:]); err != nil {
+			return
+		}
+		frame := make([]byte, 4+binary.BigEndian.Uint32(header[:]))
+		copy(frame, header[:])
+		if _, err := io.ReadFull(server, frame[4:]); err != nil {
+			return
+		}
+		raw <- frame
+	}()
+	config, err := snapshots.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	owner, err := handshakeSnapshotOwner(ctx, client, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callContext := userSnapshotContext("one", "hook", 501)
+	go func() { _, _ = owner.call(ctx, statsRequest, callContext, func() {}) }()
+	encodedContext, err := wireproto.Marshal(callContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := wireproto.EncodeFrameBytes(wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotRequest, ID: 1, Snapshot: statsRequest, SnapshotContext: encodedContext}, snapshots.MaxFrameBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case written := <-raw:
+		if !bytes.Equal(written, expected) {
+			t.Fatalf("written=%q expected=%q", written, expected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot request was not written")
+	}
+}
+
+func TestSnapshotOwnerRefusesOversizedRequestBeforeWriting(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, _ := fakeSnapshotOwner(t, frames)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var settlements atomic.Int64
+	request := json.RawMessage(`"` + string(bytes.Repeat([]byte("x"), snapshots.MaxFrameBytes)) + `"`)
+	_, err := owner.call(ctx, request, userSnapshotContext("one", "hook", 501), func() { settlements.Add(1) })
+	if !errors.Is(err, wireproto.ErrPayloadTooLarge) {
+		t.Fatalf("err=%v", err)
+	}
+	if settlements.Load() != 1 {
+		t.Fatalf("settlements=%d", settlements.Load())
+	}
+	select {
+	case frame := <-frames:
+		t.Fatalf("oversized request written: %+v", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+	owner.mu.Lock()
+	pending := len(owner.pending)
+	owner.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending=%d", pending)
+	}
+}
+
 func TestSnapshotOwnerValidatesAndCorrelatesCoreResponse(t *testing.T) {
 	for _, id := range []string{"one", "different"} {
 		t.Run(id, func(t *testing.T) {
