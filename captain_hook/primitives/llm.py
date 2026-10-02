@@ -87,6 +87,7 @@ def llm_evaluate[M: BaseModel](
     model: TModel = "small",
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
+    root_transcript: bool | int | Literal["recent", "full"] = False,
     tool_results: bool = False,
     budget: Budget | None = None,
     diff: bool | str = False,
@@ -100,7 +101,9 @@ def llm_evaluate[M: BaseModel](
     attaches the transcript window and optional diff, then calls the backend — retrying up
     to ``retries`` times, feeding a schema validation failure back to the model on re-ask. Returns
     ``None`` on a skip; raises when the call still fails after the final retry, and at once when the
-    backend rejects the model itself.
+    backend rejects the model itself. ``root_transcript`` takes a window like ``transcript`` and, when
+    the event fires inside a subagent or teammate lane, adds that window of the root session that
+    spawned the lane as ``<root_transcript>``, so a judge can read the user's words a lane never saw.
     """
     from cc_transcript.render import clip
 
@@ -144,6 +147,7 @@ def llm_evaluate[M: BaseModel](
         tool_results=tool_results,
         budget=budget,
         diff_text=None,
+        root_transcript=root_transcript,
     )
     asked = dispatched
     for attempt in count():

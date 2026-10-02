@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 # A session id becomes a filesystem path component via ``ensure_session``; external callers (CLI, MCP)
 # must not smuggle path separators or traversal past that trust boundary.
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
+ROOT_TAIL_EVENTS = 256
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -314,6 +315,13 @@ def lazy_transcript(
         return guarded_load(source, lambda _: tail_transcript(source, count))
 
     return LazyTranscript(TranscriptPins(load, partial(tail, path) if path else None), seed=True)
+
+
+def root_transcript(path: str | Path, events: int) -> LazyTranscript:
+    """The newest ``events`` events of a lane's root session transcript, tailed on first touch."""
+    return LazyTranscript(
+        TranscriptPins(partial(guarded_load, path, lambda source: tail_transcript(source, events))), seed=True
+    )
 
 
 def guarded_load[S: Session | RemoteSession](path: str | Path | None, read: Callable[[str | Path | None], S]) -> S:

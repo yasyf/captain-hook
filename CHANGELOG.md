@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   note naming the hook and reason. The framework enforces a three-second default timeout
   and caches verdicts per session, excluding timeouts and errors. The measured default,
   Cerebras `gpt-oss-120b`, requires `CEREBRAS_API_KEY`; a missing key allows with a failure note.
+- **A lane's judge can read the session that spawned it.** `llm_evaluate(root_transcript=N)`
+  adds the newest `N` messages of the root session as `<root_transcript>` when the event fires
+  inside a subagent or teammate lane, whose own transcript never holds the user's words.
+  `evt.ctx.root_transcript` is that root session, tailed from its last 256 events, and `None`
+  outside a lane; inline tests seed it with `Input(root_transcript=...)`.
 
 ### Changed
 

@@ -94,6 +94,7 @@ class StubbedContext(HookContext):
             transcript=ctx.transcript,
             settings=ctx.settings,
             project_root=ctx.project_root,
+            root_transcript=ctx.root_transcript,
             llm=llm or {},
         )
 
@@ -573,6 +574,12 @@ def input_to_event(
         evt.__dict__["skip_permissions"] = inp.skip_permissions
 
     evt.__dict__["disallowed_tools"] = frozenset(inp.disallowed_tools or ())
+
+    match inp.root_transcript:
+        case TranscriptFixture() as tf:
+            evt.ctx.root_transcript = fixture_session(tf.messages)
+        case Path() as p:
+            evt.ctx.root_transcript = fixture_transcript(p)
 
     evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm)
 

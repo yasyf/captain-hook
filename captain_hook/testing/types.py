@@ -180,6 +180,8 @@ class Input:
         transcript: Session history for transcript conditions — a path, a
             ``TranscriptFixture``, or a raw list of transcript-line dicts. A path
             also lands in the payload as ``evt.transcript_path``, on every event.
+        root_transcript: The root session a lane's event reads as ``evt.ctx.root_transcript``,
+            in any form ``transcript`` takes; pair it with ``agent_id``.
         tasks: The native task list read via ``evt.tasks``.
         background_tasks: Background-task mappings for the ``Stop``/``SubagentStop``
             payload, surfaced as ``evt.background_tasks`` — the shape that makes a
@@ -227,6 +229,7 @@ class Input:
     offset: int | None = None
     limit: int | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
+    root_transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
     background_tasks: list[dict[str, Any]] | None = None
     llm: dict[str, Any] | None = None
@@ -236,12 +239,17 @@ class Input:
     env: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
-        match self.transcript:
-            case list():
-                object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
-            case str():
-                object.__setattr__(self, "transcript", Path(self.transcript))
-        checks = FIELD_TYPES | {"file": (str, FileFixture), "transcript": (Path, TranscriptFixture)}
+        for name in ("transcript", "root_transcript"):
+            match getattr(self, name):
+                case list() as messages:
+                    object.__setattr__(self, name, TranscriptFixture(messages))
+                case str() as path:
+                    object.__setattr__(self, name, Path(path))
+        checks = FIELD_TYPES | {
+            "file": (str, FileFixture),
+            "transcript": (Path, TranscriptFixture),
+            "root_transcript": (Path, TranscriptFixture),
+        }
         for name, types in checks.items():
             if (value := getattr(self, name)) is not None and not isinstance(value, types):
                 raise TypeError(
