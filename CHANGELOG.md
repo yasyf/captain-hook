@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A long-lived hook worker can spawn again once the user's process count grows.** daemonkit
+  lowers `RLIMIT_NPROC` across each spawn to the user's process count plus 400, and the worker
+  kept that cap for life. Hours later every `ps`, `git`, and `claude` spawn from the worker
+  failed with `EAGAIN`, so the session guard read no process table and denied every literal
+  `kill <pid>` as unverifiable. The worker now raises its soft limit back to the hard limit at
+  startup.
 - **The session guard's `ccn` and `orca` probes find the binary on a launchd worker's `PATH`
   and name why a probe failed.** A worker that kept launchd's `/usr/bin:/bin:/usr/sbin:/sbin`
   never resolved `ccn`, so an owner-authorized `orca terminal close` was refused with

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import os
+import resource
 import sys
 
 from captain_hook.worker.service import WorkerService, handshake
@@ -21,6 +22,17 @@ def skip_bundled_cli_version_probe() -> None:
     only ever pass; on a machine near its process limit it is one more spawn per hook LLM call.
     """
     os.environ.setdefault("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
+
+
+def lift_spawn_nproc_cap() -> None:
+    """Raise the ``RLIMIT_NPROC`` soft limit daemonkit lowered across this worker's spawn back to the hard limit.
+
+    daemonkit caps a spawned child at the user's process count at spawn plus 400, for the child's whole
+    life. A worker that outlives a busy hour then fails every ``ps``, ``git``, and ``claude`` spawn with
+    ``EAGAIN``, and a guard that must read the process table fails closed on every call.
+    """
+    _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
 
 
 def adopt_user_path() -> None:
@@ -64,6 +76,7 @@ def main() -> None:
     from captain_hook.daemon.context import ContextIO
     from captain_hook.daemon.logsink import configure_daemon_logging
 
+    lift_spawn_nproc_cap()
     bound_transcript_parse_pool()
     skip_bundled_cli_version_probe()
     router = configure_daemon_logging(worker_log_key(build, os.environ["CAPT_HOOK_WORKER_SHARD"]))
