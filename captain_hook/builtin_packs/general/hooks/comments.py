@@ -1,4 +1,5 @@
-"""Block an edit that leaves an over-budget comment block it created or grew; warn on legacy, doc, and dense cases."""
+"""Block an edit that leaves an over-budget comment block it created or lengthened; warn on legacy rewords, doc,
+and dense cases."""
 
 from __future__ import annotations
 
@@ -85,6 +86,13 @@ PY_LONG_RUN = (
 PY_ALL_COMMENT = (
     "# note one line\n# note two line\n# note three ok\n# note four line\n# note five line\n# note six line ok\n"
 )
+GO_LEGACY_RUN = (
+    "package p\n\nfunc F() {\n"
+    "\t// legacy note that runs long enough to push three lines past the char budget one\n"
+    "\t// legacy note that runs long enough to push three lines past the char budget two\n"
+    "\t// legacy note that runs long enough to push three lines past the char budget six\n"
+    "\tx := 1\n}\n"
+)
 PY_DENSE_FIRES = "# c1 here\na = 1\n# c2 here\nb = 2\n# c3 here\n# c4 here\nc = 3\n# c5 here\n"
 
 
@@ -102,23 +110,28 @@ def touched_ancestry(evt: BaseHookEvent) -> list[TouchedComment]:
     return touched_comment_ancestry(pre, post, lang)
 
 
+def lengthened(touched: TouchedComment) -> bool:
+    """True when the block is new, or has more lines than its over-budget ancestor."""
+    return touched.ancestor is None or touched.block.lines > touched.ancestor.lines
+
+
 def touched(evt: BaseHookEvent) -> list[CommentBlock]:
     """The comment blocks this edit created or grew, or ``[]`` when the language is unparsable."""
     return [t.block for t in touched_ancestry(evt)]
 
 
 class VerboseComment(CustomCondition):
-    """True when the edit leaves an over-budget comment block it created or grew from within budget."""
+    """True when the edit leaves an over-budget comment block it created, or added lines to."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return any(t.block.too_long and t.ancestor is None for t in touched_ancestry(evt))
+        return any(t.block.too_long and lengthened(t) for t in touched_ancestry(evt))
 
 
 class LegacyCommentEdit(CustomCondition):
-    """True when the edit reworks a comment that was already over budget before it."""
+    """True when the edit rewords a comment that was already over budget without adding lines."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return any(t.block.too_long and t.ancestor is not None for t in touched_ancestry(evt))
+        return any(t.block.too_long and not lengthened(t) for t in touched_ancestry(evt))
 
 
 class VerboseDocComment(CustomCondition):
@@ -289,6 +302,16 @@ hook(
             content="# a here\n# b here\n# c here\n# d here\n# e here\n# f here",
         ): Block(pattern="Verbose comment"),
         Input(
+            file=FileFixture(name="legacy-grow.py", content=PY_LONG_RUN),
+            old="# note six here",
+            content="# note six here\n# note seven here",
+        ): Block(pattern="Verbose comment"),
+        Input(
+            file=FileFixture(name="legacy-grow.go", content=GO_LEGACY_RUN),
+            old="\tx := 1",
+            content="\t// and one more line\n\tx := 1",
+        ): Block(pattern="Verbose comment"),
+        Input(
             file=FileFixture(name="reflow.go", content="package p\n\nfunc F() {\n\t/* one two three */\n\tx := 1\n}\n"),
             old="/* one two three */",
             content="/*\n\t one\n\t two\n\t three\n\t*/",
@@ -444,6 +467,11 @@ nudge(
             content="// stale token from a much earlier session.",
         ): Warn(pattern="Legacy long comment"),
         Input(file="new.py", content=PY_LONG_RUN): Allow(),
+        Input(
+            file=FileFixture(name="legacy-grow.py", content=PY_LONG_RUN),
+            old="# note six here",
+            content="# note six here\n# note seven here",
+        ): Allow(),
         Input(
             file=FileFixture(name="grow.py", content="# a here\n# b here\n# c here\nx = 1\n"),
             old="# a here\n# b here\n# c here",

@@ -221,7 +221,8 @@ hook(
     ],
     message=(
         "This `git stash` takes from or adds to the stack shared by every worktree without a tag. "
-        'Run `git stash push -u -m "<unique-tag>"` to set work aside, then `git stash apply <sha>` (never pop).'
+        'Run `git stash push -u -m "<unique-tag>"`, read its `stash@{N}` from `git stash list`, then run '
+        "`git stash apply stash@{N}` and `git stash drop stash@{N}` with that literal ref (never pop)."
     ),
     block=True,
     tests={
