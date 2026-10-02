@@ -34,6 +34,11 @@ ROW_LINE = "31337 27200 31337   501 Wed Sep 30 06:30:00 2026 sleep 60\n"
 DEEP = 100
 
 
+@pytest.fixture(autouse=True)
+def fixture_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "getuid", lambda: 501)
+
+
 def unix(started: str) -> int:
     return int(datetime.fromisoformat(started).replace(tzinfo=UTC).timestamp())
 
