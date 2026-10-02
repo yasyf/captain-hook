@@ -442,6 +442,7 @@ class TestJudge:
         if isinstance(failure, Exception):
             (message,) = failed
             assert f"error={type(failure).__name__!r}" in message
+            assert f"pid={OWN_SLEEP.pid}" in message
             assert str(failure) in message
         else:
             assert failed == []
