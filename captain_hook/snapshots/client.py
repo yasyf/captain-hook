@@ -33,6 +33,7 @@ CLEANUP_SECONDS = 5
 GRAPH_WORK_SECONDS = 0.75
 GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
 GATE_WORK_SECONDS = 5.0
+MANDATORY_WORK_SECONDS = 15.0
 HOOK_TAIL_BYTES = 4 * 1024 * 1024
 GRAPH_DISCOVERY_ENTRIES = 50_000
 GRAPH_SOURCE_LIMIT = 4096
@@ -288,6 +289,20 @@ class SnapshotClient:
     def schedule_root_warm(self, path: str | Path, classifier: Mapping[str, str], tail_bytes: int | None) -> None:
         if classifier["id"] != "captain-configured" and self._root_warm_scheduler is not None:
             self._root_warm_scheduler(self, Path(path).absolute(), classifier, tail_bytes)
+
+    @contextmanager
+    def foreground_at_least(self, seconds: float) -> Iterator[None]:
+        if self._foreground_seconds is None:
+            yield
+            return
+        with self._guard:
+            previous = self.foreground_deadline_unix_ms
+            self.foreground_deadline_unix_ms = max(previous or 0, int((time.time() + seconds) * 1000))
+        try:
+            yield
+        finally:
+            with self._guard:
+                self.foreground_deadline_unix_ms = previous
 
     def call(self, operation: str, *, domain: bool = False, **arguments: object) -> dict[str, Any]:
         from jsonschema import ValidationError
@@ -1251,6 +1266,15 @@ class RemoteToolCalls:
 
     def __len__(self) -> int:
         return self.count()
+
+
+@contextmanager
+def foreground_evidence(seconds: float) -> Iterator[None]:
+    if (client := CURRENT_CLIENT.get()) is None:
+        yield
+        return
+    with client.foreground_at_least(seconds):
+        yield
 
 
 @contextmanager

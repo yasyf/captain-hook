@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +17,7 @@ from captain_hook.dispatch import dispatch
 from captain_hook.events import PreToolUseEvent
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
-from captain_hook.snapshots.client import EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT, MANDATORY_WORK_SECONDS, EvidenceIncomplete, SnapshotClient
 from captain_hook.transcripts import lazy_transcript
 from captain_hook.types import CustomCondition, Event
 from captain_hook.util import proc, reqenv
@@ -145,6 +146,35 @@ class TestMandatoryPhase:
             assert dispatch(Event.PreToolUse, evt) is None
         assert overrides.mandatory_completed == []
         assert overrides.evidence_gaps == []
+
+    def test_a_mandatory_hook_reads_evidence_past_the_foreground_budget_and_hands_back_the_exhausted_one(
+        self, tmp_path: Path
+    ) -> None:
+        seen: list[int | None] = []
+
+        class Reads(CustomCondition):
+            def check(self, evt: Any) -> bool:
+                client = CURRENT_CLIENT.get()
+                assert client is not None
+                seen.append(client.foreground_deadline_unix_ms)
+                return False
+
+        @on(Event.PreToolUse, only_if=[Reads()], mandatory=True)
+        def gate(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        client = SnapshotClient(lambda _: pytest.fail("no snapshot call expected"), foreground_seconds=0.75)
+        client.foreground_deadline_unix_ms = 1
+        evt = PreToolUseEvent(_raw=DESTRUCTIVE, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+        started = time.time()
+        token = CURRENT_CLIENT.set(client)
+        try:
+            with reqenv.use_request(outside_margin()):
+                dispatch(Event.PreToolUse, evt)
+        finally:
+            CURRENT_CLIENT.reset(token)
+        assert seen[0] is not None and seen[0] >= int((started + MANDATORY_WORK_SECONDS) * 1000)
+        assert client.foreground_deadline_unix_ms == 1
 
     def test_invalid_evidence_is_the_whole_events_error(self, tmp_path: Path) -> None:
         @on(Event.PreToolUse, only_if=[Exhausted("invalid_request")], mandatory=True)
