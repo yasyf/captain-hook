@@ -88,6 +88,7 @@ def llm_evaluate[M: BaseModel](
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
     root_transcript: bool | int | Literal["recent", "full"] = False,
+    root_excerpt: Callable[[BaseHookEvent], Sequence[str]] | None = None,
     tool_results: bool = False,
     budget: Budget | None = None,
     diff: bool | str = False,
@@ -104,6 +105,8 @@ def llm_evaluate[M: BaseModel](
     backend rejects the model itself. ``root_transcript`` takes a window like ``transcript`` and, when
     the event fires inside a subagent or teammate lane, adds that window of the root session that
     spawned the lane as ``<root_transcript>``, so a judge can read the user's words a lane never saw.
+    ``root_excerpt`` maps the event to needles (a quote, a thread, the text being judged) and adds every
+    root event that mentions one as ``<root_excerpt>``, however far back the root transcript it sits.
     """
     from cc_transcript.render import clip
 
@@ -148,6 +151,7 @@ def llm_evaluate[M: BaseModel](
         budget=budget,
         diff_text=None,
         root_transcript=root_transcript,
+        root_excerpt=root_excerpt(evt) if root_excerpt else (),
     )
     asked = dispatched
     for attempt in count():

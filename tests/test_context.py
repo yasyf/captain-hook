@@ -627,6 +627,38 @@ class TestCallLlm:
         )
         assert HookContext(session=SessionStore(None), transcript=lane, settings=None).root_transcript_block() == ""
 
+    def test_root_excerpt_keeps_only_matching_events_from_the_whole_root(self) -> None:
+        from captain_hook.prompt import Prompt
+        from captain_hook.testing.helpers import fixture_file, fixture_session
+
+        chatter = [T.user(f"status {i}") for i in range(400)]
+        root = fixture_file(
+            [T.user("before"), T.user('Yes, post "this" exact text'), T.user("after"), *chatter, T.user("newest")]
+        )
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([T.user("lane brief")]),
+            settings=None,
+            root_path=root,
+        )
+        assert ctx.root_excerpt_block(['Yes, post "this" exact text']) == (
+            '<root_excerpt>\nuser: before\n\nuser: Yes, post "this" exact text\n\n'
+            "user: after\n\nuser: status 0\n</root_excerpt>"
+        )
+        assert ctx.root_excerpt_block(["never said"]) == ""
+        asked = ctx.assemble_prompt(
+            Prompt().system("judge"),
+            (),
+            {},
+            transcript=5,
+            tool_results=False,
+            diff_text=None,
+            root_excerpt=['Yes, post "this" exact text'],
+        )
+        assert asked.startswith("<root_excerpt>\nuser: before") and "status 7" not in asked
+        outside = HookContext(session=SessionStore(None), transcript=ctx.transcript, settings=None)
+        assert outside.root_excerpt(["x"]) is None
+
     def test_assemble_prompt_leads_with_the_root_window_only_when_asked(self) -> None:
         from captain_hook.prompt import Prompt
         from captain_hook.testing.helpers import fixture_session
