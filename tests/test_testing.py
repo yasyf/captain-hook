@@ -245,7 +245,9 @@ class TestInputToEvent:
             ),
         )
         assert lane.ctx.root_transcript_block() == "<root_transcript>\nuser: go\n</root_transcript>"
-        assert input_to_event(Event.PreToolUse, Input(tool="Bash", command="ls")).ctx.root_transcript is None
+        assert lane.ctx.root_excerpt_block(["go"]) == "<root_excerpt>\nuser: go\n</root_excerpt>"
+        outside = input_to_event(Event.PreToolUse, Input(tool="Bash", command="ls")).ctx
+        assert outside.root_transcript is None and outside.root_excerpt(["go"]) is None
 
     def test_input_to_event_none_transcript(self):
         from captain_hook.testing.types import Input

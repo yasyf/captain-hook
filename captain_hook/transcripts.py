@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import threading
+from collections import deque
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
@@ -322,6 +323,42 @@ def root_transcript(path: str | Path, events: int) -> LazyTranscript:
     return LazyTranscript(
         TranscriptPins(partial(guarded_load, path, lambda source: tail_transcript(source, events))), seed=True
     )
+
+
+def root_excerpt(path: str | Path, needles: Sequence[str], *, around: int = 2, limit: int = 20) -> Session:
+    """The newest ``limit`` events of a lane's root session transcript whose line contains any of
+    ``needles``, each with ``around`` events either side, streamed from the whole file so an answer far
+    older than the tail still reaches the judge. A needle matches as typed or JSON-escaped, with or
+    without its non-ASCII escaped.
+    """
+    from cc_transcript.parser import parse_events_from_bytes
+
+    forms = {
+        form
+        for needle in needles
+        if needle
+        for form in (
+            needle.encode(),
+            json.dumps(needle)[1:-1].encode(),
+            json.dumps(needle, ensure_ascii=False)[1:-1].encode(),
+        )
+    }
+    hits: deque[list[bytes]] = deque(maxlen=limit)
+    before: deque[bytes] = deque(maxlen=around)
+    after = 0
+    reqenv.checkpoint()
+    with Path(path).open("rb") as transcript:
+        for line in transcript:
+            if any(form in line for form in forms):
+                hits.append([*before, line])
+                before.clear()
+                after = around
+            elif after:
+                hits[-1].append(line)
+                after -= 1
+            else:
+                before.append(line)
+    return lift_session(parse_events_from_bytes(b"".join(line for hit in hits for line in hit)), path=Path(path))
 
 
 def guarded_load[S: Session | RemoteSession](path: str | Path | None, read: Callable[[str | Path | None], S]) -> S:

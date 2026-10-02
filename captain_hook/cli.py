@@ -302,12 +302,14 @@ def dispatch_event(
     )
     background_transcript = transcript.fork()
     parent = raw.get("transcript_path")
+    in_lane = bool(parent) and resolved_path != parent
     ctx = HookContext(
         session=SessionStore(session_dir),
         transcript=transcript,
         settings=_state.settings,
         project_root=root,
-        root_transcript=root_transcript(parent, ROOT_TAIL_EVENTS) if parent and resolved_path != parent else None,
+        root_transcript=root_transcript(parent, ROOT_TAIL_EVENTS) if in_lane else None,
+        root_path=Path(parent) if in_lane else None,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
     within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)

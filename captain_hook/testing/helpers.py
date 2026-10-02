@@ -95,6 +95,7 @@ class StubbedContext(HookContext):
             settings=ctx.settings,
             project_root=ctx.project_root,
             root_transcript=ctx.root_transcript,
+            root_path=ctx.root_path,
             llm=llm or {},
         )
 
@@ -177,13 +178,18 @@ def fixture_session(messages: list[dict[str, Any]], *, path: Path | None = None)
     )
 
 
-def disk_fixture_session(messages: list[dict[str, Any]]) -> RemoteSession:
-    """Write a temporary transcript and read it through an isolated native evidence owner."""
+def fixture_file(messages: list[dict[str, Any]]) -> Path:
+    """Write raw transcript-line dicts to a temporary transcript file, synthesizing missing envelope fields."""
     path = fixture_file_dir() / f"fixture-{next(FIXTURE_FILE_COUNTER)}.jsonl"
     path.write_bytes(
         b"\n".join(json.dumps(fixture_line(index, message)).encode() for index, message in enumerate(messages))
     )
-    return fixture_transcript(path)
+    return path
+
+
+def disk_fixture_session(messages: list[dict[str, Any]]) -> RemoteSession:
+    """Write a temporary transcript and read it through an isolated native evidence owner."""
+    return fixture_transcript(fixture_file(messages))
 
 
 def build_context(
@@ -578,8 +584,10 @@ def input_to_event(
     match inp.root_transcript:
         case TranscriptFixture() as tf:
             evt.ctx.root_transcript = fixture_session(tf.messages)
+            evt.ctx.root_path = fixture_file(tf.messages)
         case Path() as p:
             evt.ctx.root_transcript = fixture_transcript(p)
+            evt.ctx.root_path = p
 
     evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm)
 

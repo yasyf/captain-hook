@@ -17,6 +17,8 @@ from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from cc_transcript.query import Session
     from cc_transcript.render import Budget
     from pydantic import BaseModel
@@ -134,6 +136,7 @@ class HookContext:
     settings: HooksSettings | None
     project_root: Path | None = None
     root_transcript: Session | RemoteSession | LazyTranscript | None = None
+    root_path: Path | None = None
     signal_evidence: dict[tuple[int | Literal["turn"], str, bool], tuple[str, ...]] = field(
         default_factory=dict, init=False
     )
@@ -278,6 +281,23 @@ class HookContext:
         src = root.resolve() if isinstance(root, LazyTranscript) else root
         rendered = render_window(src, window=window, tool_results=tool_results, budget=budget)
         return f"<root_transcript>\n{rendered}\n</root_transcript>"
+
+    def root_excerpt(self, needles: Sequence[str], *, around: int = 2) -> Session | None:
+        """The root session's events that mention any of ``needles``, with ``around`` events either side,
+        from the whole transcript rather than its tail; ``None`` outside a lane.
+        """
+        from captain_hook.transcripts import root_excerpt
+
+        return None if self.root_path is None else root_excerpt(self.root_path, needles, around=around)
+
+    def root_excerpt_block(
+        self, needles: Sequence[str], *, tool_results: bool = False, budget: Budget | None = None
+    ) -> str:
+        """The root excerpt for ``needles`` rendered as ``<root_excerpt>``; empty outside a lane or with no match."""
+        if (excerpt := self.root_excerpt(needles)) is None or not len(excerpt):
+            return ""
+        rendered = render_window(excerpt, window=None, tool_results=tool_results, budget=budget)
+        return f"<root_excerpt>\n{rendered}\n</root_excerpt>"
 
     def call_cli(
         self,
@@ -476,10 +496,12 @@ class HookContext:
         budget: Budget | None = None,
         diff_text: str | None,
         root_transcript: bool | int | Literal["recent", "full"] = False,
+        root_excerpt: Sequence[str] = (),
     ) -> str:
         block = "\n\n".join(
             rendered
             for rendered in (
+                self.root_excerpt_block(root_excerpt, tool_results=tool_results, budget=budget) if root_excerpt else "",
                 self.root_transcript_block(
                     window=transcript_window(root_transcript), tool_results=tool_results, budget=budget
                 )
