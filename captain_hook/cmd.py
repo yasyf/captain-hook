@@ -29,7 +29,7 @@ from captain_hook.util.shell import SHELLS, resolve_cd, safe_parse_command_line
 from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     from cc_transcript.command import Command, CommandLine, CommandLineQuery, Occurrence, Redirect, Word
 
@@ -514,6 +514,7 @@ class Cmd:
     raw: str = ""
     cwd: Path | None = None
     event: ToolRewriteEvent | None = None
+    bindings: Mapping[str, Binding] = field(default_factory=dict)
     replacements: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
     notes: list[str] = field(default_factory=list, repr=False, compare=False)
 
@@ -557,9 +558,9 @@ class Cmd:
 
     @cached_property
     def scope(self) -> Scope:
-        """The same-line variable bindings of the whole command text."""
+        """The same-line variable bindings of the whole command text, over ``bindings`` in force before it."""
         try:
-            return Scope(self.raw)
+            return Scope(self.raw, dict(self.bindings))
         except RecursionError:
             return Scope.unreadable(self.raw)
 

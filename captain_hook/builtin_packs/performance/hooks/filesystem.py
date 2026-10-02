@@ -100,6 +100,21 @@ hook(
             ),
             cwd="/Users/yasyf/.claude/worktrees/monorepo/ethos-audit",
         ): Block(),
+        Input(
+            command=(
+                "cd /tmp && for d in a b c d e f g h i j k l m n o p q r s /; do find $d -name '*.go'; done "
+                "2>/dev/null | head"
+            )
+        ): Block(),
+        Input(
+            command=(
+                "cd /Users/yasyf/.claude/worktrees/monorepo/parity-audit-dev/go/ci/internal/release && for d in "
+                "selection dag judge trailers targets stacks images pipeline prcheck reach reads record platy render "
+                "slack hold bake ledger canvas finish; do echo \"== $d\"; find $d -name '*.go' ! -name '*_test.go' | "
+                "xargs wc -l | sort -n | tail -25; done 2>/dev/null | grep -v ' total$'"
+            ),
+            cwd="/Users/yasyf/.orca/workspaces/monorepo/monorepo/sole",
+        ): Allow(),
         Input(command="find / -maxdepth 1 -type d"): Allow(),
         Input(command="find ~ -maxdepth 2 -type d -name daemonkit"): Allow(),
         Input(command="find / -maxdepth 0"): Allow(),
