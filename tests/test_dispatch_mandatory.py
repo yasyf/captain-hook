@@ -434,7 +434,7 @@ class TestGuardCompletion:
         healthy = self.respond(
             payload='{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"orca terminal list --json"}}', event=event
         )
-        assert (healthy.exit, healthy.guard, healthy.stdout) == (0, "", "")
+        assert (healthy.exit, healthy.guard, healthy.stdout) == (0, "", "discovered out\n")
         stop = self.respond(payload=self.STOP_PAYLOAD, event=event)
         assert (stop.exit, stop.guard) == (0, "")
         assert "`TaskStop` on task `wcn64vfub` cannot be verified" in stop.stdout
