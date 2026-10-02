@@ -89,6 +89,19 @@ def test_deep_scalar_is_keyed_by_prepared_graph():
     assert len(owner.queries) == 2
 
 
+def test_deep_scalar_memo_hit_requires_an_open_prepared_graph():
+    owner = CountingOwner()
+    session = session_for(owner)
+
+    assert session.has_tool("Bash") == 1
+    assert session.has_tool("Bash") == 1
+    session.graph.release()
+
+    with pytest.raises(EvidenceIncomplete, match="prepared graph is closed"):
+        session.has_tool("Bash")
+    assert len(owner.queries) == 1
+
+
 def test_released_lease_drops_its_memo_and_refuses_reuse():
     owner = CountingOwner()
     session = session_for(owner)

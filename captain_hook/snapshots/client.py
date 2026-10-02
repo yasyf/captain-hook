@@ -963,9 +963,9 @@ class RemoteSession:
             json.dumps(query, sort_keys=True, separators=(",", ":")),
         )
         self.lease.require()
-        if deep:
-            self.graph.require(self)
         if (cached := self.lease.scalar_results.get(key, SCALAR_MISS)) is not SCALAR_MISS:
+            if deep:
+                self.graph.require(self)
             return cached
         values = self._query(query, deep=deep)
         if len(values) != 1:
