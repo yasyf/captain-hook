@@ -55,7 +55,7 @@ def general_pack(isolate_modules: None, monkeypatch: pytest.MonkeyPatch) -> None
 
 def session_guards() -> list[str]:
     names = [hook.name for hook in app.get_mandatory_hooks(Event.PreToolUse)]
-    assert {"kill_unverified_pid", "signal_by_criteria"} <= set(names)
+    assert {"kill_unverified_pid", "signal_by_criteria", "stop_unverified_task"} <= set(names)
     return names
 
 
@@ -307,17 +307,16 @@ class TestMandatoryPhase:
 
 class TestGuardCompletion:
     PAYLOAD = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
+    STOP_PAYLOAD = '{"cwd":"/w","tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}'
 
-    def respond(self, *, mandatory: bool = True) -> Any:
+    def respond(self, *, payload: str = PAYLOAD, mandatory: bool = True) -> Any:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
             install_writer=False,
             nlp_warmer=lambda: None,
         )
-        response, _ = runtime.dispatch(
-            replace(request(payload_raw=self.PAYLOAD, mandatory=mandatory), deadline_unix_ms=0)
-        )
+        response, _ = runtime.dispatch(replace(request(payload_raw=payload, mandatory=mandatory), deadline_unix_ms=0))
         return response
 
     def test_the_general_pack_completes_the_guard(self, general_pack: None) -> None:
@@ -325,6 +324,22 @@ class TestGuardCompletion:
         assert response.exit == 0
         assert response.guard == "completed"
         assert '"permissionDecision": "deny"' in response.stdout
+
+    @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
+    def test_the_general_pack_completes_the_guard_for_a_stop_tool(self, general_pack: None, event: str) -> None:
+        runtime = ProductRuntime(
+            registry_factory=lambda _: FakeRegistry(app.current_state()),
+            transcript_loader=lambda path: None,
+            install_writer=False,
+            nlp_warmer=lambda: None,
+        )
+        response, _ = runtime.dispatch(
+            replace(request(event=event, payload_raw=self.STOP_PAYLOAD, mandatory=True), deadline_unix_ms=0)
+        )
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert '"deny"' in response.stdout
+        assert "`TaskStop` on task `wcn64vfub` cannot be verified" in response.stdout
 
     def test_a_request_the_client_did_not_flag_gets_the_verdict_without_the_completion(
         self, general_pack: None

@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 
 from capt_hook_client import guard_literal as shim
-from captain_hook import Allow
+from captain_hook import Allow, Block
 from captain_hook import guard_literal as guard
 from captain_hook.app import _state
 from captain_hook.builtin_packs.general.hooks import _sessions as session_guard
-from captain_hook.builtin_packs.general.hooks import sessions
+from captain_hook.builtin_packs.general.hooks import sessions, stops
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.types import Event
 from captain_hook.worker.protocol import MAX_EVENT_INPUT
@@ -176,6 +176,7 @@ def test_module_entry_exits_with_the_verdict(
 
 def test_rendered_constants_are_the_definition() -> None:
     assert guard.EVENTS == frozenset(DEFINITION["events"])
+    assert guard.TOOLS == frozenset(DEFINITION["tools"])
     assert guard.QUOTING == DEFINITION["quoting"]
     assert guard.GUARDED == DEFINITION["guarded"]
     assert guard.EXEMPT_HEADS == tuple(DEFINITION["exempt_heads"])
@@ -261,6 +262,20 @@ def guard_rows() -> list[tuple[Any, object]]:
     ]
 
 
+def test_stop_tools_are_the_stop_guards_names_and_flag_exactly_the_rows_it_blocks() -> None:
+    _state.hooks.clear()
+    importlib.reload(stops)
+    assert set(DEFINITION["tools"]) == set(stops.STOP_TOOLS)
+    [stop_guard] = _state.hooks
+    assert stop_guard.spec.mandatory
+    rows = [(row, expected) for row, expected in (stop_guard.spec.tests or {}).items() if not isinstance(row, str)]
+    assert len(rows) > 8
+    for row, expected in rows:
+        for event in (Event.PreToolUse, Event.PermissionRequest):
+            raw = json.dumps(input_to_event(event, row)._raw).encode()
+            assert guard.mandatory(event.name, raw) is isinstance(expected, Block), (event, row)
+
+
 def test_every_inline_guard_row_the_prefilter_matches_is_mandatory_or_allowed() -> None:
     rows = guard_rows()
     matched = 0
@@ -292,6 +307,13 @@ def test_every_fixture_the_prefilter_matches_is_mandatory_or_first_party(fixture
         (b'{"tool_name":"Bash","tool_input":{"command":"pkill \xff"}}', True),
         (b'{"tool_name":"mcp__x__y","tool_input":{"steps":[{"run":["renice","-n","5"]}]}}', True),
         (b'{"tool_name":"orca","tool_input":{"verb":"list"}}', True),
+        (b'{"tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}', True),
+        (b'{"tool_name":"TaskStop","tool_input":{"shell_id":"bash_3"}}', True),
+        (b'{"tool_name":"TaskStop"}', True),
+        (b'{"tool_name":"TaskOutput","tool_input":{"task_id":"wcn64vfub"}}', False),
+        (b'{"tool_name":"mcp__orca__TaskStop","tool_input":{"task_id":"wcn64vfub"}}', False),
+        (b'{"tool_name":["TaskStop"],"tool_input":{"task_id":"wcn64vfub"}}', False),
+        (b'{"tool_name":{"name":"TaskStop"},"tool_input":{}}', False),
         (b'{"tool_name":"mcp__x__y","tool_input":{"argv":["pk","ill"]}}', False),
         (b'{"tool_name":"Bash","tool_input":{"kill":"nothing here"}}', False),
         (b'{"tool_name":"Bash","tool_input":{"command":"echo ok"},"transcript_path":"/t/killall.jsonl"}', False),
@@ -306,6 +328,13 @@ def test_every_fixture_the_prefilter_matches_is_mandatory_or_first_party(fixture
         "invalid utf-8 beside the name",
         "deep list of dicts",
         "tool name alone",
+        "stop tool by task id",
+        "stop tool by retired shell id",
+        "stop tool with no input",
+        "task output is not a stop",
+        "mcp tool named like the stop tool",
+        "stop tool name in a list",
+        "stop tool name in a dict",
         "split across items",
         "name only in a key",
         "name outside tool_input",

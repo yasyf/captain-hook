@@ -76,6 +76,34 @@ func TestGuardDecodesThePayloadRatherThanScanningIt(t *testing.T) {
 	}
 }
 
+func TestGuardFlagsEachStopToolByExactNameOnEachOfItsEvents(t *testing.T) {
+	t.Parallel()
+	if len(guard.Tools) == 0 {
+		t.Fatal("guard.json names no tools")
+	}
+	for _, tool := range guard.Tools {
+		for _, event := range guard.Events {
+			if !Mandatory(event, []byte(`{"tool_name":"`+tool+`","tool_input":{"task_id":"wcn64vfub"}}`)) {
+				t.Fatalf("%s on %s is not mandatory", tool, event)
+			}
+		}
+		if !Mandatory("PreToolUse", []byte(`{"tool_name":"`+tool+`"}`)) {
+			t.Fatalf("%s with no tool input is not mandatory", tool)
+		}
+		for name, payload := range map[string]string{
+			"mcp suffix":           `{"tool_name":"mcp__orca__` + tool + `","tool_input":{"task_id":"wcn64vfub"}}`,
+			"name in a list":       `{"tool_name":["` + tool + `"],"tool_input":{"task_id":"wcn64vfub"}}`,
+			"name in a dict":       `{"tool_name":{"name":"` + tool + `"},"tool_input":{}}`,
+			"name in command text": `{"tool_name":"Bash","tool_input":{"command":"printf '` + tool + ` wcn64vfub'"}}`,
+			"output of the task":   `{"tool_name":"TaskOutput","tool_input":{"task_id":"wcn64vfub"}}`,
+		} {
+			if Mandatory("PreToolUse", []byte(payload)) {
+				t.Fatalf("%s is mandatory for %s", name, tool)
+			}
+		}
+	}
+}
+
 func TestGuardCoversOnlyItsEvents(t *testing.T) {
 	t.Parallel()
 	payload := []byte(`{"tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}`)

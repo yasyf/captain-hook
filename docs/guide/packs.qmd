@@ -13,6 +13,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `general` — language-agnostic guards: git/jj command safety, a session guard that denies
   `pkill`/`killall`, a `kill` or `renice` of any pid, since a process under this session may
   belong to a nested agent, a teammate, or a sibling worker,
+  the harness's `TaskStop` tool, since a bare task id does not tell a disposable shell task
+  from a workflow, agent, or teammate session,
   `orca terminal close`/`worktree rm`/`worker-stop`, `launchctl` teardown, session-ending
   `osascript`/`softwareupdate`/`pmset`/`tmux`, and `shutdown`/`reboot`, in Bash and in MCP payloads,
   doc and prompt nudges, task and plan discipline, model-routing nudges, a code-review gate, a

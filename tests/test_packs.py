@@ -34,6 +34,7 @@ GENERAL_HOOKS = {
     "questions",
     "review",
     "sessions",
+    "stops",
     "tasks",
     "tombstones",
     "tooling",
