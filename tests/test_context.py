@@ -628,8 +628,10 @@ class TestCallLlm:
         assert HookContext(session=SessionStore(None), transcript=lane, settings=None).root_transcript_block() == ""
 
     def test_root_excerpt_keeps_only_matching_events_from_the_whole_root(self) -> None:
+        from captain_hook.context import render_window
         from captain_hook.prompt import Prompt
         from captain_hook.testing.helpers import fixture_file, fixture_session
+        from captain_hook.transcripts import root_excerpt
 
         chatter = [T.user(f"status {i}") for i in range(400)]
         root = fixture_file(
@@ -653,6 +655,10 @@ class TestCallLlm:
         )
         assert ctx.root_excerpt_block(["never said"]) == ""
         assert "user: ship it — now" in ctx.root_excerpt_block(["ship it — now"])
+        newest = root_excerpt(root, ["status"], around=0, limit=3)
+        assert render_window(newest, window=None, tool_results=False, budget=None) == (
+            "user: status 397\n\nuser: status 398\n\nuser: status 399"
+        )
         asked = ctx.assemble_prompt(
             Prompt().system("judge"),
             (),
