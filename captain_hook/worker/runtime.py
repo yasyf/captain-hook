@@ -220,7 +220,9 @@ class ProductRuntime:
 
 
 def _guard_completion(event: Event) -> GuardCompletion:
-    if any(error.pack in GUARD_PACKS for error in app.current_state().load_errors):
+    state = app.current_state()
+    guard_packs = GUARD_PACKS | {hook.pack_name for hook in state.hooks if hook.spec.mandatory and hook.pack_name}
+    if any(error.pack in guard_packs for error in state.load_errors):
         return ""
     guards = app.get_mandatory_hooks(event)
     if not any(hook.pack_name in GUARD_PACKS for hook in guards):

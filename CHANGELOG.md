@@ -27,9 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mandatory under load and fails closed on host or transport failure. The worker names the
   required `general` guard pack independently of registrations. Any load error in that pack
   or absence of its mandatory hooks withholds completion, even if another pack's hook
-  completes. All registered mandatory hooks, including other packs' hooks, must still
-  complete. The unproven-child remedy in `pid_verdict` now says "Let it finish, or ask the
-  owner to end it." instead of directing the caller to the harness's stop tool.
+  completes, and so does a load error in any other pack that registers mandatory hooks. All
+  registered mandatory hooks, including other packs' hooks, must still complete. The
+  unproven-child remedy in `pid_verdict` now says "Let it finish, or ask the owner to end
+  it." instead of directing the caller to the harness's stop tool.
 - **The native client now denies after two timeouts for every mandatory guard.** After
   one retry, a second timeout previously printed a warning and let the call run unchecked.
   The retry stays, but its timeout now produces a `transport-timeout` deny envelope on

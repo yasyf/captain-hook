@@ -309,14 +309,16 @@ class TestGuardCompletion:
     PAYLOAD = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
     STOP_PAYLOAD = '{"cwd":"/w","tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}'
 
-    def respond(self, *, payload: str = PAYLOAD, mandatory: bool = True) -> Any:
+    def respond(self, *, payload: str = PAYLOAD, mandatory: bool = True, event: str = "PreToolUse") -> Any:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
             install_writer=False,
             nlp_warmer=lambda: None,
         )
-        response, _ = runtime.dispatch(replace(request(payload_raw=payload, mandatory=mandatory), deadline_unix_ms=0))
+        response, _ = runtime.dispatch(
+            replace(request(event=event, payload_raw=payload, mandatory=mandatory), deadline_unix_ms=0)
+        )
         return response
 
     def test_the_general_pack_completes_the_guard(self, general_pack: None) -> None:
@@ -327,15 +329,7 @@ class TestGuardCompletion:
 
     @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
     def test_the_general_pack_completes_the_guard_for_a_stop_tool(self, general_pack: None, event: str) -> None:
-        runtime = ProductRuntime(
-            registry_factory=lambda _: FakeRegistry(app.current_state()),
-            transcript_loader=lambda path: None,
-            install_writer=False,
-            nlp_warmer=lambda: None,
-        )
-        response, _ = runtime.dispatch(
-            replace(request(event=event, payload_raw=self.STOP_PAYLOAD, mandatory=True), deadline_unix_ms=0)
-        )
+        response = self.respond(payload=self.STOP_PAYLOAD, event=event)
         assert response.exit == 0
         assert response.guard == "completed"
         assert '"deny"' in response.stdout
@@ -417,3 +411,29 @@ class TestGuardCompletion:
             assert response.exit == 0
             assert response.guard == ""
             assert "permissionDecision" not in response.stdout
+
+    @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
+    def test_a_pack_losing_one_of_two_mandatory_modules_leaves_the_completion_empty(
+        self, general_pack: None, tmp_path: Path, event: str
+    ) -> None:
+        other = tmp_path / "other"
+        other.mkdir()
+        for name in ("other_alpha", "other_beta"):
+            (other / f"{name}.py").write_text(
+                "from captain_hook import Event, on\n\n\n"
+                "@on(Event.PreToolUse | Event.PermissionRequest, mandatory=True)\n"
+                f"def {name}(evt):\n"
+                "    return None\n"
+            )
+        with (other / "other_beta.py").open("a") as source:
+            source.write("\nraise ImportError('broken copy')\n")
+        discover_pack("other", other)
+        assert [error.source for error in app._state.load_errors] == [str(other / "other_beta.py")]
+        assert {hook.pack_name for hook in app.get_mandatory_hooks(Event.PreToolUse)} == {"general", "other"}
+
+        healthy = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"orca terminal list --json"}}'
+        for payload in (healthy, self.STOP_PAYLOAD):
+            response = self.respond(payload=payload, event=event)
+            assert response.exit == 0
+            assert response.guard == ""
+        assert '"deny"' not in self.respond(payload=healthy, event=event).stdout
