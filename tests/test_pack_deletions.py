@@ -149,6 +149,30 @@ class TestBlockRiskyRm:
         (repo / "link").symlink_to(elsewhere / "real.txt")
         assert decision(f"rm {repo / 'link'}") is None
 
+    def test_scratch_glob_checks_every_match(
+        self, isolate_modules: None, no_trash: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
+        scratch = tmp_path / "scratch"
+        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", (scratch,))
+        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
+
+        def decision(command: str) -> dict[str, Any] | None:
+            evt = input_to_event(Event.PreToolUse, Input(command=command, cwd="/"))
+            return dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
+
+        globs = scratch / "globs"
+        for index in range(12):
+            (globs / f"g{index:02}" / "victim").mkdir(parents=True)
+        assert decision(f"rm -rf {globs}/*/victim") is None
+
+        outside = tmp_path / "outside"
+        (outside / "victim" / ".git").mkdir(parents=True)
+        (globs / "g12").symlink_to(outside)
+        decided = decision(f"rm -rf {globs}/*/victim")
+        assert decided is not None
+        assert "repository root" in decided["hookSpecificOutput"]["permissionDecisionReason"]
+
     def test_glob_limit(self, isolate_modules: None, no_trash: None, tmp_path: Path) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
 

@@ -341,10 +341,10 @@ def head_reason(call: Call) -> str | None:
                 f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`), so the guard "
                 "cannot tell what runs. Spell the command name literally."
             )
-        case Unresolved(source) if (named := names_guarded_word(source)) is not None:
+        case Unresolved(source) if source:
             return (
-                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) from text "
-                f"that names `{named}` (`{clip(source, 40)}`). Spell the command name literally."
+                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) built from text "
+                f"the guard cannot read (`{clip(source, 40)}`). Spell the command name literally."
             )
         case _:
             return None

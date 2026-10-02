@@ -91,6 +91,15 @@ hook(
         Input(command="cd / && for d in *; do find $d -name daemonkit; done"): Block(),
         Input(command="find ~/.claude/worktrees/*/ -name daemonkit"): Block(),
         Input(command="find /Users/* -maxdepth 3 -name daemonkit"): Block(),
+        Input(command='D=$(printf /); cd "$D" && find . -name daemonkit'): Block(),
+        Input(command="find . -name daemonkit"): Block(),
+        Input(
+            command=(
+                "for d in go/ci/internal/release/*/; do "
+                "echo \"$(find $d -name '*.go' ! -name '*_test.go' | xargs cat | wc -l) $d\"; done"
+            ),
+            cwd="/Users/yasyf/.claude/worktrees/monorepo/ethos-audit",
+        ): Block(),
         Input(command="find / -maxdepth 1 -type d"): Allow(),
         Input(command="find ~ -maxdepth 2 -type d -name daemonkit"): Allow(),
         Input(command="find / -maxdepth 0"): Allow(),
@@ -102,13 +111,6 @@ hook(
                 "R=/Users/yasyf/.claude/worktrees/monorepo/parity-audit-dev; ls $R/go/ci; "
                 "find $R -name 'targets.yaml' -not -path '*/node_modules/*' | head"
             )
-        ): Allow(),
-        Input(
-            command=(
-                "for d in go/ci/internal/release/*/; do "
-                "echo \"$(find $d -name '*.go' ! -name '*_test.go' | xargs cat | wc -l) $d\"; done"
-            ),
-            cwd="/Users/yasyf/.claude/worktrees/monorepo/ethos-audit",
         ): Allow(),
         Input(
             command="for v in 0.2.9 0.2.11; do find $v -maxdepth 3; done",
@@ -129,9 +131,9 @@ hook(
         ): Allow(),
         Input(command="find $HOME/.claude/worktrees/captain-hook/x -name daemonkit"): Allow(),
         Input(command="find ~/.claude/worktrees/captain-hook/* -name daemonkit"): Allow(),
-        Input(command="find src -name daemonkit"): Allow(),
+        Input(command="find src -name daemonkit", cwd="/repo"): Allow(),
         Input(command="find src -newermt 2026-09-17", cwd="/repo"): Allow(),
-        Input(command="find src -path / -prune"): Allow(),
+        Input(command="find src -path / -prune", cwd="/repo"): Allow(),
         Input(command="echo 'find / -name daemonkit'"): Allow(),
         Input(command="cat <<'EOF'\nfind / -name daemonkit\nEOF"): Allow(),
         Input(command="ccx repo locate daemonkit"): Allow(),

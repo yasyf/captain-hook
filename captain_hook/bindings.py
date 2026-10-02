@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import glob
 import re
 from dataclasses import dataclass, field
 from itertools import product
 from math import prod
+from pathlib import PurePath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -49,6 +51,7 @@ PREFIXES = frozenset({"!", "time", "builtin", "command"})
 DECLARERS = frozenset({"local", "declare", "typeset", "readonly", "let"})
 READERS = frozenset({"read", "mapfile", "readarray", "getopts"})
 UNREADABLE_BINDERS = frozenset({"eval", "source", ".", "case", "select", "coproc"})
+MUTATORS = READERS | DECLARERS | UNREADABLE_BINDERS | frozenset({"unset", "export", "printf"})
 UNREADABLE_IN_SUBSTITUTION = ("#", "<<", "case")
 SHELL_OWNED = frozenset({"PWD", "OLDPWD", "RANDOM", "SECONDS", "LINENO", "REPLY", "IFS", "BASH_COMMAND", "PIPESTATUS"})
 ENVIRONMENT = {"HOME": "~"}
@@ -338,7 +341,7 @@ class Scope:
     def __post_init__(self) -> None:
         self.mentioned = frozenset(match.group(1) for match in ASSIGNMENT.finditer(self.text))
         self.mutated = frozenset(name for match in MUTATION.finditer(self.text) for name in match.groups() if name)
-        if "IFS" in self.mentioned:
+        if "IFS" in self.mentioned or "IFS" in self.mutated:
             self.unreadable_from = 0
         Walk(self).run()
 
@@ -412,7 +415,7 @@ class Scope:
         )
         if any(len(candidate) > CANDIDATE_LENGTH for candidate in candidates):
             return Unresolved(None)
-        splittable = any(not ref.quoted for ref in refs.values())
+        splittable = any(not part.quoted for part in parts if isinstance(part, Ref))
         mixed = splittable and any(part.quoted for part in parts)
         if mixed and any(candidate.split() != [candidate] for candidate in candidates):
             return Unresolved(None)
@@ -423,6 +426,18 @@ def head_of(words: list[Token]) -> tuple[str, list[Token]]:
     while words and dequote(words[0].raw) in PREFIXES:
         words = words[1:]
     return (dequote(words[0].raw), words[1:]) if words else ("", [])
+
+
+def literal_name(word: Token) -> str | None:
+    parts = segments(word.raw)
+    if parts is None or not all(isinstance(part, Literal) for part in parts):
+        return None
+    match = NAME.search("".join(part.text for part in parts))
+    return None if match is None else match.group()
+
+
+def program_name(candidate: str) -> str:
+    return PurePath(pieces[0] if (pieces := candidate.split()) else candidate).name
 
 
 @dataclass
@@ -483,15 +498,42 @@ class Walk:
                 self.scope.functions.append((start, token.end))
         self.previous = token.raw
 
+    def bind(self, event: Event) -> None:
+        if event.name == "IFS":
+            self.scope.mark_unreadable(event.offset)
+        self.scope.events.append(event)
+
     def bind_unreadable(self, word: Token) -> None:
         if (match := ASSIGNMENT.match(word.raw)) is not None:
-            self.scope.events.append(Event(word.start, match.group(1), Unknown(None)))
+            self.bind(Event(word.start, match.group(1), Unknown(None)))
+
+    def computed_mutator(self, word: Token) -> bool:
+        parts = segments(word.raw)
+        if parts is not None and all(isinstance(part, Literal) for part in parts):
+            return False
+        match self.scope.resolve(word.raw, word.start):
+            case Resolved(candidates, _):
+                return any(program_name(candidate) in MUTATORS for candidate in candidates)
+            case Unresolved():
+                return True
 
     def flush(self, *, sure: bool) -> None:
         words, self.words = self.words, []
         if not words:
             return
         head, rest = head_of(words)
+        head_word = next(
+            (
+                word
+                for word in words
+                if dequote(word.raw) not in PREFIXES
+                and ASSIGNMENT.match(word.raw) is None
+                and not word.raw.startswith("-")
+            ),
+            None,
+        )
+        if head_word is not None and self.computed_mutator(head_word):
+            self.scope.mark_unreadable(head_word.start)
         if head in BODY_OPENERS:
             if head == "else" and self.stack and self.stack[-1][0] == "then":
                 self.stack.pop()
@@ -530,14 +572,18 @@ class Walk:
                 self.bind_assignment(word, sure=sure)
 
     def bind_names(self, head: str, words: list[Token]) -> None:
-        names = [
-            match.group()
-            for word in words
-            if not word.raw.startswith("-") and (match := NAME.search(dequote(word.raw))) is not None
-        ]
+        names: list[str] = []
+        for word in words:
+            if word.raw.startswith("-"):
+                continue
+            if (name := literal_name(word)) is None:
+                self.scope.mark_unreadable(word.start)
+                return
+            names.append(name)
         if head == "read" and not names:
             names = ["REPLY"]
-        self.scope.events.extend(Event(words[0].start if words else 0, name, Unknown(None)) for name in names)
+        for name in names:
+            self.bind(Event(words[0].start if words else 0, name, Unknown(None)))
 
     def bind_exports(self, words: list[Token], sure: bool) -> None:
         options = any(word.raw.startswith("-") for word in words)
@@ -567,7 +613,7 @@ class Walk:
                 binding = Unknown(" ".join(candidates))
             case Unresolved(source):
                 binding = Unknown(source)
-        self.scope.events.append(Event(word.start, name, binding))
+        self.bind(Event(word.start, name, binding))
 
     def bind_loop(self, words: list[Token]) -> None:
         match [word.raw for word in words]:
@@ -575,7 +621,9 @@ class Walk:
                 candidates: list[str] = []
                 for item in words[2:]:
                     match self.scope.resolve(item.raw, item.start):
-                        case Resolved(values, splittable) if not any("{" in value for value in values):
+                        case Resolved(values, splittable) if not any(
+                            "{" in value or glob.has_magic(value) for value in values
+                        ):
                             candidates.extend(
                                 piece for value in values for piece in (value.split() if splittable else [value])
                             )
@@ -588,16 +636,16 @@ class Walk:
                     else Unknown(" ".join(word.raw for word in words[2:]) or None)
                 )
                 self.pending_loop = len(self.scope.events)
-                self.scope.events.append(Event(words[0].start, name, binding))
+                self.bind(Event(words[0].start, name, binding))
             case [name, *_] if NAME.fullmatch(name) is not None:
-                self.scope.events.append(Event(words[0].start, name, Unknown(None)))
+                self.bind(Event(words[0].start, name, Unknown(None)))
             case _:
                 pass
 
     def close_loop(self, index: int, end: int) -> None:
         event = self.scope.events[index]
         self.scope.events[index] = Event(event.offset, event.name, event.binding, end)
-        self.scope.events.append(Event(end, event.name, Unknown(source_of(event.binding))))
+        self.bind(Event(end, event.name, Unknown(source_of(event.binding))))
 
 
 def printf_destination(words: list[Token]) -> list[Token]:
