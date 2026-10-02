@@ -142,9 +142,20 @@ class Signature:
     verbs: tuple[Verb, ...]
     lane_name: re.Pattern[str]
     window: timedelta | None = None
+    failures_only: bool = False
 
     def sourced(self, evt: BaseHookEvent) -> bool:
         return any(verb.ran(evt) for verb in self.verbs)
+
+    def refused_text(self, evt: BaseHookEvent) -> str:
+        if not self.failures_only:
+            return result_text(evt)
+        if isinstance(evt, PostToolUseFailureEvent):
+            return evt.error
+        match getattr(evt, "tool_response", None):
+            case {"stderr": str() as stderr}:
+                return stderr
+        return ""
 
     def expires(self, text: str) -> datetime | None:
         if found := RESET.search(text):
@@ -192,6 +203,7 @@ SIGNATURES = (
         GITHUB_VERBS,
         re.compile(r"(?<![\w])(?:gh|github|graphql)-(?:quota|rate-limit)"),
         timedelta(hours=1),
+        failures_only=True,
     ),
 )
 
@@ -260,9 +272,8 @@ def excerpt(text: str, match: re.Match[str]) -> str:
 
 
 def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
-    text = result_text(evt)
     for signature in SIGNATURES:
-        if signature.sourced(evt) and (found := signature.text.search(text)):
+        if signature.sourced(evt) and (found := signature.text.search(text := signature.refused_text(evt))):
             return signature.key, Refusal(
                 tool=signature.tool,
                 verbs=tuple(verb.text for verb in signature.verbs),
@@ -485,6 +496,12 @@ SLACK_REFUSED = ToolingRefusals(
         )
     }
 )
+PR_236_BODY = (
+    "Context: The deterministic tooling-refusal path added in #234 blocked an unrelated cc-slack CLI\n"
+    "rebuild dispatch because its prompt included `ccx vcs worktree add`. The quota record came from\n"
+    '`ccx code read` printing an inline test containing "GitHub GraphQL quota exhausted"; a documentation\n'
+    "excerpt about `rate-limited until` produced another false record and blocked a PR watcher.\n"
+)
 CC_SLACK_CLI_SYNC = (
     "You are cc-slack-cli-sync. Defect: every cc-slack CLI call from lanes now fails: the daemon runs a newer "
     "release than this CLI. Use a fresh worktree `ccx vcs worktree add cc-slack-cli-sync` if you need to build, "
@@ -514,15 +531,10 @@ CC_SLACK_CLI_SYNC = (
         Input(
             command="ccx vcs pr status 12",
             output="ccx: GitHub GraphQL quota exhausted; rate-limited until 2026-10-01T22:05:00Z",
-        ): Warn(pattern="^`ccx` refused this action"),
+        ): Allow(),
         Input(
-            command="gh pr view 12 --json state",
-            output="GraphQL: API rate limit exceeded for user ID 1",
-        ): Warn(pattern="`ccx: tooling-lane=github-quota`"),
-        Input(
-            command="ccx vcs pr status 12",
-            output="ccx: GitHub GraphQL quota exhausted",
-            state=[ToolingRefusals(lanes={"github-quota"})],
+            command="gh pr view 236 --repo yasyf/captain-hook --json body -q .body",
+            output=PR_236_BODY,
         ): Allow(),
         Input(
             command="ccx code read captain_hook/builtin_packs/general/hooks/tooling.py --section 400-415",

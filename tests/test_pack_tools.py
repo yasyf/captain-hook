@@ -423,3 +423,61 @@ def test_a_session_wide_raw_env_records_no_refusal(tmp_path: Path, monkeypatch: 
 
     assert "raw" in evt.annotations
     assert refusal(evt) is None
+
+
+def test_a_quota_phrase_in_printed_prose_records_no_refusal(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import PR_236_BODY, refusal
+
+    evt = PostToolUseEvent(
+        _raw={
+            "tool_name": "Bash",
+            "tool_input": {"command": "gh pr view 236 --repo yasyf/captain-hook --json body -q .body"},
+            "tool_response": {"stdout": PR_236_BODY, "stderr": "", "interrupted": False},
+        },
+        ctx=make_ctx(tmp_path),
+    )
+
+    assert refusal(evt) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "error"),
+    [
+        (
+            "ccx vcs pr status 12",
+            "Exit code 1\nccx: GitHub GraphQL quota exhausted; rate-limited until 2099-01-01T00:00:00Z",
+        ),
+        ("gh pr view 12 --json state", "Exit code 1\nGraphQL: API rate limit exceeded for user ID 1"),
+    ],
+)
+def test_a_failed_github_call_records_the_quota_refusal(tmp_path: Path, command: str, error: str) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+    from captain_hook.events import PostToolUseFailureEvent
+
+    evt = PostToolUseFailureEvent(
+        _raw={"tool_name": "Bash", "tool_input": {"command": command}, "error": error}, ctx=make_ctx(tmp_path)
+    )
+
+    result = record_refusal(evt)
+
+    assert result is not None
+    assert "`ccx: tooling-lane=github-quota`" in (result.message or "")
+    assert set(ToolingRefusals.load(evt).refusals) == {"github-quota"}
+
+
+def test_a_failed_github_call_under_a_live_lane_stays_quiet(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+    from captain_hook.events import PostToolUseFailureEvent
+
+    ctx = make_ctx(tmp_path)
+    ctx.session[ToolingRefusals].set(ToolingRefusals(lanes={"github-quota"}))
+    evt = PostToolUseFailureEvent(
+        _raw={
+            "tool_name": "Bash",
+            "tool_input": {"command": "ccx vcs pr status 12"},
+            "error": "Exit code 1\nccx: GitHub GraphQL quota exhausted",
+        },
+        ctx=ctx,
+    )
+
+    assert record_refusal(evt) is None
