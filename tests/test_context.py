@@ -460,6 +460,18 @@ class TestCallLlm:
         assert mock_call.call_args.kwargs["specialty"] == "review"
         assert mock_call.call_args.kwargs["cwd"] == "/tmp"
 
+    def test_default_judge_is_luna_at_low_effort(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm import LlmBackends
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm("test prompt")
+        specialty, model = mock_call.call_args.kwargs["specialty"], mock_call.call_args.kwargs["model"]
+        assert (specialty, model) == ("review", "small")
+        assert LlmBackends.for_specialty(specialty).resolve_model(model) == "gpt-6-luna:low"
+
     @pytest.mark.parametrize(
         ("deadline_unix_ms", "expected"),
         [
