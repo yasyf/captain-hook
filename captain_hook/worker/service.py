@@ -371,7 +371,14 @@ class WorkerService:
     def snapshot_exchange(
         self, parent_id: int, request: dict[str, Any], *, cleanup: bool = False, expires_unix_ms: int | None = None
     ) -> dict[str, Any]:
-        from captain_hook.snapshots.client import CLEANUP_SECONDS, EvidenceIncomplete, SnapshotProtocolError
+        from loguru import logger
+
+        from captain_hook.snapshots.client import (
+            CLEANUP_SECONDS,
+            EvidenceIncomplete,
+            SnapshotProtocolError,
+            request_metadata,
+        )
         from captain_hook.util import reqenv
 
         nested: dict[str, Any] | None = request.get("request")
@@ -402,6 +409,7 @@ class WorkerService:
             self._snapshot_pending[request_id] = (parent_id, future)
         sent = False
         try:
+            started = time.monotonic()
             self._write(snapshot_request_message(request_id, parent_id, request), max_frame=MAX_SNAPSHOT_FRAME)
             sent = True
             while True:
@@ -409,6 +417,15 @@ class WorkerService:
                     reqenv.checkpoint()
                 left = expires - time.time()
                 if left <= 0:
+                    logger.bind(
+                        **request_metadata(nested or {}),
+                        status="deadline",
+                        parent_id=parent_id,
+                        frame_id=request_id,
+                        foreground_deadline_unix_ms=expires_unix_ms,
+                        expires_unix_ms=round(expires * 1000),
+                        elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+                    ).info("snapshot transport deadline elapsed")
                     raise EvidenceIncomplete("deadline", "snapshot transport deadline elapsed")
                 try:
                     return future.result(timeout=min(left, 0.05))

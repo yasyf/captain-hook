@@ -8,11 +8,14 @@ import os
 import struct
 import sys
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, BinaryIO
+
+from loguru import logger
 
 from captain_hook.snapshots.client import (
     CORE_SCHEMA,
@@ -22,6 +25,7 @@ from captain_hook.snapshots.client import (
     SnapshotProtocolError,
     encode_frame,
     read_exact,
+    request_metadata,
 )
 from captain_hook.snapshots.validation import checked, parse_exact, validator
 from captain_hook.util.caching import LRUDict
@@ -197,6 +201,7 @@ class Owner:
     def call(
         self, request: dict[str, Any], context: CallContext, token: Any, tool_registry: list[dict[str, Any]]
     ) -> dict[str, Any]:
+        started = time.monotonic()
         usage: dict[str, int] | None = None
         try:
             context["registry_generation"] = self.registry_generation(tool_registry, context)
@@ -279,9 +284,16 @@ class Owner:
                 )
             return self._page(page, request["id"])
         except self.incomplete_type as exc:
-            return failure(request["id"], exc.status, exc.reason, dict(exc.usage))
+            status, reason, usage = exc.status, exc.reason, dict(exc.usage)
         except EvidenceIncomplete as exc:
-            return failure(request["id"], exc.status, exc.reason, usage)
+            status, reason = exc.status, exc.reason
+        fields = (
+            request_metadata(request)
+            | {"status": status, "elapsed_ms": round((time.monotonic() - started) * 1000, 1)}
+            | ({key: usage[key] for key in empty_usage() if key in usage} if usage else {"usage": "unknown"})
+        )
+        logger.info("snapshot request failed: {}", " ".join(f"{key}={value!r}" for key, value in fields.items()))
+        return failure(request["id"], status, reason, usage)
 
     def discard(self, response: dict[str, Any], context: CallContext) -> None:
         self.store.discard_response(response, context=context)

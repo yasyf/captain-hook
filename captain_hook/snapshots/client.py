@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -47,6 +48,8 @@ DEFAULT_LIMITS = {
     "max_sources": 65_536,
 }
 NATIVE_CLASSIFIER = {"id": "native", "version": "1"}
+SOURCE_FIELDS = ("path", "direct_paths", "roots", "session_ids", "thread_ids")
+HANDLE_FIELDS = ("handles", "handle", "view", "cursor", "token")
 
 
 def monotonic_deadline(deadline_unix_ms: int) -> float:
@@ -81,6 +84,28 @@ def graph_limits() -> dict[str, int]:
     limits["max_discovery_entries"] = min(limits["max_discovery_entries"], GRAPH_DISCOVERY_ENTRIES)
     limits["max_sources"] = min(limits["max_sources"], GRAPH_SOURCE_LIMIT)
     return limits
+
+
+def request_metadata(request: Mapping[str, object]) -> dict[str, object]:
+    sources = {key: value for key in SOURCE_FIELDS if (value := request.get(key))}
+    resource = (
+        {
+            "resource_kind": "+".join(sources),
+            "resource_count": sum(len(value) if isinstance(value, list) else 1 for value in sources.values()),
+            "resource_sha256": hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest()[:16],
+        }
+        if sources
+        else {
+            "resource_kind": next((key for key in HANDLE_FIELDS if request.get(key)), None),
+            "resource_count": None,
+            "resource_sha256": None,
+        }
+    )
+    return {
+        "operation": request.get("operation"),
+        "request_id": request.get("id"),
+        "deadline_unix_ms": request.get("deadline_unix_ms"),
+    } | resource
 
 
 class EvidenceIncomplete(RuntimeError):
@@ -311,7 +336,8 @@ class SnapshotClient:
 
         from captain_hook.snapshots.validation import checked
 
-        retry_until = time.monotonic() + CLEANUP_SECONDS if operation == "release" else None
+        started = time.monotonic()
+        retry_until = started + CLEANUP_SECONDS if operation == "release" else None
         admission_deadline_unix_ms = int((time.time() + self._preparation_seconds) * 1000)
         retry_delay = 0.01
         while True:
@@ -325,6 +351,13 @@ class SnapshotClient:
                 and operation != "release"
                 and int(time.time() * 1000) >= self.foreground_deadline_unix_ms
             ):
+                logger.bind(
+                    **request_metadata({"operation": operation, "id": request_id} | arguments),
+                    status="deadline",
+                    foreground_deadline_unix_ms=self.foreground_deadline_unix_ms,
+                    foreground_seconds=self._foreground_seconds,
+                    elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+                ).info("foreground transcript deadline exhausted")
                 raise EvidenceIncomplete("deadline", "foreground transcript deadline exhausted")
             request: dict[str, object] = {
                 "schema": HOST_SCHEMA if domain else CORE_SCHEMA,
@@ -375,6 +408,13 @@ class SnapshotClient:
             while True:
                 status = result.get("status")
                 if status not in {"ok", "incomplete"}:
+                    logger.bind(
+                        **request_metadata({"operation": operation, "id": result.get("id")} | arguments),
+                        status=status,
+                        foreground_deadline_unix_ms=self.foreground_deadline_unix_ms,
+                        output_bytes=output_bytes,
+                        usage=result.get("usage"),
+                    ).info("snapshot request failed")
                     raise EvidenceIncomplete(str(status), str(result.get("reason")))
                 if (data := result.get("data")) is not None:
                     if not isinstance(data, dict):
@@ -389,6 +429,7 @@ class SnapshotClient:
                     return
                 if not isinstance(cursor, str) or not cursor:
                     raise EvidenceIncomplete("incomplete", str(result.get("reason")))
+                operation, arguments = "resume", {"cursor": cursor}
                 result = self.call("resume", cursor=cursor)
                 cursor = result.get("cursor")
         finally:

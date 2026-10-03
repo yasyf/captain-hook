@@ -55,7 +55,9 @@ def tally_fail_open(event: Event | None, session_id: str, gaps: Sequence[str]) -
         ) as tally:
             for gap in gaps:
                 hook, _, cause = gap.partition(": ")
-                logger.bind(hook=hook, cause=cause).warning("hook skipped: evidence incomplete")
+                logger.bind(
+                    hook=hook, cause=cause, status=cause.partition(": ")[0], event=event.name if event else None
+                ).warning("hook skipped: evidence incomplete")
                 if hook not in tally.reported and hook not in tally.pending:
                     tally.pending[hook] = cause
             if event is None or event not in SURFACING_EVENTS or not tally.pending:

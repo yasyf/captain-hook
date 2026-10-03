@@ -1,5 +1,7 @@
+import hashlib
 import io
 import json
+import re
 import struct
 import sys
 import threading
@@ -517,6 +519,72 @@ def test_owner_binds_registry_content_without_changing_authority():
     assert captured[0]["registry_generation"] == "content-fingerprint"
     assert captured[0]["authority"] == authority
     assert captured[0]["claimant"] == "fixture"
+
+
+def owner_with(native_call):
+    from cc_transcript.snapshots import SnapshotIncomplete
+
+    from captain_hook.snapshots.worker import Owner
+
+    owner = object.__new__(Owner)
+    owner.store = SimpleNamespace(register_tool_registry=lambda registry, *, context: "fixture", request=native_call)
+    owner.incomplete_type = SnapshotIncomplete
+    owner.registry_generations = {}
+    owner.registry_guard = threading.Lock()
+    return owner
+
+
+def test_owner_missing_failure_renders_safe_context_through_its_message(logcap):
+    from cc_transcript.snapshots import SnapshotIncomplete
+
+    private = "/Users/fixture-user/private/session.jsonl"
+    reason = "No such file or directory (os error 2) sk-fixture-secret"
+    usage = {"source_opens": 1, "discovery_entries_examined": 3}
+
+    def native_call(body, *, context, cancellation):
+        raise SnapshotIncomplete("missing", reason, usage=usage, work={"max_read_bytes": 7})
+
+    body = request(
+        operation="acquire", path=private, classifier={"id": "native", "version": "1"}, deadline_unix_ms=12_345
+    )["snapshot"]["request"]
+
+    response = owner_with(native_call).call(body, context(), object(), [])
+
+    assert response == failure("request-1", "missing", reason, usage)
+    checked("response", response)
+    digest = hashlib.sha256(json.dumps({"path": private}, sort_keys=True).encode()).hexdigest()[:16]
+    [record] = logcap.records
+    assert record.levelno == 20
+    assert re.fullmatch(
+        "INFO captain_hook\\.snapshots\\.worker: snapshot request failed: operation='acquire' request_id='request-1' "
+        f"deadline_unix_ms=12345 resource_kind='path' resource_count=1 resource_sha256='{digest}' "
+        "status='missing' elapsed_ms=\\d+\\.\\d discovery_entries_examined=3 source_opens=1\n",
+        logcap.text,
+    )
+    for forbidden in (private, "os error", "sk-fixture-secret", "native", "max_read_bytes"):
+        assert forbidden not in logcap.text
+
+
+def test_owner_failure_without_counters_renders_them_unknown_and_no_handle(logcap):
+    body = {
+        "schema": HOST_SCHEMA,
+        "id": "request-2",
+        "operation": "prepare_review",
+        "policy": {"id": "other", "version": "1"},
+        "view": {"handle": {"owner_epoch": "owner", "snapshot_id": "snapshot", "lease_id": "lease-fixture-secret"}},
+    }
+
+    response = owner_with(lambda *_, **__: pytest.fail("native store was called")).call(body, context(), object(), [])
+
+    assert response == failure("request-2", "invalid_request", "unregistered Captain evidence policy")
+    assert re.fullmatch(
+        "INFO captain_hook\\.snapshots\\.worker: snapshot request failed: operation='prepare_review' "
+        "request_id='request-2' deadline_unix_ms=None resource_kind='view' resource_count=None resource_sha256=None "
+        "status='invalid_request' elapsed_ms=\\d+\\.\\d usage='unknown'\n",
+        logcap.text,
+    )
+    assert "lease-fixture-secret" not in logcap.text
+    assert "owner_epoch" not in logcap.text
 
 
 REFUSING_HOST = """
