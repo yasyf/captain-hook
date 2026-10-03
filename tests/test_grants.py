@@ -717,8 +717,8 @@ def test_spending_an_unknown_grant_names_it(tmp_path: Path) -> None:
     assert refused.exit_code == 1 and "no grant 000000000000" in refused.output
 
 
-def recorded_words(quote: str, *, expires: datetime) -> Grant:
-    said = evidence_module.words_evidence(quote, store.now() - timedelta(days=2))
+def recorded_words(quote: str, *, expires: datetime, ago: timedelta = timedelta(days=2)) -> Grant:
+    said = evidence_module.words_evidence(quote, store.now() - ago)
     return store.mint(
         Grant(
             id=store.new_id(),
@@ -729,7 +729,7 @@ def recorded_words(quote: str, *, expires: datetime) -> Grant:
             source_key=said.key,
             expires=expires,
             author="words@test",
-            created=store.now() - timedelta(days=2),
+            created=store.now() - ago,
         )
     )
 
@@ -748,14 +748,15 @@ def in_orca(monkeypatch: pytest.MonkeyPatch, handle: str) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "1")
 
 
-def fake_orca(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+def fake_orca(monkeypatch: pytest.MonkeyPatch, status: list[str] | None = None) -> list[tuple[str, ...]]:
     calls: list[tuple[str, ...]] = []
-    worker = {"agentTerminalHandle": "term_lane", "dispatchStatus": "dispatched", "runId": "run_1"}
+    lane = status or ["dispatched"]
     finished = {"agentTerminalHandle": "term_old", "dispatchStatus": "completed", "runId": "run_0"}
 
     def orca(*args: str) -> dict[str, Any]:
         calls.append(args)
         if args[:2] == ("orchestration", "worker-list"):
+            worker = {"agentTerminalHandle": "term_lane", "dispatchStatus": lane[0], "runId": "run_1"}
             return {"workers": [finished, worker], "page": {"hasMore": False, "nextCursor": None}}
         assert args == ("orchestration", "run-show", "--id", "run_1")
         return {"run": {"id": "run_1", "coordinator_handle": "term_root"}}
@@ -799,3 +800,66 @@ def test_no_orca_binds_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     in_orca(monkeypatch, "term_unknown")
     assert not declared().check(event(tmp_path / "other", session="other-root", call="c2"))
     assert calls == [("orchestration", "worker-list", "--limit", "100")]
+
+
+def test_an_orca_lane_never_adopts_the_coordinators_recorded_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.record_terminal("term_root", TREE)
+    words = recorded_words("send one reply in that thread", expires=store.now() + timedelta(days=5))
+    grant = minted(uses=1)
+    fake_orca(monkeypatch)
+    in_orca(monkeypatch, "term_lane")
+    assert declared().check(event(tmp_path / "a", "a", session="lane-a"))
+    assert store.adoptions(words.id) == [] and [found.tree for found in store.adoptions(grant.id)] == ["lane-a"]
+    judged = declared(judge=Judge("rules"), evidence=(OwnerWords(),))
+    lane_b = event(tmp_path / "b", "b", session="lane-b", call="c2", allow=True, reason="ok", relied_on=[words.id])
+    assert evidence_module.recorded(lane_b, "words") == []
+    assert not judged.check(lane_b)
+    assert not declared().check(event(tmp_path, "root", call="c3"))
+
+
+def test_a_reused_coordinator_terminal_never_lends_the_new_sessions_grants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.record_terminal("term_root", TREE)
+    minted(uses=None)
+    fake_orca(monkeypatch)
+    in_orca(monkeypatch, "term_lane")
+    assert declared().check(event(tmp_path / "lane", "lane", session="lane-root"))
+    store.record_terminal("term_root", "unrelated-root")
+    unrelated = store.mint(
+        Grant(id=store.new_id(), kind="test.write", tree="unrelated-root", scope=SCOPE, author="t", created=store.now())
+    )
+    monkeypatch.setattr(orca_module, "BINDING_TTL", timedelta(0))
+    declared().check(event(tmp_path / "lane", "again", session="lane-root", call="c2"))
+    assert store.adoptions(unrelated.id) == []
+
+
+def test_an_orca_binding_is_revalidated_after_its_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.record_terminal("term_root", TREE)
+    first = minted(uses=None)
+    status = ["dispatched"]
+    calls = fake_orca(monkeypatch, status)
+    in_orca(monkeypatch, "term_lane")
+    assert declared().check(event(tmp_path / "lane", "lane", session="lane-root"))
+    assert [found.tree for found in store.adoptions(first.id)] == ["lane-root"]
+    monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_moved")
+    declared().check(event(tmp_path / "lane", "moved", session="lane-root", call="c2"))
+    assert len(calls) == 3
+    monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_lane")
+    monkeypatch.setattr(orca_module, "BINDING_TTL", timedelta(0))
+    status[0] = "completed"
+    later = minted(uses=None)
+    declared().check(event(tmp_path / "lane", "done", session="lane-root", call="c3"))
+    assert store.adoptions(later.id) == []
+
+
+def test_a_withdrawal_whose_record_expired_still_reaches_the_judge(tmp_path: Path) -> None:
+    grant = minted(approved={"text": "ok"}, uses=None)
+    recorded_words("stop posting there", expires=store.now() - timedelta(seconds=1), ago=timedelta(seconds=30))
+    evt = event(tmp_path, "ok", allow=False, reason="the owner withdrew it", withdrawn=True)
+    denied = declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(OwnerWords(),)).check(evt)
+    assert isinstance(denied, Denied) and "withdrew" in denied.reason
+    assert "stop posting there" in evt.ctx.call_llm.call_args_list[0].args[0].system_text
+    assert store.load(grant.id).revoked is not None

@@ -15,6 +15,7 @@ from captain_hook.grants.records import Adoption, Grant, Spend, SpendState
 from captain_hook.util.paths import resolve_state_dir
 
 RESERVATION_TTL = timedelta(minutes=2)
+EVIDENCE_KINDS = ("ask", "words")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS grants (
     id TEXT PRIMARY KEY,
@@ -310,12 +311,16 @@ def adopt(grant_id: str, *, tree: str, session: str, agent: str) -> Adoption:
 
 
 def adopt_tree(source: str, *, tree: str, session: str, agent: str) -> int:
-    """Adopt every grant minted in *source* into *tree*, logged like :func:`adopt`; returns how many were new."""
+    """Adopt every spendable grant minted in *source* into *tree*, logged like :func:`adopt`.
+
+    The owner's recorded words and answers stay in their own tree, so a second tree never mints a fresh
+    budget from an approval *source* already spent. Returns how many adoptions were new.
+    """
     with connect() as db:
         return db.execute(
             "INSERT OR IGNORE INTO adoptions (grant_id, tree, at, session, agent)"
-            " SELECT id, ?, ?, ?, ? FROM grants WHERE tree = ?",
-            (tree, now().isoformat(), session, agent, source),
+            " SELECT id, ?, ?, ?, ? FROM grants WHERE tree = ? AND kind NOT IN (SELECT value FROM json_each(?))",
+            (tree, now().isoformat(), session, agent, source, json.dumps(EVIDENCE_KINDS)),
         ).rowcount
 
 

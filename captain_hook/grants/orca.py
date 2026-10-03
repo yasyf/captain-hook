@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from captain_hook.grants import store
 from captain_hook.grants.evidence import tree_of
@@ -18,14 +18,16 @@ if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
 
 ORCA_TIMEOUT = 5
-UNBOUND_RECHECK = timedelta(minutes=5)
+BINDING_TTL = timedelta(minutes=1)
 WORKER_PAGE = 100
 
 
 class OrcaRun(BaseModel):
+    terminal: str | None = None
     run: str | None = None
     coordinator: str | None = None
     checked: datetime | None = None
+    pinned: dict[str, str] = Field(default_factory=dict[str, str])
 
 
 def terminal() -> str | None:
@@ -65,23 +67,36 @@ def dispatched_run(handle: str) -> str | None:
     return None
 
 
-def resolve(handle: str) -> OrcaRun:
-    at = store.now()
+def resolve(handle: str) -> tuple[str | None, str | None]:
     if (run := dispatched_run(handle)) is None or (shown := orca("orchestration", "run-show", "--id", run)) is None:
-        return OrcaRun(checked=at)
-    return OrcaRun(run=run, coordinator=shown["run"]["coordinator_handle"], checked=at)
+        return None, None
+    return run, shown["run"]["coordinator_handle"]
+
+
+def pin(run: str | None, coordinator: str | None) -> str:
+    return f"{run} {coordinator}"
 
 
 def bound_run(evt: BaseHookEvent, handle: str) -> OrcaRun:
     slot = evt.ctx.session[OrcaRun]
-    cached = slot.get()
-    if cached is not None and (
-        cached.run is not None or (cached.checked is not None and store.now() - cached.checked < UNBOUND_RECHECK)
-    ):
+    at = store.now()
+    cached = slot.get(OrcaRun())
+    if cached.terminal == handle and cached.checked is not None and at - cached.checked < BINDING_TTL:
         return cached
-    found = resolve(handle)
+    run, coordinator = resolve(handle)
+    pinned = cached.pinned
+    if run is not None and coordinator is not None and pin(run, coordinator) not in pinned:
+        if (tree := store.terminal_tree(coordinator)) is not None:
+            pinned = pinned | {pin(run, coordinator): tree}
+    found = OrcaRun(terminal=handle, run=run, coordinator=coordinator, checked=at, pinned=pinned)
     slot.set(found)
     return found
+
+
+def coordinator_tree(binding: OrcaRun) -> str | None:
+    if binding.coordinator is None or (pinned := binding.pinned.get(pin(binding.run, binding.coordinator))) is None:
+        return None
+    return pinned if store.terminal_tree(binding.coordinator) == pinned else None
 
 
 def record_terminal(evt: BaseHookEvent) -> None:
@@ -95,10 +110,8 @@ def adopt_coordinator(evt: BaseHookEvent) -> None:
     if (handle := terminal()) is None:
         return
     binding = bound_run(evt, handle)
-    if binding.run is None or binding.coordinator is None:
-        return
     tree = tree_of(evt)
-    if (coordinator := store.terminal_tree(binding.coordinator)) is None or coordinator == tree:
+    if (coordinator := coordinator_tree(binding)) is None or coordinator == tree:
         return
     agent = f"orca:{binding.run}"
     if adopted := store.adopt_tree(coordinator, tree=tree, session=evt.session_id, agent=agent):
