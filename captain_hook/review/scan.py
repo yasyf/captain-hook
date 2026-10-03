@@ -28,6 +28,7 @@ so two sessions' complaints about one hook collapse to one candidate.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from cc_transcript.context import ContextWindow
+    from cc_transcript.corrections import CorrectionLog
     from cc_transcript.mining.signals import MiningSignal
     from cc_transcript.models import TranscriptEvent
 
@@ -398,6 +400,7 @@ async def ingest(
     prepared: Mapping[str, Any],
     *,
     corrections: Sequence[Mapping[str, Any]],
+    ledger: CorrectionLedger,
     repo_key: RepoKey | None = None,
 ) -> ScanReport:
     from cc_transcript.mining.store import event_row, now
@@ -437,7 +440,7 @@ async def ingest(
                 session_id=candidate.ref.session_id,
                 occurred_at=candidate.occurred_at,
             )
-    await record_correction_drafts(corrections)
+    await record_correction_drafts(corrections, ledger=ledger)
     return ScanReport(scanned=1, inserted=inserted)
 
 
@@ -470,8 +473,44 @@ def correction_pages(
     return first + second, first_refused + second_refused
 
 
+class CorrectionLedger:
+    def __init__(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        self.log: CorrectionLog | None = None
+
+    async def __aenter__(self) -> CorrectionLedger:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self.log is not None:
+            await self.log.close()
+
+    async def handle(self) -> CorrectionLog:
+        from cc_transcript.corrections import CorrectionLog
+
+        self.log = self.log or await CorrectionLog.open()
+        return self.log
+
+    async def recorded(self, anchors: Sequence[EventRef]) -> set[EventRef]:
+        log = await self.handle()
+        keys = {
+            (row.session_id, row.anchor_uuid)
+            for session_id in {anchor.session_id for anchor in anchors}
+            for row in await log.for_session(session_id)
+        }
+        return {anchor for anchor in anchors if (anchor.session_id, anchor.event_uuid) in keys}
+
+    def recorded_from_thread(self, anchors: Sequence[EventRef]) -> set[EventRef]:
+        return asyncio.run_coroutine_threadsafe(self.recorded(anchors), self.loop).result()
+
+
 def prepare_source(
-    client: Any, path: Path, settings: ReviewSettings, repo_key: RepoKey | None = None
+    client: Any,
+    path: Path,
+    settings: ReviewSettings,
+    repo_key: RepoKey | None = None,
+    *,
+    recorded: Callable[[Sequence[EventRef]], set[EventRef]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
     from captain_hook.decisions import decisions_db_path
     from captain_hook.snapshots.review import REVIEW_POLICY, ProjectionBudget, decode_candidate
@@ -505,6 +544,9 @@ def prepare_source(
         eligible = [
             candidate for raw in candidates if (candidate := decode_candidate(raw)[0]).source_kind != HOOK_COMPLAINT
         ]
+        if eligible:
+            completed = recorded([candidate.ref for candidate in eligible])
+            eligible = [candidate for candidate in eligible if candidate.ref not in completed]
         corrections: list[dict[str, Any]] = []
         refused: list[tuple[EventRef, EvidenceIncomplete]] = []
         for offset in range(0, len(eligible), 256):
@@ -527,8 +569,6 @@ async def scan_transcript(
 async def scan(
     store: ReviewStore, *, settings: ReviewSettings, transcripts: Sequence[Path], repo_key: RepoKey | None = None
 ) -> ScanReport:
-    import asyncio
-
     from loguru import logger
 
     from captain_hook.snapshots.review import review_client
@@ -542,43 +582,46 @@ async def scan(
     next_checkpoint = None
     from captain_hook.snapshots.client import EvidenceIncomplete
 
-    with review_client() as client:
-        try:
-            pages = await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint)))
-        except EvidenceIncomplete as exc:
-            if exc.status != "stale_cursor":
-                raise
-            pages = await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=None)))
-        for page in pages:
-            next_checkpoint = page["checkpoint"]
-            for entry in page["entries"]:
-                if entry["state"] != "present":
-                    continue
-                path = entry["path"]
-                revision_key = f"snapshot_revision:{dedup_key(path)}"
-                refused_key = f"snapshot_refused:{dedup_key(path)}"
-                if entry["revision"] in {await store.meta(revision_key), await store.meta(refused_key)}:
-                    continue
-                try:
-                    prepared, corrections, anchors_refused = await asyncio.to_thread(
-                        prepare_source, client, Path(path), settings, repo_key
-                    )
-                except EvidenceIncomplete as exc:
-                    if exc.status != "output_limit":
-                        raise
-                    logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
-                    await store.set_meta(refused_key, entry["revision"])
-                    refused += 1
-                    continue
-                for anchor, refusal in anchors_refused:
-                    logger.bind(transcript=path, session_id=anchor.session_id, event_uuid=anchor.event_uuid).warning(
-                        f"correction evidence refused: {refusal.reason}"
-                    )
-                report = await ingest(store, prepared, corrections=corrections, repo_key=repo_key)
-                await store.set_meta(revision_key, entry["revision"])
-                scanned += report.scanned
-                inserted += report.inserted
-                refused += len(anchors_refused)
+    async with CorrectionLedger() as ledger:
+        with review_client() as client:
+            try:
+                pages = await asyncio.to_thread(
+                    lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint))
+                )
+            except EvidenceIncomplete as exc:
+                if exc.status != "stale_cursor":
+                    raise
+                pages = await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=None)))
+            for page in pages:
+                next_checkpoint = page["checkpoint"]
+                for entry in page["entries"]:
+                    if entry["state"] != "present":
+                        continue
+                    path = entry["path"]
+                    revision_key = f"snapshot_revision:{dedup_key(path)}"
+                    refused_key = f"snapshot_refused:{dedup_key(path)}"
+                    if entry["revision"] in {await store.meta(revision_key), await store.meta(refused_key)}:
+                        continue
+                    try:
+                        prepared, corrections, anchors_refused = await asyncio.to_thread(
+                            prepare_source, client, Path(path), settings, repo_key, recorded=ledger.recorded_from_thread
+                        )
+                    except EvidenceIncomplete as exc:
+                        if exc.status != "output_limit":
+                            raise
+                        logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
+                        await store.set_meta(refused_key, entry["revision"])
+                        refused += 1
+                        continue
+                    for anchor, refusal in anchors_refused:
+                        logger.bind(
+                            transcript=path, session_id=anchor.session_id, event_uuid=anchor.event_uuid
+                        ).warning(f"correction evidence refused: {refusal.reason}")
+                    report = await ingest(store, prepared, corrections=corrections, ledger=ledger, repo_key=repo_key)
+                    await store.set_meta(revision_key, entry["revision"])
+                    scanned += report.scanned
+                    inserted += report.inserted
+                    refused += len(anchors_refused)
     if next_checkpoint is not None:
         await store.set_meta(checkpoint_key, next_checkpoint)
     return ScanReport(scanned, inserted, refused)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, Confidence
 from pydantic import Field
-from pydantic_settings import SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from spawnllm import TModel
 
 from captain_hook.settings import HooksSettings, resolve_state_dir
@@ -14,6 +14,19 @@ from captain_hook.settings import HooksSettings, resolve_state_dir
 
 def resolve_review_db_path() -> Path:
     return resolve_state_dir() / "review" / "review-v1.db"
+
+
+class ReviewPaths(BaseSettings):
+    """The reviewer's database location alone, read from ``HOOKS_REVIEW_DB_PATH``.
+
+    The hook guard resolves its admission locks from this without validating the full
+    :class:`ReviewSettings`, so a malformed reviewer knob still reaches the detached child,
+    which records the failure.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")
+
+    db_path: Path = Field(default_factory=resolve_review_db_path)
 
 
 class ReviewSettings(HooksSettings):

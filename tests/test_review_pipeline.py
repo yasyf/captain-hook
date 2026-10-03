@@ -52,6 +52,7 @@ from captain_hook.review.pipeline import (
     guard_and_spawn,
     guard_and_sweep,
     judge_lock,
+    pending_claim,
     queued_review_lock,
     repo_lock,
     review_log_path,
@@ -305,7 +306,8 @@ class TestGuardAndSpawn:
             json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode()
         )
         [(argv, kwargs)] = popen_calls
-        assert argv == spawn_argv(str(transcript), str(tmp_path))
+        [pending_fd] = kwargs["pass_fds"]
+        assert argv == spawn_argv(str(transcript), str(tmp_path), pending_fd=pending_fd)
         assert argv[:6] == [sys.executable, "-P", "-m", "captain_hook", "review", "spawn"]
         assert kwargs["start_new_session"] is True
         assert kwargs["env"][SPAWNED_ENV] == "1"
@@ -636,6 +638,95 @@ class TestGateClaimOrdering:
         guard_and_sweep(payload, gate_enrollment=True)
         assert popen_calls == []
         guard_and_sweep(payload)
+        assert len(popen_calls) == 1
+
+
+class TestPendingAdmission:
+    def payload(self, tmp_path: Path) -> dict[str, object]:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        return {"transcript_path": str(transcript), "cwd": str(tmp_path), "hook_event_name": "SessionStart"}
+
+    def test_session_starts_with_claimed_pending_work_spawn_one_child(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook.review import pipeline
+
+        children: list[int] = []
+        probes: list[str | None] = []
+
+        def spawn(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+            [pending_fd] = kwargs["pass_fds"]
+            assert argv[-2:] == ["--pending-fd", str(pending_fd)]
+            children.append(os.dup(pending_fd))
+            return SimpleNamespace(pid=4242)
+
+        def probe(cwd: str | None) -> bool:
+            probes.append(cwd)
+            return True
+
+        monkeypatch.setattr(pipeline.subprocess, "Popen", spawn)
+        monkeypatch.setattr(pipeline, "enrolled", probe)
+        payload = self.payload(tmp_path)
+        try:
+            dispatch_review("SessionStart", payload)
+            dispatch_review("SessionStart", payload)
+            assert len(children) == 1
+            assert probes == [str(tmp_path)]
+            assert "review-run skip: a queued pass already covers" in review_log_path().read_text()
+            os.close(children[0])
+            dispatch_review("SessionStart", payload)
+            dispatch_review("SessionEnd", payload)
+            assert len(children) == 2
+            assert probes == [str(tmp_path), str(tmp_path)]
+        finally:
+            for child in children[1:]:
+                os.close(child)
+
+    def test_a_failed_detach_releases_the_pending_claim(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.review import pipeline
+
+        attempts: list[list[str]] = []
+
+        def refuse(argv: list[str], **kwargs: Any) -> None:
+            attempts.append(argv)
+            raise OSError("fork refused")
+
+        monkeypatch.setattr(pipeline.subprocess, "Popen", refuse)
+        monkeypatch.setattr(pipeline, "enrolled", lambda cwd: True)
+        payload = self.payload(tmp_path)
+        dispatch_review("SessionStart", payload)
+        dispatch_review("SessionStart", payload)
+        assert [argv[-2] for argv in attempts] == ["--pending-fd", "--pending-fd"]
+        assert review_log_path().read_text().count("detach failed") == 2
+
+    def test_child_holds_the_handed_down_claim_until_it_takes_the_repo_lock(self, tmp_path: Path) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        transcript = tmp_path / "projects" / "s1.jsonl"
+        with pending_claim(settings.db_path, transcript) as parent_fd:
+            assert parent_fd is not None
+            child_fd = os.dup(parent_fd)
+        with pending_claim(settings.db_path, transcript) as rival:
+            assert rival is None
+        with queued_review_lock(settings, str(tmp_path), transcript, pending_fd=child_fd) as claimed:
+            assert claimed
+            with pending_claim(settings.db_path, transcript) as follow_up:
+                assert follow_up is not None
+
+    def test_an_active_child_admits_the_next_event_while_the_parent_still_holds_its_copy(self, tmp_path: Path) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        transcript = tmp_path / "projects" / "s1.jsonl"
+        with pending_claim(settings.db_path, transcript) as parent_fd:
+            assert parent_fd is not None
+            with queued_review_lock(settings, str(tmp_path), transcript, pending_fd=os.dup(parent_fd)) as claimed:
+                assert claimed
+                with pending_claim(settings.db_path, transcript) as follow_up:
+                    assert follow_up is not None
+
+    def test_a_malformed_reviewer_knob_still_spawns_the_recording_child(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOOKS_REVIEW_JUDGE_CONCURRENCY", "not-a-number")
+        guard_and_spawn(json.dumps(self.payload(tmp_path)).encode())
         assert len(popen_calls) == 1
 
 

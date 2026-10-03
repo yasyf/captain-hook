@@ -17,7 +17,7 @@ from cc_transcript.ids import EventRef, EventUuid, SessionId
 from cc_transcript.mining.candidates import dedup_key
 
 from captain_hook.review.judge import CONTEXT_BUDGET, TRIGGER_BUDGET, prompt_builder
-from captain_hook.review.scan import ScanReport, ingest, prepare_source, scan
+from captain_hook.review.scan import CorrectionLedger, ScanReport, ingest, prepare_source, scan
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, SnapshotClient
 from captain_hook.snapshots.review import (
     REVIEW_POLICY,
@@ -42,6 +42,15 @@ from tests.review_helpers import (
 HANDLE = {"owner_epoch": "epoch", "snapshot_id": "source", "generation": "1", "lease_id": "lease"}
 TOOL_RESULT_BYTES = 64 * 1024
 HOOK_COMPLAINT_TEXT = "**Note**: The task tracker reminder re-fired on a sequence I already completed - ignoring it."
+
+
+def nothing_recorded(anchors) -> set[EventRef]:
+    return set()
+
+
+async def recorded_in_ledger(anchors) -> set[EventRef]:
+    async with CorrectionLedger() as ledger:
+        return await ledger.recorded(anchors)
 
 
 def window(session: str = "session") -> ContextWindow:
@@ -329,7 +338,7 @@ def test_source_preparation_releases_lease_on_incomplete(settings):
 
     client = SimpleNamespace(acquire=lambda path: session, pages=pages)
     with pytest.raises(EvidenceIncomplete):
-        prepare_source(client, Path("/unused"), settings)
+        prepare_source(client, Path("/unused"), settings, recorded=nothing_recorded)
     assert released == [True]
 
 
@@ -348,7 +357,7 @@ async def test_incomplete_source_cannot_advance_scan_checkpoint(store, settings,
     monkeypatch.setattr(
         scan_module,
         "prepare_source",
-        lambda *args: (_ for _ in ()).throw(EvidenceIncomplete("deadline", "bounded")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(EvidenceIncomplete("deadline", "bounded")),
     )
     try:
         with pytest.raises(EvidenceIncomplete):
@@ -367,7 +376,8 @@ async def test_ingest_records_empty_source_atomically(store):
         "repo_key": REPO,
         "candidates_json": [],
     }
-    assert await ingest(store, prepared, corrections=[]) == ScanReport(1, 0)
+    async with CorrectionLedger() as ledger:
+        assert await ingest(store, prepared, corrections=[], ledger=ledger) == ScanReport(1, 0)
     assert await store.file_mtimes() == {"/fixture/source.jsonl": 1.23}
 
 
@@ -385,7 +395,7 @@ async def test_ingest_failure_rolls_back_source_and_feedback(store, monkeypatch)
     }
     monkeypatch.setattr(store, "record_observation", AsyncMock(side_effect=RuntimeError("write failed")))
     with pytest.raises(RuntimeError, match="write failed"):
-        await ingest(store, prepared, corrections=[])
+        await ingest(store, prepared, corrections=[], ledger=CorrectionLedger())
     assert await store.file_mtimes() == {}
     assert await store.db.sql("SELECT dedup_key FROM feedback_events") == []
 
@@ -443,10 +453,11 @@ async def test_correction_drafts_keep_full_hunks_without_post_model_snapshot_acc
         assert CORRECTION in prompt
         return CorrectionPick(candidate=1, note="fixture")
 
-    monkeypatch.setattr("cc_transcript.corrections.CorrectionLog.open", AsyncMock(return_value=Log()))
     monkeypatch.setattr("cc_transcript.extract.correct.usable_backend", lambda: object())
     monkeypatch.setattr("spawnllm.extract", choose)
-    await record_correction_drafts(prepared["corrections"])
+    await record_correction_drafts(
+        prepared["corrections"], ledger=SimpleNamespace(handle=AsyncMock(return_value=Log()))
+    )
     assert len(recorded) == 1
     assert recorded[0].incorrect_old == old
     assert recorded[0].incorrect_new == new
@@ -608,13 +619,107 @@ def review_comments(count: int) -> list[dict]:
 
 
 def prepared_anchors(path: Path, settings) -> tuple[Counter[str], Counter[str], list[tuple[EventRef, Any]]]:
-    prepared, corrections, refused = prepare_source(CURRENT_CLIENT.get(), path, settings, REPO)
+    prepared, corrections, refused = prepare_source(
+        CURRENT_CLIENT.get(), path, settings, REPO, recorded=nothing_recorded
+    )
     eligible = Counter(
         candidate.ref.event_uuid
         for raw in prepared["candidates_json"]
         if (candidate := decode_candidate(raw)[0]).source_kind == "transcript_message"
     )
     return eligible, Counter(draft["anchor"]["event_uuid"] for draft in corrections), refused
+
+
+@pytest.fixture
+def git_calls(monkeypatch) -> list[tuple[str, ...]]:
+    calls: list[tuple[str, ...]] = []
+
+    class CountingGit:
+        def __init__(self, snapshot, *, max_bytes, max_processes=84):
+            self.snapshot = snapshot
+
+        def __call__(self, repo, *arguments):
+            calls.append(arguments)
+
+    monkeypatch.setattr("captain_hook.snapshots.review.BoundedGit", CountingGit)
+    return calls
+
+
+@pytest.fixture
+def prepared_batches(monkeypatch) -> list[list[str]]:
+    from captain_hook.review import scan as scan_module
+
+    batches: list[list[str]] = []
+    split = scan_module.correction_pages
+
+    def counted(client, session, batch, repo):
+        batches.append([candidate.ref.event_uuid for candidate in batch])
+        return split(client, session, batch, repo)
+
+    monkeypatch.setattr(scan_module, "correction_pages", counted)
+    return batches
+
+
+def anchor_uuid(edit: list[dict]) -> str:
+    return edit[-1]["uuid"]
+
+
+@pytest.mark.usefixtures(native_review_owner.__name__)
+async def test_rescan_prepares_only_anchors_without_a_recorded_correction(
+    tmp_path, store, settings, prepared_batches, git_calls
+):
+    edits = [corrected_edit(f"module{index}") for index in range(10)]
+    path = write_transcript(tmp_path / "s.jsonl", [entry for edit in edits[:8] for entry in edit])
+    await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)
+    assert sorted(uuid for batch in prepared_batches for uuid in batch) == sorted(map(anchor_uuid, edits[:8]))
+    prepared_batches.clear()
+    write_transcript(path, [entry for edit in edits for entry in edit])
+    assert (await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)).scanned == 1
+    assert prepared_batches == [[anchor_uuid(edit) for edit in edits[8:]]]
+
+
+@pytest.mark.usefixtures(native_review_owner.__name__)
+async def test_rescan_of_an_unchanged_transcript_prepares_nothing_and_runs_no_git(
+    tmp_path, store, settings, prepared_batches, git_calls
+):
+    write_transcript(tmp_path / "s.jsonl", [entry for label in ("parser", "lexer") for entry in corrected_edit(label)])
+    await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)
+    assert len(prepared_batches) == 1
+    prepared_batches.clear()
+    git_before = len(git_calls)
+    assert await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO) == ScanReport(0, 0, 0)
+    assert (prepared_batches, len(git_calls)) == ([], git_before)
+
+
+@pytest.mark.usefixtures(native_review_owner.__name__)
+def test_a_correction_recorded_under_another_anchor_ref_leaves_the_anchor_prepared(
+    tmp_path, settings, prepared_batches
+):
+    import asyncio
+    from dataclasses import replace
+
+    from cc_transcript.corrections import Correction, CorrectionLog
+
+    parser, lexer = corrected_edit("parser"), corrected_edit("lexer")
+    path = write_transcript(tmp_path / "s.jsonl", [*parser, *lexer])
+    _, corrections, _ = prepare_source(CURRENT_CLIENT.get(), path, settings, REPO, recorded=nothing_recorded)
+    rows = {
+        draft["anchor"]["event_uuid"]: Correction(**json.loads(draft["choices"][0]["correction_json"]))
+        for draft in corrections
+    }
+
+    async def record() -> None:
+        async with await CorrectionLog.open() as log:
+            await log.append(rows[anchor_uuid(parser)])
+            await log.append(replace(rows[anchor_uuid(lexer)], anchor_uuid=EventUuid("superseded-anchor")))
+
+    asyncio.run(record())
+    prepared_batches.clear()
+    _, corrections, _ = prepare_source(
+        CURRENT_CLIENT.get(), path, settings, REPO, recorded=lambda anchors: asyncio.run(recorded_in_ledger(anchors))
+    )
+    assert prepared_batches == [[anchor_uuid(lexer)]]
+    assert [draft["anchor"]["event_uuid"] for draft in corrections] == [anchor_uuid(lexer)]
 
 
 @pytest.fixture
@@ -750,7 +855,7 @@ def test_review_preparation_walks_a_hook_complaint_session_under_the_output_boun
         assistant_text(HOOK_COMPLAINT_TEXT),
     ]
     prepared, corrections, refused = prepare_source(
-        CURRENT_CLIENT.get(), write_transcript(tmp_path / "s.jsonl", entries), settings, REPO
+        CURRENT_CLIENT.get(), write_transcript(tmp_path / "s.jsonl", entries), settings, REPO, recorded=nothing_recorded
     )
     assert prepared["disposition"] == "eligible"
     assert (corrections, refused) == ([], [])
@@ -760,7 +865,11 @@ def test_review_preparation_walks_a_hook_complaint_session_under_the_output_boun
 @pytest.mark.usefixtures(native_review_owner.__name__)
 def test_review_preparation_reads_a_multi_comment_message_once(tmp_path, settings, event_reads):
     prepared, _, refused = prepare_source(
-        CURRENT_CLIENT.get(), write_transcript(tmp_path / "s.jsonl", review_comments(60)), settings, REPO
+        CURRENT_CLIENT.get(),
+        write_transcript(tmp_path / "s.jsonl", review_comments(60)),
+        settings,
+        REPO,
+        recorded=nothing_recorded,
     )
     kinds = Counter(decode_candidate(raw)[0].source_kind for raw in prepared["candidates_json"])
     assert (kinds["review_comment"], refused) == (60, [])
@@ -771,7 +880,11 @@ def test_review_preparation_reads_a_multi_comment_message_once(tmp_path, setting
 def test_review_preparation_refuses_a_candidate_over_the_owned_page_by_size(tmp_path, settings):
     with pytest.raises(EvidenceIncomplete) as refused:
         prepare_source(
-            CURRENT_CLIENT.get(), write_transcript(tmp_path / "s.jsonl", review_comments(120)), settings, REPO
+            CURRENT_CLIENT.get(),
+            write_transcript(tmp_path / "s.jsonl", review_comments(120)),
+            settings,
+            REPO,
+            recorded=nothing_recorded,
         )
     assert refused.value.status == "output_limit"
     assert re.fullmatch(

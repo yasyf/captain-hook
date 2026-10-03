@@ -100,6 +100,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advisory hook fails open and a mandatory hook withholds its completion exactly as for
   transcript evidence. The teammate tool approval excludes native Bash before it reads the
   flag, so a Bash event never pays for the second hook's walk.
+- **Session-reviewer bursts spawn one child, and rescans skip recorded corrections.** The
+  `SessionStart` and `SessionEnd` guard used to detach a Python reviewer child on every event.
+  Most of those children then lost the pending-pass lock after paying for an interpreter, imports,
+  and an origin lookup. The guard now claims that lock before the enrollment probe and passes the locked
+  descriptor to the child, so an event that finds a pass already queued for its transcript
+  directory spawns nothing. A child releases its claim the moment it takes the repo lock, so an
+  event during a running pass still queues exactly one follow-up. A
+  changed transcript now prepares Git correction evidence only for anchors with no row in the
+  corrections ledger, keyed by each anchor's session and event. Recorded anchors no longer start
+  Git subprocesses.
 - **A session may kill or renice a process it started.** The session guard reads the target's
   environment with `ps -E` and allows a literal `kill <pid>` or `renice -p <pid>` when its
   `CLAUDE_CODE_SESSION_ID` names the calling session, including a process reparented to

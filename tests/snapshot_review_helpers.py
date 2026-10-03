@@ -204,6 +204,7 @@ def owner_fixture(monkeypatch):
         lambda paths: sorted({str(Path(path).parent) for path in paths if Path(path).is_absolute()}),
     )
     monkeypatch.setattr("captain_hook.snapshots.review.record_correction_drafts", AsyncMock())
+    monkeypatch.setattr("captain_hook.review.scan.CorrectionLedger.recorded", AsyncMock(return_value=set()))
     try:
         yield owner
     finally:

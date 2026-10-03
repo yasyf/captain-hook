@@ -147,7 +147,7 @@ def sweep_key(cwd: str) -> str:
     return hashlib.sha256(cwd.encode()).hexdigest()[:12]
 
 
-def spawn_argv(transcript: str, cwd: str | None, *, sweep: bool = False) -> list[str]:
+def spawn_argv(transcript: str, cwd: str | None, *, sweep: bool = False, pending_fd: int | None = None) -> list[str]:
     # -P: the reviewer runs with the session's repo as its cwd, and `-m` would otherwise put that repo
     # at the head of sys.path, where a directory sharing a dependency's name shadows the installed one.
     return [
@@ -161,6 +161,7 @@ def spawn_argv(transcript: str, cwd: str | None, *, sweep: bool = False) -> list
         transcript,
         *(("--cwd", cwd) if cwd else ()),
         *(("--sweep",) if sweep else ()),
+        *(("--pending-fd", str(pending_fd)) if pending_fd is not None else ()),
     ]
 
 
@@ -195,7 +196,7 @@ def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None] | No
     return transcript, cwd if isinstance(cwd, str) else None
 
 
-def detach(argv: list[str], *, spawned: str) -> None:
+def detach(argv: list[str], *, spawned: str, pass_fds: tuple[int, ...] = ()) -> None:
     try:
         (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
@@ -205,6 +206,7 @@ def detach(argv: list[str], *, spawned: str) -> None:
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
+                pass_fds=pass_fds,
                 cwd=reqenv.cwd(),
                 env=reqenv.env_map() | {SPAWNED_ENV: "1"},
             )
@@ -286,10 +288,18 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     the raw CLI entry leaves it off, so the detached child stays the
     authoritative enrollment gate for that path.
 
+    Before the enrollment probe or any spawn, the guard claims the transcript
+    directory's pending-pass lock (:func:`pending_claim`) and hands the locked
+    descriptor to the child, so an event arriving while a pass is already queued
+    for that directory spawns nothing; while a pass runs, the next event queues
+    exactly one follow-up child behind it.
+
     Args:
         raw: The hook's stdin bytes, holding the SessionStart/SessionEnd JSON payload.
         gate_enrollment: Skip the spawn for a non-watched repo (native dispatch only).
     """
+    from captain_hook.review.settings import ReviewPaths
+
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("review-run skip: CAPT_HOOK_SPAWNED set")
         return
@@ -300,10 +310,23 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     if (parsed := payload_transcript(raw, label="review-run")) is None:
         return
     transcript, cwd = parsed
-    if gate_enrollment and not enrolled(cwd):
-        breadcrumb("review-run skip: not watching")
-        return
-    detach(spawn_argv(transcript, cwd), spawned=f"spawned {transcript}")
+    with ExitStack() as claim:
+        try:
+            pending_fd = claim.enter_context(pending_claim(ReviewPaths().db_path, Path(transcript)))
+        except OSError:
+            breadcrumb("review-run skip: pending lock OSError")
+            return
+        if pending_fd is None:
+            breadcrumb("review-run skip: a queued pass already covers this transcript directory")
+            return
+        if gate_enrollment and not enrolled(cwd):
+            breadcrumb("review-run skip: not watching")
+            return
+        detach(
+            spawn_argv(transcript, cwd, pending_fd=pending_fd),
+            spawned=f"spawned {transcript}",
+            pass_fds=(pending_fd,),
+        )
 
 
 def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
@@ -501,13 +524,48 @@ def repo_lock(settings: ReviewSettings, cwd: str, *, wait: bool) -> AbstractCont
     return exclusive_flock(settings.db_path.parent / "locks" / f"repo-{key}.lock", wait=wait)
 
 
-@contextmanager
-def queued_review_lock(settings: ReviewSettings, cwd: str, transcript: Path) -> Generator[bool]:
+def pending_lock_path(db_path: Path, transcript: Path) -> Path:
     key = hashlib.sha256(str(transcript.parent.resolve()).encode()).hexdigest()[:16]
+    return db_path.parent / "locks" / f"pending-{key}.lock"
+
+
+@contextmanager
+def pending_claim(db_path: Path, transcript: Path) -> Iterator[int | None]:
+    """Claims the transcript directory's pending-pass lock for a child about to detach.
+
+    Yields the locked descriptor, or ``None`` when a queued pass already holds the lock. Exit closes
+    this process's descriptor without ``LOCK_UN``: the ``flock`` lives on the open file description,
+    so a child that inherited the descriptor keeps holding it, and with no child it releases. The
+    child releases it with :func:`release_pending` once it holds the repo lock.
+    """
+    (path := pending_lock_path(db_path, transcript)).parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield None
+            return
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def release_pending(fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def queued_review_lock(
+    settings: ReviewSettings, cwd: str, transcript: Path, *, pending_fd: int | None = None
+) -> Generator[bool]:
     with ExitStack() as pending, ExitStack() as active:
-        if not pending.enter_context(
-            exclusive_flock(settings.db_path.parent / "locks" / f"pending-{key}.lock", wait=False)
-        ):
+        if pending_fd is not None:
+            pending.callback(release_pending, pending_fd)
+        elif not pending.enter_context(exclusive_flock(pending_lock_path(settings.db_path, transcript), wait=False)):
             yield False
             return
         claimed = active.enter_context(repo_lock(settings, cwd, wait=True))
@@ -642,7 +700,12 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
 
 
 async def spawn_session(
-    transcript: Path, *, cwd: str, settings: ReviewSettings | None = None, sweep: bool = False
+    transcript: Path,
+    *,
+    cwd: str,
+    settings: ReviewSettings | None = None,
+    sweep: bool = False,
+    pending_fd: int | None = None,
 ) -> SpawnReport:
     """Runs :func:`review_session` and records its outcome — the ``review spawn`` entry.
 
@@ -669,6 +732,8 @@ async def spawn_session(
         settings: The reviewer settings; constructed inside the recording
             boundary when omitted, so a settings/env failure still records.
         sweep: Whether to run the throttled sweep (no PR sync, no brain).
+        pending_fd: The pending-pass lock descriptor :func:`guard_and_spawn` claimed and
+            handed down; omitted, the child claims that lock itself.
 
     Returns:
         The recorded :class:`SpawnReport` for this pass.
@@ -682,7 +747,11 @@ async def spawn_session(
     started = datetime.now(UTC)
     try:
         settings = settings or ReviewSettings()
-        lock = repo_lock(settings, cwd, wait=False) if sweep else queued_review_lock(settings, cwd, transcript)
+        lock = (
+            repo_lock(settings, cwd, wait=False)
+            if sweep
+            else queued_review_lock(settings, cwd, transcript, pending_fd=pending_fd)
+        )
         with lock as claimed:
             if not claimed:
                 logger.info(f"review spawn skipped: another pass holds the lock for cwd={cwd}")
