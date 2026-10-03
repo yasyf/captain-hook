@@ -714,3 +714,29 @@ def test_spending_an_unknown_grant_names_it(tmp_path: Path) -> None:
         grant_cli, [*argv, "--session", TREE, "--call", "p", "--fingerprint", "f", "--summary", "s"]
     )
     assert refused.exit_code == 1 and "no grant 000000000000" in refused.output
+
+
+def recorded_words(quote: str, *, expires: datetime) -> Grant:
+    said = evidence_module.words_evidence(quote, store.now() - timedelta(days=2))
+    return store.mint(
+        Grant(
+            id=store.new_id(),
+            kind="words",
+            tree=TREE,
+            scope={},
+            evidence=[said],
+            source_key=said.key,
+            expires=expires,
+            author="words@test",
+            created=store.now() - timedelta(days=2),
+        )
+    )
+
+
+def test_a_lane_reads_its_roots_older_words_from_the_recorded_index(tmp_path: Path) -> None:
+    recorded_words("post the AIG summary in that thread", expires=store.now() + timedelta(days=5))
+    recorded_words("post anything anywhere", expires=store.now() - timedelta(minutes=1))
+    lane = event(tmp_path, session="lane-session")
+    lane.ctx.root_path = tmp_path / f"{TREE}.jsonl"
+    quotes = [item.quote for item in OwnerWords().collect(lane, proposal(lane))]
+    assert quotes == ["post the AIG summary in that thread"]

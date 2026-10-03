@@ -284,7 +284,7 @@ class HookContext:
 
     def root_excerpt(self, needles: Sequence[str], *, around: int = 2) -> Session | None:
         """The root session's events that mention any of ``needles``, with ``around`` events either side,
-        from the whole transcript rather than its tail; ``None`` outside a lane.
+        from the last 16 MiB of its transcript rather than its event tail; ``None`` outside a lane.
         """
         from captain_hook.transcripts import root_excerpt
 

@@ -1,6 +1,7 @@
 import io
 import json
 import struct
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -8,7 +9,14 @@ from types import SimpleNamespace
 import pytest
 from jsonschema import ValidationError
 
-from captain_hook.snapshots.client import CORE_SCHEMA, HOST_SCHEMA, MAX_FRAME_BYTES, SnapshotProtocolError, encode_frame
+from captain_hook.snapshots.client import (
+    CORE_SCHEMA,
+    HOST_SCHEMA,
+    MAX_FRAME_BYTES,
+    Bridge,
+    SnapshotProtocolError,
+    encode_frame,
+)
 from captain_hook.snapshots.validation import checked, validator
 from captain_hook.snapshots.worker import OWNER_ADMISSION, OwnerService, empty_usage, failure, handshake, read_frame
 
@@ -509,3 +517,25 @@ def test_owner_binds_registry_content_without_changing_authority():
     assert captured[0]["registry_generation"] == "content-fingerprint"
     assert captured[0]["authority"] == authority
     assert captured[0]["claimant"] == "fixture"
+
+
+REFUSING_HOST = """
+import json, struct, sys
+def read():
+    (size,) = struct.unpack(">I", sys.stdin.buffer.read(4))
+    return json.loads(sys.stdin.buffer.read(size))
+def write(value):
+    body = json.dumps(value).encode()
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+write(read())
+frame = read()
+write({"protocol": 1, "op": "error", "id": frame["id"], "error": "captain: snapshot admission queue exhausted"})
+"""
+
+
+def test_the_bridge_names_the_error_the_host_returns():
+    bridge = Bridge((sys.executable, "-c", REFUSING_HOST))
+    with pytest.raises(SnapshotProtocolError, match="snapshot host failed the request: captain: snapshot admission"):
+        bridge({"schema": HOST_SCHEMA})
+    bridge.close()
