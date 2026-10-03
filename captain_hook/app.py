@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from captain_hook.confirm import Confirm
     from captain_hook.events import BaseHookEvent
+    from captain_hook.grants import Grants
     from captain_hook.settings import HooksSettings
     from captain_hook.types import HookResult
 
@@ -77,6 +78,14 @@ def reject_confirm_misuse(events: Event, block: bool, confirm: Confirm | None) -
         raise ValueError("confirm needs block=True: it settles a block, and a warn has nothing to settle.")
     if confirm is not None and events & ~TOOL_EVENTS:
         raise ValueError("confirm judges a tool call, so it runs only on tool events.")
+
+
+def reject_grants_misuse(events: Event, block: bool, grants: Grants | None) -> None:
+    """Reject ``grants`` with no block for a grant to lift, or on an event with no tool call to cover."""
+    if grants is not None and not block:
+        raise ValueError("grants needs block=True: a grant lifts a block, and a warn has nothing to lift.")
+    if grants is not None and events & ~TOOL_EVENTS:
+        raise ValueError("grants cover a tool call, so they run only on tool events.")
 
 
 def reject_transcript_events(transcript_events: int | None) -> None:
@@ -227,6 +236,7 @@ def hook(
     skip_if: Sequence[TCondition] = (),
     block: bool = False,
     confirm: Confirm | None = None,
+    grants: Grants | None = None,
     advisory_on_deny: bool = False,
     respect_gitignore: bool = True,
     max_fires: int | None = None,
@@ -239,6 +249,7 @@ def hook(
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
     reject_confirm_misuse(events, block, confirm)
+    reject_grants_misuse(events, block, grants)
     reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
@@ -251,6 +262,7 @@ def hook(
                 message=message,
                 block=block,
                 confirm=confirm,
+                grants=grants,
                 advisory_on_deny=advisory_on_deny,
                 respect_gitignore=respect_gitignore,
                 max_fires=max_fires,
