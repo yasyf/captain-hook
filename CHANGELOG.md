@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A permission event walks the process tree once, and a repeat request from the same
+  client reuses it.** `SkipPermissions()` and `evt.disallowed_tools` each walked from the
+  client's parent to the nearest `claude` with one `ps` per hop, and the per-event memo lived
+  on the event copy each registration received, so one subagent Bash call paid two walks of up
+  to 20 probes each. The anchor now resolves once per request and every registration shares
+  it. A hook worker keeps a small cache keyed by the client's parent pid, storing every hop
+  from that process up to the `claude` it found (pid, parent, start time, command); a later
+  request from the same pid costs one `ps` listing those pids, and any difference anywhere in
+  the chain (a recycled pid, an exec, a reparent, an exit, an unreadable listing) drops the
+  entry and walks afresh. An unknown outcome is never cached. Each probe checks for
+  abandonment and runs under a timeout clamped to the caller's deadline, and a walk the
+  deadline cuts short reports incomplete evidence (`deadline`) instead of an answer, so an
+  advisory hook fails open and a mandatory hook withholds its completion exactly as for
+  transcript evidence. The teammate tool approval excludes native Bash before it reads the
+  flag, so a Bash event never pays for the second hook's walk.
 - **An owner-authorized `orca terminal close` survives a loaded machine.** The guard gave
   `ccn answer show` 2 s, and at a load average above 600 the read took 11–13 s, so every close
   under a valid answer was denied. The read now waits up to 30 s, bounded by the caller's

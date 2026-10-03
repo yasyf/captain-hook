@@ -3,19 +3,25 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
+from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 MAX_WALK = 20
-PS_TABLE_ARGV = ("ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,command=")
+PROBE_TIMEOUT = 5
+ANCHOR_CACHE_SIZE = 64
+PS_ROW_COLUMNS = "pid=,ppid=,pgid=,uid=,lstart=,command="
+PS_TABLE_ARGV = ("ps", "-A", "-ww", "-o", PS_ROW_COLUMNS)
 PS_TABLE_ENV = {"LC_ALL": "C", "TZ": "UTC"}
 LSTART = r"(\w{3} \w{3}\s+\d{1,2} \d\d:\d\d:\d\d \d{4})"
 PS_TABLE_ROW = re.compile(rf"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+{LSTART}\s+(.*)$")
@@ -73,10 +79,41 @@ class ProcessTable:
         return tuple(found)
 
 
-def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
+class AnchorCache:
+    def __init__(self, capacity: int) -> None:
+        self._chains: OrderedDict[int, tuple[ProcessRow, ...]] = OrderedDict()
+        self._lock = threading.Lock()
+        self._capacity = capacity
+
+    def get(self, client_ppid: int) -> tuple[ProcessRow, ...] | None:
+        with self._lock:
+            if (chain := self._chains.get(client_ppid)) is not None:
+                self._chains.move_to_end(client_ppid)
+            return chain
+
+    def put(self, client_ppid: int, chain: tuple[ProcessRow, ...]) -> None:
+        with self._lock:
+            self._chains[client_ppid] = chain
+            self._chains.move_to_end(client_ppid)
+            while len(self._chains) > self._capacity:
+                self._chains.popitem(last=False)
+
+    def discard(self, client_ppid: int) -> None:
+        with self._lock:
+            self._chains.pop(client_ppid, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._chains.clear()
+
+
+ANCHORS = AnchorCache(ANCHOR_CACHE_SIZE)
+
+
+def ps_rows(argv: tuple[str, ...], *, timeout: float) -> dict[int, ProcessRow] | None:
     try:
         done = subprocess.run(
-            PS_TABLE_ARGV,
+            argv,
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
@@ -101,7 +138,18 @@ def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
             started_at(started),
             command,
         )
-    return ProcessTable(rows)
+    return rows
+
+
+def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
+    return None if (rows := ps_rows(PS_TABLE_ARGV, timeout=timeout)) is None else ProcessTable(rows)
+
+
+def process_rows(pids: Sequence[int]) -> dict[int, ProcessRow] | None:
+    return ps_rows(
+        ("ps", "-ww", "-o", PS_ROW_COLUMNS, "-p", ",".join(map(str, pids))),
+        timeout=reqenv.clamp_timeout(PROBE_TIMEOUT),
+    )
 
 
 def started_at(lstart: str) -> datetime:
@@ -154,24 +202,16 @@ def process_start_time(pid: int) -> str | None:
     return out.strip() or None
 
 
-def parent_entry(pid: int) -> tuple[int, str] | None:
-    try:
-        out = subprocess.run(
-            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    match out.split(None, 1):
-        case [ppid, command]:
-            return int(ppid), command.strip()
-        case [ppid]:
-            return int(ppid), ""
-        case _:
-            return None
+def probe(pids: Sequence[int]) -> dict[int, ProcessRow] | None:
+    reqenv.checkpoint()
+    rows = None if reqenv.deadline_within(0) else process_rows(pids)
+    if rows is None and reqenv.deadline_within(0):
+        raise EvidenceIncomplete("deadline", "process ancestry walk reached the caller deadline")
+    return rows
+
+
+def next_hop(pid: int) -> ProcessRow | None:
+    return None if (rows := probe((pid,))) is None else rows.get(pid)
 
 
 def is_claude_cli_js(token: str) -> bool:
@@ -188,18 +228,38 @@ def is_claude(tokens: list[str]) -> bool:
             return False
 
 
+def walk_chain(start_pid: int) -> tuple[ProcessRow, ...] | None:
+    if (row := next_hop(start_pid)) is None:
+        return None
+    chain = [row]
+    while not is_claude(row.command.split()):
+        if row.ppid <= 1 or len(chain) == MAX_WALK or (row := next_hop(row.ppid)) is None:
+            return None
+        chain.append(row)
+    return tuple(chain)
+
+
+def chain_argv(chain: tuple[ProcessRow, ...] | None) -> tuple[str, ...]:
+    return () if chain is None else tuple(chain[-1].command.split())
+
+
+def chain_is_live(chain: tuple[ProcessRow, ...]) -> bool:
+    rows = probe([row.pid for row in chain])
+    return rows is not None and all(rows.get(row.pid) == row for row in chain)
+
+
 def walk_claude_argv(start_pid: int) -> tuple[str, ...]:
-    pid = start_pid
-    for _ in range(MAX_WALK):
-        if (entry := parent_entry(pid)) is None:
-            return ()
-        ppid, command = entry
-        if is_claude(tokens := command.split()):
-            return tuple(tokens)
-        if ppid <= 1:
-            return ()
-        pid = ppid
-    return ()
+    return chain_argv(walk_chain(start_pid))
+
+
+def anchored_claude_argv(client_ppid: int) -> tuple[str, ...]:
+    if (chain := ANCHORS.get(client_ppid)) is not None:
+        if chain_is_live(chain):
+            return chain_argv(chain)
+        ANCHORS.discard(client_ppid)
+    if (chain := walk_chain(client_ppid)) is not None:
+        ANCHORS.put(client_ppid, chain)
+    return chain_argv(chain)
 
 
 @cache
@@ -211,13 +271,20 @@ def claude_argv() -> tuple[str, ...]:
     """The whitespace-split command line of the nearest ``claude`` ancestor, ``()`` when none is found.
 
     Cold, the walk starts at this process and is process-cached. Under a bound request (the
-    resident daemon) it walks fresh from the client's parent on every call — a resumed
-    session may relaunch with different flags, and per-dispatch memoization already lives on
-    the ``BaseHookEvent`` properties that read it.
+    resident daemon) it resolves once per request from the client's parent and every event copy
+    and registration of that request shares the result; across requests the walk is reused
+    while one probe shows every hop from the client's parent to that ``claude`` unchanged, so
+    a resumed session relaunched with different flags is seen on its next request. A walk the
+    caller's deadline cuts short raises :class:`EvidenceIncomplete` (``deadline``) rather than
+    answering, so a hook reading it fails open or withholds completion as it would for
+    transcript evidence.
     """
     if (ov := reqenv.current()) is None:
         return _cold_claude_argv()
-    return walk_claude_argv(ov.client_ppid)
+    with ov.memo.lock:
+        if ov.memo.claude_argv is None:
+            ov.memo.claude_argv = anchored_claude_argv(ov.client_ppid)
+        return ov.memo.claude_argv
 
 
 def disallowed_tools(argv: Sequence[str]) -> frozenset[str]:

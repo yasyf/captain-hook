@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from loguru import logger
@@ -16,6 +18,10 @@ from captain_hook.packs import manager
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
+from captain_hook.util import proc, reqenv
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance", "graphite"}
@@ -159,6 +165,52 @@ def test_fixes_pack_approves_scratch_writes(isolate_modules: None, tmp_path: Pat
     assert decision("Write", {"file_path": "/Users/u/proj/src/main.py", "content": "x"}) is None
     assert decision("Write", {"file_path": "/tmp/../Users/u/proj/main.py", "content": "x"}) is None
     assert decision("mcp__srv__Write", {"file_path": "/tmp/x.py", "content": "x"}) is None
+
+
+@pytest.mark.parametrize(
+    "inp",
+    [
+        pytest.param(Input(command="echo hi", agent_id="tm1"), id="native_bash"),
+        pytest.param(
+            Input(tool="Write", tool_input={"file_path": "/tmp/x.py", "content": "x"}, agent_id="tm1"),
+            id="scratch_write",
+        ),
+    ],
+)
+def test_fixes_pack_walks_the_claude_ancestry_once_per_request(
+    isolate_modules: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inp: Input
+) -> None:
+    discover_pack("fixes", manager.resolve_builtin("fixes").path)
+    started = datetime(2026, 9, 30, 6, 1, 5)
+    table = {
+        50: proc.ProcessRow(50, 60, 50, 501, started, "/bin/zsh -c hook"),
+        60: proc.ProcessRow(60, 70, 60, 501, started, "/bin/sh -c bash-tool"),
+        70: proc.ProcessRow(70, 1, 70, 501, started, "claude --dangerously-skip-permissions"),
+    }
+    probed: list[tuple[int, ...]] = []
+
+    def fake_process_rows(pids: Sequence[int]) -> dict[int, proc.ProcessRow]:
+        probed.append(tuple(pids))
+        return {pid: table[pid] for pid in pids if pid in table}
+
+    monkeypatch.setattr(proc, "process_rows", fake_process_rows)
+
+    def decision() -> str:
+        request = reqenv.RequestOverrides(
+            env={key: value for key, value in os.environ.items() if reqenv.is_whitelisted(key)},
+            cwd="/w",
+            client_ppid=50,
+            session_id="s",
+        )
+        with reqenv.use_request(request):
+            result = dispatch(Event.PreToolUse, input_to_event(Event.PreToolUse, inp), session_dir=tmp_path)
+        assert result is not None
+        return result["hookSpecificOutput"]["permissionDecision"]
+
+    assert decision() == "allow"
+    assert probed == [(50,), (60,), (70,)]
+    assert decision() == "allow"
+    assert probed == [(50,), (60,), (70,), (50, 60, 70)]
 
 
 def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path) -> None:
