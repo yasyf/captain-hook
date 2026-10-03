@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import struct
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -28,10 +29,12 @@ OP_BACKGROUND_END = "background_end"
 OP_SNAPSHOT_REQUEST = "snapshot_request"
 OP_SNAPSHOT_RESULT = "snapshot_result"
 OP_SNAPSHOT_CANCEL = "snapshot_cancel"
+OP_ABANDON = "abandon"
 SNAPSHOT_FRAME_FIELDS = frozenset({"snapshot", "snapshot_context", "snapshot_config", "parent_id"})
 
 HELLO_KEYS = frozenset({"protocol", "op", "build"})
 EVENT_FRAME_KEYS = frozenset({"protocol", "op", "id", "request"})
+ABANDON_FRAME_KEYS = frozenset({"protocol", "op", "id"})
 EVENT_REQUEST_KEYS = frozenset(
     {
         "schema",
@@ -72,6 +75,7 @@ class EventRequest:
     deadline_unix_ms: int
     mandatory: bool = False
     received: float = field(default_factory=time.perf_counter, compare=False)
+    abandon: threading.Event = field(default_factory=threading.Event, compare=False, repr=False)
 
     def deadline_passed(self) -> bool:
         return 0 < self.deadline_unix_ms <= time.time() * 1000
@@ -195,6 +199,19 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         deadline_unix_ms=request["deadline_unix_ms"],
         mandatory=request.get("mandatory", False),
     )
+
+
+def decode_abandon(message: dict[str, Any]) -> int:
+    if (
+        set(message) != ABANDON_FRAME_KEYS
+        or type(message["protocol"]) is not int
+        or message["protocol"] != PROTOCOL
+        or message["op"] != OP_ABANDON
+        or type(message["id"]) is not int
+        or message["id"] <= 0
+    ):
+        raise ProtocolError(f"invalid abandon frame: {message!r}")
+    return message["id"]
 
 
 def hello_response(build: str) -> dict[str, object]:

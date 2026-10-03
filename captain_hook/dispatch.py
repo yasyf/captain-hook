@@ -457,8 +457,12 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
 
     Every event takes a JSON envelope except ``PreCompact``, whose schema has no
     ``hookSpecificOutput``: Claude Code appends each successful hook's raw trimmed stdout to the
-    compaction's custom instructions, so a non-block result renders as its plain message.
+    compaction's custom instructions, so a non-block result renders as its plain message. The host-fired
+    ``ResourcePressure`` takes only the proceed acknowledgement capt-hookd parses: a warn or allow renders it,
+    anything else renders nothing.
     """
+    if event is Event.ResourcePressure:
+        return {"decision": "proceed"} if result.action in (Action.warn, Action.allow) else None
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
     if event is Event.PreCompact:

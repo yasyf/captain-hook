@@ -36,6 +36,42 @@ can block.
 | `SessionEnd` | `SessionEndEvent` | When the session ends | `reason` | No — output ignored |
 | `MessageDisplay` | `MessageDisplayEvent` | For each streamed chunk of an assistant reply | `message_id`, `index`, `final`, `delta` | No — a `rewrite` replaces the chunk's displayed text |
 
+## Host events {#host-events}
+
+One more event exists, and Claude Code never fires it. The `capt-hookd` host raises `ResourcePressure`,
+typed as `ResourcePressureEvent`, when a child of a session stays resource-heavy. It has no entry in `hooks.json`,
+so it adds nothing to the thirteen lifecycle events above. The `performance` pack's resource monitor is
+its only handler. See [Tune the subprocess resource monitor](../guide/packs.qmd#tune-the-subprocess-resource-monitor)
+for the thresholds.
+
+The event arrives in one of three stages, readable as `evt.stage`:
+
+| Stage | Fires |
+|-------|-------|
+| `warn` | On the first sustained sample of heavy CPU or disk use |
+| `judge` | When the grace period ends and the child is still heavy |
+| `escalate` | When the child outlives a `SIGTERM` |
+
+| Property | Meaning |
+|----------|---------|
+| `stage` | `"warn"`, `"judge"`, or `"escalate"` |
+| `process` | The child's identity and usage as a mapping |
+| `pid`, `ppid`, `pgid` | The child's process ids |
+| `start_unix`, `start_usec` | The child's start time |
+| `comm`, `argv` | The child's command name and arguments |
+| `process_cwd` | The child's working directory, or `None` |
+| `runtime_s` | How long the child has run, in seconds |
+| `cpu_fraction`, `disk_bps` | Measured usage, or `None` when the reading was unavailable |
+| `claude_pid`, `claude_start_unix` | The session's `claude` process, which anchors ownership |
+
+The host refuses a `ResourcePressure` event that a client submits, so only the host can raise it.
+
+Only the `warn` stage reads the answer. A warn or an allow renders `{"decision": "proceed"}`, which tells
+the host the stage ran. For a warn, the host reads anything else as a refusal and stops tracking that
+child, so the child is left running and is not warned about again. The host does not read the answers to
+`judge` and `escalate`. The worker records a notice for each refusal instead, and the next hook event
+delivers it to the session.
+
 `PreToolUse` and `PermissionRequest` prevent an action. A `PreToolUse` block denies the tool
 call outright, and a `PermissionRequest` result answers the pending dialog. `allow` and
 `rewrite` approve it silently, `block` denies it with the message shown to the user, and

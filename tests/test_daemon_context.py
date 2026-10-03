@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from loguru import logger
 
@@ -23,6 +23,7 @@ class Request:
     cwd: str
     env: dict[str, str]
     deadline_unix_ms: int = 0
+    abandon: threading.Event = field(default_factory=threading.Event)
 
 
 def make_request(*, env: dict[str, str] | None = None, cwd: str = "/tmp/proj") -> Request:

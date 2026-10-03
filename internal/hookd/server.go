@@ -47,10 +47,22 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		manager.snapshots = snapshotService
 		manager.startSweeper(workerSweepInterval)
+		settings, err := wireproto.ParseResourceSettings(requestEnvironment(os.Environ()))
+		if err != nil {
+			fmt.Fprintf(logFile, "captain: resource settings: %v; using the defaults\n", err)
+			if settings, err = wireproto.ParseResourceSettings(nil); err != nil {
+				return nil, err
+			}
+		}
+		monitor := newResourceMonitor(manager, newProcSource(), settings)
+		if settings.Enabled {
+			monitor.start()
+		}
 		return &hostProduct{
 			manager:   manager,
 			snapshots: snapshotService,
 			hub:       newNotificationHub(),
+			monitor:   monitor,
 		}, nil
 	})
 	return err
@@ -60,6 +72,7 @@ type hostProduct struct {
 	manager   *workerManager
 	hub       *notificationHub
 	snapshots *snapshotService
+	monitor   *resourceMonitor
 }
 
 // Handle owns dispatch for every captain-hook op. Admission to the business
@@ -77,6 +90,10 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 		if event.ClientPID != req.Caller.PID {
 			return daemonkit.Reply{}, errors.New("captain: event client pid does not match authenticated peer")
 		}
+		if event.Event == resourceEvent {
+			return daemonkit.Reply{}, fmt.Errorf("captain: %s is a host event and cannot be submitted by a client", resourceEvent)
+		}
+		p.monitor.observe(event, req.Caller.PID)
 		response, err := p.manager.dispatch(ctx, event)
 		if err != nil {
 			return daemonkit.Reply{}, err

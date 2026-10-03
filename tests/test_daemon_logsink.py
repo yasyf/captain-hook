@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import stat
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ class Request:
     cwd: str
     env: dict[str, str]
     deadline_unix_ms: int = 0
+    abandon: threading.Event = field(default_factory=threading.Event)
 
 
 def make_request(log_dir: Path) -> Request:

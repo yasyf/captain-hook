@@ -67,6 +67,11 @@ func lateReplyLeavesTheWorkerUsable(t *testing.T, late func(id uint64) wireproto
 		if err != nil {
 			return
 		}
+		abandon, err := wireproto.DecodeFrame(serverConn)
+		if err != nil || abandon.Op != wireproto.OpAbandon || abandon.ID != abandoned.ID {
+			t.Errorf("frame after the abandoned request = %+v, %v; want its abandon frame", abandon, err)
+			return
+		}
 		second, err := wireproto.DecodeFrame(serverConn)
 		if err != nil {
 			return
@@ -262,6 +267,19 @@ func TestWorkerSlotsBoundOutstandingCallsUntilRepliesArrive(t *testing.T) {
 	for range workerSlots {
 		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("holding call = %v, want %v", err, context.Canceled)
+		}
+	}
+	abandoned := make(map[uint64]bool, workerSlots)
+	for range workerSlots {
+		frame := <-frames
+		if frame.Op != wireproto.OpAbandon || frame.Request != nil || abandoned[frame.ID] {
+			t.Fatalf("cancelled call wrote %+v, want one abandon frame per held request", frame)
+		}
+		abandoned[frame.ID] = true
+	}
+	for _, frame := range held {
+		if !abandoned[frame.ID] {
+			t.Fatalf("held request %d was never abandoned on the worker stream", frame.ID)
 		}
 	}
 

@@ -81,6 +81,7 @@ from captain_hook.events import PostToolUseEvent as PostToolUseEvent
 from captain_hook.events import PostToolUseFailureEvent as PostToolUseFailureEvent
 from captain_hook.events import PreCompactEvent as PreCompactEvent
 from captain_hook.events import PreToolUseEvent as PreToolUseEvent
+from captain_hook.events import ResourcePressureEvent as ResourcePressureEvent
 from captain_hook.events import SessionCron as SessionCron
 from captain_hook.events import SessionEndEvent as SessionEndEvent
 from captain_hook.events import SessionStartEvent as SessionStartEvent
@@ -163,6 +164,8 @@ from captain_hook.testing.types import Warn as Warn
 from captain_hook.transcripts import register_transcript as register_transcript
 from captain_hook.transcripts import registered_paths as registered_paths
 from captain_hook.turn import Turn as Turn
+from captain_hook.types import CLAUDE_EVENTS as CLAUDE_EVENTS
+from captain_hook.types import HOST_EVENTS as HOST_EVENTS
 from captain_hook.types import Action as Action
 from captain_hook.types import Agent as Agent
 from captain_hook.types import And as And
