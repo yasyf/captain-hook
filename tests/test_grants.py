@@ -748,20 +748,15 @@ def in_orca(monkeypatch: pytest.MonkeyPatch, handle: str) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "1")
 
 
-def fake_orca(monkeypatch: pytest.MonkeyPatch, status: list[str] | None = None) -> list[tuple[str, ...]]:
-    calls: list[tuple[str, ...]] = []
+def fake_orca(monkeypatch: pytest.MonkeyPatch, status: list[str] | None = None) -> list[str]:
+    calls: list[str] = []
     lane = status or ["dispatched"]
-    finished = {"agentTerminalHandle": "term_old", "dispatchStatus": "completed", "runId": "run_0"}
 
-    def orca(*args: str) -> dict[str, Any]:
-        calls.append(args)
-        if args[:2] == ("orchestration", "worker-list"):
-            worker = {"agentTerminalHandle": "term_lane", "dispatchStatus": lane[0], "runId": "run_1"}
-            return {"workers": [finished, worker], "page": {"hasMore": False, "nextCursor": None}}
-        assert args == ("orchestration", "run-show", "--id", "run_1")
-        return {"run": {"id": "run_1", "coordinator_handle": "term_root"}}
+    def resolve(handle: str) -> tuple[str | None, str | None]:
+        calls.append(handle)
+        return ("run_1", "term_root") if handle == "term_lane" and lane[0] == "dispatched" else (None, None)
 
-    monkeypatch.setattr(orca_module, "orca", orca)
+    monkeypatch.setattr(orca_module, "resolve", resolve)
     return calls
 
 
@@ -787,7 +782,7 @@ def test_an_orca_lane_spends_its_coordinators_grant(tmp_path: Path, monkeypatch:
     assert declared().check(lane)
     assert [(found.tree, found.agent) for found in store.adoptions(grant.id)] == [("lane-root", "orca:run_1")]
     assert declared().check(event(tmp_path / "lane", "again", session="lane-root", call="c2"))
-    assert len(calls) == 2
+    assert calls == ["term_lane"]
     assert not declared().check(event(tmp_path, "root", call="c3"))
 
 
@@ -799,7 +794,7 @@ def test_no_orca_binds_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert not declared().check(event(tmp_path, session="lane-root"))
     in_orca(monkeypatch, "term_unknown")
     assert not declared().check(event(tmp_path / "other", session="other-root", call="c2"))
-    assert calls == [("orchestration", "worker-list", "--limit", "100")]
+    assert calls == ["term_unknown"]
 
 
 def test_an_orca_lane_never_adopts_the_coordinators_recorded_words(
@@ -846,7 +841,7 @@ def test_an_orca_binding_is_revalidated_after_its_ttl(tmp_path: Path, monkeypatc
     assert [found.tree for found in store.adoptions(first.id)] == ["lane-root"]
     monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_moved")
     declared().check(event(tmp_path / "lane", "moved", session="lane-root", call="c2"))
-    assert len(calls) == 3
+    assert calls == ["term_lane", "term_moved"]
     monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_lane")
     monkeypatch.setattr(orca_module, "BINDING_TTL", timedelta(0))
     status[0] = "completed"
@@ -863,3 +858,18 @@ def test_a_withdrawal_whose_record_expired_still_reaches_the_judge(tmp_path: Pat
     assert isinstance(denied, Denied) and "withdrew" in denied.reason
     assert "stop posting there" in evt.ctx.call_llm.call_args_list[0].args[0].system_text
     assert store.load(grant.id).revoked is not None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("dispatched", ("run_inline", "term_root")), ("completed", (None, None))],
+    ids=["dispatched", "settled"],
+)
+def test_a_lane_resolves_its_run_through_orcas_worker_list(status: str, expected: tuple[str | None, ...]) -> None:
+    from captain_hook.builtin_packs.general.hooks._sessions import inline_run, inline_worker
+    from captain_hook.testing.helpers import stubbed_commands
+
+    commands = {"orca orchestration worker-list": inline_worker("term_lane", status), **inline_run("term_root")}
+    with stubbed_commands(commands):
+        assert orca_module.resolve("term_lane") == expected
+        assert orca_module.resolve("term_other") == (None, None)

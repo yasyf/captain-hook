@@ -34,6 +34,7 @@ from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
 from captain_hook.events import PreToolUseEvent
 from captain_hook.grants import evidence as evidence_module
+from captain_hook.grants import orca as orca_grants
 from captain_hook.grants import store
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
@@ -754,6 +755,7 @@ class TestTerminalClose:
     ) -> None:
         monkeypatch.setattr(_sessions, "idle", lambda handle, seen=iter(idles): next(seen))
         monkeypatch.setattr(_sessions, "worker_of", lambda handle, seen=iter(workers): next(seen))
+        monkeypatch.setattr(orca_grants, "resolve", lambda handle: (None, None))
         with stubbed_commands(SETTLED):
             envelope = envelope_of(bash(AGENT_CLOSE, llm=CLASS_ALLOW), tmp_path, env=ROOT)
         assert envelope is not None

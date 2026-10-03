@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -17,9 +15,7 @@ from captain_hook.util import reqenv
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
 
-ORCA_TIMEOUT = 5
 BINDING_TTL = timedelta(minutes=1)
-WORKER_PAGE = 100
 
 
 class OrcaRun(BaseModel):
@@ -38,39 +34,15 @@ def attended() -> bool:
     return reqenv.getenv("CLAUDE_CODE_SESSION_ATTENDED") == "1"
 
 
-def orca(*args: str) -> dict[str, Any] | None:
-    try:
-        done = subprocess.run(
-            ["orca", *args, "--json"],
-            capture_output=True,
-            text=True,
-            timeout=ORCA_TIMEOUT,
-            env=reqenv.env_map(),
-            check=False,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if done.returncode != 0 or not done.stdout.strip():
-        return None
-    return json.loads(done.stdout)["result"]
-
-
-def dispatched_run(handle: str) -> str | None:
-    cursor: list[str] = []
-    while (page := orca("orchestration", "worker-list", "--limit", str(WORKER_PAGE), *cursor)) is not None:
-        for worker in page["workers"]:
-            if worker["agentTerminalHandle"] == handle and worker["dispatchStatus"] == "dispatched":
-                return worker["runId"]
-        if not page["page"]["hasMore"]:
-            return None
-        cursor = ["--cursor", page["page"]["nextCursor"]]
-    return None
-
-
 def resolve(handle: str) -> tuple[str | None, str | None]:
-    if (run := dispatched_run(handle)) is None or (shown := orca("orchestration", "run-show", "--id", run)) is None:
+    from captain_hook.builtin_packs.general.hooks._sessions import orca_json, worker_of
+
+    worker = worker_of(handle)
+    if not isinstance(worker, dict) or worker.get("dispatchStatus") != "dispatched" or not (run := worker.get("runId")):
         return None, None
-    return run, shown["run"]["coordinator_handle"]
+    shown = ("orca", "orchestration", "run-show", "--id", run, "--json")
+    coordinator = orca_json(shown, "result", "run", "coordinator_handle")
+    return (run, coordinator) if isinstance(coordinator, str) else (None, None)
 
 
 def pin(run: str | None, coordinator: str | None) -> str:
