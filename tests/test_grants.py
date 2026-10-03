@@ -31,7 +31,8 @@ from captain_hook.grants import (
 )
 from captain_hook.grants import evidence as evidence_module
 from captain_hook.grants.cli import grant as grant_cli
-from captain_hook.types import Action, HookSpec, RegisteredHook
+from captain_hook.hook_lint import result_violations
+from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
 from tests.helpers import make_ctx
 
 TREE = "root-session"
@@ -236,6 +237,14 @@ def test_racing_judges_share_one_approval(tmp_path: Path) -> None:
     assert len(store.grants("test.write", TREE)) == 1
 
 
+def test_a_rule_denies_a_grant_minted_from_evidence(tmp_path: Path) -> None:
+    said = owner("post anything")
+    never = Never("never", lambda action: True, "this kind never goes out", always=True)
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),), rules=(never,))
+    denied = grants.check(event(tmp_path, "one", allow=True, reason="r", relied_on=[said.id]))
+    assert isinstance(denied, Denied) and "this kind never goes out" in denied.reason
+
+
 def test_verbatim_standing_words_mint_an_unlimited_grant(tmp_path: Path) -> None:
     said = owner(f"ok {STANDING} thanks")
     grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),), standing_rules=("no-edit",))
@@ -342,16 +351,19 @@ def entry(grants: Grants) -> RegisteredHook:
 def test_a_hook_with_grants_lifts_its_block_for_a_covering_grant(tmp_path: Path) -> None:
     grant = minted()
     result = execute_hook(entry(declared()), event(tmp_path))
-    assert result is not None and result.action is Action.warn
-    assert f"allowed by grant {grant.id}, 0 use(s) left" in (result.message or "")
+    assert result == HookResult(
+        action=Action.warn, message=f"needs_grant: allowed by grant `{grant.id}`, 0 use(s) left.", approve=False
+    )
+    assert result is not None and not result_violations(result)
 
 
-def test_a_hook_with_grants_keeps_its_block_and_says_why(tmp_path: Path) -> None:
+def test_a_hook_with_grants_keeps_its_block_and_tells_the_user_why(tmp_path: Path) -> None:
     result = execute_hook(entry(declared()), event(tmp_path))
-    assert result is not None and result.action is Action.block
-    assert result.message == (
-        "Needs the owner's permission.\n\nNo test.write grant covers reply in C1/1.2."
-        " Ask the user for permission for exactly this action."
+    assert result == HookResult(
+        action=Action.block,
+        message="Needs the owner's permission.",
+        system_message="needs_grant: No test.write grant covers reply in C1/1.2."
+        " Ask the user for permission for exactly this action.",
     )
 
 
@@ -359,7 +371,16 @@ def test_a_failing_grant_check_keeps_the_block(tmp_path: Path) -> None:
     broken = Grants("test.write", ("channel", "thread"), lambda evt: Proposal(scope={}))
     result = execute_hook(entry(broken), event(tmp_path))
     assert result is not None and result.action is Action.block
-    assert "The grant check failed (ValueError" in (result.message or "")
+    assert result.message == "Needs the owner's permission."
+    assert "the grant check failed (ValueError" in (result.system_message or "")
+
+
+def test_a_hook_with_grants_fails_closed() -> None:
+    from captain_hook import hook
+    from captain_hook.app import GRANTS_INCOMPLETE, _state
+
+    hook(Event.PreToolUse, "Needs the owner's permission.", block=True, grants=declared())
+    assert _state.hooks[-1].spec.on_incomplete == GRANTS_INCOMPLETE
 
 
 def test_hook_rejects_grants_without_a_block() -> None:

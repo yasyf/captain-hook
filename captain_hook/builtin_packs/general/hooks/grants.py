@@ -6,7 +6,17 @@ from typing import TYPE_CHECKING
 from captain_hook import Allow, Block, CommandSchema, Event, Input, LambdaCondition, Operand, Option, Tool, on
 from captain_hook.grants import store
 from captain_hook.grants.declare import DECLARED
-from captain_hook.grants.evidence import Asked, OwnerWords, answer_evidence, parse_answer, tree_of, verbatim
+from captain_hook.grants.evidence import (
+    Asked,
+    OwnerWords,
+    answer_evidence,
+    ccn_answer,
+    parse_answer,
+    session_started,
+    tree_of,
+    verbatim,
+    written_at,
+)
 from captain_hook.grants.records import Grant, Proposal
 
 if TYPE_CHECKING:
@@ -75,6 +85,9 @@ def refusal(evt: BaseHookEvent, call: Call) -> str | None:
     if (declared := DECLARED.get(kind)) is None:
         return f"no hook declares grant kind `{kind}`, so nothing would judge or spend it"
     if verbs(call)[1] == "import":
+        answer_id = next((word.value for word in GRANT_CLI.bind(call).words.get("rest", ())), None) or ""
+        if written_at(ccn_answer(evt, answer_id)) >= session_started(evt):
+            return f"answer `{answer_id}` was written after this session started, so it is not the owner's prior ruling"
         return None
     quote = str((bound.get("quote") or [""])[-1])
     owners = [*OwnerWords().collect(evt, Proposal({})), *Asked().collect(evt, Proposal({}))]

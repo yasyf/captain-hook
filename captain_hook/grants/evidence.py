@@ -155,7 +155,13 @@ def ask_evidence(use: Any) -> list[Evidence]:
 def recorded_asks(evt: BaseHookEvent) -> list[Evidence]:
     from captain_hook.grants import store
 
-    return [item for grant in store.grants("ask", tree_of(evt)) for item in grant.evidence]
+    at = store.now()
+    return [
+        item
+        for grant in store.grants("ask", tree_of(evt))
+        if grant.revoked is None and (grant.expires is None or grant.expires > at)
+        for item in grant.evidence
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +233,14 @@ def ccn_answers(evt: BaseHookEvent, term: str) -> list[dict[str, Any]]:
     )
     if done.returncode != 0 or not done.stdout.strip():
         return []
+    return json.loads(done.stdout)
+
+
+def ccn_answer(evt: BaseHookEvent, answer_id: str) -> dict[str, Any]:
+    argv = ["ccn", "answer", "show", answer_id, "--json", "-R", str(evt.cwd or reqenv.cwd())]
+    done = subprocess.run(
+        argv, capture_output=True, text=True, timeout=RULINGS_TIMEOUT, env=reqenv.env_map(), check=True
+    )
     return json.loads(done.stdout)
 
 

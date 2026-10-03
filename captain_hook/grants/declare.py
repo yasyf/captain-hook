@@ -221,6 +221,9 @@ class Grants:
                 approved=dict(action.payload) if action.payload else None,
                 source_key=next((item.key for item in relied if item.key), None) or f"action:{fingerprint(action)}",
             )
+        rulings = [rule.evaluate(grant, action) for rule in self.applicable(grant)]
+        if denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
+            return Denied(f"grant {grant.id}: {denied.note}", self.would_allow)
         try:
             return self.spend(evt, grant, action, verdict.reason, verdict.relied_on)
         except store.SpentError as exc:
@@ -249,14 +252,15 @@ class Grants:
 def lifted(evt: BaseHookEvent, hook: str, result: HookResult, grants: Grants) -> HookResult:
     """Settle the block of a hook declared with ``grants=``: a covering grant lifts it, anything else keeps it.
 
-    The check fails closed: a store, evidence, or judge error keeps the block and names the error.
+    The check fails closed: a store, evidence, or judge error keeps the block. The block's own message
+    stays the agent-facing text; why no grant covered the call goes to the user as ``system_message``.
     """
     try:
         verdict = grants.check(evt)
     except Exception as exc:
         logger.bind(hook=hook).opt(exception=True).warning("grant check failed; keeping the block")
-        return replace(result, message=f"{result.message}\n\nThe grant check failed ({type(exc).__name__}: {exc}).")
+        return replace(result, system_message=f"{hook}: the grant check failed ({type(exc).__name__}: {exc}).")
     if isinstance(verdict, Denied):
-        return replace(result, message=f"{result.message}\n\n{verdict.message}")
+        return replace(result, system_message=f"{hook}: {verdict.message}")
     left = "unlimited uses" if verdict.remaining is None else f"{verdict.remaining} use(s) left"
-    return evt.context(f"{hook}: allowed by grant {verdict.grant.id}, {left}: {verdict.reason}")
+    return evt.context(f"{hook}: allowed by grant `{verdict.grant.id}`, {left}.")

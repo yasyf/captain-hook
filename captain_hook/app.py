@@ -80,6 +80,9 @@ def reject_confirm_misuse(events: Event, block: bool, confirm: Confirm | None) -
         raise ValueError("confirm judges a tool call, so it runs only on tool events.")
 
 
+GRANTS_INCOMPLETE = "Retry the call; a grant lifts this block only once its check runs."
+
+
 def reject_grants_misuse(events: Event, block: bool, grants: Grants | None) -> None:
     """Reject ``grants`` with no block for a grant to lift, or on an event with no tool call to cover."""
     if grants is not None and not block:
@@ -263,6 +266,7 @@ def hook(
                 block=block,
                 confirm=confirm,
                 grants=grants,
+                on_incomplete=GRANTS_INCOMPLETE if grants is not None else None,
                 advisory_on_deny=advisory_on_deny,
                 respect_gitignore=respect_gitignore,
                 max_fires=max_fires,
