@@ -101,11 +101,12 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
         raise EvidenceIncomplete("invalid_request", "transcript loading requires an admitted snapshot client")
     from captain_hook.app import _state
 
+    tail_bytes = HOOK_TAIL_BYTES if reqenv.provider() == "claude" else None
     try:
-        session = client.acquire(path, tail_bytes=HOOK_TAIL_BYTES)
+        session = client.acquire(path, tail_bytes=tail_bytes)
     except EvidenceIncomplete as exc:
         if exc.status in {"incomplete", "deadline"}:
-            client.schedule_root_warm(path, NATIVE_CLASSIFIER, HOOK_TAIL_BYTES)
+            client.schedule_root_warm(path, NATIVE_CLASSIFIER, tail_bytes)
         raise
     try:
         if _state.classifier is not None:
@@ -125,7 +126,7 @@ def load_transcript(path: str | Path | None) -> Session | RemoteSession:
         return session.with_classifier(data[0]["classifier"])
     except EvidenceIncomplete as exc:
         if exc.status in {"incomplete", "deadline"}:
-            client.schedule_root_warm(path, session.classifier, HOOK_TAIL_BYTES)
+            client.schedule_root_warm(path, session.classifier, tail_bytes)
         session.release()
         raise
     except BaseException:

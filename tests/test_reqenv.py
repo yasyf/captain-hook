@@ -63,6 +63,24 @@ class TestGetenv:
         assert reqenv.getenv("CLAUDE_PROJECT_DIR", 10.0) == 10.0
 
 
+class TestProvider:
+    @pytest.mark.parametrize("value", ["claude", "codex"])
+    def test_reads_explicit_request_provider(self, value: str) -> None:
+        with reqenv.use_request(overrides({"CAPT_HOOK_PROVIDER": value})):
+            assert reqenv.provider() == value
+
+    def test_omitted_provider_remains_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CAPT_HOOK_PROVIDER", "codex")
+        with reqenv.use_request(overrides({})):
+            assert reqenv.provider() == "claude"
+
+    @pytest.mark.parametrize("value", ["", "unknown", "Codex"])
+    def test_unknown_provider_is_rejected(self, value: str) -> None:
+        with reqenv.use_request(overrides({"CAPT_HOOK_PROVIDER": value})):
+            with pytest.raises(ValueError, match="unsupported hook provider"):
+                reqenv.provider()
+
+
 class TestEnvMap:
     def test_unbound_is_the_process_environ(self) -> None:
         assert reqenv.env_map() is os.environ

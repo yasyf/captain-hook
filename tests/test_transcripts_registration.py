@@ -687,6 +687,50 @@ class TestUnsafePathsSkipped:
         assert raised.value.status == status
 
 
+@pytest.mark.parametrize("event", [Event.SessionStart, Event.UserPromptSubmit, Event.PreToolUse, Event.PostToolUse, Event.Stop])
+def test_codex_hook_dispatch_reads_native_root_transcript(tmp_path, event):
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.testing.snapshots import FixtureOwner
+    from captain_hook.util import reqenv
+
+    rollout = write_apply_patch_rollout(tmp_path / "rollout.jsonl", "codex-root")
+    observed = []
+
+    @on(event)
+    def root_evidence(evt):
+        observed.append(evt.ctx.t.has_edit_to("src/a.py", subagents=False))
+
+    raw = {
+        "session_id": "codex-root",
+        "transcript_path": str(rollout),
+        "cwd": str(tmp_path),
+        "hook_event_name": event.name,
+        "model": "gpt-6.1-sol",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pwd"},
+        "tool_response": "/tmp/demo\n",
+    }
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": "codex"}, str(tmp_path), 0, "codex-root")
+    try:
+        with reqenv.use_request(scope):
+            dispatch_event(tmp_path, event, raw, session_dir=ensure_session(SessionId("codex-root")))
+        assert observed == [True]
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
+def test_unknown_hook_provider_is_rejected_before_dispatch(tmp_path):
+    from captain_hook.util import reqenv
+
+    scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": "unknown"}, str(tmp_path), 0, "unknown-provider")
+    with reqenv.use_request(scope):
+        with pytest.raises(ValueError, match="unsupported hook provider"):
+            dispatch_event(tmp_path, Event.SessionStart, {}, session_dir=None)
+
+
 def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path):
     from captain_hook.snapshots.client import CURRENT_CLIENT
     from captain_hook.testing.helpers import fixture_line
