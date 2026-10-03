@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import threading
@@ -25,6 +26,7 @@ from captain_hook.snapshots.client import (
     RemoteSession,
     RootWarmState,
     SnapshotClient,
+    fails_open,
     foreground_seconds,
 )
 from captain_hook.snapshots.worker import empty_usage, failure
@@ -535,6 +537,135 @@ def test_expired_foreground_budget_never_sends_a_native_request():
 
     with pytest.raises(EvidenceIncomplete, match="foreground transcript deadline exhausted"):
         client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
+
+
+def test_an_exhausted_shared_foreground_deadline_records_each_refused_request(logcap):
+    private = "/Users/fixture-user/private/root.jsonl"
+    client = SnapshotClient(lambda _: pytest.fail("expired foreground request was sent"), foreground_seconds=0)
+    client.bind_tool_registry({})
+
+    for _ in range(2):
+        with pytest.raises(EvidenceIncomplete, match="foreground transcript deadline exhausted") as caught:
+            client.call("acquire", path=private, classifier={"id": "native", "version": "1"})
+        assert caught.value.status == "deadline"
+        assert fails_open(caught.value)
+
+    digest = hashlib.sha256(json.dumps({"path": private}, sort_keys=True).encode()).hexdigest()[:16]
+    records = [record for record in logcap.records if record.message.startswith("foreground transcript deadline")]
+    assert [record.levelno for record in records] == [20, 20]
+    for index, record in enumerate(records, start=1):
+        for field in (
+            "status='deadline'",
+            f"foreground_deadline_unix_ms={client.foreground_deadline_unix_ms}",
+            "foreground_seconds=0",
+            "operation='acquire'",
+            f"request_id='{client._prefix}-{index}'",
+            " deadline_unix_ms=None",
+            "resource_kind='path'",
+            "resource_count=1",
+            f"resource_sha256='{digest}'",
+        ):
+            assert field in record.message
+        assert "elapsed_ms=" in record.message
+    assert private not in logcap.text
+    assert "native" not in logcap.text
+
+
+def test_a_returned_missing_response_records_safe_context_and_keeps_its_verdict(logcap):
+    private = "/Users/fixture-user/private/session.jsonl"
+    reason = "No such file or directory (os error 2) sk-fixture-secret"
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        usage = empty_usage() | {"source_opens": 1, "discovery_entries_examined": 3}
+        return {"schema": HOST_SCHEMA, "response": failure(request["id"], "missing", reason, usage)}
+
+    client = SnapshotClient(exchange, foreground_seconds=5)
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete) as caught:
+        client.acquire(private)
+
+    assert (caught.value.status, caught.value.reason) == ("missing", reason)
+    assert fails_open(caught.value)
+    [request] = requests
+    assert request["deadline_unix_ms"] == client.foreground_deadline_unix_ms
+    digest = hashlib.sha256(json.dumps({"path": private}, sort_keys=True).encode()).hexdigest()[:16]
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot request failed")]
+    assert record.levelno == 20
+    for field in (
+        "status='missing'",
+        f"foreground_deadline_unix_ms={client.foreground_deadline_unix_ms}",
+        "output_bytes=0",
+        "'source_opens': 1",
+        "'discovery_entries_examined': 3",
+        "'requests_failed': 1",
+        "operation='acquire'",
+        f"request_id='{request['id']}'",
+        " deadline_unix_ms=None",
+        "resource_kind='path'",
+        "resource_count=1",
+        f"resource_sha256='{digest}'",
+    ):
+        assert field in record.message
+    assert private not in logcap.text
+    assert "os error" not in logcap.text
+    assert "sk-fixture-secret" not in logcap.text
+
+
+def test_a_failed_resume_records_its_request_context_without_private_values(logcap):
+    private = "/Users/fixture-user/private/session.jsonl"
+    cursor = "private-cursor-value"
+    reason = "No such file or directory (os error 2) sk-fixture-secret"
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        match request["operation"]:
+            case "acquire":
+                return response(request, {"kind": "strings", "values": ["first"]}, cursor=cursor)
+            case "resume":
+                return {"schema": HOST_SCHEMA, "response": failure(request["id"], "missing", reason)}
+            case _:
+                pytest.fail("unexpected snapshot request")
+
+    client = SnapshotClient(exchange, foreground_seconds=5)
+    client.bind_tool_registry({})
+    pages = client.pages("acquire", path=private, classifier={"id": "native", "version": "1"})
+    assert next(pages) == {"kind": "strings", "values": ["first"]}
+
+    with pytest.raises(EvidenceIncomplete) as caught:
+        next(pages)
+
+    assert (caught.value.status, caught.value.reason) == ("missing", reason)
+    assert fails_open(caught.value)
+    [initial, resumed] = requests
+    assert initial["operation"] == "acquire"
+    assert initial["deadline_unix_ms"] == client.foreground_deadline_unix_ms
+    assert resumed["operation"] == "resume"
+    assert resumed["cursor"] == cursor
+    assert "deadline_unix_ms" not in resumed
+    assert initial["id"] != resumed["id"]
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot request failed")]
+    assert record.levelno == 20
+    for field in (
+        "status='missing'",
+        "operation='resume'",
+        f"request_id='{resumed['id']}'",
+        " deadline_unix_ms=None",
+        f"foreground_deadline_unix_ms={client.foreground_deadline_unix_ms}",
+        "resource_kind='cursor'",
+        "resource_count=None",
+        "resource_sha256=None",
+        "output_bytes=37",
+    ):
+        assert field in record.message
+    assert f"request_id='{initial['id']}'" not in record.message
+    for value in (private, cursor, "os error", "sk-fixture-secret"):
+        assert value not in logcap.text
 
 
 def test_exitstack_lease_cleanup_retries_retained_limit():

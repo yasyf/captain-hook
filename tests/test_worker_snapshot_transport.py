@@ -1,4 +1,7 @@
+import hashlib
 import io
+import json
+import re
 import socket
 import threading
 import time
@@ -231,6 +234,63 @@ def test_foreground_transport_deadline_overrides_long_native_deadline(transport)
     }
     write_message(outgoing, snapshot_reply(snapshot, error="cancelled"))
     assert read_message(incoming)["op"] == "result"
+
+
+def test_transport_deadline_records_safe_request_context_before_conversion(transport, logcap):
+    private = "/Users/fixture-user/private/session.jsonl"
+    finished = threading.Event()
+    sent = {}
+
+    def dispatch(request):
+        sent["deadline"] = int(time.time() * 1000) + 120_000
+        sent["expires"] = int(time.time() * 1000) + 80
+        value = {
+            "schema": "captain.transcript/1",
+            "request": {
+                "schema": "cc-transcript.snapshot/1",
+                "id": "client-7",
+                "operation": "acquire",
+                "path": private,
+                "deadline_unix_ms": sent["deadline"],
+            },
+        }
+        with pytest.raises(EvidenceIncomplete, match="snapshot transport deadline elapsed") as caught:
+            service.snapshot_exchange(request.id, value, expires_unix_ms=sent["expires"])
+        sent["status"] = caught.value.status
+        finished.set()
+        return EventResponse(), None
+
+    service, _, incoming, outgoing, _ = transport(dispatch)
+    write_message(outgoing, event(9))
+    snapshot = read_message(incoming)
+    assert snapshot["snapshot"]["request"]["deadline_unix_ms"] == sent["deadline"]
+    assert read_message(incoming) == {"protocol": 1, "op": "snapshot_cancel", "id": snapshot["id"], "parent_id": 9}
+    assert finished.wait(timeout=3)
+    assert service._snapshot_pending[snapshot["id"]][1].cancelled()
+    write_message(outgoing, snapshot_reply(snapshot, error="cancelled"))
+    assert read_message(incoming)["op"] == "result"
+
+    digest = hashlib.sha256(json.dumps({"path": private}, sort_keys=True).encode()).hexdigest()[:16]
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot transport deadline elapsed")]
+    assert sent["status"] == "deadline"
+    assert record.levelno == 20
+    for field in (
+        "status='deadline'",
+        "parent_id=9",
+        f"frame_id={snapshot['id']}",
+        f"foreground_deadline_unix_ms={sent['expires']}",
+        f"expires_unix_ms={sent['expires']}",
+        "operation='acquire'",
+        "request_id='client-7'",
+        f" deadline_unix_ms={sent['deadline']}",
+        "resource_kind='path'",
+        "resource_count=1",
+        f"resource_sha256='{digest}'",
+    ):
+        assert field in record.message
+    assert 0 <= float(re.search(r"elapsed_ms=([\d.]+)", record.message).group(1)) < 3000
+    assert private not in logcap.text
+    assert [record for record in logcap.records if record.levelno >= 30] == []
 
 
 def test_snapshot_reply_requires_matching_parent():

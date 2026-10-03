@@ -14,6 +14,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
@@ -104,14 +105,16 @@ def test_allowed_and_blocked_verdicts(project: Path) -> None:
     assert "Recursive force-delete is forbidden" in blocked.stdout
 
 
-def test_worker_is_reused_across_events(project: Path) -> None:
-    session = uuid.uuid4().hex
-    assert not denied(bash(project, session, "ls"))
-    first = worker_pids(project)
-    assert first
-    for _ in range(3):
+def test_worker_is_reused_across_events() -> None:
+    with TemporaryDirectory(prefix="captain-hook-reuse-", dir=Path.home()) as directory:
+        project = make_project(Path(directory))
+        session = uuid.uuid4().hex
         assert not denied(bash(project, session, "ls"))
-    assert worker_pids(project) == first
+        first = worker_pids(project)
+        assert first
+        for _ in range(3):
+            assert not denied(bash(project, session, "ls"))
+        assert worker_pids(project) == first
 
 
 def test_concurrent_sessions_each_get_their_verdict(project: Path, tmp_path: Path) -> None:

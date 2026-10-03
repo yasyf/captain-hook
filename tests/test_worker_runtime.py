@@ -690,6 +690,37 @@ def test_a_hook_skipped_after_the_reply_is_named_on_the_next_dispatch(tmp_path: 
     assert "skipped async guard (read_limit: incomplete); all hooks" in json.loads(warned.stdout)["systemMessage"]
 
 
+def test_each_skip_warns_once_with_its_event_and_status(tmp_path: Path, logcap: Any) -> None:
+    foreground = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=skipped_one_hook,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    background = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=skipped_one_async_hook,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+
+    first, _ = foreground.dispatch(session_request(tmp_path, event="Stop"))
+    second, _ = foreground.dispatch(session_request(tmp_path, event="Stop"))
+    _, after = background.dispatch(session_request(tmp_path))
+    assert after is not None
+    after()
+
+    warnings = [record.message for record in logcap.records if record.levelno >= 30]
+    assert len(warnings) == 3
+    for message in warnings[:2]:
+        assert "hook='guard' cause='entry_limit: condition incomplete' status='entry_limit' event='Stop'" in message
+    assert "hook='async guard' cause='read_limit: incomplete' status='read_limit' event=None" in warnings[2]
+    assert json.loads(first.stdout.splitlines()[-1])["systemMessage"].startswith(
+        "sibling ran\n\ncapt-hook: skipped guard (entry_limit: condition incomplete)"
+    )
+    assert json.loads(second.stdout.splitlines()[-1])["systemMessage"] == "sibling ran"
+
+
 def test_a_contended_tally_still_fails_open(tmp_path: Path) -> None:
     from filelock import FileLock
 
