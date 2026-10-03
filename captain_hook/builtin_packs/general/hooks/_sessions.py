@@ -23,7 +23,7 @@ from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, pro
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
-from captain_hook.grants import Allowed, Evidence, Grants, Proposal, Rulings
+from captain_hook.grants import Allowed, Evidence, Grants, Judge, Proposal, Rulings, StandingRulings
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
 from captain_hook.util import proc, reqenv
 from captain_hook.util.payload import command_texts
@@ -142,6 +142,19 @@ LAUNCH_RECEIPTS = ".claude/scratch/orca-launch"
 RECEIPT_SLACK = timedelta(seconds=1)
 RETRY_WINDOW = timedelta(minutes=2)
 LATER_SESSION = "name it in a cc-notes answer for a later session"
+SETTLED = frozenset({"completed", "failed"})
+CLASS_RULINGS = ("c9b27c1", "6190a4a")
+SETTLED_CLOSE_RULES = (
+    "The owner's standing rulings in the evidence cover a class of Orca terminal closes rather than one named "
+    "terminal: c9b27c1 lets the root close a settled dispatch's idle terminal, as orca-gc does, and 6190a4a lets it "
+    "close an orphan terminal its own failed launch created. The proposed action's payload is Orca's record for the "
+    "terminal: the dispatch holding it and that dispatch's status. The guard has already proven the status is "
+    "completed or failed and the terminal's agent idles at a prompt. Allow only when a ruling's words cover closing "
+    "a terminal with this record, and cite that ruling. Deny when the rulings exclude this record, or limit the class "
+    "to terminals it is not."
+)
+TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
+SPAWN_TOOLS = frozenset({"Agent", "Task"})
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_TABLE = (
     "    1     0     1    0 Thu Jan  1 00:00:00 2026 /sbin/launchd\n"
@@ -204,9 +217,56 @@ def inline_create(
     ]
 
 
+def inline_spawn(task: str, *, tool: str = "Agent", status: str = "teammate_spawned") -> list[dict[str, Any]]:
+    name, _, team = task.partition("@")
+    return [
+        *INLINE_TRANSCRIPT,
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_spawn", "name": tool, "input": {"name": name}}],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_spawn", "content": f"agent_id: {task}"}],
+            },
+            "toolUseResult": {"status": status, "teammate_id": task, "agent_id": task, "name": name, "team_name": team},
+        },
+    ]
+
+
 def inline_workers(*handles: str) -> str:
     rows = [{"dispatchId": f"ctx_{index}", "agentTerminalHandle": handle} for index, handle in enumerate(handles)]
     return json.dumps({"ok": True, "result": {"workers": rows, "page": {}, "scope": {"source": "all"}}})
+
+
+def inline_worker(handle: str, status: str, stage: str = "settled") -> str:
+    row = {
+        "dispatchId": "ctx_settled",
+        "runId": "run_inline",
+        "dispatchStatus": status,
+        "agentTerminalHandle": handle,
+        "projection": {"stage": {"detail": stage}},
+    }
+    return json.dumps({"ok": True, "result": {"workers": [row], "page": {}, "scope": {"source": "all"}}})
+
+
+def inline_class_rulings(*, written: datetime = INLINE_STARTED - timedelta(days=1)) -> dict[str, str]:
+    bodies = {
+        "c9b27c1": "Owner: after a dispatch settles the root runs orca-gc to close that dispatch's idle terminal; "
+        "never a live or unsettled dispatch.",
+        "6190a4a": "Owner: the root may close an orphan Orca terminal its own failed launch created.",
+    }
+    return {
+        f"ccn answer show {ident}": json.dumps(
+            {"id": f"{ident}aaaa", "title": "Close settled terminals", "body": body, "updated_at": written.isoformat()}
+        )
+        for ident, body in bodies.items()
+    }
 
 
 def inline_screen(*tail: str) -> str:
@@ -783,7 +843,7 @@ def runs_once(call: Call, scan: Scan) -> bool:
     )
 
 
-def dispatch_of(handle: str) -> str | Unreadable | None:
+def worker_of(handle: str) -> dict[str, Any] | Unreadable | None:
     cursor: tuple[str, ...] = ()
     while True:
         argv = ("orca", "orchestration", "worker-list", "--limit", str(WORKER_PAGE), *cursor, "--json")
@@ -794,7 +854,7 @@ def dispatch_of(handle: str) -> str | Unreadable | None:
                 return Unreadable("Orca scoped its worker list to one Run")
             holder = next(
                 (
-                    row["dispatchId"]
+                    row
                     for row in page["workers"]
                     if handle in (row.get("agentTerminalHandle"), (row.get("resource") or {}).get("terminalHandle"))
                 ),
@@ -881,10 +941,11 @@ class CreatedHere:
         if found is None:
             return []
         use, bash = found
-        holder = dispatch_of(handle)
+        holder = worker_of(handle)
         ready = idle(handle) if holder is None else False
         if holder is not None or ready is not True:
-            logger.bind(terminal=handle, dispatch=holder, idle=ready).info("a terminal this session created is busy")
+            dispatch = holder.get("dispatchId") if isinstance(holder, dict) else holder
+            logger.bind(terminal=handle, dispatch=dispatch, idle=ready).info("a terminal this session created is busy")
             return []
         return [
             Evidence(
@@ -894,6 +955,49 @@ class CreatedHere:
                 said_at=use.result_ts or use.ts,
                 detail=f"this session created {handle}; no dispatch names it and its agent idles at a prompt",
                 key=f"created:{evt.session_id}/{evt.agent_id or 'main'}/{handle}",
+                live=True,
+            )
+        ]
+
+
+def settled_close(handle: str, tab: bool) -> Proposal | None:
+    worker = worker_of(handle)
+    if not isinstance(worker, dict) or worker.get("dispatchStatus") not in SETTLED or idle(handle) is not True:
+        return None
+    dispatch, status = worker["dispatchId"], worker["dispatchStatus"]
+    stage = ((worker.get("projection") or {}).get("stage") or {}).get("detail")
+    return Proposal(
+        scope={},
+        payload={"terminal": handle, "tab": tab, "dispatch": dispatch, "run": worker.get("runId"), "status": status},
+        summary=f"close terminal {handle}, whose dispatch {dispatch} is {status} ({stage}) and whose agent idles "
+        "at a prompt",
+    )
+
+
+def spawned(use: Any, task: str) -> bool:
+    if use.call.name not in SPAWN_TOOLS or use.result is None:
+        return False
+    result = use.result.tool_use_result
+    return isinstance(result, dict) and result.get("status") == "teammate_spawned" and result.get("teammate_id") == task
+
+
+@dataclass(frozen=True, slots=True)
+class OwnTeammate:
+    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
+        task = action.scope["task"]
+        if TEAMMATE_TASK.fullmatch(task) is None:
+            return []
+        found = next((use for turn in evt.ctx.t.turns for use in turn.tool_uses if spawned(use, task)), None)
+        if found is None:
+            return []
+        return [
+            Evidence(
+                id=f"teammate:{task}",
+                source="teammate",
+                quote=task,
+                said_at=found.result_ts or found.ts,
+                detail=f"this agent's own transcript records spawning {task} as its teammate",
+                key=f"teammate:{evt.session_id}/{evt.agent_id or 'main'}/{task}",
                 live=True,
             )
         ]
@@ -923,9 +1027,21 @@ LAUNCHD_STOP = Grants(
 TASK_STOP = Grants(
     "sessions.task-stop",
     ("task",),
-    evidence=(rulings_naming("task"),),
+    evidence=(OwnTeammate(), rulings_naming("task")),
     replay=RETRY_WINDOW,
-    would_allow="Have the owner name the task id in a cc-notes answer before the stopping session starts.",
+    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or have the owner "
+    "name the task id in a cc-notes answer before the stopping session starts.",
+    hook="sessions",
+)
+SETTLED_CLOSE = Grants(
+    "sessions.close-settled",
+    (),
+    judge=Judge(rules=SETTLED_CLOSE_RULES),
+    evidence=(StandingRulings(CLASS_RULINGS),),
+    mint=None,
+    ttl=None,
+    would_allow="Close only an idle terminal whose dispatch Orca records as settled, under a standing owner ruling "
+    "that predates the closing session.",
     hook="sessions",
 )
 

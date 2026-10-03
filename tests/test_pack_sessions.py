@@ -22,9 +22,12 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_OWNER_TERMINAL,
     INLINE_STARTED,
     INLINE_TRANSCRIPT,
+    inline_class_rulings,
     inline_create,
     inline_ruling,
+    inline_spawn,
     inline_tab,
+    inline_worker,
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
@@ -117,9 +120,18 @@ AGENT_TERMINALS = table(
     row(16001, 16000, "-/opt/homebrew/bin/fish -l", started="2026-09-30T06:52:01"),
     row(16002, 16001, "claude --dangerously-skip-permissions --effort xhigh", started="2026-09-30T06:52:05"),
 )
+TWO_AGENT_TERMINALS = table(
+    *AGENT_TERMINALS.rows.values(),
+    row(17000, 1743, f"{INLINE_LOGIN} /opt/homebrew/bin/fish", uid=0, started="2026-09-30T06:53:00"),
+    row(17001, 17000, "-/opt/homebrew/bin/fish -l", started="2026-09-30T06:53:01"),
+    row(17002, 17001, "codex --dangerously-bypass-approvals-and-sandbox", started="2026-09-30T06:53:05"),
+)
 OWNER_CLOSE = f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json"
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 IDLE_CLOSE = "orca terminal close --terminal term_idle --json"
+SETTLED = INLINE_COMMANDS | inline_class_rulings()
+CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
+ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
 CLOSE_FIX = (
     "Close only an idle orphan this session created, or ask the owner to name it in a cc-notes answer for a later "
     "session."
@@ -211,7 +223,10 @@ def decide(
 
 def stop(tool_input: dict[str, Any], **fields: Any) -> Input:
     return Input(
-        tool="TaskStop", tool_input=tool_input, cwd="/w", session_id="s1", transcript=INLINE_TRANSCRIPT, **fields
+        tool="TaskStop",
+        tool_input=tool_input,
+        cwd="/w",
+        **{"session_id": "s1", "transcript": INLINE_TRANSCRIPT, **fields},
     )
 
 
@@ -448,6 +463,8 @@ class TestFailClosed:
         )
 
 
+OBSERVED_LANE = "aig-no-delete-plan@session-67c0e5da"
+RESUMED_SESSION = "900424b6-7393-480c-a26a-f1bd21da6e57"
 STOP_DENIED = (
     "BLOCKED: `TaskStop` on task `wcn64vfub` cannot be verified as a disposable shell task rather than a workflow, "
     "agent, or teammate session, its own children included. Let it finish, or ask the owner to end it or name it in "
@@ -509,6 +526,48 @@ class TestStopTool:
     ) -> None:
         rulings["wcn64vfub"] = ruling("Stop wcn64vfub.", written=INLINE_STARTED + timedelta(seconds=1))
         assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+        assert spends("sessions.task-stop") == []
+
+    def test_a_teammate_this_session_spawned_stops_and_records_its_spend(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        resumed = stop({"task_id": OBSERVED_LANE}, session_id=RESUMED_SESSION, transcript=inline_spawn(OBSERVED_LANE))
+        assert decide_input(resumed, tmp_path) is None
+        assert decide_input(resumed, tmp_path, event=Event.PermissionRequest) is None
+        assert spends("sessions.task-stop") == [
+            ("committed", f"stop task {OBSERVED_LANE}", [f"teammate:{OBSERVED_LANE}"])
+        ]
+
+    def test_a_lane_stops_the_teammate_it_spawned(self, general_pack: None, tmp_path: Path) -> None:
+        own = stop({"task_id": OBSERVED_LANE}, agent_id="capt-hook-grants", transcript=inline_spawn(OBSERVED_LANE))
+        assert decide_input(own, tmp_path) is None
+
+    @pytest.mark.parametrize(
+        ("task_id", "fields"),
+        [
+            pytest.param(OBSERVED_LANE, {}, id="never-spawned"),
+            pytest.param(
+                OBSERVED_LANE, {"transcript": inline_spawn("aig-no-delete-plan-2@session-67c0e5da")}, id="another-name"
+            ),
+            pytest.param(
+                "aig-no-delete-plan@session-756e25cc", {"transcript": inline_spawn(OBSERVED_LANE)}, id="foreign-session"
+            ),
+            pytest.param(
+                OBSERVED_LANE,
+                {"agent_id": "sibling", "root_transcript": inline_spawn(OBSERVED_LANE)},
+                id="root-spawned-it",
+            ),
+            pytest.param("aig-no-delete-plan", {"transcript": inline_spawn("aig-no-delete-plan")}, id="bare-id"),
+            pytest.param(
+                OBSERVED_LANE, {"transcript": inline_spawn(OBSERVED_LANE, status="async_launched")}, id="not-a-teammate"
+            ),
+        ],
+    )
+    def test_a_task_this_agent_did_not_spawn_as_its_teammate_stays_protected(
+        self, general_pack: None, tmp_path: Path, task_id: str, fields: dict[str, Any]
+    ) -> None:
+        denied = decide_input(stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
+        assert denied == STOP_DENIED.replace("wcn64vfub", task_id)
         assert spends("sessions.task-stop") == []
 
 
@@ -592,6 +651,71 @@ class TestTerminalClose:
             f"close terminal {INLINE_OWNER_TERMINAL}",
             "close terminal term_agent",
         ]
+
+    def test_a_class_ruling_closes_every_settled_dispatchs_idle_terminal_from_one_grant(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = TWO_AGENT_TERMINALS
+        for handle, status, stage in (
+            ("term_agent", "completed", "settled"),
+            ("term_shim", "failed", "agent_readiness"),
+        ):
+            with stubbed_commands(SETTLED | {"orca orchestration worker-list": inline_worker(handle, status, stage)}):
+                close = bash(f"orca terminal close --terminal {handle} --json", llm=CLASS_ALLOW)
+                assert decide_input(close, tmp_path) is None
+        [grant] = store.grants("sessions.close-settled")
+        assert grant.uses is None and grant.scope == {}
+        assert [(spend.state, spend.relied_on) for spend in store.spends(grant.id)] == [
+            ("committed", ["ccn:c9b27c1"]),
+            ("committed", ["ccn:c9b27c1"]),
+        ]
+        assert spends("sessions.close") == []
+
+    @pytest.mark.parametrize(
+        ("commands", "llm"),
+        [
+            pytest.param(
+                {"orca orchestration worker-list": inline_worker("term_agent", "dispatched", "input_accepted")},
+                CLASS_ALLOW,
+                id="live-dispatch",
+            ),
+            pytest.param({"orca terminal read": INLINE_BUSY}, CLASS_ALLOW, id="busy-agent"),
+            pytest.param(
+                inline_class_rulings(written=INLINE_STARTED + timedelta(minutes=1)), CLASS_ALLOW, id="stale-ruling"
+            ),
+            pytest.param({}, {}, id="judge-declines"),
+            pytest.param({"orca orchestration worker-list": _sessions.inline_workers()}, CLASS_ALLOW, id="no-dispatch"),
+        ],
+    )
+    def test_a_class_ruling_never_lifts_a_close_the_orca_record_or_the_judge_rules_out(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        commands: dict[str, str],
+        llm: dict[str, Any],
+    ) -> None:
+        settled = {"orca orchestration worker-list": inline_worker("term_agent", "completed")}
+        with stubbed_commands(SETTLED | settled | commands):
+            message = decide_input(bash(AGENT_CLOSE, llm=llm), tmp_path)
+        assert message is not None
+        assert "where pid 16002" in message
+        assert [spend for grant in store.grants("sessions.close-settled") for spend in store.spends(grant.id)] == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_d83bbb927995",
+            f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_1 --dispatch ctx_2",
+            f"/Users/dev/monorepo/{ORCA_GC} --run run_1",
+            f"cd /Users/dev/monorepo && {ORCA_GC} --run run_1 --dispatch ctx_1 2>&1 | tail -20",
+        ],
+    )
+    def test_the_roots_orca_gc_run_is_not_refused(
+        self, general_pack: None, agent_table: None, tmp_path: Path, command: str
+    ) -> None:
+        with stubbed_commands(INLINE_COMMANDS):
+            assert decide(command, tmp_path) is None
 
     def test_an_idle_terminal_this_session_created_closes_and_records_its_spend(
         self, general_pack: None, agent_table: None, tmp_path: Path

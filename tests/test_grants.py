@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -27,6 +28,7 @@ from captain_hook.grants import (
     OwnerWords,
     Proposal,
     Rulings,
+    StandingRulings,
     reservations,
     settle,
     store,
@@ -344,6 +346,39 @@ def test_rulings_count_only_when_written_before_the_session(tmp_path: Path, monk
     assert [item.id for item in items] == ["ccn:543e865"]
     assert items[0].key == "ccn:543e865aaaa@2026-10-01T10:00:00+00:00"
     assert items[0].live
+
+
+def test_standing_rulings_read_each_id_written_before_the_session_and_skip_absent_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = datetime(2026, 10, 2, 18, 0, tzinfo=UTC)
+    answers = {
+        "c9b27c1": {"id": "c9b27c1aaaa", "title": "gc", "body": "close settled", "updated_at": "2026-10-01T10:00:00Z"},
+        "777beef": {"id": "777beefaaaa", "title": "late", "body": "close all", "updated_at": "2026-10-02T18:30:00Z"},
+    }
+
+    def show(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        found = answers.get(argv[3])
+        if found is None:
+            return subprocess.CompletedProcess(argv, 3, stdout="", stderr="not-found")
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(found), stderr="")
+
+    monkeypatch.setattr(evidence_module.subprocess, "run", show)
+    standing = StandingRulings(("c9b27c1", "777beef", "6190a4a"), started=lambda evt: started)
+    items = standing.collect(event(tmp_path), Proposal(scope={}))
+    assert [(item.id, item.key, item.live) for item in items] == [
+        ("ccn:c9b27c1", "ccn:c9b27c1aaaa@2026-10-01T10:00:00+00:00", True)
+    ]
+
+
+def test_standing_rulings_fail_on_an_unreadable_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        evidence_module.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, stdout="", stderr="ccn: no repository"),
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        StandingRulings(("c9b27c1",)).collect(event(tmp_path), Proposal(scope={}))
 
 
 def test_a_ruling_names_a_term_only_as_a_whole_word(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -675,5 +710,7 @@ def test_a_downstream_spender_names_a_spent_one_shot_for_the_same_payload_again(
 
 def test_spending_an_unknown_grant_names_it(tmp_path: Path) -> None:
     argv = ["spend", "000000000000", "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", TREE]
-    refused = CliRunner().invoke(grant_cli, [*argv, "--session", TREE, "--call", "p", "--fingerprint", "f", "--summary", "s"])
+    refused = CliRunner().invoke(
+        grant_cli, [*argv, "--session", TREE, "--call", "p", "--fingerprint", "f", "--summary", "s"]
+    )
     assert refused.exit_code == 1 and "no grant 000000000000" in refused.output

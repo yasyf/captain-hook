@@ -14,6 +14,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     block_first,
     clip,
     inline_ruling,
+    inline_spawn,
     lift,
 )
 from captain_hook.grants import Proposal
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     from captain_hook import BaseHookEvent, HookResult, ToolRewriteEvent
 
 STOP_TOOLS = frozenset({"TaskStop"})
+OWN_LANE = "lane-2@session-67c0e5da"
 stopping = partial(Input, tool="TaskStop", commands=INLINE_COMMANDS, transcript=INLINE_TRANSCRIPT)
 
 
@@ -79,6 +81,28 @@ def describe_target(target: tuple[str, str] | None) -> str:
             tool_input={"task_id": "wcn64vfub"},
             commands={**INLINE_COMMANDS, "ccn answer search wcn64vfub": inline_ruling("Stop wcn64vfub2.")},
         ): Block(pattern="cannot be verified"),
+        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE)): Allow(),
+        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE, tool="Task")): Allow(),
+        stopping(tool_input={"task_id": OWN_LANE}, agent_id="lane-1", transcript=inline_spawn(OWN_LANE)): Allow(),
+        stopping(tool_input={"task_id": OWN_LANE}): Block(pattern=f"on task `{OWN_LANE}` cannot be verified"),
+        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn("lane-3@session-67c0e5da")): Block(
+            pattern="cannot be verified"
+        ),
+        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE, status="async_launched")): Block(
+            pattern="cannot be verified"
+        ),
+        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE, tool="Bash")): Block(
+            pattern="cannot be verified"
+        ),
+        stopping(tool_input={"task_id": OWN_LANE}, agent_id="lane-1", root_transcript=inline_spawn(OWN_LANE)): Block(
+            pattern="cannot be verified"
+        ),
+        stopping(tool_input={"task_id": "aig-no-delete-plan@session-756e25cc"}): Block(
+            pattern="on task `aig-no-delete-plan@session-756e25cc` cannot be verified"
+        ),
+        stopping(tool_input={"task_id": "lane-2"}, transcript=inline_spawn("lane-2")): Block(
+            pattern="on task `lane-2` cannot be verified"
+        ),
         Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(tool="mcp__orca__TaskStop", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(command="printf 'TaskStop wcn64vfub'"): Allow(),

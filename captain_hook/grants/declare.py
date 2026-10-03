@@ -74,7 +74,7 @@ class Grants:
             per scope across every session tree, so a judge-less declaration reads only sources that
             name the action, such as ``Rulings``.
         evidence: Where the owner's words live, read when no stored grant covers the action.
-        mint: Uses of a grant minted from session evidence.
+        mint: Uses of a grant minted from session evidence; ``None`` mints a grant every later action may spend.
         ttl: How long a grant minted from session evidence lives.
         standing_ttl: How long a standing grant minted from the owner's verbatim words lives.
         standing_rules: Rule names a standing grant asserts.
@@ -91,7 +91,7 @@ class Grants:
     rules: Sequence[Rule] = ()
     judge: Judge | None = None
     evidence: Sequence[EvidenceSource] = ()
-    mint: int = 1
+    mint: int | None = 1
     ttl: timedelta | None = timedelta(days=1)
     standing_ttl: timedelta | None = None
     standing_rules: tuple[str, ...] = ()
