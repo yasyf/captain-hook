@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
@@ -61,6 +61,16 @@ def getenv[T](key: str, default: str | T | None = None) -> str | T | None:
     if (ov := _OVERRIDES.get()) is not None and is_whitelisted(key):
         return ov.env.get(key, default)
     return os.environ.get(key, default)
+
+
+def provider() -> Literal["claude", "codex"]:
+    match getenv("CAPT_HOOK_PROVIDER", "claude"):
+        case "claude":
+            return "claude"
+        case "codex":
+            return "codex"
+        case value:
+            raise ValueError(f"unsupported hook provider: {value!r}")
 
 
 def env_map() -> Mapping[str, str]:

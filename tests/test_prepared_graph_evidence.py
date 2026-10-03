@@ -107,9 +107,12 @@ def test_incomplete_graph_enqueues_registered_sources_for_warming():
     assert queued == [(client, session.graph.sources)]
 
 
-def test_cold_root_schedules_background_progress_and_fails_open(tmp_path):
+@pytest.mark.parametrize("provider,tail_bytes", [("claude", HOOK_TAIL_BYTES), ("codex", None)])
+@pytest.mark.parametrize("status", ["incomplete", "deadline", "invalid_request"])
+def test_cold_root_schedules_background_progress_and_fails_open(tmp_path, provider, tail_bytes, status):
     from captain_hook.snapshots.client import CURRENT_CLIENT
     from captain_hook.transcripts import load_transcript
+    from captain_hook.util import reqenv
 
     path = tmp_path / "large-root.jsonl"
     scheduled = []
@@ -119,15 +122,24 @@ def test_cold_root_schedules_background_progress_and_fails_open(tmp_path):
             (source_client, source_path, classifier, tail_bytes)
         ),
     )
-    client.acquire = lambda _, **__: (_ for _ in ()).throw(EvidenceIncomplete("incomplete", "foreground byte budget"))
+    attempts = []
+
+    def acquire(source, **kwargs):
+        attempts.append((source, kwargs))
+        raise EvidenceIncomplete(status, "foreground byte budget")
+
+    client.acquire = acquire
     token = CURRENT_CLIENT.set(client)
     try:
-        with pytest.raises(EvidenceIncomplete, match="foreground byte budget"):
-            load_transcript(path)
+        scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": provider}, str(tmp_path), 0, "session")
+        with reqenv.use_request(scope):
+            with pytest.raises(EvidenceIncomplete, match="foreground byte budget"):
+                load_transcript(path)
     finally:
         CURRENT_CLIENT.reset(token)
 
-    assert scheduled == [(client, path, {"id": "native", "version": "1"}, HOOK_TAIL_BYTES)]
+    assert attempts == [(path, {"tail_bytes": tail_bytes})]
+    assert scheduled == ([] if status == "invalid_request" else [(client, path, {"id": "native", "version": "1"}, tail_bytes)])
 
 
 def test_graph_work_stays_inside_the_hook_deadline():

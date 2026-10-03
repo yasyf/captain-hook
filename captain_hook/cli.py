@@ -289,6 +289,7 @@ def dispatch_event(
     )
     from captain_hook.util import reqenv
 
+    reqenv.provider()
     record_heartbeat(event, raw)
     resolved_path = raw.get("agent_transcript_path") or (
         lane_transcript_path(parent, agent_id)
