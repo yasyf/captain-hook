@@ -155,6 +155,14 @@ class Grants:
     def applicable(self, grant: Grant) -> list[Rule]:
         return [rule for rule in self.rules if rule.always or rule.name in grant.rules]
 
+    def decide(self, evt: BaseHookEvent, action: Proposal | None = None) -> Allowed | Denied:
+        """:meth:`check`, failing closed: a store, evidence, or judge error is a denial naming the error."""
+        try:
+            return self.check(evt, action)
+        except Exception as exc:
+            logger.bind(hook=self.hook, kind=self.kind).opt(exception=True).warning("grant check failed")
+            return Denied(f"the grant check failed ({type(exc).__name__}: {exc}).", self.would_allow)
+
     def check(self, evt: BaseHookEvent, action: Proposal | None = None) -> Allowed | Denied:
         """Spend a grant that covers *action*, minting one from the owner's words when none is stored.
 
@@ -317,11 +325,7 @@ def lifted(evt: BaseHookEvent, hook: str, result: HookResult, grants: Grants) ->
     The check fails closed: a store, evidence, or judge error keeps the block. The block's own message
     stays the agent-facing text; why no grant covered the call goes to the user as ``system_message``.
     """
-    try:
-        verdict = grants.check(evt)
-    except Exception as exc:
-        logger.bind(hook=hook).opt(exception=True).warning("grant check failed; keeping the block")
-        return replace(result, system_message=f"{hook}: the grant check failed ({type(exc).__name__}: {exc}).")
+    verdict = grants.decide(evt)
     if isinstance(verdict, Denied):
         return replace(result, system_message=f"{hook}: {verdict.message}")
     left = "unlimited uses" if verdict.remaining is None else f"{verdict.remaining} use(s) left"

@@ -937,11 +937,7 @@ class Ungranted:
 
 
 def lift(evt: BaseHookEvent, grants: Grants, action: Proposal, message: str) -> Ungranted | None:
-    try:
-        verdict = grants.check(evt, action)
-    except Exception as exc:
-        logger.bind(kind=grants.kind).opt(exception=True).warning("grant check failed; keeping the block")
-        return Ungranted(message, f"{grants.hook}: the grant check failed ({type(exc).__name__}: {exc}).")
+    verdict = grants.decide(evt, action)
     if isinstance(verdict, Allowed):
         return None
     return Ungranted(message, f"{grants.hook}: {verdict.message}" if verdict.reason else "")
