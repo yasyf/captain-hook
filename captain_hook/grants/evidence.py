@@ -32,6 +32,18 @@ if TYPE_CHECKING:
 OWNER_WINDOW = 60
 RULINGS_TIMEOUT = 5
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
+MACHINE_ENVELOPES = (
+    "<task-notification",
+    "<teammate-message",
+    "<agent-message",
+    "<channel ",
+    "<system-reminder",
+    "<local-command",
+    "<command-name",
+    "<command-message",
+    "<user-prompt-submit-hook",
+    "Caveat: The messages below",
+)
 
 
 class EvidenceSource(Protocol):
@@ -178,6 +190,22 @@ class Asked:
         return sorted(merged.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
 
+def machine_written(text: str, markers: Sequence[str] = ()) -> bool:
+    """Whether a prompt is a harness envelope or carries a tool's marker, so it is never the owner's words."""
+    return text.lstrip().startswith(MACHINE_ENVELOPES) or any(marker in text for marker in markers)
+
+
+def words_evidence(text: str, at: datetime | None) -> Evidence:
+    key = f"words:{sha256(f'{at.isoformat() if at else ""}|{text}'.encode()).hexdigest()[:12]}"
+    return Evidence(id=key, source="words", quote=text, said_at=at, key=key)
+
+
+def recorded_words(evt: BaseHookEvent) -> list[Evidence]:
+    from captain_hook.grants import store
+
+    return [item for grant in store.grants("words", tree_of(evt)) for item in grant.evidence]
+
+
 def queued_words(turn: Any) -> list[tuple[str, Any]]:
     return [
         (event.detail.prompt or "", event)
@@ -203,16 +231,16 @@ class OwnerWords:
     window: int = OWNER_WINDOW
 
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
-        items: dict[str, Evidence] = {}
+        items = {item.id: item for item in recorded_words(evt) if not machine_written(item.quote, self.machine)}
         needles = self.needles(evt) if self.needles else ()
         for session, prompts_are_owner in owner_sessions(evt, needles):
             for turn in session.recent_messages(self.window).turns:
                 said = [(turn.prompt, turn.started_at)] if prompts_are_owner else []
                 said += [(text, event.meta.timestamp) for text, event in queued_words(turn)]
                 for text, at in said:
-                    if text and not any(marker in text for marker in self.machine):
-                        key = f"words:{sha256(text.encode()).hexdigest()[:12]}"
-                        items[key] = Evidence(id=key, source="words", quote=text, said_at=at, key=key)
+                    if text and not machine_written(text, self.machine):
+                        item = words_evidence(text, at)
+                        items[item.id] = item
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
 
@@ -248,6 +276,10 @@ def written_at(answer: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(answer["updated_at"])
 
 
+def ruling_key(answer: dict[str, Any]) -> str:
+    return f"ccn:{answer['id']}@{written_at(answer).isoformat()}"
+
+
 @dataclass(frozen=True, slots=True)
 class Rulings:
     """The owner's durable rulings recorded as cc-notes answers that name the action's *search* term.
@@ -269,7 +301,7 @@ class Rulings:
                 quote=answer["body"],
                 said_at=written_at(answer),
                 detail=f"ruling {answer['id'][:7]}: {answer['title']}",
-                key=f"ccn:{answer['id']}@{written_at(answer).isoformat()}",
+                key=ruling_key(answer),
             )
             for answer in ccn_answers(evt, term)
             if term in answer.get("body", "") and written_at(answer) < cutoff

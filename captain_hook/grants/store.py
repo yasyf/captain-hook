@@ -126,6 +126,16 @@ def save(grant: Grant) -> None:
         db.execute("UPDATE grants SET body = ? WHERE id = ?", (grant.model_dump_json(), grant.id))
 
 
+def link(grant_id: str, system: str, ident: str) -> Grant:
+    """Record *ident* as *grant_id*'s twin in *system*, against the stored record, keeping any revocation."""
+    with connect() as db, immediate(db):
+        body = db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()[0]
+        current = Grant.model_validate_json(body)
+        linked = current.model_copy(update={"links": current.links | {system: ident}})
+        db.execute("UPDATE grants SET body = ? WHERE id = ?", (linked.model_dump_json(), grant_id))
+        return linked
+
+
 def load(grant_id: str) -> Grant:
     with connect() as db:
         row = db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()
@@ -188,6 +198,8 @@ def matching(kind: str, tree: str, scope: Mapping[str, str], fingerprint: str) -
 def reserve(
     grant_id: str,
     *,
+    tree: str,
+    scope: Mapping[str, str],
     state: SpendState,
     session: str,
     agent: str,
@@ -205,6 +217,8 @@ def reserve(
     at = now()
     with connect() as db, immediate(db):
         grant = Grant.model_validate_json(db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()[0])
+        if grant.tree != tree or grant.scope != dict(scope):
+            raise SpentError(f"grant {grant.id} covers {grant.scope} in another session tree or destination.")
         rows = db.execute(f"SELECT {SPEND_COLUMNS} FROM spends WHERE grant_id = ? ORDER BY id", (grant_id,)).fetchall()
         used = [parse_spend(row) for row in rows]
         left = remaining(grant, used, at)
@@ -230,13 +244,23 @@ def reserve(
         return None if left is None else left - 1
 
 
-def settle(tool_use_id: str, *, allowed: bool) -> None:
-    """Commit every use reserved for *tool_use_id* when its event was allowed, else release them."""
-    with connect() as db:
+def settle(tool_use_id: str, *, allowed: bool) -> bool:
+    """Commit every use reserved for *tool_use_id* when its event was allowed, else release them.
+
+    A reservation older than :data:`RESERVATION_TTL` stopped holding its use, so it is released and the
+    settle reports ``False``: the call it reserved for must not go ahead.
+    """
+    cutoff = (now() - RESERVATION_TTL).isoformat()
+    with connect() as db, immediate(db):
+        stale = db.execute(
+            "UPDATE spends SET state = 'released' WHERE tool_use_id = ? AND state = 'reserved' AND at <= ?",
+            (tool_use_id, cutoff),
+        ).rowcount
         db.execute(
             "UPDATE spends SET state = ? WHERE tool_use_id = ? AND state = 'reserved'",
             ("committed" if allowed else "released", tool_use_id),
         )
+    return not (allowed and stale)
 
 
 def revoke(grant_id: str) -> Grant:

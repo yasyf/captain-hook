@@ -83,8 +83,10 @@ def reject_confirm_misuse(events: Event, block: bool, confirm: Confirm | None) -
 GRANTS_INCOMPLETE = "Retry the call; a grant lifts this block only once its check runs."
 
 
-def reject_grants_misuse(events: Event, block: bool, grants: Grants | None) -> None:
-    """Reject ``grants`` with no block for a grant to lift, or on an event with no tool call to cover."""
+def reject_grants_misuse(events: Event, block: bool, grants: Grants | None, max_fires: int | None) -> None:
+    """Reject ``grants`` with no block for a grant to lift, on an event with no tool call, or under a fire cap."""
+    if grants is not None and max_fires is not None:
+        raise ValueError("grants cannot take max_fires: a capped gate would stop checking and let calls through.")
     if grants is not None and not block:
         raise ValueError("grants needs block=True: a grant lifts a block, and a warn has nothing to lift.")
     if grants is not None and events & ~TOOL_EVENTS:
@@ -252,7 +254,7 @@ def hook(
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
     reject_confirm_misuse(events, block, confirm)
-    reject_grants_misuse(events, block, grants)
+    reject_grants_misuse(events, block, grants, max_fires)
     reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)

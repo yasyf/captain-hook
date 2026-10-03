@@ -41,9 +41,9 @@ def reservations() -> Generator[list[str]]:
         _RESERVED.reset(token)
 
 
-def settle(reserved: Sequence[str], *, allowed: bool) -> None:
-    for tool_use_id in dict.fromkeys(reserved):
-        store.settle(tool_use_id, allowed=allowed)
+def settle(reserved: Sequence[str], *, allowed: bool) -> bool:
+    """Settle this dispatch's reservations with its verdict; ``False`` when an allowed call lost its use."""
+    return all([store.settle(tool_use_id, allowed=allowed) for tool_use_id in dict.fromkeys(reserved)])
 
 
 def call_id(evt: BaseHookEvent) -> str:
@@ -131,6 +131,12 @@ class Grants:
             )
         )
 
+    def stale_rulings(self, grant: Grant, items: Sequence[Evidence]) -> str | None:
+        current = {item.key for item in items if item.source == "ccn-answer"}
+        return next(
+            (item.id for item in grant.evidence if item.source == "ccn-answer" and item.key not in current), None
+        )
+
     def applicable(self, grant: Grant) -> list[Rule]:
         return [rule for rule in self.rules if rule.always or rule.name in grant.rules]
 
@@ -163,6 +169,9 @@ class Grants:
             if denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
                 refusals.append(f"grant {grant.id}: {denied.note}")
                 continue
+            if stale := self.stale_rulings(grant, session()):
+                refusals.append(f"grant {grant.id} rests on {stale}, which changed after the grant was minted.")
+                continue
             since = [
                 item
                 for item in session()
@@ -179,6 +188,8 @@ class Grants:
                     return Denied(
                         f"{exc}, and a grant it cannot judge never covers an action.", self.would_allow, undecided=True
                     )
+                if verdict.withdrawn:
+                    store.revoke(grant.id)
                 if not verdict.allow:
                     refusals.append(f"grant {grant.id}: {verdict.reason}")
                     continue
@@ -201,6 +212,10 @@ class Grants:
         if not verdict.allow:
             return Denied(" ".join([*refusals, verdict.reason]), self.would_allow)
         relied = [item for item in items if item.id in verdict.relied_on]
+        if not relied:
+            return Denied(
+                " ".join([*refusals, "The judge allowed without citing any of the owner's words."]), self.would_allow
+            )
         owners = [item for item in items if item.source in OWNER_SOURCES]
         if verdict.standing and (said := verbatim(verdict.standing, owners)) is not None:
             quoted = said.model_copy(update={"quote": verdict.standing, "detail": said.quote})
@@ -221,7 +236,12 @@ class Grants:
                 uses=self.mint,
                 ttl=self.ttl,
                 approved=dict(action.payload) if action.payload else None,
-                source_key=next((item.key for item in relied if item.key), None) or f"action:{fingerprint(action)}",
+                source_key=relied[0].key or relied[0].id,
+            )
+        if grant.scope != self.canonical(action):
+            return Denied(
+                " ".join([*refusals, f"The approval it relied on already covers {grant.scope} as grant {grant.id}."]),
+                self.would_allow,
             )
         rulings = [rule.evaluate(grant, action) for rule in self.applicable(grant)]
         if denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
@@ -236,6 +256,8 @@ class Grants:
         tool_use_id = call_id(evt)
         left = store.reserve(
             grant.id,
+            tree=tree_of(evt),
+            scope=self.canonical(action),
             state="reserved" if reserved is not None else "committed",
             session=evt.session_id,
             agent=evt.agent_id or "main",

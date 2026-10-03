@@ -709,8 +709,18 @@ def dispatch(
     """
     with grant_declare.reservations() as reserved:
         envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
-        grant_declare.settle(reserved, allowed=not denies(envelope))
-        return envelope
+        if not reserved or denies(envelope):
+            grant_declare.settle(reserved, allowed=False)
+            return envelope
+        try:
+            kept = grant_declare.settle(reserved, allowed=True)
+        except Exception:
+            logger.opt(exception=True).warning("grant settle failed; refusing the call")
+            kept = False
+        return envelope if kept else format_output(event, HookResult(action=Action.block, message=UNSETTLED))
+
+
+UNSETTLED = "A grant use for this call could not be recorded, so the call does not go ahead. Retry it."
 
 
 def denies(envelope: Envelope | None) -> bool:

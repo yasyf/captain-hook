@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -13,6 +14,7 @@ from typing import Any
 import click
 
 from captain_hook.grants import store
+from captain_hook.grants.evidence import ruling_key
 from captain_hook.grants.records import Evidence, Grant
 from captain_hook.util import reqenv
 
@@ -101,14 +103,20 @@ def grant() -> None:
     """Record, inspect, and revoke spendable grants: the owner's permission as a record hooks can spend."""
 
 
+def owner_at_terminal() -> None:
+    if not sys.stdin.isatty():
+        raise click.UsageError("only the owner mints a grant, from an interactive terminal")
+
+
 @grant.command(name="add")
 @mint_options
 @click.option("--quote", required=True, help="The owner's words, verbatim")
 def add(quote: str, **options: Any) -> None:
-    """Mint a grant from the owner's verbatim words.
+    """Mint a grant from the owner's verbatim words; the owner runs it from an interactive terminal.
 
-    An agent's call passes a guard that finds the quote in the owner's own words in its session tree.
+    Agents never mint here: a hook mints a grant only from the owner's own words, through its judge.
     """
+    owner_at_terminal()
     evidence = Evidence(id="cli", source="cli", quote=quote, said_at=store.now())
     click.echo(describe(minted(MintOptions(**options), evidence=evidence, author="cli")))
 
@@ -117,18 +125,21 @@ def add(quote: str, **options: Any) -> None:
 @mint_options
 @click.argument("answer_id")
 def import_(answer_id: str, **options: Any) -> None:
-    """Mint a grant from a cc-notes answer recording the owner's ruling, pinned to its current revision."""
+    """Mint a grant from a cc-notes answer recording the owner's ruling, pinned to its current revision.
+
+    The owner runs it from an interactive terminal; a hook reads rulings as evidence on its own.
+    """
+    owner_at_terminal()
     done = subprocess.run(
         ["ccn", "answer", "show", answer_id, "--json"], capture_output=True, text=True, check=True, env=reqenv.env_map()
     )
     answer = json.loads(done.stdout)
-    revised = answer["updated_at"]
     evidence = Evidence(
         id=f"ccn:{answer['id'][:7]}",
         source="ccn-answer",
         quote=answer["body"],
         detail=f"ruling {answer['id'][:7]}: {answer['title']}",
-        key=f"ccn:{answer['id']}@{revised}",
+        key=ruling_key(answer),
     )
     click.echo(describe(minted(MintOptions(**options), evidence=evidence, author=f"ccn:{answer['id'][:7]}")))
 

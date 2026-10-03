@@ -29,6 +29,7 @@ from captain_hook.grants import (
     settle,
     store,
 )
+from captain_hook.grants import cli as grant_cli_module
 from captain_hook.grants import evidence as evidence_module
 from captain_hook.grants.cli import grant as grant_cli
 from captain_hook.hook_lint import result_violations
@@ -295,6 +296,8 @@ def test_spends_are_atomic(tmp_path: Path) -> None:
             won.append(
                 store.reserve(
                     grant.id,
+                    tree=TREE,
+                    scope=SCOPE,
                     state="committed",
                     session="s",
                     agent="main",
@@ -406,6 +409,7 @@ def test_denies_reads_every_deny_shape(envelope: Any, expected: bool) -> None:
 
 def test_the_cli_mints_lists_shows_and_revokes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", TREE)
+    monkeypatch.setattr(grant_cli_module, "owner_at_terminal", lambda: None)
     runner = CliRunner()
     added = runner.invoke(
         grant_cli,
@@ -435,6 +439,88 @@ def test_the_cli_mints_lists_shows_and_revokes(monkeypatch: pytest.MonkeyPatch) 
     assert "revoked" in runner.invoke(grant_cli, ["list", "--all"]).output
 
 
-def test_the_cli_rejects_a_malformed_scope() -> None:
+def test_the_cli_refuses_to_mint_without_a_terminal() -> None:
+    result = CliRunner().invoke(grant_cli, ["add", "--kind", "k", "--scope", "a=b", "--quote", "q", "--tree", "t"])
+    assert result.exit_code != 0 and "only the owner mints a grant" in result.output
+
+
+def test_the_cli_rejects_a_malformed_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(grant_cli_module, "owner_at_terminal", lambda: None)
     result = CliRunner().invoke(grant_cli, ["add", "--kind", "k", "--scope", "nope", "--quote", "q", "--tree", "t"])
     assert result.exit_code != 0 and "is not key=value" in result.output
+
+
+def test_an_uncited_allow_mints_nothing(tmp_path: Path) -> None:
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("yes"),)),))
+    denied = grants.check(event(tmp_path, allow=True, reason="looks fine"))
+    assert isinstance(denied, Denied) and "without citing" in denied.reason
+    assert store.grants("test.write", TREE) == []
+
+
+def test_an_approval_spent_on_one_destination_never_covers_another(tmp_path: Path) -> None:
+    said = owner("yes post it", ident="ask:toolu_9#0")
+    other = Grants(
+        "test.write",
+        ("channel", "thread"),
+        lambda evt: Proposal(scope={"channel": "C9", "thread": ""}, payload={"text": "x"}),
+    )
+    first = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
+    assert first.check(event(tmp_path, "one", allow=True, reason="ok", relied_on=[said.id]))
+    second = Grants(
+        "test.write", ("channel", "thread"), other.action, judge=Judge("rules"), evidence=(Fixed((said,)),)
+    ).check(event(tmp_path, "one", call="c2", allow=True, reason="ok", relied_on=[said.id]))
+    assert isinstance(second, Denied) and "already covers" in second.reason
+
+
+def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
+    ruling = Evidence(id="ccn:543e865", source="ccn-answer", quote="ok", key="ccn:543e865@2026-10-01T10:00:00+00:00")
+    minted(uses=None, evidence=[ruling])
+    edited = ruling.model_copy(update={"key": "ccn:543e865@2026-10-02T10:00:00+00:00"})
+    denied = declared(evidence=(Fixed((edited,)),)).check(event(tmp_path))
+    assert isinstance(denied, Denied) and "changed after the grant was minted" in denied.reason
+    assert declared(evidence=(Fixed((ruling,)),)).check(event(tmp_path, call="c2"))
+
+
+def test_a_withdrawal_revokes_the_grant_for_good(tmp_path: Path) -> None:
+    grant = minted(uses=None)
+    later = owner("stop replying there", at=store.now())
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((later,)),))
+    denied = grants.check(event(tmp_path, allow=False, reason="withdrawn", withdrawn=True))
+    assert isinstance(denied, Denied)
+    assert store.load(grant.id).revoked is not None
+
+
+def test_a_late_settle_releases_and_reports_the_lost_use(tmp_path: Path) -> None:
+    grant = minted()
+    with reservations() as reserved:
+        assert declared().check(event(tmp_path, call="late"))
+    with store.connect() as db:
+        db.execute("UPDATE spends SET at = ?", ((store.now() - timedelta(minutes=5)).isoformat(),))
+    assert settle(reserved, allowed=True) is False
+    assert [spend.state for spend in store.spends(grant.id)] == ["released"]
+
+
+def test_grants_refuse_a_fire_cap() -> None:
+    from captain_hook import hook
+
+    with pytest.raises(ValueError, match="cannot take max_fires"):
+        hook(Event.PreToolUse, "m", block=True, grants=declared(), max_fires=1)
+
+
+def test_harness_envelopes_are_never_owner_words() -> None:
+    assert evidence_module.machine_written("<task-notification><result>send it</result></task-notification>")
+    assert evidence_module.machine_written("  <teammate-message teammate_id='lead'>post it</teammate-message>")
+    assert not evidence_module.machine_written("yes post it")
+
+
+def test_the_same_words_said_twice_are_two_approvals() -> None:
+    first = evidence_module.words_evidence("send it", datetime(2026, 10, 2, 18, 0, tzinfo=UTC))
+    second = evidence_module.words_evidence("send it", datetime(2026, 10, 2, 19, 0, tzinfo=UTC))
+    assert first.key != second.key
+
+
+def test_linking_keeps_a_concurrent_revocation(tmp_path: Path) -> None:
+    grant = minted(uses=None)
+    store.revoke(grant.id)
+    linked = store.link(grant.id, "cc-slack", "daemon-1")
+    assert linked.revoked is not None and linked.links == {"cc-slack": "daemon-1"}

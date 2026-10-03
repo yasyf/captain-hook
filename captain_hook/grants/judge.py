@@ -29,7 +29,9 @@ FRAME = """
     lists what the owner said after it was recorded, which can narrow or withdraw it. <proposed_action>
     is the action, and <rules_evaluated> the deterministic rules already run against it.
 
-    Cite in relied_on the ids of every evidence item your verdict rests on. Set standing to the owner's
+    Cite in relied_on the ids of every evidence item your verdict rests on; an allow that cites none is
+    refused. Set withdrawn when the owner's words in <owner_since_grant> withdraw or narrow the recorded
+    grant so that it no longer covers actions like this one. Set standing to the owner's
     exact words, copied verbatim from one evidence item, only when those words permit more than this
     one action (for example "reply in that thread without asking"); otherwise leave it empty.
     Reason first, quoting the owner words you relied on, then set allow.
@@ -41,8 +43,9 @@ class GrantVerdict(BaseModel):
 
     reason: str
     allow: bool
-    relied_on: list[str] = Field(default_factory=list)
+    relied_on: list[str] = Field(default_factory=list[str])
     standing: str | None = None
+    withdrawn: bool = False
 
 
 class JudgeFailed(Exception):
