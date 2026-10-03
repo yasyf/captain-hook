@@ -222,10 +222,10 @@ def _execute_hook(
     (``SystemExit``/``KeyboardInterrupt``), which releases and then re-propagates so the abort is
     not silently swallowed. A truthy result reached once nobody waits on it any more (the caller's
     deadline passed, or dispatch gave up on the event) is not delivered either: :func:`deliver`
-    publishes the ledger write and the caller's *settle* under
-    :func:`captain_hook.util.reqenv.publish`, which unwinds as
-    :class:`captain_hook.util.reqenv.Abandoned` instead once the event closed, so the slot comes
-    back the same way and a closure never splits an accepted verdict from its record. Uncapped
+    publishes the caller's *settle* under :func:`captain_hook.util.reqenv.publish`, which unwinds
+    as :class:`captain_hook.util.reqenv.Abandoned` instead once the event closed, and writes the
+    ledger row only once that publication was accepted, so the slot and the row come back or
+    stay together and a closure never splits an accepted verdict from its record. Uncapped
     hooks (``max_fires is None``) skip the lock entirely.
     """
     hook_session_dir = (session_dir / entry.state_key / (evt.agent_id or "main")) if session_dir else None
@@ -255,12 +255,12 @@ def deliver(
     entry: RegisteredHook, evt: BaseHookEvent, result: HookResult | None, settle: Settle | None
 ) -> HookResult | None:
     def accept() -> None:
-        if result:
-            record_fire(entry, evt, result)
         if settle is not None:
             settle(result)
 
     reqenv.publish(accept)
+    if result:
+        record_fire(entry, evt, result)
     return result
 
 
@@ -707,12 +707,16 @@ def run_mandatory(
 ) -> None:
     """Run one mandatory hook under the event's :class:`MandatoryBound`, then publish its completion into *future*.
 
-    The completion and the settlement are one :func:`captain_hook.util.reqenv.publish` with the
-    hook's ledger write, under the cutoff's closure lock: a verdict is accepted whole before the
-    collector closes the event or refused whole after it, never half-recorded. Incomplete
+    The completion and the settlement are one :func:`captain_hook.util.reqenv.publish` under the
+    cutoff's closure lock, and nothing that blocks runs under it: a verdict is accepted whole
+    before the collector closes the event or refused whole after it, never half-recorded, and
+    its ledger row follows the acceptance on this thread. Incomplete
     transcript evidence leaves the hook unrun, settling the future with no completion; a cutoff
     already passed when the hook starts or closed by the time it publishes, or any other
-    exception, is the whole event's and propagates through the future.
+    exception, is the whole event's and propagates through the future. A publication refused
+    after it settled, because it finished past the cutoff or still held the closure when the
+    collector stopped waiting, has already settled its future into a phase the collector fails,
+    so that refusal only withholds the row and the slot.
     """
     if bound.cutoff.is_set():
         raise MandatoryDeadlinePassed(f"{entry.name}: the caller's deadline passed while the hook was queued")
@@ -737,6 +741,8 @@ def run_mandatory(
             )
             reqenv.publish(partial(future.set_result, None))
     except reqenv.Abandoned:
+        if future.done():
+            return
         raise MandatoryDeadlinePassed(f"{entry.name}: finished past the caller's deadline") from None
 
 
@@ -776,15 +782,21 @@ def collect_mandatory(
 
     The closure comes first and takes the cutoff's lock, so every publication that beat it is a
     settled future and none can follow it; only then is each future read, and the phase recorded
-    in :func:`captain_hook.util.reqenv.mandatory_phase` as settled or failed, exactly once. Past
-    the cutoff every hook not yet started is cancelled and every one still running is the
-    event's failure: a hook that ignores its budget keeps its thread until it returns, but a
-    verdict nobody waited for records no completion and keeps no fire slot. A hook that raised
-    dooms the event the same way.
+    in :func:`captain_hook.util.reqenv.mandatory_phase` as settled or failed, exactly once. The
+    closure waits for the lock no longer than the cutoff itself: a publisher still inside it at
+    the cutoff is not waited for, the flag refuses every publisher after it, and the phase fails
+    whatever that publisher goes on to settle while the publisher itself is refused on its way
+    out, keeping no row or slot, so the collector returns by the cutoff however a hook's thread
+    was scheduled. A publication that finished settling past the cutoff before a delayed
+    collector closed is refused and fails the phase the same way, so only a verdict settled by
+    the cutoff is ever counted. Past the cutoff every hook not yet started is cancelled and
+    every one still running is the event's failure: a hook that ignores its budget keeps its
+    thread until it returns, but a verdict nobody waited for records no completion and keeps no
+    fire slot. A hook that raised dooms the event the same way.
     """
     phase = reqenv.mandatory_phase()
     wait(futures, timeout=cutoff.seconds_left())
-    cutoff.close()
+    closed = cutoff.close(timeout=cutoff.seconds_left())
     for future in futures:
         future.cancel()
     try:
@@ -794,6 +806,8 @@ def collect_mandatory(
             if not future.done():
                 raise MandatoryDeadlinePassed(f"{entry.name}: still running at the caller's deadline")
             future.result()
+        if not closed:
+            raise MandatoryDeadlinePassed("a verdict was still publishing at the caller's deadline")
     except BaseException:
         phase.conclude("failed")
         raise
