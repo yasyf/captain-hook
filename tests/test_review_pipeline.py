@@ -692,10 +692,12 @@ class TestPendingAdmission:
             raise OSError("fork refused")
 
         monkeypatch.setattr(pipeline.subprocess, "Popen", refuse)
+        monkeypatch.setattr(pipeline, "enrolled", lambda cwd: True)
         payload = self.payload(tmp_path)
         dispatch_review("SessionStart", payload)
         dispatch_review("SessionStart", payload)
-        assert len(attempts) == 2
+        assert [argv[-2] for argv in attempts] == ["--pending-fd", "--pending-fd"]
+        assert review_log_path().read_text().count("detach failed") == 2
 
     def test_child_holds_the_handed_down_claim_until_it_takes_the_repo_lock(self, tmp_path: Path) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
