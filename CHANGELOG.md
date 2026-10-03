@@ -211,6 +211,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CAPT_HOOK_CCX_RAW` value other than `1`, `true`, or `yes`, and a blocking hook on Agent, Task,
   Skill, Read, Grep, or Glob with neither an `Annotated` escape nor `confirm=`. The
   authoring-hooks skill documents the notation.
+- **`capt-hook lint` flags a mandatory hook that reads evidence.** A hook registered with
+  `mandatory=True` whose handler calls `llm_evaluate`, `evt.llm`, `evt.ctx.call_llm`, `llm_gate`,
+  `llm_nudge`, or `prompt_check`, or reads `evt.ctx.t` or `evt.ctx.transcript`, is reported with the
+  split to make: a mandatory hook is evidence-free, so the LLM or transcript check moves to an
+  advisory hook. The finding names what the static pass follows (helpers in the file, registrars
+  imported from a sibling module, import aliases) and what it cannot see (a helper imported from
+  another package, dynamic dispatch).
+- **A mandatory hook that does not complete denies the call, whether or not the client flagged
+  it.** A `mandatory=True` hook that raises, times out, is left queued at the deadline, or is left
+  unrun on incomplete evidence makes the worker answer the event's own deny envelope, exit 0, with
+  a reason naming the hook and the cause, so a custom policy on a request the builtin prefilter
+  did not mark mandatory (a Slack message, say) fails closed instead of reading as a non-blocking
+  hook error. A request the prefilter did flag still reports no completion, so the client's own
+  deny stands. The worker's reserved request lane also serves any event the loaded registry
+  guards, not only the requests the client flagged.
+- **A verdict racing the mandatory deadline is accepted whole or refused whole.** A mandatory
+  hook's ledger row, completion, and settled future are published together under the cutoff's
+  closure lock, and the phase's outcome is recorded once that closure is in place, so the worker
+  denies on a failed phase whatever the completion list says and a refused verdict spends no
+  `max_fires` slot. The worker's deny reaches the client only when the worker recognizes the
+  failure and its reply arrives; transport silence stays the client's call, which retries a
+  timed-out guard once and then warns.
+- **The mandatory collector returns by the cutoff however a publishing hook's thread is
+  scheduled.** The closure waits for a verdict's publication no longer than the cutoff and fails
+  the phase when a publisher outlives it inside the lock, so a hook descheduled mid-publication
+  can no longer hold the reply past the caller's deadline or turn a late settlement into a
+  settled phase. Nothing that blocks runs under that lock, and the ledger row follows an accepted
+  verdict on the hook's own thread. A verdict counts only if it finished settling by the cutoff
+  and the collector did not give up on it: one refused at the cutoff records no completion, and
+  one that settled past the cutoff or still held the lock when the collector stopped waiting
+  lands in the failed phase. Neither writes a row, and both refund their `max_fires` slot.
 
 ### Changed
 
@@ -243,6 +274,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Printed prose no longer records a GitHub quota refusal.** The quota signature reads only a
   failed call's error or the tool's stderr, so a `gh pr view` that prints a PR body quoting
   "GitHub GraphQL quota exhausted" records nothing.
+- **A slow mandatory hook no longer starves the session guard or the reply.** The event's
+  `mandatory=True` hooks run side by side on a fixed pool of eight threads, one state-key group
+  at a time, under the caller's deadline less the reply margin (inside the margin, whatever
+  remains), so an LLM call inside one clamps to a bound the reply survives instead of the client's
+  whole timeout, and the builtin guard registered after it completes on its own. Dispatch waits
+  no longer than that budget: a hook still queued at the deadline is left unrun and one still
+  running is the event's error, with no completion recorded either way; a hook that ignores its
+  budget keeps its thread until it returns. The guard's one process-table read and one payload
+  scan are shared across those threads and kept per payload across interleaved events. In the
+  worker, a guarded event takes a reserved lane of four request threads, so a burst of slow
+  advisory events holding every worker thread no longer queues it past the client's deadline.
+  The bound is absolute: the hooks' deadline and the collector's cutoff are fixed from the
+  caller's deadline when the event starts, so a pause between reading the clock and binding never
+  extends them, and a verdict reached after the cutoff is the event's error rather than a late
+  completion. Each registration records its own completion, so two registrations sharing a state
+  key cannot stand in for one another, and a verdict nobody waited for gives its `max_fires`
+  slot back and writes no ledger entry.
+- **`llm_evaluate` no longer retries into a deadline it cannot meet.** A failed call is not retried
+  once the caller's deadline is inside five seconds; it raises instead of re-asking with a
+  one-second clamp.
 - **`git stash drop $(...)` blocks again.** A substitution that expands to nothing makes git
   drop `stash@{0}`, so only `apply`, which removes nothing, accepts a substitution operand.
 - **A named command no longer hides a choice from the narrate-then-wait gate.** The "waiting on

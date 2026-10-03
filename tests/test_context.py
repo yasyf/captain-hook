@@ -500,13 +500,12 @@ class TestCallLlm:
         assert mock_call.call_args.kwargs["timeout"] == expected
 
     def test_an_abandoned_hook_never_starts_a_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import threading
 
         from captain_hook.util import reqenv
 
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
-        flag = threading.Event()
+        flag = reqenv.Cutoff()
         flag.set()
 
         with reqenv.abandonable(flag), patch("spawnllm.call_sync") as llm, patch("spawnllm.proc.run_cli") as cli:

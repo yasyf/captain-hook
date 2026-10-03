@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import traceback
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -16,19 +17,19 @@ from captain_hook.cli import EVENT_NAMES, dispatch_event
 from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
-from captain_hook.dispatch import envelope_text
+from captain_hook.dispatch import envelope_text, format_output, mandatory_completions
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
 from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
-from captain_hook.types import Event
+from captain_hook.types import Action, Event, HookResult, RegisteredHook
 from captain_hook.util import reqenv
 from captain_hook.worker.fail_open import ALL_HOOKS, fail_open_envelope, tally_fail_open, with_warning
 from captain_hook.worker.protocol import GUARD_COMPLETED, EventRequest, EventResponse, GuardCompletion
 from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
     from typing import Protocol
 
     type Background = Callable[[], None]
@@ -71,11 +72,16 @@ class ProductRuntime:
         self._transcript_loader = transcript_loader
         self._registries: dict[str, RegistryLike] = {}
         self._registries_guard = threading.Lock()
+        self._guarded_events: dict[str, frozenset[str]] = {}
         self._writer = decision_writer.install() if install_writer else None
         self._nlp_warmup = threading.Thread(
             target=_warm_nlp, args=(nlp_warmer,), name="capt-hook-nlp-warm", daemon=True
         )
         self._nlp_warmup_guard = threading.Lock()
+
+    def guarded(self, request: EventRequest) -> bool:
+        """Whether *request* takes the reserved lane: the client flagged it, or the loaded registry guards its event."""
+        return request.mandatory or request.event in self._guarded_events.get(request.root, frozenset())
 
     def dispatch(self, request: EventRequest) -> tuple[EventResponse, Background | None]:
         started = time.perf_counter()
@@ -172,15 +178,29 @@ class ProductRuntime:
         buffers.stdout.write(snapshot.discovery_stdout)
         buffers.stderr.write(snapshot.discovery_stderr)
         with app.use_state(snapshot.state):
-            output, background = self._dispatcher(
-                Path(request.root),
-                event,
-                raw,
-                session_dir=session_dir,
-                transcript_loader=self._transcript_loader,
-            )
+            self._guarded_events[request.root] = guarded_events(snapshot.state)
+            required = mandatory_completions(event)
+            try:
+                output, background = self._dispatcher(
+                    Path(request.root),
+                    event,
+                    raw,
+                    session_dir=session_dir,
+                    transcript_loader=self._transcript_loader,
+                )
+            except Exception as exc:
+                if not (unfinished := unfinished_mandatory(required)):
+                    raise
+                logger.bind(hooks=[hook.name for hook in unfinished]).opt(exception=True).error(
+                    "mandatory hook did not complete; denying the call"
+                )
+                buffers.stderr.write(traceback.format_exc())
+                output, background = mandatory_denial(event, unfinished, f"{type(exc).__name__}: {exc}"), _nothing
+            else:
+                if unfinished := unfinished_mandatory(required):
+                    output = mandatory_denial(event, unfinished, "left unrun")
             context = contextvars.copy_context()
-            guard = _guard_completion(event) if request.mandatory else ""
+            guard = _guard_completion(event) if request.mandatory and not unfinished else ""
         if session_id and (gaps := reqenv.evidence_gaps()) and (warning := tally_fail_open(event, session_id, gaps)):
             output = with_warning(event, output, warning)
         if output:
@@ -227,8 +247,32 @@ def _guard_completion(event: Event) -> GuardCompletion:
     guards = app.get_mandatory_hooks(event)
     if not any(hook.pack_name in GUARD_PACKS for hook in guards):
         return ""
-    completed = reqenv.mandatory_completed()
-    return GUARD_COMPLETED if all(hook.state_key in completed for hook in guards) else ""
+    completed = Counter(reqenv.mandatory_completed())
+    required = mandatory_completions(event)
+    return GUARD_COMPLETED if all(completed[key] == 1 for key in required) else ""
+
+
+def unfinished_mandatory(required: Mapping[str, RegisteredHook]) -> list[RegisteredHook]:
+    completed = Counter(reqenv.mandatory_completed())
+    unfinished = [hook for key, hook in required.items() if completed[key] != 1]
+    return unfinished or (list(required.values()) if reqenv.mandatory_phase().failed else [])
+
+
+def mandatory_denial(event: Event, unfinished: Sequence[RegisteredHook], cause: str) -> Envelope | None:
+    names = ", ".join(hook.name for hook in unfinished)
+    message = (
+        f"BLOCKED: the mandatory hook {names} did not complete ({cause}), so this call could not be checked "
+        "and stays denied. Retry once the hook answers, or ask the owner to run the call themselves."
+    )
+    return format_output(event, HookResult(action=Action.block, message=message))
+
+
+def guarded_events(state: app.State) -> frozenset[str]:
+    return frozenset(event.name for hook in state.hooks if hook.spec.mandatory for event in hook.spec.events)
+
+
+def _nothing() -> None:
+    return None
 
 
 def _run_detached(background: Background, session_id: str | None) -> None:

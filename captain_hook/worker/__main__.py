@@ -88,7 +88,7 @@ def main() -> None:
     from captain_hook.worker.runtime import ProductRuntime
 
     runtime = ProductRuntime()
-    service = WorkerService(sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch)
+    service = WorkerService(sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch, guarded=runtime.guarded)
     pipeline._ADOPTER = service.adopt
     try:
         service.run()

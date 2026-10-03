@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import ast
 import json
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from captain_hook.hook_lint import Finding, copy_violations, lint_paths, lint_source, result_violations
+import captain_hook
+from captain_hook.hook_lint import (
+    MANDATORY_EVIDENCE,
+    Finding,
+    copy_violations,
+    lint_paths,
+    lint_source,
+    mandatory_handlers,
+    result_violations,
+)
 from captain_hook.types import Action, HookResult
 from tests.helpers import run_cli, write_hook
+
+BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
 CLEAN_HOOK = """
 from captain_hook import Allow, Input, Warn, warn_command
@@ -162,6 +174,162 @@ class TestStaticLint:
     )
     def test_declarative_code_is_clean(self, source: str) -> None:
         assert findings(source) == []
+
+    @pytest.mark.parametrize(
+        ("source", "detail"),
+        [
+            pytest.param(
+                """
+                @on(Event.PreToolUse, mandatory=True)
+                def guard(evt):
+                    return llm_evaluate(evt, "judge", GateVerdict, hook="guard")
+                """,
+                "mandatory hook guard calls llm_evaluate",
+                id="decorated handler calling llm_evaluate",
+            ),
+            pytest.param(
+                """
+                guard = partial(on, Event.PreToolUse, mandatory=True)
+
+                @guard(only_if=[Tool("Bash")])
+                def session(evt):
+                    return evt.block("no") if evt.ctx.t.recent(5).assistant_text() else None
+                """,
+                "mandatory hook session reads evt.ctx.t",
+                id="partial registrar reading the transcript",
+            ),
+            pytest.param(
+                """
+                def handler(evt):
+                    return evt.llm("is this safe?", bool)
+
+                on(Event.PreToolUse, mandatory=True)(handler)
+                """,
+                "mandatory hook handler calls llm",
+                id="call-form registration asking evt.llm",
+            ),
+            pytest.param(
+                """
+                def handler(evt):
+                    return evt.ctx.call_llm("judge", "is this safe?", bool)
+
+                on(Event.PreToolUse, mandatory=True)(handler)
+                """,
+                "mandatory hook handler calls call_llm",
+                id="call-form registration asking evt.ctx.call_llm",
+            ),
+            pytest.param(
+                """
+                def judge(evt):
+                    return prompt_check(evt, "judge", prefix="guard")
+
+                @on(Event.PreToolUse, mandatory=True)
+                def guard(evt):
+                    return judge(evt)
+                """,
+                "mandatory hook guard calls prompt_check",
+                id="evidence read through a module helper",
+            ),
+            pytest.param(
+                """
+                from captain_hook.primitives.llm import llm_evaluate as judge
+
+                @on(Event.PreToolUse, mandatory=True)
+                def guard(evt):
+                    return judge(evt, "judge", GateVerdict, hook="guard")
+                """,
+                "mandatory hook guard calls llm_evaluate",
+                id="aliased import",
+            ),
+            pytest.param(
+                """
+                import captain_hook.primitives.llm as L
+
+                @on(Event.PreToolUse, mandatory=True)
+                def guard(evt):
+                    return L.llm_evaluate(evt, "judge", GateVerdict, hook="guard")
+                """,
+                "mandatory hook guard calls llm_evaluate",
+                id="module alias",
+            ),
+            pytest.param(
+                """
+                class Judge:
+                    def judge(self, evt):
+                        return prompt_check(evt, "judge", prefix="guard")
+
+                @on(Event.PreToolUse, mandatory=True)
+                def guard(evt):
+                    return Judge().judge(evt)
+                """,
+                "mandatory hook guard calls prompt_check",
+                id="evidence read through a method helper",
+            ),
+        ],
+    )
+    def test_a_mandatory_hook_reading_evidence_is_flagged(self, source: str, detail: str) -> None:
+        assert [text for rule, text in findings(source) if rule == "code"] == [f"{detail}; {MANDATORY_EVIDENCE}"]
+
+    def test_the_evidence_finding_names_what_the_traversal_cannot_see(self) -> None:
+        assert "a helper imported from another package or reached by dynamic dispatch is not seen" in MANDATORY_EVIDENCE
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                """
+                @on(Event.PreToolUse)
+                def advisory(evt):
+                    return llm_evaluate(evt, "judge", GateVerdict, hook="advisory")
+                """,
+                id="advisory hook calling llm_evaluate",
+            ),
+            pytest.param(
+                """
+                @on(Event.PreToolUse, mandatory=True)
+                def guard(evt):
+                    return evt.block("no") if evt.command.q.runs("kill") else None
+                """,
+                id="mandatory hook on the payload alone",
+            ),
+            pytest.param(
+                """
+                llm_gate("judge", message="Stop. Run the tests.", events=Event.PreToolUse)
+                """,
+                id="llm gate registered advisory",
+            ),
+        ],
+    )
+    def test_an_evidence_free_or_advisory_hook_is_clean(self, source: str) -> None:
+        assert findings(source) == []
+
+    @pytest.mark.parametrize(
+        ("body", "flagged"),
+        [
+            pytest.param("return llm_evaluate(evt, 'judge', GateVerdict, hook='session')", True, id="reads evidence"),
+            pytest.param("return evt.block('no') if evt.command.q.runs('kill') else None", False, id="payload only"),
+        ],
+    )
+    def test_a_registrar_imported_from_a_sibling_is_resolved(self, tmp_path: Path, body: str, flagged: bool) -> None:
+        (tmp_path / "_guards.py").write_text(
+            "from functools import partial\n\nfrom captain_hook import Event, on\n\n"
+            "guard = partial(on, Event.PreToolUse, mandatory=True)\n"
+        )
+        (tmp_path / "hooks.py").write_text(
+            "from captain_hook.primitives.llm import llm_evaluate\n\n"
+            "from ._guards import guard\n\n\n@guard()\ndef session(evt):\n    " + body + "\n"
+        )
+        details = [finding.detail for finding in lint_paths([tmp_path]) if finding.rule == "code"]
+        assert details == (["mandatory hook session calls llm_evaluate; " + MANDATORY_EVIDENCE] if flagged else [])
+
+    def test_the_general_packs_imported_guard_registrations_are_recognized(self) -> None:
+        sessions = BUILTIN_PACKS_DIR / "general" / "hooks" / "sessions.py"
+        tree = ast.parse(sessions.read_text())
+        functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+        recognized = {handler.name for handler in mandatory_handlers(sessions, tree, functions)}
+        assert {"kill_unverified_pid", "signal_by_criteria"} <= recognized
+        assert len(recognized) >= 19
+        assert lint_paths([BUILTIN_PACKS_DIR]) == []
 
     def test_comments_except_todos_and_workarounds(self) -> None:
         assert findings(

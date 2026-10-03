@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -17,6 +18,7 @@ from captain_hook.builtin_packs.general.hooks.tombstones import TombstoneComment
 from captain_hook.dispatch import dispatch, dispatch_async
 from captain_hook.testing.helpers import fixture_session, mock_subagent_stop_event
 from captain_hook.types import Action, Event, RanCommand, Signal, Signals, Tool, Waiting
+from captain_hook.util import reqenv
 from tests.helpers import (
     build_ctx,
     make_ctx,
@@ -459,6 +461,31 @@ class TestLlmEvaluateFiredThisTurn:
         ctx.call_llm.reset_mock()
         assert dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path) is None
         ctx.call_llm.assert_not_called()
+
+
+class TestLlmRetryFloor:
+    NOW = 1_000.0
+
+    def evaluate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seconds_left: float) -> Any:
+        from captain_hook.primitives.llm import llm_evaluate
+
+        ctx = make_ctx(tmp_path, texts=["some context"])
+        ctx.call_llm.side_effect = TimeoutError("claude-sdk timed out after 25s")
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: self.NOW))
+        bounded = reqenv.RequestOverrides(
+            env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=int((self.NOW + seconds_left) * 1000)
+        )
+        with reqenv.use_request(bounded), pytest.raises(TimeoutError):
+            llm_evaluate(make_pre_tool_event(ctx=ctx), "judge", None, hook="judge", once_per_turn=False)
+        return ctx.call_llm
+
+    def test_a_timed_out_call_is_not_retried_inside_the_floor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert self.evaluate(tmp_path, monkeypatch, 3.0).call_count == 1
+
+    def test_a_timed_out_call_is_retried_with_room_left(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self.evaluate(tmp_path, monkeypatch, 30.0).call_count == 3
 
 
 class TestLlmEvaluateWhenPredicate:

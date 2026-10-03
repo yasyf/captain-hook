@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -127,7 +129,7 @@ class TestCheckpoint:
         reqenv.checkpoint()
 
     def test_passes_until_the_flag_is_set_then_raises(self) -> None:
-        flag = threading.Event()
+        flag = reqenv.Cutoff()
         with reqenv.abandonable(flag):
             reqenv.checkpoint()
             flag.set()
@@ -140,7 +142,7 @@ class TestCheckpoint:
         from captain_hook.util.vcs import scanned_names
 
         (tmp_path / "nested").mkdir()
-        flag = threading.Event()
+        flag = reqenv.Cutoff()
         flag.set()
         with reqenv.abandonable(flag):
             with pytest.raises(reqenv.Abandoned):
@@ -151,6 +153,74 @@ class TestCheckpoint:
 
     def test_abandoned_escapes_a_handlers_broad_except(self) -> None:
         assert not issubclass(reqenv.Abandoned, Exception)
+
+    def test_publish_runs_until_the_cutoff_closes_then_refuses(self) -> None:
+        cutoff = reqenv.Cutoff()
+        published: list[str] = []
+        with reqenv.abandonable(cutoff):
+            assert reqenv.publish(lambda: published.append("verdict")) is None
+            cutoff.close()
+            with pytest.raises(reqenv.Abandoned):
+                reqenv.publish(lambda: published.append("late"))
+        assert published == ["verdict"]
+        assert reqenv.publish(lambda: "unbound") == "unbound"
+
+    def test_close_refuses_a_publisher_it_stopped_waiting_for(self) -> None:
+        cutoff = reqenv.Cutoff()
+        entered, release = threading.Event(), threading.Event()
+
+        def hold() -> str:
+            entered.set()
+            assert release.wait(timeout=5.0)
+            return "held"
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            holder = pool.submit(cutoff.publish, hold)
+            assert entered.wait(timeout=5.0)
+            assert cutoff.close(timeout=0.0) is False
+            assert cutoff.is_set()
+            release.set()
+            with pytest.raises(reqenv.Abandoned):
+                holder.result(timeout=5.0)
+        with reqenv.abandonable(cutoff), pytest.raises(reqenv.Abandoned):
+            reqenv.publish(lambda: "late")
+        assert reqenv.Cutoff().close(timeout=0.0) is True
+
+    def test_a_publisher_the_closure_waited_for_is_counted(self) -> None:
+        cutoff = reqenv.Cutoff()
+        entered, release = threading.Event(), threading.Event()
+
+        def hold() -> str:
+            entered.set()
+            assert release.wait(timeout=5.0)
+            return "held"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            holder = pool.submit(cutoff.publish, hold)
+            assert entered.wait(timeout=5.0)
+            closer = pool.submit(cutoff.close)
+            release.set()
+            assert holder.result(timeout=5.0) == "held"
+            assert closer.result(timeout=5.0) is True
+
+    def test_a_settlement_crossing_the_cutoff_is_refused_and_fails_a_later_close(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = [1_000.0]
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: now[0]))
+        cutoff = reqenv.Cutoff(deadline_unix_ms=1_000_500)
+        settled: list[str] = []
+
+        def settle_past_the_cutoff() -> str:
+            settled.append("late")
+            now[0] += 1.0
+            return "late"
+
+        assert cutoff.publish(lambda: "timely") == "timely"
+        with pytest.raises(reqenv.Abandoned):
+            cutoff.publish(settle_past_the_cutoff)
+        assert settled == ["late"]
+        assert cutoff.close(timeout=0.0) is False
 
 
 class TestAbandoned:

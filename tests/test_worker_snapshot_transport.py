@@ -320,7 +320,7 @@ def test_abandoned_foreground_can_release_through_parentless_cleanup(transport):
 
     def dispatch(request):
         client = CURRENT_CLIENT.get()
-        abandoned = threading.Event()
+        abandoned = reqenv.Cutoff()
         abandoned.set()
         override = reqenv.RequestOverrides({}, "/fixture", 1, "fixture", deadline_unix_ms=1)
         with reqenv.use_request(override), reqenv.abandonable(abandoned):
