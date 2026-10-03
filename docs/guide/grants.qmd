@@ -261,7 +261,9 @@ stored grants recheck the answer's revision before spending; editing the answer
 stops its existing grant from covering the action.
 
 Stored `ask` and `words` evidence is collected only while its record is unexpired
-and unrevoked. `Asked` also reads recent transcript answers. To stop an already minted
+and unrevoked. The judge of a stored grant also reads expired records said after the
+grant was minted, so a withdrawal never lapses while the grant is usable. `Asked`
+also reads recent transcript answers. To stop an already minted
 permission, revoke the grant of the declaration's kind.
 
 ## Follow the check order
@@ -500,11 +502,16 @@ records nothing.
 On a grants check in an Orca terminal, the framework finds the
 dispatched worker for that terminal with `orca orchestration worker-list`, and reads
 the Run's coordinator terminal with `orca orchestration run-show`. It then adopts
-every grant minted in the session tree last recorded for that terminal. Each
-adoption is logged with agent `orca:<run>`, so both trees share the budget, and
-`grant show` lists the lane. The session caches the Run lookup; a terminal with no
-dispatched worker is looked up again after five minutes. Outside Orca, or with no
-recorded coordinator session, nothing is adopted.
+every spendable grant minted in the session tree recorded for that terminal. The
+coordinator's recorded `words` and `ask` records are never adopted, so one approval
+still spends once. Each adoption is logged with agent `orca:<run>`, so both trees
+share the budget, and `grant show` lists the lane.
+
+A lane pins the coordinator session it first binds for each Run. When the coordinator
+terminal's record moves to another session, the lane adopts nothing more from it.
+The session re-reads the Run from Orca after one minute, or when its terminal
+changes, so a finished worker stops adopting. Outside Orca, or with no recorded
+coordinator session, nothing is adopted.
 
 Inspect and revoke a grant with its printed id in place of `GRANT_ID`:
 
