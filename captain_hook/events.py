@@ -167,6 +167,11 @@ class BaseHookEvent:
     def session_id(self) -> str:
         return self._raw["session_id"]
 
+    @property
+    def tool_use_id(self) -> str | None:
+        """The id of the tool call this event concerns; ``None`` on events about no call."""
+        return self._raw.get("tool_use_id")
+
     @cached_property
     def tasks(self) -> Tasks:
         """The live task list for this session, read from Claude Code's native task store.

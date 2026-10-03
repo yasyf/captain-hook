@@ -22,6 +22,7 @@ from captain_hook import faults, hook_lint
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.desktop.cli import helper
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch, dispatch_async, envelope_text
+from captain_hook.grants.cli import grant
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -1063,6 +1064,7 @@ cli.add_command(helper)
 cli.add_command(update)
 cli.add_command(pause)
 cli.add_command(resume)
+cli.add_command(grant)
 
 
 main = cli

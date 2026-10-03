@@ -93,6 +93,15 @@ from captain_hook.events import UserPromptSubmitEvent as UserPromptSubmitEvent
 from captain_hook.fields import Deque as Deque
 from captain_hook.file import File as File
 from captain_hook.file import categorize_files as categorize_files
+from captain_hook.grants import Asked as Asked
+from captain_hook.grants import ContentMatches as ContentMatches
+from captain_hook.grants import Grant as Grant
+from captain_hook.grants import Grants as Grants
+from captain_hook.grants import Judge as Judge
+from captain_hook.grants import Never as Never
+from captain_hook.grants import OwnerWords as OwnerWords
+from captain_hook.grants import Proposal as Proposal
+from captain_hook.grants import Rulings as Rulings
 from captain_hook.primitives.commands import Rewritten as Rewritten
 from captain_hook.primitives.commands import WalkContext as WalkContext
 from captain_hook.primitives.commands import block_command as block_command

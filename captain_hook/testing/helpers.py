@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 from unittest import mock
 
 from cc_transcript.parser import parse_event
@@ -44,6 +44,9 @@ from captain_hook.transcripts import lift_session, load_transcript
 from captain_hook.types import Event, HookResult, Tool
 from captain_hook.util import reqenv
 
+if TYPE_CHECKING:
+    from captain_hook.grants import Grant
+
 STUB_FIELD_VALUES: dict[str, Any] = {
     "block": True,
     "confident": True,
@@ -52,6 +55,7 @@ STUB_FIELD_VALUES: dict[str, Any] = {
     "reasoning": "inline test stub",
     "reason": "inline test stub",
     "safe": False,
+    "allow": False,
 }
 
 FIXTURE_FILE_COUNTER = count()
@@ -561,7 +565,7 @@ def input_to_event(
         evt.__dict__["_home_dir"] = str(Path(file).parent)
     evt._raw |= (
         ({"transcript_path": str(transcript_path)} if transcript_path else {})
-        | ({"session_id": inp.session_id} if inp.session_id else {})
+        | {"session_id": inp.session_id or "fixture"}
         | ({"agent_id": inp.agent_id} if inp.agent_id else {})
         | ({"agent_type": inp.agent_type} if inp.agent_type else {})
     )
@@ -791,6 +795,16 @@ def hermetic_request(
         yield
 
 
+def fresh_grants(seeds: list[Grant] | None) -> None:
+    """Empty the grant store, then mint *seeds*, so each inline test sees only the grants it declares."""
+    from captain_hook.grants import store
+
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{store.grants_path()}{suffix}").unlink(missing_ok=True)
+    for grant in seeds or ():
+        store.mint(grant)
+
+
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
     from captain_hook.app import _state, is_planning_agent_skip
 
@@ -809,6 +823,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                         # named tool, else pins the first named tool (families infer_tool can't
                         # shape, e.g. WebFetch/WebSearch). No Tool condition => pure inference.
                         spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
+                        fresh_grants(key.grants)
                         with hermetic_request(key.env, key.cwd, key.session_id):
                             evt = input_to_event(
                                 next(iter(entry.spec.events)),

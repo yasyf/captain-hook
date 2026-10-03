@@ -17,6 +17,8 @@ from loguru import logger
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
 from captain_hook.conditions import matches_conditions
 from captain_hook.confirm import confirmed
+from captain_hook.grants import declare as grant_declare
+from captain_hook.grants.declare import lifted
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import MANDATORY_WORK_SECONDS, EvidenceIncomplete, fails_open, foreground_evidence
 from captain_hook.state import HookState
@@ -129,6 +131,8 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
 
     try:
         result = entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
+        if result is not None and result.action is Action.block and (grants := entry.spec.grants) is not None:
+            return lifted(evt, entry.name, result, grants)
         if result is not None and (confirm := result.confirm) is not None:
             return confirmed(evt, entry.name, result, confirm)
         return result
@@ -698,7 +702,47 @@ def dispatch(
     claim on the deny's reason. ``advisory=False`` stops after them, so a caller already inside the
     deadline margin still completes the guard while skipping the hooks the margin exists for; a
     fail-closed hook (``on_incomplete``) that matches then blocks, since it never got to judge.
+
+    Every grant use a hook reserves during the event commits when the envelope lets the call
+    through and is released when any hook denies it, so a chained command whose second half is
+    refused never spends the grant its first half matched.
     """
+    with grant_declare.reservations() as reserved:
+        envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
+        if not reserved or denies(envelope):
+            grant_declare.settle(reserved, allowed=False)
+            return envelope
+        try:
+            kept = grant_declare.settle(reserved, allowed=True)
+        except Exception:
+            logger.opt(exception=True).warning("grant settle failed; refusing the call")
+            kept = False
+        return envelope if kept else format_output(event, HookResult(action=Action.block, message=UNSETTLED))
+
+
+UNSETTLED = "A grant use for this call could not be recorded, so the call does not go ahead. Retry it."
+
+
+def denies(envelope: Envelope | None) -> bool:
+    """Whether *envelope* stops the call: a deny, a denied permission, or a blocked stop."""
+    if not isinstance(envelope, dict):
+        return False
+    specific = envelope.get("hookSpecificOutput") or {}
+    decision = specific.get("decision") or {}
+    return (
+        specific.get("permissionDecision") == "deny"
+        or decision.get("behavior") == "deny"
+        or envelope.get("decision") == "block"
+    )
+
+
+def dispatch_hooks(
+    event: Event,
+    evt: BaseHookEvent,
+    session_dir: Path | None,
+    *,
+    advisory: bool,
+) -> Envelope | None:
     from captain_hook.transcripts import release_transcript
 
     try:

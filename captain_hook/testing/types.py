@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from captain_hook.grants import Grant
 
 FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "command": (str,),
@@ -201,6 +204,7 @@ class Input:
             forwards per request (``CLAUDE_*``, ``ORCA_*``, ``CAPT_HOOK_*``, ...) resolves from this
             mapping alone, never the runner's own environment, as it does for a real request's env.
             ``reqenv.env_map()`` hands the same mapping to subprocesses. Defaults to empty.
+        grants: Grants to mint into an otherwise empty grant store before the test runs.
         state: Session state models to seed (``state=[ReviewState(intent="x")]``), each written to a
             real temporary session directory under its own class, so ``ReviewState.load(evt)`` and
             ``evt.ctx.s`` read it exactly as in production. Shares the directory ``seen`` seeds.
@@ -237,6 +241,7 @@ class Input:
     commands: dict[str, str] | None = None
     state: list[BaseModel] | None = None
     env: dict[str, str] | None = None
+    grants: list[Grant] | None = None
 
     def __post_init__(self) -> None:
         for name in ("transcript", "root_transcript"):
