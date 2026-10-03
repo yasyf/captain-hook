@@ -74,6 +74,8 @@ class Grants:
         ttl: How long a grant minted from session evidence lives.
         standing_ttl: How long a standing grant minted from the owner's verbatim words lives.
         standing_rules: Rule names a standing grant asserts.
+        spent_by: The downstream system that spends this kind's grants with ``capt-hook grant spend``;
+            when set, a check names the covering grant without reserving a use.
         would_allow: What the agent can do to get permission, appended to every deny.
     """
 
@@ -87,6 +89,7 @@ class Grants:
     ttl: timedelta | None = timedelta(days=1)
     standing_ttl: timedelta | None = None
     standing_rules: tuple[str, ...] = ()
+    spent_by: str | None = None
     would_allow: str = "Ask the user for permission for exactly this action."
     hook: str = field(default="grants")
 
@@ -223,10 +226,10 @@ class Grants:
                 evt,
                 scope=dict(action.scope),
                 evidence=[quoted, *(item for item in relied if item.id != said.id)],
-                uses=None,
+                uses=verdict.uses,
                 ttl=self.standing_ttl,
                 rules=self.standing_rules,
-                source_key=f"standing:{said.key}",
+                source_key=said.key or said.id,
             )
         else:
             grant = self.grant(
@@ -252,6 +255,12 @@ class Grants:
             return Denied(" ".join([*refusals, str(exc)]), self.would_allow)
 
     def spend(self, evt: BaseHookEvent, grant: Grant, action: Proposal, reason: str, relied: list[str]) -> Allowed:
+        if self.spent_by is not None:
+            at = store.now()
+            used = store.spends(grant.id)
+            if (why := store.unusable(grant, used, at, fingerprint(action))) is not None:
+                raise store.SpentError(why)
+            return Allowed(grant, store.remaining(grant, used, at), reason)
         reserved = _RESERVED.get()
         tool_use_id = call_id(evt)
         left = store.reserve(

@@ -73,6 +73,16 @@ class Grant(BaseModel):
 SpendState = Literal["reserved", "committed", "released"]
 
 
+class Adoption(BaseModel):
+    """An agent in another session tree made a grant usable there; the two trees share its budget."""
+
+    grant_id: str
+    tree: str
+    at: datetime
+    session: str
+    agent: str
+
+
 class Spend(BaseModel):
     """One use of a grant: reserved while its event is decided, then committed or released."""
 

@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from captain_hook.grants.records import Grant, Spend, SpendState
+from captain_hook.grants.records import Adoption, Grant, Spend, SpendState
 from captain_hook.util.paths import resolve_state_dir
 
 RESERVATION_TTL = timedelta(minutes=2)
@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS spends (
     summary TEXT NOT NULL,
     reason TEXT NOT NULL,
     relied_on TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS adoptions (
+    grant_id TEXT NOT NULL REFERENCES grants(id),
+    tree TEXT NOT NULL,
+    at TEXT NOT NULL,
+    session TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    PRIMARY KEY (grant_id, tree)
 );
 CREATE INDEX IF NOT EXISTS grants_by_kind ON grants (kind, tree);
 CREATE INDEX IF NOT EXISTS spends_by_grant ON spends (grant_id);
@@ -145,10 +153,15 @@ def load(grant_id: str) -> Grant:
 
 
 def grants(kind: str | None = None, tree: str | None = None) -> list[Grant]:
-    clauses = [(column, value) for column, value in (("kind", kind), ("tree", tree)) if value is not None]
-    where = " AND ".join(f"{column} = ?" for column, _ in clauses) or "1"
+    """The grants of *kind* usable in *tree*: minted there or adopted into it."""
+    clauses = [("kind = ?", [kind])] if kind is not None else []
+    if tree is not None:
+        clauses.append(("(tree = ? OR id IN (SELECT grant_id FROM adoptions WHERE tree = ?))", [tree, tree]))
+    where = " AND ".join(clause for clause, _ in clauses) or "1"
     with connect() as db:
-        rows = db.execute(f"SELECT body FROM grants WHERE {where}", [value for _, value in clauses]).fetchall()
+        rows = db.execute(
+            f"SELECT body FROM grants WHERE {where}", [value for _, values in clauses for value in values]
+        ).fetchall()
     return sorted((Grant.model_validate_json(row[0]) for row in rows), key=lambda grant: grant.created)
 
 
@@ -216,8 +229,11 @@ def reserve(
     """
     at = now()
     with connect() as db, immediate(db):
-        grant = Grant.model_validate_json(db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()[0])
-        if grant.tree != tree or grant.scope != dict(scope):
+        if (row := db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()) is None:
+            raise SpentError(f"no grant {grant_id}.")
+        grant = Grant.model_validate_json(row[0])
+        adopted = db.execute("SELECT 1 FROM adoptions WHERE grant_id = ? AND tree = ?", (grant_id, tree)).fetchone()
+        if (grant.tree != tree and adopted is None) or grant.scope != dict(scope):
             raise SpentError(f"grant {grant.id} covers {grant.scope} in another session tree or destination.")
         rows = db.execute(f"SELECT {SPEND_COLUMNS} FROM spends WHERE grant_id = ? ORDER BY id", (grant_id,)).fetchall()
         used = [parse_spend(row) for row in rows]
@@ -261,6 +277,29 @@ def settle(tool_use_id: str, *, allowed: bool) -> bool:
             ("committed" if allowed else "released", tool_use_id),
         )
     return not (allowed and stale)
+
+
+def adopt(grant_id: str, *, tree: str, session: str, agent: str) -> Adoption:
+    """Make *grant_id* usable in *tree* too, sharing its budget, and log who adopted it."""
+    load(grant_id)
+    adoption = Adoption(grant_id=grant_id, tree=tree, at=now(), session=session, agent=agent)
+    with connect() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO adoptions (grant_id, tree, at, session, agent) VALUES (?, ?, ?, ?, ?)",
+            (grant_id, tree, adoption.at.isoformat(), session, agent),
+        )
+    return adoption
+
+
+def adoptions(grant_id: str) -> list[Adoption]:
+    with connect() as db:
+        rows = db.execute(
+            "SELECT grant_id, tree, at, session, agent FROM adoptions WHERE grant_id = ? ORDER BY at", (grant_id,)
+        ).fetchall()
+    return [
+        Adoption(grant_id=row[0], tree=row[1], at=datetime.fromisoformat(row[2]), session=row[3], agent=row[4])
+        for row in rows
+    ]
 
 
 def revoke(grant_id: str) -> Grant:

@@ -161,7 +161,10 @@ def list_(kind: str | None, tree: str | None, everything: bool) -> None:
 def show(grant_id: str) -> None:
     """Show a grant's record and every use of it."""
     found = store.load(grant_id)
+    click.echo(describe(found))
     click.echo(found.model_dump_json(indent=2))
+    for adoption in store.adoptions(grant_id):
+        click.echo(f"{store.stamp(adoption.at)}  adopted into tree {adoption.tree} by {adoption.session}/{adoption.agent}")
     for spend in store.spends(grant_id):
         click.echo(
             f"{store.stamp(spend.at)}  {spend.state}  {spend.session}/{spend.agent}  {spend.summary}  {spend.reason}"
@@ -173,3 +176,59 @@ def show(grant_id: str) -> None:
 def revoke(grant_id: str) -> None:
     """Revoke a grant; it covers nothing from now on."""
     click.echo(describe(store.revoke(grant_id)))
+
+
+@grant.command()
+@click.argument("grant_id")
+@click.option("--tree", default=None, help="Session tree to adopt it into (default: this session)")
+@click.option("--agent", default="main", show_default=True, help="The agent adopting it, for the log")
+def adopt(grant_id: str, tree: str | None, agent: str) -> None:
+    """Make a grant from another session tree usable in this one; both trees share its budget.
+
+    Any agent may adopt a grant it was handed; the adoption is logged with the session and agent.
+    """
+    session = session_tree()
+    adoption = store.adopt(grant_id, tree=tree or session, session=session, agent=agent)
+    click.echo(f"{describe(store.load(grant_id))}  adopted into {adoption.tree}")
+
+
+@grant.command()
+@click.argument("grant_id")
+@click.option("--scope", "scope", multiple=True, required=True, help="One key=value of the action's scope; repeat")
+@click.option("--tree", required=True, help="Session tree the action runs in")
+@click.option("--session", required=True, help="Session making the call")
+@click.option("--agent", default="main", show_default=True, help="Agent making the call")
+@click.option("--call", "call", required=True, help="Id of the call this use pays for")
+@click.option("--fingerprint", required=True, help="Digest of the action's payload; a retry repeats it")
+@click.option("--summary", required=True, help="One line naming the action")
+def spend(
+    grant_id: str,
+    scope: tuple[str, ...],
+    tree: str,
+    session: str,
+    agent: str,
+    call: str,
+    fingerprint: str,
+    summary: str,
+) -> None:
+    """Spend one use of a grant for a system that enforces it downstream, such as the cc-slack daemon.
+
+    Prints the grant and the uses left as JSON; exits non-zero with the reason when the grant cannot pay.
+    """
+    try:
+        left = store.reserve(
+            grant_id,
+            tree=tree,
+            scope=parse_scope(scope),
+            state="committed",
+            session=session,
+            agent=agent,
+            tool_use_id=call,
+            fingerprint=fingerprint,
+            summary=summary,
+            reason="spent downstream",
+            relied_on=[],
+        )
+    except store.SpentError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps({"grant": json.loads(store.load(grant_id).model_dump_json()), "remaining": left}))

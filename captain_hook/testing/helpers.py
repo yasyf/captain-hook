@@ -82,7 +82,7 @@ class StubbedContext(HookContext):
         values = STUB_FIELD_VALUES | self.llm
         return response_model(
             **{
-                name: values.get(name, "")
+                name: values.get(name, None if info.default is None else "")
                 for name, info in response_model.model_fields.items()
                 if name in values or info.default is None
             }

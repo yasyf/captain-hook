@@ -531,3 +531,58 @@ def test_the_judge_runs_on_luna_at_low_effort() -> None:
 
     judge = Judge("rules")
     assert LlmBackends.for_specialty(judge.specialty).resolve_model(judge.model) == "gpt-6-luna:low"
+
+
+def test_the_judge_mints_a_counted_grant_when_the_owner_names_a_number(tmp_path: Path) -> None:
+    words = "send these three replies in that thread"
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner(words),)),))
+    first = grants.check(event(tmp_path, "one", allow=True, reason="ok", relied_on=["words:1"], standing=words, uses=3))
+    assert isinstance(first, Allowed) and first.grant.uses == 3 and first.remaining == 2
+    again = {"allow": True, "reason": "ok", "relied_on": ["words:1"]}
+    assert [bool(grants.check(event(tmp_path, f"t{n}", call=f"c{n}", **again))) for n in range(3)] == [True, True, False]
+
+
+def test_an_adopted_grant_covers_the_adopting_tree_and_shares_its_budget(tmp_path: Path) -> None:
+    grant = minted(uses=2)
+    assert not declared().check(event(tmp_path, "lane", session="lane-root"))
+    adoption = store.adopt(grant.id, tree="lane-root", session="lane-root", agent="comms")
+    assert adoption.agent == "comms" and [found.tree for found in store.adoptions(grant.id)] == ["lane-root"]
+    assert declared().check(event(tmp_path, "lane", session="lane-root", call="c1"))
+    assert declared().check(event(tmp_path, "root", call="c2"))
+    assert not declared().check(event(tmp_path, "again", session="lane-root", call="c3"))
+
+
+def test_a_downstream_spender_names_the_grant_and_pays_through_the_cli(tmp_path: Path) -> None:
+    grant = minted(uses=1)
+    named = declared(spent_by="cc-slack").check(event(tmp_path, "one"))
+    assert isinstance(named, Allowed) and named.grant.id == grant.id and store.spends(grant.id) == []
+    argv = ["spend", grant.id, "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", TREE]
+    argv += ["--session", TREE, "--call", "post-1", "--fingerprint", "f1", "--summary", "reply"]
+    paid = CliRunner().invoke(grant_cli, argv)
+    assert paid.exit_code == 0 and '"remaining": 0' in paid.output
+    assert [spend.state for spend in store.spends(grant.id)] == ["committed"]
+    refused = CliRunner().invoke(grant_cli, [*argv[:-6], "--call", "post-2", "--fingerprint", "f2", "--summary", "reply"])
+    assert refused.exit_code == 1 and f"grant {grant.id} was spent at" in refused.output
+    assert isinstance(declared(spent_by="cc-slack").check(event(tmp_path, "two", call="c2")), Denied)
+
+
+def test_a_downstream_spend_refuses_another_tree(tmp_path: Path) -> None:
+    grant = minted()
+    argv = ["spend", grant.id, "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", "elsewhere"]
+    argv += ["--session", "elsewhere", "--call", "p", "--fingerprint", "f", "--summary", "reply"]
+    refused = CliRunner().invoke(grant_cli, argv)
+    assert refused.exit_code == 1 and "another session tree" in refused.output
+
+
+def test_a_downstream_spender_names_a_spent_one_shot_for_the_same_payload_again(tmp_path: Path) -> None:
+    grant = minted()
+    assert declared().check(event(tmp_path, "same"))
+    again = declared(spent_by="cc-slack").check(event(tmp_path, "same", call="toolu_2"))
+    assert isinstance(again, Allowed) and again.grant.id == grant.id
+    assert isinstance(declared(spent_by="cc-slack").check(event(tmp_path, "other", call="toolu_3")), Denied)
+
+
+def test_spending_an_unknown_grant_names_it(tmp_path: Path) -> None:
+    argv = ["spend", "000000000000", "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", TREE]
+    refused = CliRunner().invoke(grant_cli, [*argv, "--session", TREE, "--call", "p", "--fingerprint", "f", "--summary", "s"])
+    assert refused.exit_code == 1 and "no grant 000000000000" in refused.output
