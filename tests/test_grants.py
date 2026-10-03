@@ -572,3 +572,17 @@ def test_a_downstream_spend_refuses_another_tree(tmp_path: Path) -> None:
     argv += ["--session", "elsewhere", "--call", "p", "--fingerprint", "f", "--summary", "reply"]
     refused = CliRunner().invoke(grant_cli, argv)
     assert refused.exit_code == 1 and "another session tree" in refused.output
+
+
+def test_a_downstream_spender_names_a_spent_one_shot_for_the_same_payload_again(tmp_path: Path) -> None:
+    grant = minted()
+    assert declared().check(event(tmp_path, "same"))
+    again = declared(spent_by="cc-slack").check(event(tmp_path, "same", call="toolu_2"))
+    assert isinstance(again, Allowed) and again.grant.id == grant.id
+    assert isinstance(declared(spent_by="cc-slack").check(event(tmp_path, "other", call="toolu_3")), Denied)
+
+
+def test_spending_an_unknown_grant_names_it(tmp_path: Path) -> None:
+    argv = ["spend", "000000000000", "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", TREE]
+    refused = CliRunner().invoke(grant_cli, [*argv, "--session", TREE, "--call", "p", "--fingerprint", "f", "--summary", "s"])
+    assert refused.exit_code == 1 and "no grant 000000000000" in refused.output

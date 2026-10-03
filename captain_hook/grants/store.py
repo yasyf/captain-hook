@@ -229,7 +229,9 @@ def reserve(
     """
     at = now()
     with connect() as db, immediate(db):
-        grant = Grant.model_validate_json(db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()[0])
+        if (row := db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()) is None:
+            raise SpentError(f"no grant {grant_id}.")
+        grant = Grant.model_validate_json(row[0])
         adopted = db.execute("SELECT 1 FROM adoptions WHERE grant_id = ? AND tree = ?", (grant_id, tree)).fetchone()
         if (grant.tree != tree and adopted is None) or grant.scope != dict(scope):
             raise SpentError(f"grant {grant.id} covers {grant.scope} in another session tree or destination.")

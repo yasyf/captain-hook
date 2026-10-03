@@ -258,7 +258,7 @@ class Grants:
         if self.spent_by is not None:
             at = store.now()
             used = store.spends(grant.id)
-            if (why := store.unusable(grant, used, at)) is not None:
+            if (why := store.unusable(grant, used, at, fingerprint(action))) is not None:
                 raise store.SpentError(why)
             return Allowed(grant, store.remaining(grant, used, at), reason)
         reserved = _RESERVED.get()
