@@ -17,6 +17,7 @@ from loguru import logger
 from captain_hook.grants import store
 from captain_hook.grants.evidence import Asked, OwnerWords, tree_of, verbatim
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
+from captain_hook.grants.orca import adopt_coordinator
 from captain_hook.grants.records import Allowed, Denied, Evidence, Grant, Proposal
 
 if TYPE_CHECKING:
@@ -180,6 +181,7 @@ class Grants:
             action = self.action(evt)
         scope = self.canonical(action)
         tree = tree_of(evt)
+        adopt_coordinator(evt)
         collected: list[Evidence] | None = None
 
         def session() -> list[Evidence]:

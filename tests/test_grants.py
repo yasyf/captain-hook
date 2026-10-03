@@ -35,6 +35,7 @@ from captain_hook.grants import (
 )
 from captain_hook.grants import cli as grant_cli_module
 from captain_hook.grants import evidence as evidence_module
+from captain_hook.grants import orca as orca_module
 from captain_hook.grants.cli import grant as grant_cli
 from captain_hook.hook_lint import result_violations
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
@@ -740,3 +741,61 @@ def test_a_lane_reads_its_roots_older_words_from_the_recorded_index(tmp_path: Pa
     lane.ctx.root_path = tmp_path / f"{TREE}.jsonl"
     quotes = [item.quote for item in OwnerWords().collect(lane, proposal(lane))]
     assert quotes == ["post the AIG summary in that thread"]
+
+
+def in_orca(monkeypatch: pytest.MonkeyPatch, handle: str) -> None:
+    monkeypatch.setenv("ORCA_TERMINAL_HANDLE", handle)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "1")
+
+
+def fake_orca(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    calls: list[tuple[str, ...]] = []
+    worker = {"agentTerminalHandle": "term_lane", "dispatchStatus": "dispatched", "runId": "run_1"}
+    finished = {"agentTerminalHandle": "term_old", "dispatchStatus": "completed", "runId": "run_0"}
+
+    def orca(*args: str) -> dict[str, Any]:
+        calls.append(args)
+        if args[:2] == ("orchestration", "worker-list"):
+            return {"workers": [finished, worker], "page": {"hasMore": False, "nextCursor": None}}
+        assert args == ("orchestration", "run-show", "--id", "run_1")
+        return {"run": {"id": "run_1", "coordinator_handle": "term_root"}}
+
+    monkeypatch.setattr(orca_module, "orca", orca)
+    return calls
+
+
+def test_an_attended_orca_session_records_its_terminal_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    in_orca(monkeypatch, "term_root")
+    evt = event(tmp_path)
+    orca_module.record_terminal(evt)
+    orca_module.record_terminal(evt)
+    assert store.terminal_tree("term_root") == TREE
+    assert not store.record_terminal("term_root", TREE)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "0")
+    monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_nested")
+    orca_module.record_terminal(event(tmp_path / "nested", session="nested-print"))
+    assert store.terminal_tree("term_nested") is None
+
+
+def test_an_orca_lane_spends_its_coordinators_grant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.record_terminal("term_root", TREE)
+    grant = minted(uses=2)
+    calls = fake_orca(monkeypatch)
+    in_orca(monkeypatch, "term_lane")
+    lane = event(tmp_path / "lane", "lane", session="lane-root")
+    assert declared().check(lane)
+    assert [(found.tree, found.agent) for found in store.adoptions(grant.id)] == [("lane-root", "orca:run_1")]
+    assert declared().check(event(tmp_path / "lane", "again", session="lane-root", call="c2"))
+    assert len(calls) == 2
+    assert not declared().check(event(tmp_path, "root", call="c3"))
+
+
+def test_no_orca_binds_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.record_terminal("term_root", TREE)
+    minted(uses=None)
+    calls = fake_orca(monkeypatch)
+    monkeypatch.delenv("ORCA_TERMINAL_HANDLE", raising=False)
+    assert not declared().check(event(tmp_path, session="lane-root"))
+    in_orca(monkeypatch, "term_unknown")
+    assert not declared().check(event(tmp_path / "other", session="other-root", call="c2"))
+    assert calls == [("orchestration", "worker-list", "--limit", "100")]

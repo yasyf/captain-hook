@@ -89,6 +89,8 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    monkeypatch.delenv("ORCA_TERMINAL_HANDLE", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ATTENDED", raising=False)
     config_dir = tmp_path_factory.mktemp("claude-config")
     (config_dir / "plugins").mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))

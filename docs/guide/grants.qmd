@@ -492,6 +492,20 @@ The CLI reads the adopting session from the session environment variables even
 when `--tree` is explicit. `grant show` logs each adoption with its destination
 tree, timestamp, session, and agent.
 
+An Orca lane adopts its Run coordinator's grants without a command. The builtin
+`general` pack records the Orca terminal of each attended Claude session from
+`ORCA_TERMINAL_HANDLE`, once per session. A `claude -p` session is unattended and
+records nothing.
+
+On a grants check in an Orca terminal, the framework finds the
+dispatched worker for that terminal with `orca orchestration worker-list`, and reads
+the Run's coordinator terminal with `orca orchestration run-show`. It then adopts
+every grant minted in the session tree last recorded for that terminal. Each
+adoption is logged with agent `orca:<run>`, so both trees share the budget, and
+`grant show` lists the lane. The session caches the Run lookup; a terminal with no
+dispatched worker is looked up again after five minutes. Outside Orca, or with no
+recorded coordinator session, nothing is adopted.
+
 Inspect and revoke a grant with its printed id in place of `GRANT_ID`:
 
 ```bash

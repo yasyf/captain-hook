@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS adoptions (
     agent TEXT NOT NULL,
     PRIMARY KEY (grant_id, tree)
 );
+CREATE TABLE IF NOT EXISTS orca_terminals (
+    handle TEXT NOT NULL,
+    tree TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (handle, tree)
+);
 CREATE INDEX IF NOT EXISTS grants_by_kind ON grants (kind, tree);
 CREATE INDEX IF NOT EXISTS spends_by_grant ON spends (grant_id);
 CREATE INDEX IF NOT EXISTS spends_by_call ON spends (tool_use_id, state);
@@ -301,6 +307,37 @@ def adopt(grant_id: str, *, tree: str, session: str, agent: str) -> Adoption:
             (grant_id, tree, adoption.at.isoformat(), session, agent),
         )
     return adoption
+
+
+def adopt_tree(source: str, *, tree: str, session: str, agent: str) -> int:
+    """Adopt every grant minted in *source* into *tree*, logged like :func:`adopt`; returns how many were new."""
+    with connect() as db:
+        return db.execute(
+            "INSERT OR IGNORE INTO adoptions (grant_id, tree, at, session, agent)"
+            " SELECT id, ?, ?, ?, ? FROM grants WHERE tree = ?",
+            (tree, now().isoformat(), session, agent, source),
+        ).rowcount
+
+
+def record_terminal(handle: str, tree: str) -> bool:
+    """Record that session tree *tree* runs in the Orca terminal *handle*; ``False`` when already recorded."""
+    with connect() as db:
+        return (
+            db.execute(
+                "INSERT OR IGNORE INTO orca_terminals (handle, tree, at) VALUES (?, ?, ?)",
+                (handle, tree, now().isoformat()),
+            ).rowcount
+            == 1
+        )
+
+
+def terminal_tree(handle: str) -> str | None:
+    """The session tree most recently recorded in the Orca terminal *handle*."""
+    with connect() as db:
+        row = db.execute(
+            "SELECT tree FROM orca_terminals WHERE handle = ? ORDER BY at DESC LIMIT 1", (handle,)
+        ).fetchone()
+    return None if row is None else row[0]
 
 
 def adoptions(grant_id: str) -> list[Adoption]:

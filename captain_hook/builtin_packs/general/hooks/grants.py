@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from captain_hook import Allow, Block, Event, Input, LambdaCondition, Tool, on
 from captain_hook.grants import store
 from captain_hook.grants.evidence import answer_evidence, machine_written, parse_answer, tree_of, words_evidence
+from captain_hook.grants.orca import record_terminal
 from captain_hook.grants.records import Evidence, Grant
 
 if TYPE_CHECKING:
@@ -51,6 +52,16 @@ def record_answers(evt: PostToolUseEvent) -> HookResult | None:
 def record_owner_words(evt: UserPromptSubmitEvent) -> HookResult | None:
     if evt.ctx.root_path is None and (prompt := evt.user_prompt) and not machine_written(prompt):
         record(evt, "words", words_evidence(prompt, store.now()))
+    return None
+
+
+@on(
+    Event.SessionStart | Event.UserPromptSubmit | Event.PreToolUse,
+    respect_gitignore=False,
+    skip_planning_agents=False,
+)
+def record_orca_terminal(evt: BaseHookEvent) -> HookResult | None:
+    record_terminal(evt)
     return None
 
 
