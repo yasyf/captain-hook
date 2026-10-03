@@ -14,7 +14,7 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     git_probe,
     graphite_owns,
 )
-from captain_hook.util import reqenv
+from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -22,7 +22,8 @@ if TYPE_CHECKING:
 
     from captain_hook.cmd import Call
 
-CHECK_TIMEOUT = 15
+CHECK_TIMEOUT = 45.0
+VERDICT_SECONDS = 1.0
 PUSH_SKIPS = frozenset({"--dry-run", "-n", "--delete", "-d"})
 PUSH_ALL = frozenset({"--all", "--branches", "--mirror"})
 GIT_HEAD_MOVES = ("commit", "merge", "rebase", "reset", "cherry-pick", "revert", "am", "pull", "checkout", "switch")
@@ -41,6 +42,11 @@ class Push:
     head: str | None
 
 
+def check_budget() -> float:
+    left = collect_budget(SYNC_DEADLINE_MARGIN_SECONDS + VERDICT_SECONDS)
+    return CHECK_TIMEOUT if left is None else min(CHECK_TIMEOUT, left)
+
+
 def run(argv: list[str], cwd: Path) -> str | None:
     done = subprocess.run(
         argv,
@@ -48,7 +54,7 @@ def run(argv: list[str], cwd: Path) -> str | None:
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
-        timeout=reqenv.clamp_timeout(CHECK_TIMEOUT),
+        timeout=check_budget(),
         check=False,
     )
     if done.returncode != 0:
@@ -210,18 +216,29 @@ def already_enqueued(push: Push, report: dict[str, str]) -> bool:
     return bool(push.head and (enqueued := report.get("enqueued")) and push.head.startswith(enqueued))
 
 
-def holds(cwd: Path, planned: list[Push]) -> list[Push]:
-    if not (prs := open_prs(sorted({push.branch for push in planned}), cwd)):
-        return []
-    if (reports := queue_reports(sorted(set(prs.values())), cwd)) is None:
-        return []
-    return [
+def holds(cwd: Path, planned: list[Push]) -> tuple[list[Push], list[str]]:
+    branches = sorted({push.branch for push in planned})
+    try:
+        prs = open_prs(branches, cwd)
+    except subprocess.TimeoutExpired:
+        return [], [f"`{branch}`" for branch in branches]
+    if not prs:
+        return [], []
+    numbers = sorted(set(prs.values()))
+    try:
+        reports = queue_reports(numbers, cwd)
+    except subprocess.TimeoutExpired:
+        return [], [f"`#{number}`" for number in numbers]
+    if reports is None:
+        return [], []
+    held = [
         push
         for push in planned
         if (number := prs.get(push.branch)) is not None
         and reports[number]["queue"] == "queued"
         and not already_enqueued(push, reports[number])
     ]
+    return held, []
 
 
 @on(
@@ -239,6 +256,7 @@ def holds(cwd: Path, planned: list[Push]) -> list[Push]:
 )
 def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
     held: list[Push] = []
+    unverified: list[str] = []
     moved = False
     for call in evt.cmd.calls():
         if (
@@ -247,8 +265,16 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
             and (cwd := lookup_dir(call, evt.cwd)) is not None
             and (planned := plan(call, evt.cwd))
         ):
-            held += holds(cwd, [Push(push.branch, None) for push in planned] if moved else planned)
+            found, missed = holds(cwd, [Push(push.branch, None) for push in planned] if moved else planned)
+            held += found
+            unverified += missed
         moved = moved or moves_heads(call)
+    if not held and unverified:
+        return evt.block(
+            f"The merge-queue check timed out for {', '.join(dict.fromkeys(unverified))}, "
+            "so this push is held until it can rule out a queued PR. "
+            "Rerun the push once `ccx vcs pr status` answers for them."
+        )
     if not held:
         return None
     branches = ", ".join(dict.fromkeys(f"`{push.branch}`" for push in held))

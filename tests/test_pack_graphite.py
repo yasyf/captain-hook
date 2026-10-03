@@ -3,19 +3,23 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
 import captain_hook
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
 from captain_hook.hook_lint import copy_violations
 from captain_hook.loader import discover_pack
 from captain_hook.testing.helpers import input_to_event, stubbed_commands
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
+from captain_hook.util import reqenv
 from tests.helpers import raw_text, raw_tool_msg
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
@@ -913,6 +917,58 @@ def test_a_failed_queue_check_allows_the_push(
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo, _ = queued_repo(tmp_path, "feat")
     assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+@contextmanager
+def timing_out(command: str) -> Generator[list[float]]:
+    budgets: list[float] = []
+    stubbed: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run
+    words = tuple(command.split())
+
+    def run(args: list[str], *pargs: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        if tuple(args[: len(words)]) == words:
+            budgets.append(kwargs["timeout"])
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return stubbed(args, *pargs, **kwargs)
+
+    with mock.patch.object(subprocess, "run", run):
+        yield budgets
+
+
+@pytest.mark.parametrize(
+    ("commands", "slow", "named"),
+    [
+        pytest.param({PR_LOOKUP: pr_lookup(26315)}, QUEUE_STATUS, "`#26315`", id="status"),
+        pytest.param({}, PR_LOOKUP, "`feat`", id="lookup"),
+    ],
+)
+def test_a_timed_out_queue_check_holds_the_push_naming_what_it_could_not_verify(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, commands: dict[str, str], slow: str, named: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    with stubbed_commands(commands), timing_out(slow):
+        result = dispatch_command("git push", repo, tmp_path)
+    assert_fires(result, "deny", f"timed out for {named},")
+
+
+def test_the_queue_check_times_out_inside_the_hook_deadline(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    deadline = int((time.time() + 30) * 1000)
+    overrides = reqenv.RequestOverrides(
+        env=dict(os.environ), cwd=str(repo), client_ppid=1, session_id="s", deadline_unix_ms=deadline
+    )
+    with (
+        reqenv.use_request(overrides),
+        stubbed_commands({PR_LOOKUP: pr_lookup(26315)}),
+        timing_out(QUEUE_STATUS) as budgets,
+    ):
+        result = dispatch_command("git push", repo, tmp_path)
+    assert_fires(result, "deny", "`#26315`")
+    assert 0 < budgets[0] <= 30 - SYNC_DEADLINE_MARGIN_SECONDS - 1
 
 
 def test_the_queue_check_needs_ccx(isolate_modules: None, tmp_path: Path) -> None:
