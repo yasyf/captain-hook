@@ -118,10 +118,11 @@ class Allowed:
 
 @dataclass(frozen=True, slots=True)
 class Denied:
-    """No grant covers the action: why, and what would allow it."""
+    """No grant covers the action: why, what would allow it, and whether the judge failed to decide."""
 
     reason: str
     would_allow: str
+    undecided: bool = False
 
     def __bool__(self) -> bool:
         return False

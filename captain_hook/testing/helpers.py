@@ -565,7 +565,7 @@ def input_to_event(
         evt.__dict__["_home_dir"] = str(Path(file).parent)
     evt._raw |= (
         ({"transcript_path": str(transcript_path)} if transcript_path else {})
-        | ({"session_id": inp.session_id} if inp.session_id else {})
+        | {"session_id": inp.session_id or "fixture"}
         | ({"agent_id": inp.agent_id} if inp.agent_id else {})
         | ({"agent_type": inp.agent_type} if inp.agent_type else {})
     )

@@ -268,7 +268,7 @@ def test_a_judge_that_gives_no_verdict_denies(tmp_path: Path) -> None:
     evt = event(tmp_path)
     evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
     denied = declared(judge=Judge("rules"), evidence=(Fixed((owner("x"),)),)).check(evt)
-    assert isinstance(denied, Denied) and "no verdict" in denied.reason
+    assert isinstance(denied, Denied) and "no verdict" in denied.reason and denied.undecided
 
 
 def test_a_denied_event_releases_its_reservation(tmp_path: Path) -> None:
@@ -323,14 +323,13 @@ def test_rulings_count_only_when_written_before_the_session(tmp_path: Path, monk
             "id": "543e865aaaa",
             "title": "alerts",
             "body": "C1: not-ours replies ok",
-            "created_at": "2026-10-01T10:00:00+00:00",
+            "updated_at": "2026-10-01T10:00:00Z",
         },
         {
             "id": "777beefaaaa",
             "title": "self-granted",
             "body": "C1: anything goes",
-            "created_at": "2026-10-01T10:00:00+00:00",
-            "updated_at": "2026-10-02T18:30:00+00:00",
+            "updated_at": "2026-10-02T18:30:00Z",
         },
     ]
     monkeypatch.setattr(evidence_module, "ccn_answers", lambda evt, term: answers)

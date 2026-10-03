@@ -55,10 +55,10 @@ def first_timestamp(path: Path) -> datetime:
 
 
 def session_started(evt: BaseHookEvent) -> datetime:
-    """When the acting session wrote its first transcript line."""
-    if (path := evt.ctx.transcript_path) is None:
-        raise ValueError("the acting session has no transcript to date it by")
-    return first_timestamp(Path(path))
+    """When the acting session wrote its first transcript line: read from its file, or from an in-memory session."""
+    if (path := evt.ctx.transcript_path) is not None:
+        return first_timestamp(Path(path))
+    return evt.ctx.transcript.events[0].meta.timestamp
 
 
 def owner_sessions(evt: BaseHookEvent, needles: Sequence[str] = ()) -> list[tuple[Any, bool]]:
@@ -208,7 +208,7 @@ class OwnerWords:
         for session, prompts_are_owner in owner_sessions(evt, needles):
             for turn in session.recent_messages(self.window).turns:
                 said = [(turn.prompt, turn.started_at)] if prompts_are_owner else []
-                said += [(text, turn.started_at) for text, _ in queued_words(turn)]
+                said += [(text, event.meta.timestamp) for text, event in queued_words(turn)]
                 for text, at in said:
                     if text and not any(marker in text for marker in self.machine):
                         key = f"words:{sha256(text.encode()).hexdigest()[:12]}"
@@ -245,7 +245,7 @@ def ccn_answer(evt: BaseHookEvent, answer_id: str) -> dict[str, Any]:
 
 
 def written_at(answer: dict[str, Any]) -> datetime:
-    return datetime.fromisoformat(answer.get("updated_at") or answer["created_at"])
+    return datetime.fromisoformat(answer["updated_at"])
 
 
 @dataclass(frozen=True, slots=True)

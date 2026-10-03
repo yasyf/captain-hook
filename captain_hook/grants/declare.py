@@ -176,7 +176,9 @@ class Grants:
                         evt, hook=self.hook, action=action, evidence=since, rulings=rulings, grant=grant
                     )
                 except JudgeFailed as exc:
-                    return Denied(f"{exc}, and a grant it cannot judge never covers an action.", self.would_allow)
+                    return Denied(
+                        f"{exc}, and a grant it cannot judge never covers an action.", self.would_allow, undecided=True
+                    )
                 if not verdict.allow:
                     refusals.append(f"grant {grant.id}: {verdict.reason}")
                     continue
@@ -195,7 +197,7 @@ class Grants:
         try:
             verdict = judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
         except JudgeFailed as exc:
-            return Denied(f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow)
+            return Denied(f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow, undecided=True)
         if not verdict.allow:
             return Denied(" ".join([*refusals, verdict.reason]), self.would_allow)
         relied = [item for item in items if item.id in verdict.relied_on]

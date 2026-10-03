@@ -122,7 +122,7 @@ def import_(answer_id: str, **options: Any) -> None:
         ["ccn", "answer", "show", answer_id, "--json"], capture_output=True, text=True, check=True, env=reqenv.env_map()
     )
     answer = json.loads(done.stdout)
-    revised = answer.get("updated_at") or answer["created_at"]
+    revised = answer["updated_at"]
     evidence = Evidence(
         id=f"ccn:{answer['id'][:7]}",
         source="ccn-answer",
