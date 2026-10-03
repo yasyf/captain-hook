@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,14 +16,21 @@ import captain_hook
 from captain_hook.app import on
 from captain_hook.builtin_packs.general.hooks import _sessions
 from captain_hook.builtin_packs.general.hooks._sessions import (
+    INLINE_BUSY,
     INLINE_COMMANDS,
     INLINE_LOGIN,
-    INLINE_OWNER_ANSWER,
     INLINE_OWNER_TERMINAL,
+    INLINE_STARTED,
+    INLINE_TRANSCRIPT,
+    inline_create,
+    inline_ruling,
+    inline_tab,
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
 from captain_hook.events import PreToolUseEvent
+from captain_hook.grants import evidence as evidence_module
+from captain_hook.grants import store
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete
@@ -102,15 +111,25 @@ TERMINALS = table(
     row(15000, 1743, f"{INLINE_LOGIN} /opt/homebrew/bin/fish", uid=0, started="2026-09-30T06:50:00"),
     row(15001, 15000, "-/opt/homebrew/bin/fish -l", started="2026-09-30T06:50:01"),
 )
-OWNER_CLOSE = (
-    f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json # ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+AGENT_TERMINALS = table(
+    *MAC.rows.values(),
+    row(16000, 1743, f"{INLINE_LOGIN} /opt/homebrew/bin/fish", uid=0, started="2026-09-30T06:52:00"),
+    row(16001, 16000, "-/opt/homebrew/bin/fish -l", started="2026-09-30T06:52:01"),
+    row(16002, 16001, "claude --dangerously-skip-permissions --effort xhigh", started="2026-09-30T06:52:05"),
 )
+OWNER_CLOSE = f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json"
+AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 IDLE_CLOSE = "orca terminal close --terminal term_idle --json"
-OWNER_FIX = "Add `# ccx:owner-authorized=<cc-notes answer id>`; its body must name this terminal id."
+CLOSE_FIX = (
+    "Close only an idle orphan this session created, or ask the owner to name it in a cc-notes answer for a later "
+    "session."
+)
+REAL_CCN_ANSWERS = evidence_module.ccn_answers
 
 
 def overrides(client_ppid: int = HOOK_SHELL) -> reqenv.RequestOverrides:
-    return reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=client_ppid, session_id="s1")
+    state = {"CAPTAIN_HOOK_STATE_DIR": os.environ["CAPTAIN_HOOK_STATE_DIR"]}
+    return reqenv.RequestOverrides(env=state, cwd="/w", client_ppid=client_ppid, session_id="s1")
 
 
 @pytest.fixture
@@ -122,6 +141,11 @@ def fake_table(monkeypatch: pytest.MonkeyPatch) -> dict[str, ProcessTable | None
 
 
 @pytest.fixture
+def agent_table(fake_table: dict[str, ProcessTable | None]) -> None:
+    fake_table["table"] = AGENT_TERMINALS
+
+
+@pytest.fixture
 def environs(monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable | None]) -> dict[int, str]:
     shown: dict[int, str] = {}
     monkeypatch.setattr(proc, "environment", lambda row, **kw: shown.get(row.pid))
@@ -129,8 +153,22 @@ def environs(monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable
 
 
 @pytest.fixture(autouse=True)
-def unread_answers() -> None:
-    _sessions.ANSWER_BODIES.clear()
+def rulings(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, Any]]]:
+    answers: dict[str, list[dict[str, Any]]] = {}
+    monkeypatch.setattr(evidence_module, "ccn_answers", lambda evt, term: answers.get(term, []))
+    return answers
+
+
+def ruling(body: str, *, written: Any = INLINE_STARTED - timedelta(days=1)) -> list[dict[str, Any]]:
+    return json.loads(inline_ruling(body, written=written))
+
+
+def spends(kind: str) -> list[tuple[str, str, list[str]]]:
+    return [
+        (spend.state, spend.summary, spend.relied_on)
+        for grant in store.grants(kind)
+        for spend in store.spends(grant.id)
+    ]
 
 
 @pytest.fixture
@@ -147,24 +185,34 @@ def reason(envelope: dict[str, Any] | None) -> str | None:
     return output["decision"]["message"] if output["decision"]["behavior"] == "deny" else None
 
 
+def envelope_of(
+    inp: Input, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
+) -> dict[str, Any] | None:
+    evt = input_to_event(event, inp)
+    with reqenv.use_request(overrides(client_ppid)):
+        return dispatch(event, evt, session_dir=tmp_path)
+
+
 def decide_input(
     inp: Input, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
 ) -> str | None:
-    evt = input_to_event(event, inp)
-    with reqenv.use_request(overrides(client_ppid)):
-        return reason(dispatch(event, evt, session_dir=tmp_path))
+    return reason(envelope_of(inp, tmp_path, event=event, client_ppid=client_ppid))
+
+
+def bash(command: str, **fields: Any) -> Input:
+    return Input(command=command, cwd="/w", session_id="s1", **{"transcript": INLINE_TRANSCRIPT, **fields})
 
 
 def decide(
     command: str, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
 ) -> str | None:
-    return decide_input(
-        Input(command=command, cwd="/w", session_id="s1"), tmp_path, event=event, client_ppid=client_ppid
-    )
+    return decide_input(bash(command), tmp_path, event=event, client_ppid=client_ppid)
 
 
 def stop(tool_input: dict[str, Any], **fields: Any) -> Input:
-    return Input(tool="TaskStop", tool_input=tool_input, cwd="/w", session_id="s1", **fields)
+    return Input(
+        tool="TaskStop", tool_input=tool_input, cwd="/w", session_id="s1", transcript=INLINE_TRANSCRIPT, **fields
+    )
 
 
 def failing_run(monkeypatch: pytest.MonkeyPatch, program: str, error: BaseException) -> None:
@@ -401,9 +449,9 @@ class TestFailClosed:
 
 
 STOP_DENIED = (
-    "BLOCKED: `TaskStop` on task `wcn64vfub` cannot be verified: a bare id does not tell a disposable shell task "
-    "from a workflow, agent, or teammate session, which no session may stop, its own children included. "
-    "Let it finish, or ask the owner to end it."
+    "BLOCKED: `TaskStop` on task `wcn64vfub` cannot be verified as a disposable shell task rather than a workflow, "
+    "agent, or teammate session, its own children included. Let it finish, or ask the owner to end it or name it in "
+    "a cc-notes answer for a later session."
 )
 
 
@@ -448,148 +496,168 @@ class TestStopTool:
         assert decide_input(output, tmp_path) is None
         assert decide_input(output, tmp_path, event=Event.PermissionRequest) is None
 
-
-def answer_reads(monkeypatch: pytest.MonkeyPatch, body: str = "close term_x") -> list[float]:
-    timeouts: list[float] = []
-
-    def run(args: Sequence[str], *pargs: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        assert args[:3] == ("ccn", "answer", "show")
-        timeouts.append(kwargs["timeout"])
-        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"body": body}), stderr="")
-
-    monkeypatch.setattr(subprocess, "run", run)
-    return timeouts
-
-
-class TestAnswerNames:
-    def test_ccn_is_found_with_a_minimal_worker_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        (ccn := tmp_path / "ccn").write_text("#!/bin/sh\nprintf '%s\\n' '{\"body\": \"close term_x\"}'\n")
-        ccn.chmod(0o755)
-        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path),))
-
-        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
-
-    def test_a_missing_ccn_names_the_hook_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setenv("PATH", str(tmp_path / "path"))
-        monkeypatch.setattr(_sessions, "PROBE_FALLBACK_DIRS", (str(tmp_path / "fallback"),))
-
-        assert _sessions.answer_names("abc", "term_x", None, "s1") == _sessions.Unreadable(
-            "`ccn` is not installed on the hook's PATH"
-        )
-
-    def test_a_ccn_timeout_names_its_duration(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 30.0))
-
-        assert _sessions.answer_names("abc", "term_x", None, "s1") == _sessions.TimedOut(
-            "`ccn` timed out after 30s", 30.0
-        )
-
-    def test_the_read_waits_up_to_thirty_seconds_within_the_caller_deadline(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_an_owner_ruling_lifts_one_stop_and_records_its_spend(
+        self, general_pack: None, tmp_path: Path, rulings: dict[str, list[dict[str, Any]]]
     ) -> None:
-        timeouts = answer_reads(monkeypatch)
-        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
-        with reqenv.use_request(overrides()), reqenv.deadline_in(60):
-            assert _sessions.answer_names("abd", "term_x", None, "s1") is True
-        with reqenv.use_request(overrides()), reqenv.deadline_in(15):
-            assert _sessions.answer_names("abe", "term_x", None, "s1") is True
-        assert timeouts[:2] == [30.0, 30.0]
-        assert 9.0 < timeouts[2] <= 9.75
+        rulings["wcn64vfub"] = ruling("Stop wcn64vfub; it hung on a dead socket.")
+        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) is None
+        assert spends("sessions.task-stop") == [("committed", "stop task wcn64vfub", ["ccn:0207568"])]
+        assert decide_input(stop({"task_id": "b1a2c3d4"}), tmp_path) == STOP_DENIED.replace("wcn64vfub", "b1a2c3d4")
 
-    def test_a_read_body_is_cached_per_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        timeouts = answer_reads(monkeypatch)
-        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
-        assert _sessions.answer_names("abc", "term_y", None, "s1") is False
-        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
-        assert len(timeouts) == 1
-        assert _sessions.answer_names("abc", "term_x", None, "s2") is True
-        assert _sessions.answer_names("abc", "term_x", Path("/elsewhere"), "s1") is True
-        assert len(timeouts) == 3
-
-    def test_a_failed_read_is_not_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 30.0))
-        assert isinstance(_sessions.answer_names("abc", "term_x", None, "s1"), _sessions.TimedOut)
-        timeouts = answer_reads(monkeypatch)
-        assert _sessions.answer_names("abc", "term_x", None, "s1") is True
-        assert len(timeouts) == 1
+    def test_a_ruling_written_during_the_session_never_lifts_a_stop(
+        self, general_pack: None, tmp_path: Path, rulings: dict[str, list[dict[str, Any]]]
+    ) -> None:
+        rulings["wcn64vfub"] = ruling("Stop wcn64vfub.", written=INLINE_STARTED + timedelta(seconds=1))
+        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+        assert spends("sessions.task-stop") == []
 
 
 class TestTerminalClose:
-    def test_the_owner_answer_allows_only_the_terminal_it_names(
-        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    def test_an_owner_ruling_closes_the_terminal_it_names_once(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        rulings: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        rulings[INLINE_OWNER_TERMINAL] = ruling(f"Owner: close exactly {INLINE_OWNER_TERMINAL}.")
+        with stubbed_commands(INLINE_COMMANDS | inline_tab(INLINE_OWNER_TERMINAL, INLINE_OWNER_TERMINAL)):
+            assert decide(OWNER_CLOSE, tmp_path) is None
+            again = envelope_of(bash(f"{OWNER_CLOSE} --tab"), tmp_path)
+        assert spends("sessions.close") == [("committed", f"close terminal {INLINE_OWNER_TERMINAL}", ["ccn:0207568"])]
+        assert again is not None
+        assert CLOSE_FIX in (reason(again) or "")
+        assert "was spent" in again["systemMessage"]
+
+    def test_a_ruling_naming_another_terminal_keeps_the_block(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        rulings: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        rulings["term_agent"] = ruling("Close term_agent2 and nothing else.")
+        with stubbed_commands(INLINE_COMMANDS):
+            message = decide(AGENT_CLOSE, tmp_path)
+        assert message is not None
+        assert "where pid 16002 (`claude" in message
+        assert CLOSE_FIX in message
+
+    def test_a_ruling_written_after_the_session_started_keeps_the_block(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        rulings: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        rulings["term_agent"] = ruling("Close term_agent.", written=INLINE_STARTED + timedelta(minutes=1))
+        with stubbed_commands(INLINE_COMMANDS):
+            message = decide(AGENT_CLOSE, tmp_path)
+        assert message is not None
+        assert CLOSE_FIX in message
+        assert spends("sessions.close") == []
+
+    def test_an_unreadable_ruling_keeps_the_block_and_tells_the_user(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(evidence_module, "ccn_answers", REAL_CCN_ANSWERS)
+        monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+        orca = {argv: stdout for argv, stdout in INLINE_COMMANDS.items() if not argv.startswith("ccn")}
+        with stubbed_commands(orca):
+            envelope = envelope_of(bash(AGENT_CLOSE), tmp_path)
+        assert envelope is not None
+        assert CLOSE_FIX in (reason(envelope) or "")
+        assert "sessions: the grant check failed (FileNotFoundError" in envelope["systemMessage"]
+
+    def test_a_batch_of_closes_stays_blocked_when_a_ruling_names_both(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        rulings: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        both = ruling(f"Close {INLINE_OWNER_TERMINAL} and term_agent.")
+        rulings[INLINE_OWNER_TERMINAL] = rulings["term_agent"] = both
+        with stubbed_commands(INLINE_COMMANDS):
+            message = decide(f"{OWNER_CLOSE}; {AGENT_CLOSE}", tmp_path)
+            assert decide(OWNER_CLOSE, tmp_path) is None
+            assert decide(AGENT_CLOSE, tmp_path) is None
+        assert message is not None
+        assert "leave ending them to the owner" in message
+        assert [summary for _, summary, _ in spends("sessions.close")] == [
+            f"close terminal {INLINE_OWNER_TERMINAL}",
+            "close terminal term_agent",
+        ]
+
+    def test_an_idle_terminal_this_session_created_closes_and_records_its_spend(
+        self, general_pack: None, agent_table: None, tmp_path: Path
     ) -> None:
         with stubbed_commands(INLINE_COMMANDS):
-            assert decide(OWNER_CLOSE, tmp_path) is None
-            message = decide(OWNER_CLOSE.replace(INLINE_OWNER_TERMINAL, "term_agent2"), tmp_path)
-        assert message is not None
-        assert f"cc-notes answer `{INLINE_OWNER_ANSWER}` does not name it" in message
-        assert OWNER_FIX in message
+            assert decide_input(bash(AGENT_CLOSE, transcript=inline_create("term_agent")), tmp_path) is None
+        assert spends("sessions.close") == [("committed", "close terminal term_agent", ["created:term_agent"])]
 
     @pytest.mark.parametrize(
-        ("error", "explanation"),
+        ("transcript", "commands"),
         [
-            pytest.param(FileNotFoundError("ccn"), "`ccn` is not installed on the hook's PATH", id="missing"),
-            pytest.param(PermissionError("ccn"), "`ccn` could not run", id="unexecutable"),
+            pytest.param(inline_create("term_other"), {}, id="another-terminal"),
+            pytest.param(INLINE_TRANSCRIPT, {}, id="never-created"),
+            pytest.param(inline_create("term_agent"), {"orca terminal read": INLINE_BUSY}, id="busy"),
+            pytest.param(
+                inline_create("term_agent"),
+                {"orca orchestration worker-list": _sessions.inline_workers("term_agent")},
+                id="dispatched",
+            ),
+            pytest.param(
+                inline_create("term_agent"),
+                {"orca terminal wait": json.dumps({"ok": True, "result": {"wait": {"satisfied": False}}})},
+                id="not-tui-idle",
+            ),
         ],
     )
-    def test_an_unavailable_ccn_denies(
+    def test_a_terminal_that_is_no_idle_orphan_of_this_session_keeps_the_block(
         self,
         general_pack: None,
-        fake_table: dict[str, ProcessTable | None],
+        agent_table: None,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        error: BaseException,
-        explanation: str,
+        transcript: list[dict[str, Any]],
+        commands: dict[str, str],
     ) -> None:
-        failing_run(monkeypatch, "ccn", error)
-        message = decide(OWNER_CLOSE, tmp_path)
+        with stubbed_commands(INLINE_COMMANDS | commands):
+            message = decide_input(bash(AGENT_CLOSE, transcript=transcript), tmp_path)
         assert message is not None
-        assert f"cc-notes answer `{INLINE_OWNER_ANSWER}` was not read ({explanation})" in message
-        assert OWNER_FIX in message
+        assert "where pid 16002" in message
+        assert spends("sessions.close") == []
 
-    def test_a_timed_out_read_asks_for_a_retry(
+    @pytest.mark.parametrize(("offset", "allowed"), [(60, True), (600, False)], ids=["during", "after"])
+    def test_an_orca_launch_receipt_written_during_the_call_proves_creation(
         self,
         general_pack: None,
-        fake_table: dict[str, ProcessTable | None],
+        agent_table: None,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        offset: int,
+        allowed: bool,
     ) -> None:
-        failing_run(monkeypatch, "ccn", subprocess.TimeoutExpired("ccn", 30.0))
-        message = decide(OWNER_CLOSE, tmp_path)
-        assert message is not None
-        assert f"reading cc-notes answer `{INLINE_OWNER_ANSWER}` timed out after 30s; retry the close" in message
-
-    def test_a_batch_of_closes_under_one_answer_reads_it_once(
-        self,
-        general_pack: None,
-        fake_table: dict[str, ProcessTable | None],
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        timeouts = answer_reads(monkeypatch, f"close {INLINE_OWNER_TERMINAL} and term_agent")
-        batch = (
-            f"orca terminal close --terminal {INLINE_OWNER_TERMINAL}; orca terminal close --terminal term_agent "
-            f"# ccx:owner-authorized={INLINE_OWNER_ANSWER}"
+        home = tmp_path / "home"
+        receipt = home / ".claude/scratch/orca-launch/run_1/lane-a.terminal.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(json.dumps({"ok": True, "result": {"terminal": {"handle": "term_agent"}}}))
+        written = (INLINE_STARTED + timedelta(seconds=offset)).timestamp()
+        os.utime(receipt, (written, written))
+        monkeypatch.setenv("HOME", str(home))
+        launch = inline_create("term_agent", "ORCA_LAUNCH_RUN=run_1 orca-launch.sh lane-a opus xhigh /tmp/brief.md")
+        launch[1]["timestamp"] = (INLINE_STARTED + timedelta(seconds=10)).isoformat()
+        launch[2]["timestamp"] = (INLINE_STARTED + timedelta(seconds=120)).isoformat()
+        launch[2]["message"]["content"][0]["content"] = (
+            "lane-a failed worker-start: boom; rollback left terminal=term_agent"
         )
-        assert decide(batch, tmp_path) is None
-        assert decide(OWNER_CLOSE, tmp_path) is None
-        assert len(timeouts) == 1
-
-    def test_a_failing_ccn_denies(
-        self,
-        general_pack: None,
-        fake_table: dict[str, ProcessTable | None],
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        def run(args: Any, *pargs: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            return subprocess.CompletedProcess(args, 3, stdout="", stderr="not-found: entity not found")
-
-        monkeypatch.setattr(subprocess, "run", run)
-        message = decide(OWNER_CLOSE, tmp_path)
-        assert message is not None
-        assert f"cc-notes answer `{INLINE_OWNER_ANSWER}` was not read (`ccn` failed)" in message
+        with stubbed_commands(INLINE_COMMANDS):
+            message = decide_input(bash(AGENT_CLOSE, transcript=launch), tmp_path)
+        assert (message is None) is allowed
 
     def test_a_terminal_hosting_no_agent_closes(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -601,7 +669,7 @@ class TestTerminalClose:
             message = decide(IDLE_CLOSE, tmp_path)
         assert message is not None
         assert "where pid 15002 (`codex exec review`) runs" in message
-        assert OWNER_FIX in message
+        assert CLOSE_FIX in message
 
     def test_a_bare_shell_pid_still_needs_creation_proof(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -637,26 +705,19 @@ class TestTerminalClose:
         assert message is not None
         assert "the process table could not be read" in message
 
-    @pytest.mark.parametrize(
-        ("command", "probe"),
-        [(OWNER_CLOSE, "run `ccn`"), (IDLE_CLOSE, "read the process table")],
-        ids=["owner", "tree"],
-    )
     def test_a_deadline_too_close_denies_without_probing(
         self,
         general_pack: None,
         fake_table: dict[str, ProcessTable | None],
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        command: str,
-        probe: str,
     ) -> None:
         failing_run(monkeypatch, "", AssertionError("no subprocess may run"))
-        evt = input_to_event(Event.PreToolUse, Input(command=command, cwd="/w", session_id="s1"))
+        evt = input_to_event(Event.PreToolUse, bash(OWNER_CLOSE))
         with reqenv.use_request(overrides()), reqenv.deadline_in(SYNC_DEADLINE_MARGIN_SECONDS + 0.3):
             message = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
         assert message is not None
-        assert f"the caller deadline is too close to {probe}" in message
+        assert "the caller deadline is too close to read the process table" in message
 
 
 class TestSnapshotBudget:

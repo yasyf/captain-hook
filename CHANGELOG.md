@@ -12,13 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the exact tool name on `PreToolUse` and `PermissionRequest`. A bare task id does not tell a
   disposable shell task from a workflow, agent, or teammate session, so the caller's own
   child workflows and subagents stay protected too. The denial names the target and asks
-  the caller to let it finish or ask the owner to end it.
-- **An owner-recorded cc-notes answer authorizes one `orca terminal close`.** A Bash comment
-  `# ccx:owner-authorized=<answer id>` lets the session guard allow `orca terminal close
-  --terminal <id>` when `ccn answer show <id>` returns a body naming that exact terminal id and
-  the command closes one literally spelled terminal. A missing `ccn`, a failed or timed-out
-  lookup, an answer that does not name the id, a variable id, a loop, or any other
-  session-ending verb keeps the deny, whose copy now names the annotation.
+  the caller to let it finish, or ask the owner to end it or name it in a cc-notes answer
+  for a later session.
+- **Session guards spend grants for an owner-named terminal close, launchd service stop,
+  or `TaskStop`.** The `sessions.close`, `sessions.launchctl`, and `sessions.task-stop`
+  kinds scope permission to a terminal handle, service label, or task id. The budget is
+  one use per cc-notes ruling and scope across all session trees, with a one-day expiry.
+  The ruling's body must name the value as a whole name, and its `updated_at` must predate
+  the acting session. Evidence keys are `ccn:<answer id>@<updated_at>`; judge-less grant keys add the
+  canonical scope as `<key>#<scope json>`. Editing the answer invalidates its grant,
+  and `capt-hook grant show` shows each spend. Identical scope and payload retries reuse
+  a committed spend for less than two minutes, covering `PermissionRequest` after
+  `PreToolUse` or a prompt retry; a later identical command needs new approval.
+  A session may also close an idle Orca terminal its own transcript proves it created,
+  provided no dispatch across any Run names it, `tui-idle` succeeds, and its screen shows
+  an idle Claude or Codex prompt with no
+  pending question. Creation needs a lone, bare `orca terminal create` call without an
+  environment prefix or substitution, or an `orca-launch.sh` call whose output names
+  `terminal=<handle>` and whose matching receipt's mtime falls within the call, allowing
+  one second either side. This evidence is checked again before a stored grant spends.
+  A literal single-terminal close accepts `--tab` only when the visual layout proves the
+  pane is alone; batches stay blocked. A lifted close or launchctl command must run once:
+  first at top level and at the start of the Bash payload, with only pipe successors.
+  Loops, command chains, background calls, wrappers, substitutions, and respelled variables
+  keep the block; `TaskStop` runs once as a tool call.
+  The launchd lift covers service-targeted `bootout`, `kickstart`, `disable`, `kill`,
+  `stop`, and `remove`; domain teardown and all other session-guard blocks have no grant
+  lift. Denials name the later-session ruling, and
+  grant refusal reasons reach the user as `sessions: ...`. This replaces the unreleased
+  `# ccx:owner-authorized=<answer id>` annotation, which allowed unlimited reuse and
+  answers written during the acting session.
 
 ### Fixed
 
@@ -37,14 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advisory hook fails open and a mandatory hook withholds its completion exactly as for
   transcript evidence. The teammate tool approval excludes native Bash before it reads the
   flag, so a Bash event never pays for the second hook's walk.
-- **An owner-authorized `orca terminal close` survives a loaded machine.** The guard gave
-  `ccn answer show` 2 s, and at a load average above 600 the read took 11–13 s, so every close
-  under a valid answer was denied. The read now waits up to 30 s, bounded by the caller's
-  deadline. A hook worker caches each answer body it reads for the session, so a batch of closes
-  under one answer costs one read. A timed-out read says so and asks for a retry. With the
-  `# ccx:owner-authorized=<answer id>` marker, each literal single-terminal close in a `;` or `&&`
-  chain is checked against the answer on its own, where the guard denied any chain with more
-  than one close.
 - **A session may kill or renice a process it started.** The session guard reads the target's
   environment with `ps -E` and allows a literal `kill <pid>` or `renice -p <pid>` when its
   `CLAUDE_CODE_SESSION_ID` names the calling session, including a process reparented to
@@ -59,12 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed with `EAGAIN`, so the session guard read no process table and denied every literal
   `kill <pid>` as unverifiable. The worker now raises its soft limit back to the hard limit at
   startup.
-- **The session guard's `ccn` and `orca` probes find the binary on a launchd worker's `PATH`
-  and name why a probe failed.** A worker that kept launchd's `/usr/bin:/bin:/usr/sbin:/sbin`
-  never resolved `ccn`, so an owner-authorized `orca terminal close` was refused with
-  "`ccn` could not run". The probes now search `/opt/homebrew/bin`, `/usr/local/bin`, and
+- **The session guard's Orca probes find the binary on a launchd worker's `PATH`
+  and name why a probe failed.** The probes search `/opt/homebrew/bin`, `/usr/local/bin`, and
   `~/.local/bin` after the inherited `PATH`. A missing binary reads "is not installed on the
-  hook's PATH" and a timeout reads "timed out after 2s", where both used to read "could not run".
+  hook's PATH" and a two-second timeout reads "timed out after 2s".
 - **The native prefilter flags `TaskStop`, so the host fails closed.** Go and generated
   Python match the exact tool name before the Bash first-party check. A stop request is
   mandatory under load and fails closed on host or transport failure. The worker names the
@@ -108,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal's process through `orca terminal show` and `orca diagnostics memory`, reads its
   subtree from the process table, and allows the close when nothing below the shell is an agent,
   a protected program, or a `cc-*`/`orca-*` shim. An unreadable table, an unknown terminal, or a
-  process Orca cannot name still denies; `kill` of the bare shell's pid is unchanged.
+  process Orca cannot name needs a grant; `kill` of the bare shell's pid is unchanged.
 - **Adding lines to an over-budget comment blocks again.** The verbose-comment block now covers
   an edit that lengthens a run already over budget; a same-length reword still only warns.
 - **The `git stash` block names a drop it allows.** Its copy resolves the entry's `stash@{N}`
@@ -151,6 +164,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grant declarations can check explicit proposals and mint without a judge.** `Grants.action`
+  is optional when a handler passes a `Proposal` to `check(evt, action)`; attaching a
+  declaration without an action through `hook(..., grants=...)` raises `ValueError`.
+  Without a judge, the first collected evidence item supplies approval. Minting keys on
+  `<key>#<scope json>` and looks across trees through `Grants.grant(..., across_trees=True)`
+  and `store.mint(..., across_trees=True)`, so an approval mints once per kind and canonical
+  scope. Stored grants need a scope match after the usual validity and rule checks.
+  `Asked()` and `OwnerWords()` require a judge. `Evidence.live` makes a source collect
+  evidence again before a stored grant spends, replacing the check specific to cc-notes
+  revisions. `Rulings` and
+  `capt-hook grant import` supply live evidence keyed by `ccn:<answer id>@<updated_at>`.
+  Rulings match whole names: `com.x.helper` cannot approve `com.x`, while a sentence-ending
+  period still counts. `Grants.replay: timedelta`, defaulting to `timedelta.max`, bounds
+  how long an identical scope and payload can reuse a one-use grant's committed spend.
 - **Graphite's presubmit review reminder stays quiet in dispatched lanes.** A whole
   `ccx: role=<value>` line in the session's dispatch prompt skips the reminder because the
   parent owns the review pass. The pack uses `Annotated("raw")` for its raw escapes.

@@ -280,11 +280,18 @@ def ruling_key(answer: dict[str, Any]) -> str:
     return f"ccn:{answer['id']}@{written_at(answer).isoformat()}"
 
 
+def names(body: str, term: str) -> bool:
+    return re.search(rf"(?<![\w.-]){re.escape(term)}(?![\w-]|\.\w)", body) is not None
+
+
 @dataclass(frozen=True, slots=True)
 class Rulings:
     """The owner's durable rulings recorded as cc-notes answers that name the action's *search* term.
 
-    Only answers last written before the acting session started count; each is pinned to that revision.
+    Only answers last written before the acting session started count, and only where the term
+    stands as a whole name: ``term_a`` is not named by ``term_ab``, nor ``com.x`` by ``com.x.helper``.
+    Each item is live and pinned to its revision, so a grant minted from it stops covering anything
+    once the answer is edited.
     """
 
     search: Callable[[Proposal], str]
@@ -302,7 +309,8 @@ class Rulings:
                 said_at=written_at(answer),
                 detail=f"ruling {answer['id'][:7]}: {answer['title']}",
                 key=ruling_key(answer),
+                live=True,
             )
             for answer in ccn_answers(evt, term)
-            if term in answer.get("body", "") and written_at(answer) < cutoff
+            if names(answer.get("body", ""), term) and written_at(answer) < cutoff
         ]

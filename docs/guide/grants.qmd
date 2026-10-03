@@ -91,9 +91,9 @@ anything. The reason and `would_allow` go to the user as `system_message`, prefi
 with `<hook>: `. Other hooks still decide the event, and Claude Code's permission
 flow still applies.
 
-`grants=` requires `block=True` and tool events. Registration raises `ValueError`
-otherwise. Narrow the event with `only_if` and `skip_if`; `action` must return a
-`Proposal`, not `None`.
+`grants=` requires `block=True`, tool events, and a declaration with an `action`
+function. Registration raises `ValueError` otherwise. Narrow the event with
+`only_if` and `skip_if`; `action` must return a `Proposal`, not `None`.
 
 ## Read a grant record
 
@@ -114,9 +114,13 @@ otherwise. Narrow the event with `only_if` and `skip_if`; `action` must return a
 | `links` | Grant ids in other systems, as `dict[str, str]` |
 | `author`, `created`, `revoked` | Who minted it, when, and when it was revoked |
 
-Each evidence record has `id`, `source`, `quote`, `said_at`, `detail`, and `key`.
+Each evidence record has `id`, `source`, `quote`, `said_at`, `detail`, `key`, and `live`.
 The judge cites `id`; minting uses `key`. `quote` holds the owner's words.
 `detail` holds context such as the question and the options shown.
+
+`live` defaults to `False`. Set `live=True` for evidence its source must collect
+again before a stored grant spends. If any live evidence key is missing from the
+new collection, that grant no longer covers the action.
 
 Uses live in separate spend records. Each records its timestamp, state, session,
 agent, tool-use id, payload fingerprint, summary, reason, and cited evidence ids.
@@ -176,6 +180,7 @@ without spending a use, even when the judge allowed the mint.
 ::: {.callout-warning title="A deferred rule needs a judge"}
 Without a `Judge`, a matching stored grant passes unless a rule denies it.
 `ContentMatches` alone does not reject changed content: a mismatch defers.
+Tree, budget, expiry, revocation, and live-evidence checks still apply.
 :::
 
 ## Judge the owner's evidence
@@ -190,7 +195,7 @@ For "send these three replies" the judge sets `standing` to that quote and
 `uses=3`, allowing three uses. `GrantVerdict.uses` is a positive integer or
 `None` when the words set no limit.
 
-The defaults are `model="small"`, `specialty="general"`, and `deadline=20` seconds.
+The defaults are `model="small"`, `specialty="review"`, and `deadline=20` seconds.
 `contexts` accepts the same prompt contexts as other LLM hooks.
 `transcript` and `root_transcript` default to `False`; set either to a message
 count, `"recent"`, or `"full"` when the judge needs more context.
@@ -203,7 +208,13 @@ The evidence providers determine which words can authorize an action:
 |----------|--------------------|
 | `Asked()` | `AskUserQuestion` answers from stored `ask` grants and recent transcript calls |
 | `OwnerWords()` | Typed, pasted, and human-queued owner words; ordinary lane prompts are excluded |
-| `Rulings(search=...)` | cc-notes answers containing the proposal's search term and last written before the acting session started |
+| `Rulings(search=...)` | cc-notes answers naming the proposal's search term as a whole name and last written before the acting session started |
+
+A declaration without a judge treats the first collected evidence item as the
+approval and mints from it. Use sources that already identify an approved action,
+such as `Rulings`. A matching stored grant needs no model judgment once its rules
+and live-evidence checks pass. Declaring `Asked()` or `OwnerWords()` without a
+judge raises `ValueError`: those sources need a judge to interpret the owner's words.
 
 `Asked` preserves every option's label, description, and preview, along with the
 selection, typed answer, and per-question notes. It distinguishes what was shown
@@ -232,11 +243,19 @@ EVIDENCE = (
 )
 ```
 
-`Rulings` reads `updated_at`, falling back to `created_at`. That timestamp must
-be strictly earlier than the first timestamp in the acting session's transcript.
-An answer written or edited during the session does not qualify. Its evidence
-key includes the answer id and timestamp. This guard runs when collecting rulings;
-stored grants do not revalidate the source answer's revision before spending.
+`Rulings` requires the answer's `updated_at` to be strictly earlier than the first
+timestamp in the acting session's transcript. An answer written or edited during
+the session does not qualify. The body must name the search term as a whole name.
+A preceding word character, `.`, or `-` prevents a match, as does a following word
+character, `-`, or `.` followed by a word character. `term_a` does not match
+`term_ab` or `term_a-2`, and `com.x` does not match `com.x.helper`. A sentence-ending
+period after the term still counts.
+
+Its evidence key is `ccn:<answer id>@<updated_at>`, with the timestamp in ISO format.
+A judge-less declaration adds the canonical scope to the grant's `source_key`, so
+one answer naming two terminals mints two grants. Rulings are live evidence, so
+stored grants recheck the answer's revision before spending; editing the answer
+stops its existing grant from covering the action.
 
 Stored `ask` evidence is collected only while its record is unexpired and
 unrevoked. `Asked` also reads recent transcript answers. To stop an already minted
@@ -250,14 +269,17 @@ permission, revoke the grant of the declaration's kind.
    exact scope, newest first.
    Skip revoked, expired, or exhausted grants, except for an eligible identical
    retry. Evaluate the applicable deterministic rules.
-2. Collect the configured evidence. If it includes `ask` or `words` evidence
-   timestamped after the grant's creation, run the judge before spending, even
-   when a rule allowed. Otherwise, a rule's allow skips the judge. Without a
-   rule's allow, the configured judge decides from the grant and evidence.
-3. If no stored candidate covers the call, use the judge and configured evidence
-   to decide whether to mint. A denied verdict returns its reason. An allow
-   mints with the declaration's `mint` budget and `ttl` and stores the proposed
-   payload as `approved`. An empty payload sets `approved=None`.
+2. If the grant has live evidence, collect the configured sources again and skip
+   the grant if any live key is missing. When a judge is configured, collect its
+   evidence too: later `ask` or `words` evidence makes it judge before spending,
+   even when a rule allowed. Otherwise, a rule's allow skips the judge; without
+   one, the configured judge decides. A declaration without a judge accepts the
+   matching grant after these checks.
+3. If no stored candidate covers the call, use the configured evidence to decide
+   whether to mint. A judge decides when present; otherwise, the first collected
+   item supplies approval, and no items means a deny. An allow mints with the
+   declaration's `mint` budget and `ttl` and stores the proposed payload as
+   `approved`. An empty payload sets `approved=None`.
 4. If the allow includes a `standing` quote found in an `ask` or `words` evidence
    item, mint with the verdict's `uses`, `standing_ttl`, and `standing_rules` instead.
    A count allows that many uses; `uses=None` allows unlimited uses.
@@ -267,14 +289,24 @@ permission, revoke the grant of the declaration's kind.
    returns `Denied`; otherwise, reserve a use unless `spent_by` names a downstream
    system that spends it.
 
-Ordinary minting uses the first cited evidence item's key, or its id when the key
-is empty, as `source_key`. Standing minting uses the matching owner's evidence key
-or id. One approval mints once per kind and tree. A later mint from the same words
-returns the same grant with its remaining budget. Concurrent judges share it too.
+With a judge, ordinary minting uses the first cited evidence item's key, or its id
+when the key is empty, as `source_key`. Standing minting uses the matching owner's
+evidence key or id. One approval mints once per kind and tree. A later mint from the
+same words returns the same grant with its remaining budget. Concurrent judges
+share it too.
+
+Without a judge, minting uses `<key>#<scope json>` as `source_key`, with the id in
+place of an empty key and the canonical scope serialized as JSON. It calls
+`Grants.grant(..., across_trees=True)`, which passes the option to `store.mint`.
+The lookup covers every session tree: one approval mints once per kind and scope.
+A second tree reaching for it gets the existing grant and, unless it has adopted
+that grant, a refusal saying the grant covers the scope in another session tree.
+Naming two scopes in one answer permits a separate grant for each.
 
 Ask keys name the tool-use id and question index. Ruling keys name the answer and
-revision. Owner-word keys hash the text, so repeating identical words reuses the
-same key. An allow without a citation to collected evidence cannot mint a grant.
+revision. Owner-word keys hash the text and timestamp, so
+collecting the same message again reuses its key. An allow without a citation to
+collected evidence cannot mint a grant.
 
 Keep `Asked()` and `OwnerWords()` in `evidence` when later owner instructions must
 reach the judge. The stored path sees only evidence from the configured providers
@@ -297,11 +329,17 @@ is unlimited. Expiry and revocation stop all three. `Grants.grant(...)` is the
 Python minting method; its `uses` defaults to `1` and its `ttl` to `None`.
 It does not inherit the declaration's evidence-minting lifetime.
 
-A committed one-use grant can cover repeated retries of the identical scope and
-payload without spending again, including retries with a new tool-use id.
-The fingerprint excludes `summary`, so changing only the summary still counts as
-a retry. Changed payloads need another available use or approval, and expiry and
-revocation still reject an identical retry.
+`Grants.replay` is a `timedelta`, defaulting to `timedelta.max`. A one-use grant
+covers an identical action without a second use only while less than `replay` has
+elapsed since its committed spend. The scope and payload fingerprint must match;
+a new tool-use id is allowed. The fingerprint excludes `summary`, so changing only
+the summary still counts as a retry.
+
+Set `replay=timedelta(minutes=2)` for a two-minute window; retries do not extend it.
+After the window, another approval is needed. Changed payloads need another
+available use or approval, and expiry and
+revocation still reject an identical retry. The store's `retried`, `unusable`,
+`matching`, and `reserve` checks take the replay window too.
 
 The downstream tool must deduplicate the effect. A grant tracks permission;
 it does not make a message send or other write idempotent.
@@ -352,6 +390,12 @@ hold a use for this spend.
 Call `MESSAGE_WRITES.check(evt)` when a handler needs the grant record or remaining
 budget. It returns a truthy `Allowed(grant, remaining, reason)` or a falsey
 `Denied(reason, would_allow)`. `Denied.message` joins the refusal and remediation.
+
+For a hook that checks several calls within one event, pass each `Proposal`
+directly to `check(evt, action)`. The explicit proposal overrides the declaration's
+`action` function. Such a declaration may omit `action`; calling `check(evt)` on
+it without a proposal raises `TypeError`. Attachments through `hook(..., grants=...)`
+still require an `action` function.
 
 As an alternative to the `hook(...)` registration above, keep the declaration and
 register this handler. It blocks check errors and uses the attachment's policy
@@ -422,18 +466,15 @@ uvx capt-hook grant import ANSWER_ID --kind message.write \
 Neither sets an approved payload. A declaration with `ContentMatches` and a
 judge therefore asks the judge about the first use.
 
-The builtin guard checks agent-run Bash calls to `grant add` and `grant import`.
-Both require a declared kind. For `add`, the quote must occur in owner evidence
-in the session tree, with whitespace folded. If the declaration has a judge, it
-also judges the proposed scope and use budget. For `import`, the answer's
-`updated_at`, falling back to `created_at`, must be strictly earlier than the
-acting session's first transcript timestamp. The guard refuses an answer written
-or edited at or after that timestamp.
+Only the owner runs `add` and `import`, from an interactive terminal. The builtin
+guard blocks agent-run Bash calls to both, and the CLI rejects noninteractive
+input. Agents retry the action itself so its hook can collect the owner's evidence.
 
-That guard does not fully validate a mint. For `add`, the judge is optional and
-a larger budget needs no verified standing quote.
-The CLI does not enforce the declaration's exact scope keys or validate
-expiry and tree against the approval. Treat direct CLI minting as an owner action.
+The CLI records the owner's chosen scope, budget, expiry, and tree without judging
+the approval or enforcing a declaration's exact scope keys. Imported cc-notes
+evidence stores the answer's revision with `live=True`, so it keeps the revision
+recheck before spending. Include `Rulings` in the declaration's evidence sources
+to collect that revision again.
 
 Any agent can make a grant from another session tree usable in its own with
 `capt-hook grant adopt <id> [--tree T] [--agent NAME]`. Both trees share the
@@ -458,11 +499,78 @@ uvx capt-hook grant revoke GRANT_ID
 ```
 
 `list` hides spent, expired, and revoked grants unless `--all` is set.
-An exhausted one-use grant can still cover an identical retry even though it is
-absent from the default list. `show` leads with the live status and remaining
-uses, or the reason the grant is unusable. It then prints the record, adoptions,
-and every spend, including reserved, committed, and released uses.
+An exhausted one-use grant can still cover an identical retry within the
+declaration's replay window even though it is absent from the default list.
+`show` leads with the live status and remaining uses, or the reason the grant is
+unusable. It then prints the record, adoptions, and every spend, including reserved,
+committed, and released uses.
 `revoke` prevents future spends and retries.
+
+## Lift a session guard block
+
+The `general` pack declares three kinds without a judge. The budget is one use
+per ruling and scope across all session trees, with a one-day expiry:
+
+| Kind | Scope | Action it can cover |
+|------|-------|---------------------|
+| `sessions.close` | `terminal=<handle>` | `orca terminal close --terminal <handle>` |
+| `sessions.launchctl` | `service=<launchd label>` | `launchctl bootout`, `kickstart`, `disable`, `kill`, `stop`, or `remove` on one service |
+| `sessions.task-stop` | `task=<id>` | `TaskStop`, using `task_id` or the retired `shell_id` |
+
+All three read `Rulings(search=...)` for their scope value. Have the owner name
+it in a cc-notes answer before the acting session starts. Inspect the spend with
+`capt-hook grant show <id>`. All three set `replay=timedelta(minutes=2)`: the same
+scope and payload can reuse a committed spend for less than two minutes. This
+covers the `PermissionRequest` following `PreToolUse` for the same call, or a
+prompt retry. A later identical command needs a new approval.
+
+A grant lifts a terminal close or `launchctl` stop only when the guarded call runs
+once. It must be the first command at top level, and the Bash payload text must
+start with it. Every other command must be a pipe successor, so
+`launchctl kickstart -k system/com.example.orca-serve 2>&1 | tail -3` can qualify.
+Loops, `&&` or `;` chains such as `cd /tmp && launchctl ...`, background `&`,
+`sh -c`, substitutions, and commands respelled through variables keep the block.
+`TaskStop` is a tool call and runs once by construction.
+
+For `launchctl`, spell the command and target literally, without wrappers,
+substitutions, or variables. Service targets are `system/<label>` or
+`<domain>/<id>/<label>`, where the domain is `gui`, `user`, `pid`, or `login`.
+`kill` takes a signal before the target; `stop` and `remove` also accept a bare
+label. No lift covers domain targets such as `gui/501`, the `reboot`, `asuser`,
+`bsexec`, or `unload` verbs, or any other session-guard block.
+
+`sessions.close` also accepts live `CreatedHere` evidence when all checks pass:
+
+- This session's transcript shows `orca terminal create` as the only command in
+  its Bash call. It must use bare `orca` without an environment prefix or
+  substitution. `./orca` and other paths do not qualify. Its JSON output must name
+  `result.terminal.handle`. Alternatively, an `orca-launch.sh <lane> ...` call must
+  output `terminal=<handle>` and have a matching
+  `~/.claude/scratch/orca-launch/*/<lane>.terminal.json` receipt dated by mtime
+  between call start minus one second and result plus one second.
+- `orca orchestration worker-list` names no dispatch for the terminal across any
+  Run, with `ORCA_TERMINAL_HANDLE` unset for the probe.
+- `orca terminal wait --for tui-idle` succeeds within one second; the screen
+  shows Claude's `❯` or Codex's `› Ask Codex to do anything` prompt among its last
+  eight nonblank, non-border lines, with no busy marker. The last spoken line
+  before the prompt must not end in `?`.
+
+Stored grants based on `CreatedHere` recheck this evidence, so a busy terminal
+loses that coverage. An owner ruling is a separate lift and does not require these
+creation and idle checks. A terminal whose process tree has no agent can close
+directly. Name one literal terminal; batches stay blocked. `--tab` requires
+`orca terminal list --include-visual-layouts` to prove the terminal is alone in
+its tab; otherwise, the denial says to drop `--tab`.
+
+The owner can mint one close from a terminal; replace the placeholders:
+
+```bash
+uvx capt-hook grant add --kind sessions.close --scope terminal=TERMINAL_HANDLE \
+  --tree ROOT_SESSION_ID --for 1d --quote 'Close TERMINAL_HANDLE once.'
+```
+
+Denials name the remedy. Grant refusal reasons reach the user in `systemMessage`,
+prefixed with `sessions: `.
 
 ## Test grants inline
 

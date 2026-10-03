@@ -84,13 +84,15 @@ GRANTS_INCOMPLETE = "Retry the call; a grant lifts this block only once its chec
 
 
 def reject_grants_misuse(events: Event, block: bool, grants: Grants | None, max_fires: int | None) -> None:
-    """Reject ``grants`` with no block for a grant to lift, on an event with no tool call, or under a fire cap."""
+    """Reject ``grants`` with no block to lift, off tool events, under a fire cap, or with no action to cover."""
     if grants is not None and max_fires is not None:
         raise ValueError("grants cannot take max_fires: a capped gate would stop checking and let calls through.")
     if grants is not None and not block:
         raise ValueError("grants needs block=True: a grant lifts a block, and a warn has nothing to lift.")
     if grants is not None and events & ~TOOL_EVENTS:
         raise ValueError("grants cover a tool call, so they run only on tool events.")
+    if grants is not None and grants.action is None:
+        raise ValueError("grants needs a declaration with an action: the attachment maps each event to one.")
 
 
 def reject_transcript_events(transcript_events: int | None) -> None:
