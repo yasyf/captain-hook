@@ -1,0 +1,503 @@
+---
+title: "Spendable grants"
+description: "Declare scoped permission, judge the owner's evidence, and reserve uses against a tool call."
+---
+
+A grant records permission that a hook can spend. It names the action's scope,
+the owner's evidence, a use budget, and an expiry. A root session and its agents
+share that budget. Use grants when an approval must survive a retry or reach
+another agent in the same session tree.
+
+## Declare the action that needs permission
+
+Declare a `Grants` instance, then attach it to a blocking tool hook. The `action`
+function receives the event and returns a `Proposal`. Put destination keys in
+`scope` and every field that changes the effect in `payload`.
+
+For a messaging tool named `slack_reply`, assume each call supplies `channel`,
+`thread`, `text`, `verb`, `broadcast`, and `files`. Save this hook in
+`.claude/hooks/message_grants.py`:
+
+```python
+from captain_hook import (
+    Asked,
+    BaseHookEvent,
+    ContentMatches,
+    Event,
+    Grants,
+    Judge,
+    Never,
+    OwnerWords,
+    Proposal,
+    Tool,
+    hook,
+)
+
+
+def message_action(evt: BaseHookEvent) -> Proposal:
+    raw = evt.input.raw
+    return Proposal(
+        scope={"channel": raw["channel"], "thread": raw["thread"]},
+        payload={key: value for key, value in raw.items() if key not in ("channel", "thread")},
+        summary=f"{raw['verb']} in {raw['channel']}/{raw['thread']}",
+    )
+
+
+MESSAGE_WRITES = Grants(
+    "message.write",
+    scope=("channel", "thread"),
+    action=message_action,
+    rules=(
+        ContentMatches(),
+        Never(
+            "no-edit",
+            lambda action: action.payload["verb"] == "edit",
+            "Standing permission does not cover edits. Ask for approval of this edit.",
+        ),
+        Never(
+            "no-broadcast",
+            lambda action: bool(action.payload["broadcast"]),
+            "Standing permission does not cover broadcasts. Ask for approval of this broadcast.",
+        ),
+    ),
+    judge=Judge(
+        "Require the owner's approval for this destination and payload. "
+        "Standing permission covers posts without broadcasts. "
+        "Later owner instructions can narrow or withdraw permission.",
+        model="medium",
+    ),
+    evidence=(Asked(), OwnerWords()),
+    standing_rules=("no-edit", "no-broadcast"),
+    would_allow="Ask the user to approve this destination and the complete payload.",
+    hook="message_writes",
+)
+
+hook(
+    Event.PreToolUse,
+    "This message needs the owner's permission. Ask for approval of the destination and payload.",
+    only_if=[Tool("slack_reply")],
+    block=True,
+    grants=MESSAGE_WRITES,
+)
+```
+
+The grant check runs only after the hook matches and produces a block. An allow
+lifts that hook's block and returns `evt.context(...)` with one sentence:
+``<hook>: allowed by grant `<id>`, N use(s) left.`` The id is in a code span;
+unlimited grants say `unlimited uses` instead of `N use(s) left`.
+
+A deny keeps the hook's own message as the agent-facing block, without appending
+anything. The reason and `would_allow` go to the user as `system_message`, prefixed
+with `<hook>: `. Other hooks still decide the event, and Claude Code's permission
+flow still applies.
+
+`grants=` requires `block=True` and tool events. Registration raises `ValueError`
+otherwise. Narrow the event with `only_if` and `skip_if`; `action` must return a
+`Proposal`, not `None`.
+
+## Read a grant record
+
+`Grants` is the declaration, and `Grant` is the stored permission with these fields:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Stable handle, normally 12 hex characters |
+| `kind` | Declaration that accepts it, such as `message.write` |
+| `tree` | Root session id allowed to spend it |
+| `scope` | Exact destination values as `dict[str, str]` |
+| `approved` | Approved payload as a dictionary, or `None` |
+| `uses` | Total use budget of `1`, another positive integer, or `None` for unlimited |
+| `expires` | Expiry timestamp, or `None` |
+| `rules` | Names of additional rules this grant asserts |
+| `evidence` | Owner evidence records |
+| `source_key` | Approval identity used to reuse an existing grant |
+| `links` | Grant ids in other systems, as `dict[str, str]` |
+| `author`, `created`, `revoked` | Who minted it, when, and when it was revoked |
+
+Each evidence record has `id`, `source`, `quote`, `said_at`, `detail`, and `key`.
+The judge cites `id`; minting uses `key`. `quote` holds the owner's words.
+`detail` holds context such as the question and the options shown.
+
+Uses live in separate spend records. Each records its timestamp, state, session,
+agent, tool-use id, payload fingerprint, summary, reason, and cited evidence ids.
+`uses` stays fixed; the store computes the remaining budget from these records.
+
+## Choose exact scope keys
+
+Every proposal must carry exactly the keys in `Grants.scope`. Missing or extra
+keys raise `ValueError`. `Grants.grant(...)` applies the same check when minting
+through the declaration. Matching requires equality of the whole scope.
+
+For the messaging declaration, `{"channel": "C_EXAMPLE", "thread": ""}` means
+a top-level post. It does not cover a reply. An omitted `thread` is an error,
+and an empty string is not a wildcard. Normalize identifiers in `action` before
+constructing the proposal; scope matching does not resolve aliases.
+
+Tree binding is separate from scope. The framework uses `evt.ctx.root_path.stem`
+when a spawning session is known, otherwise `evt.session_id`. A lane can spend
+its root's grant from another process. An unrelated root cannot select it.
+
+The shared store lives at `~/.claude/state/hooks/grants.db`. Set
+`CAPTAIN_HOOK_STATE_DIR` to move its state root, as with [other hook state](state.qmd).
+Sharing the database does not remove the tree boundary.
+
+## Apply deterministic rules
+
+Rules run against each stored candidate before the judge. A `deny` rejects that
+candidate and takes precedence over an allow from another rule. An `allow` can
+avoid the model call, while a `defer` leaves the decision to the judge.
+
+`ContentMatches()` compares the whole payload with `Grant.approved`. Text fields
+default to `("text",)` and use `equivalent=str.__eq__`; other fields use equality.
+An exact match allows; a difference defers with a word diff for text. With no
+approved payload, it defers. Include files, broadcast flags, and the operation
+verb in the payload so changing them reaches the check.
+
+If your tool renders mentions differently from its preview, pass your comparator
+as `ContentMatches(equivalent=...)`. Set `text=("content",)` for a payload whose
+text field is named `content`.
+
+`Never(name, test, message)` denies when `test(proposal)` is true. It defaults to
+`always=False`, so it runs only for grants whose `rules` list names it. Pass
+`always=True` to apply it to every grant. `ContentMatches` defaults to
+`always=True`.
+
+`standing_rules` supplies rule names when evidence mints an unlimited grant.
+In the example, standing grants assert `no-edit` and `no-broadcast`; a one-use
+approval can cover an explicit edit or broadcast. A name activates a rule already
+present in the declaration. It does not define a new rule.
+
+Before spending a grant minted from evidence, the declaration runs every
+`always=True` rule and every rule the grant names. A `deny` returns `Denied`
+without spending a use, even when the judge allowed the mint.
+
+::: {.callout-warning title="A deferred rule needs a judge"}
+Without a `Judge`, a matching stored grant passes unless a rule denies it.
+`ContentMatches` alone does not reject changed content: a mismatch defers.
+:::
+
+## Judge the owner's evidence
+
+`Judge` receives the proposal, the evaluated rules, and the evidence. For a
+stored grant, it also receives that grant's evidence and the owner's later words.
+Its result has `allow`, `reason`, `relied_on`, and optional `standing` fields.
+`relied_on` names evidence ids. `standing` is a quote string.
+
+The defaults are `model="small"`, `specialty="general"`, and `deadline=20` seconds.
+`contexts` accepts the same prompt contexts as other LLM hooks.
+`transcript` and `root_transcript` default to `False`; set either to a message
+count, `"recent"`, or `"full"` when the judge needs more context.
+`root_excerpt` maps an event to search needles in the root transcript.
+`tool_results=False` keeps tool output out of those windows by default.
+
+The evidence providers determine which words can authorize an action:
+
+| Provider | Collected evidence |
+|----------|--------------------|
+| `Asked()` | `AskUserQuestion` answers from stored `ask` grants and recent transcript calls |
+| `OwnerWords()` | Typed, pasted, and human-queued owner words; ordinary lane prompts are excluded |
+| `Rulings(search=...)` | cc-notes answers containing the proposal's search term and last written before the acting session started |
+
+`Asked` preserves every option's label, description, and preview, along with the
+selection, typed answer, and per-question notes. It distinguishes what was shown
+from what was chosen. The builtin `general` pack records answers on
+`PostToolUse(AskUserQuestion)` as tree-bound `ask` grants with one use and a
+24-hour expiry. These are evidence records; the declaration mints its own kind
+after the judge allows.
+
+`Asked` and `OwnerWords` default to a window of 60 and accept a `needles` callback
+to include root-session excerpts farther back. Set
+`needles=lambda evt: ("C_EXAMPLE",)` to search for that channel id.
+`OwnerWords(machine=("<machine-message>",))` excludes prompts containing that marker.
+Tool output, teammate messages, and notifications are not owner evidence.
+Use `machine` for machine-written content delivered through ordinary prompt text.
+
+To add durable rulings to the declaration, replace its `evidence` value with this
+tuple and import `Rulings`:
+
+```python
+from captain_hook import Asked, OwnerWords, Rulings
+
+EVIDENCE = (
+    Asked(),
+    OwnerWords(),
+    Rulings(search=lambda action: action.scope["channel"]),
+)
+```
+
+`Rulings` reads `updated_at`, falling back to `created_at`. That timestamp must
+be strictly earlier than the first timestamp in the acting session's transcript.
+An answer written or edited during the session does not qualify. Its evidence
+key includes the answer id and timestamp. This guard runs when collecting rulings;
+stored grants do not revalidate the source answer's revision before spending.
+
+Stored `ask` evidence is collected only while its record is unexpired and
+unrevoked. `Asked` also reads recent transcript answers. To stop an already minted
+permission, revoke the grant of the declaration's kind.
+
+## Follow the check order
+
+`Grants.check(evt)` stops at the first allow:
+
+1. Read stored grants of this kind and tree with the exact scope, newest first.
+   Skip revoked, expired, or exhausted grants, except for an eligible identical
+   retry. Evaluate the applicable deterministic rules.
+2. Collect the configured evidence. If it includes `ask` or `words` evidence
+   timestamped after the grant's creation, run the judge before spending, even
+   when a rule allowed. Otherwise, a rule's allow skips the judge. Without a
+   rule's allow, the configured judge decides from the grant and evidence.
+3. If no stored candidate covers the call, use the judge and configured evidence
+   to decide whether to mint. A denied verdict returns its reason. An allow
+   mints with the declaration's `mint` budget and `ttl` and stores the proposed
+   payload as `approved`. An empty payload sets `approved=None`.
+4. If the allow includes a `standing` quote found in an `ask` or `words` evidence
+   item, mint with `uses=None`, `standing_ttl`, and `standing_rules` instead.
+   The quote must be a verbatim substring after folding whitespace. An unverified
+   standing quote leaves the ordinary `mint` budget in place.
+5. Run the declaration's applicable rules against the minted grant. A `deny`
+   returns `Denied`; otherwise, reserve a use.
+
+Ordinary minting uses the first cited evidence item with a nonempty key as its
+`source_key`. Standing minting uses `standing:` plus the matching owner's evidence
+key. The store reuses a grant for the same kind, tree, and source key. Concurrent
+judges therefore share that grant's budget.
+
+Ask keys name the tool-use id and question index. Ruling keys name the answer and
+revision. Owner-word keys hash the text, so repeating identical words reuses the
+same key. An allow may omit evidence citations. When no cited item has a key,
+ordinary minting uses `action:` plus the action fingerprint as `source_key`.
+
+Keep `Asked()` and `OwnerWords()` in `evidence` when later owner instructions must
+reach the judge. The stored path sees only evidence from the configured providers
+and their windows. Interpreting withdrawals requires a judge.
+
+Standing grants minted from evidence have no approved payload. With a judge and
+only the example's rules, later writes still call the judge: `ContentMatches`
+defers, and `Never` never returns an allow.
+
+## Set budgets, expiry, and retry behavior
+
+`mint=1` and `ttl=timedelta(days=1)` are the defaults for ordinary evidence mints.
+Set `mint` to a positive integer for a larger budget, or `ttl=None` for no expiry.
+A verified standing quote produces unlimited uses. `standing_ttl=None` is its
+default lifetime; set a `timedelta` to bound it.
+
+On a `Grant`, `uses=1` means one use, `uses=N` allows N uses, and `uses=None`
+is unlimited. Expiry and revocation stop all three. `Grants.grant(...)` is the
+Python minting method; its `uses` defaults to `1` and its `ttl` to `None`.
+It does not inherit the declaration's evidence-minting lifetime.
+
+A committed one-use grant can cover repeated retries of the identical scope and
+payload without spending again, including retries with a new tool-use id.
+The fingerprint excludes `summary`, so changing only the summary still counts as
+a retry. Changed payloads need another available use or approval, and expiry and
+revocation still reject an identical retry.
+
+The downstream tool must deduplicate the effect. A grant tracks permission;
+it does not make a message send or other write idempotent.
+
+## Settle uses with the event
+
+During dispatch, a successful check reserves a use. Reserved uses count against
+the budget, and the store serializes reservations so two racing calls cannot
+both reserve the last use.
+
+The dispatcher commits reservations when the event's final verdict allows.
+If any hook denies, it releases them. A failure after the tool starts does not
+refund a committed use. Unsettled reservations stop counting after two minutes.
+
+Outside dispatch's reservation context, `check(evt)` commits immediately.
+Use the dispatcher when testing a sequence whose final verdict can release a use.
+
+## Handle a verdict in your own hook
+
+Call `MESSAGE_WRITES.check(evt)` when a handler needs the grant record or remaining
+budget. It returns a truthy `Allowed(grant, remaining, reason)` or a falsey
+`Denied(reason, would_allow)`. `Denied.message` joins the refusal and remediation.
+
+As an alternative to the `hook(...)` registration above, keep the declaration and
+register this handler. It blocks check errors and uses the attachment's policy
+for incomplete checks:
+
+```python
+from captain_hook import BaseHookEvent, Event, HookResult, Tool, on
+from captain_hook.app import GRANTS_INCOMPLETE
+from captain_hook.grants import Allowed
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("slack_reply")],
+    skip_planning_agents=False,
+    on_incomplete=GRANTS_INCOMPLETE,
+)
+def message_writes(evt: BaseHookEvent) -> HookResult:
+    try:
+        verdict = MESSAGE_WRITES.check(evt)
+    except Exception:
+        return evt.block("The grant check failed. Retry after fixing the check.")
+    if isinstance(verdict, Allowed):
+        return evt.context(f"Allowed by grant `{verdict.grant.id}`.")
+    return evt.block(verdict.message)
+```
+
+The `grants=` attachment already converts store, parse, evidence, and judge errors
+inside its check to a block. Judge timeouts, backend failures, and invalid results
+deny permission. A raw `check` can raise other errors; letting them escape an
+ordinary handler can leave only a logged failure and no block.
+
+`hook(..., grants=...)` sets `on_incomplete` to `captain_hook.app.GRANTS_INCOMPLETE`.
+An abandoned or incomplete check blocks. The handler form above sets the same
+policy explicitly.
+
+## Manage grants from the CLI
+
+`capt-hook grant` provides `add`, `import`, `list`, `show`, and `revoke`.
+Run the examples through `uvx capt-hook`, like other commands in these guides.
+Replace `ROOT_SESSION_ID` with the intended root session id.
+
+Record one approved message with a 30-minute lifetime:
+
+```bash
+uvx capt-hook grant add --kind message.write \
+  --scope channel=C_EXAMPLE --scope thread=1.2 \
+  --tree ROOT_SESSION_ID --uses 1 --for 30m \
+  --quote 'Post the reviewed update in this thread.'
+```
+
+Use `--uses N` for a finite budget or `--unlimited` for a standing grant.
+`--for` accepts durations such as `30m`, `8h`, or `7d`; omitting it sets no expiry.
+Repeat `--rule` to assert declared rule names; `--uses` defaults to `1`.
+When `--tree` is absent, the CLI reads `CLAUDE_CODE_SESSION_ID`, then `CLAUDE_SESSION_ID`.
+Pass the root id explicitly when running from a lane.
+
+Import a cc-notes answer using the same scope, budget, lifetime, rule, and tree
+options. Replace `ANSWER_ID` with an existing answer id:
+
+```bash
+uvx capt-hook grant import ANSWER_ID --kind message.write \
+  --scope channel=C_EXAMPLE --scope thread=1.2 \
+  --tree ROOT_SESSION_ID --uses 1 --for 8h
+```
+
+`add` stores the quote; `import` stores the answer body and a revision key.
+Neither sets an approved payload. A declaration with `ContentMatches` and a
+judge therefore asks the judge about the first use.
+
+The builtin guard checks agent-run Bash calls to `grant add` and `grant import`.
+Both require a declared kind. For `add`, the quote must occur in owner evidence
+in the session tree, with whitespace folded. If the declaration has a judge, it
+also judges the proposed scope and use budget. For `import`, the answer's
+`updated_at`, falling back to `created_at`, must be strictly earlier than the
+acting session's first transcript timestamp. The guard refuses an answer written
+or edited at or after that timestamp.
+
+That guard does not fully validate a mint. For `add`, the judge is optional and
+a larger budget needs no verified standing quote.
+The CLI does not enforce the declaration's exact scope keys or validate
+expiry and tree against the approval. Treat direct CLI minting as an owner action.
+
+Inspect and revoke a grant with its printed id in place of `GRANT_ID`:
+
+```bash
+uvx capt-hook grant list --kind message.write --tree ROOT_SESSION_ID
+uvx capt-hook grant list --all
+uvx capt-hook grant show GRANT_ID
+uvx capt-hook grant revoke GRANT_ID
+```
+
+`list` hides spent, expired, and revoked grants unless `--all` is set.
+An exhausted one-use grant can still cover an identical retry even though it is
+absent from the default list. `show` prints the record and every spend, including
+reserved, committed, and released uses. `revoke` prevents future spends and retries.
+
+## Test grants inline
+
+Seed a real grant store with `Input(grants=[...])`. Each test starts with an empty,
+isolated store, then loads its own seeds. Match the input's `session_id` to the
+grant's `tree`. The model stub defaults to `allow=False`; use `llm` to exercise
+an allow, its reason, cited evidence, or a `standing` quote.
+
+This complete hook tests a report write with no grant, an exact approved payload,
+a rejected change, and a change the judge allows. Save it in
+`.claude/hooks/report_grants.py`:
+
+```python
+from datetime import UTC, datetime
+
+from captain_hook import (
+    BaseHookEvent, Block, ContentMatches, Event, Grant, Grants, Input,
+    Judge, Proposal, Tool, Warn, hook,
+)
+from captain_hook.grants import Evidence
+
+
+def report_action(evt: BaseHookEvent) -> Proposal:
+    raw = evt.input.raw
+    return Proposal(
+        scope={"path": raw["file_path"]},
+        payload={"content": raw["content"]},
+        summary=f"write {raw['file_path']}",
+    )
+
+
+REPORT_WRITES = Grants(
+    "report.write",
+    scope=("path",),
+    action=report_action,
+    rules=(ContentMatches(text=("content",)),),
+    judge=Judge("Require the owner's approval for this report's content."),
+)
+APPROVED = Grant(
+    id="0123456789ab",
+    kind="report.write",
+    tree="example-root",
+    scope={"path": "/tmp/report.txt"},
+    approved={"content": "Reviewed report"},
+    evidence=[Evidence(id="words:review", source="words", quote="Write the reviewed report.")],
+    author="test",
+    created=datetime(2026, 1, 1, tzinfo=UTC),
+)
+
+hook(
+    Event.PreToolUse,
+    "Report writes need permission. Ask the user to approve the report.",
+    only_if=[Tool("Write")],
+    block=True,
+    grants=REPORT_WRITES,
+    tests={
+        Input(file="/tmp/report.txt", content="Reviewed report", session_id="example-root"): Block(),
+        Input(
+            file="/tmp/report.txt", content="Reviewed report",
+            session_id="example-root", grants=[APPROVED],
+        ): Warn(pattern="allowed by grant `0123456789ab`, 0 use"),
+        Input(
+            file="/tmp/report.txt", content="Changed report",
+            session_id="example-root", grants=[APPROVED],
+        ): Block(pattern="Report writes need permission", system_message="inline test stub"),
+        Input(
+            file="/tmp/report.txt", content="Changed report",
+            session_id="example-root", grants=[APPROVED],
+            llm={"allow": True, "reason": "The owner approved the revision.", "relied_on": ["words:review"]},
+        ): Warn(pattern="allowed by grant `0123456789ab`"),
+    },
+)
+```
+
+Run the inline tests:
+
+```bash
+uvx capt-hook test
+```
+
+An attached grant's allow returns a context note, so its inline expectation is
+`Warn`, even though the hook lifts its block. A `standing` override only produces
+an unlimited mint when an evidence provider supplies the matching owner words.
+Inline stubs test the declaration and verdict handling. They do not test whether
+the model interprets permission correctly.
+
+## See also
+
+[Writing hooks](primitives.qmd) covers conditions and blocking hooks.
+For prompt contexts and model calls, see [LLM hooks](llm-hooks.qmd).
+[Test hooks inline](testing.qmd) covers transcript fixtures and stubbed commands.

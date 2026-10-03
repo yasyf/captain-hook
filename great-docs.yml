@@ -96,6 +96,15 @@ reference:
       - llm_nudge
       - prompt_check
       - Confirm
+      - Grants
+      - Judge
+      - Proposal
+      - Grant
+      - Asked
+      - OwnerWords
+      - Rulings
+      - ContentMatches
+      - Never
       - approve
       - deny
       - llm_approve
