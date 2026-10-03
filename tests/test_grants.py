@@ -524,3 +524,10 @@ def test_linking_keeps_a_concurrent_revocation(tmp_path: Path) -> None:
     store.revoke(grant.id)
     linked = store.link(grant.id, "cc-slack", "daemon-1")
     assert linked.revoked is not None and linked.links == {"cc-slack": "daemon-1"}
+
+
+def test_the_judge_runs_on_luna_at_low_effort() -> None:
+    from spawnllm import LlmBackends
+
+    judge = Judge("rules")
+    assert LlmBackends.for_specialty(judge.specialty).resolve_model(judge.model) == "gpt-6-luna:low"
