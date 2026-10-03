@@ -29,7 +29,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript[judge]==14.34.0",
+    "cc-transcript[judge]==14.36.0",
     "pydantic>=2.0",
     "jsonschema>=4.26",
     "pydantic-settings>=2.0",
@@ -83,7 +83,7 @@ build-backend = "hatchling.build"
 environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
 
 [tool.uv.sources]
-great-docs = { git = "https://github.com/yasyf/great-docs", rev = "2a9315baf34a4c90f3512a2199215fe1b8755ff4" }
+great-docs = { git = "https://github.com/yasyf/great-docs", rev = "36961d6dcf5bc485627ea11b80a6f6de9cca47e0" }
 
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"
