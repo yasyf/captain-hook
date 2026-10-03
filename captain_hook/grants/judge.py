@@ -33,7 +33,9 @@ FRAME = """
     refused. Set withdrawn when the owner's words in <owner_since_grant> withdraw or narrow the recorded
     grant so that it no longer covers actions like this one. Set standing to the owner's
     exact words, copied verbatim from one evidence item, only when those words permit more than this
-    one action (for example "reply in that thread without asking"); otherwise leave it empty.
+    one action (for example "reply in that thread without asking"); otherwise leave it empty. When
+    those words name how many such actions they permit ("send these three replies"), also set uses
+    to that number; leave uses empty when they set no limit.
     Reason first, quoting the owner words you relied on, then set allow.
 """
 
@@ -45,6 +47,7 @@ class GrantVerdict(BaseModel):
     allow: bool
     relied_on: list[str] = Field(default_factory=list[str])
     standing: str | None = None
+    uses: int | None = Field(default=None, ge=1)
     withdrawn: bool = False
 
 

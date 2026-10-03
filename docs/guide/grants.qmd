@@ -6,7 +6,7 @@ description: "Declare scoped permission, judge the owner's evidence, and reserve
 A grant records permission that a hook can spend. It names the action's scope,
 the owner's evidence, a use budget, and an expiry. A root session and its agents
 share that budget. Use grants when an approval must survive a retry or reach
-another agent in the same session tree.
+another agent or session tree.
 
 ## Declare the action that needs permission
 
@@ -103,7 +103,7 @@ otherwise. Narrow the event with `only_if` and `skip_if`; `action` must return a
 |-------|---------|
 | `id` | Stable handle, normally 12 hex characters |
 | `kind` | Declaration that accepts it, such as `message.write` |
-| `tree` | Root session id allowed to spend it |
+| `tree` | Root session id where it was minted; other trees can adopt it |
 | `scope` | Exact destination values as `dict[str, str]` |
 | `approved` | Approved payload as a dictionary, or `None` |
 | `uses` | Total use budget of `1`, another positive integer, or `None` for unlimited |
@@ -135,7 +135,8 @@ constructing the proposal; scope matching does not resolve aliases.
 
 Tree binding is separate from scope. The framework uses `evt.ctx.root_path.stem`
 when a spawning session is known, otherwise `evt.session_id`. A lane can spend
-its root's grant from another process. An unrelated root cannot select it.
+its root's grant from another process. Another root must adopt the grant before
+selecting it. Both trees then spend from the same budget.
 
 The shared store lives at `~/.claude/state/hooks/grants.db`. Set
 `CAPTAIN_HOOK_STATE_DIR` to move its state root, as with [other hook state](state.qmd).
@@ -162,7 +163,8 @@ text field is named `content`.
 `always=True` to apply it to every grant. `ContentMatches` defaults to
 `always=True`.
 
-`standing_rules` supplies rule names when evidence mints an unlimited grant.
+`standing_rules` supplies rule names when evidence mints a standing grant,
+including one with a finite budget.
 In the example, standing grants assert `no-edit` and `no-broadcast`; a one-use
 approval can cover an explicit edit or broadcast. A name activates a rule already
 present in the declaration. It does not define a new rule.
@@ -180,8 +182,13 @@ Without a `Judge`, a matching stored grant passes unless a rule denies it.
 
 `Judge` receives the proposal, the evaluated rules, and the evidence. For a
 stored grant, it also receives that grant's evidence and the owner's later words.
-Its result has `allow`, `reason`, `relied_on`, and optional `standing` fields.
-`relied_on` names evidence ids. `standing` is a quote string.
+Its `GrantVerdict` has `allow`, `reason`, `relied_on`, and optional `standing` and
+`uses` fields. `relied_on` names evidence ids.
+
+`standing` holds the owner's verbatim quote permitting more than one action.
+For "send these three replies" the judge sets `standing` to that quote and
+`uses=3`, allowing three uses. `GrantVerdict.uses` is a positive integer or
+`None` when the words set no limit.
 
 The defaults are `model="small"`, `specialty="general"`, and `deadline=20` seconds.
 `contexts` accepts the same prompt contexts as other LLM hooks.
@@ -239,7 +246,8 @@ permission, revoke the grant of the declaration's kind.
 
 `Grants.check(evt)` stops at the first allow:
 
-1. Read stored grants of this kind and tree with the exact scope, newest first.
+1. Read stored grants of this kind minted in or adopted into this tree with the
+   exact scope, newest first.
    Skip revoked, expired, or exhausted grants, except for an eligible identical
    retry. Evaluate the applicable deterministic rules.
 2. Collect the configured evidence. If it includes `ask` or `words` evidence
@@ -251,21 +259,22 @@ permission, revoke the grant of the declaration's kind.
    mints with the declaration's `mint` budget and `ttl` and stores the proposed
    payload as `approved`. An empty payload sets `approved=None`.
 4. If the allow includes a `standing` quote found in an `ask` or `words` evidence
-   item, mint with `uses=None`, `standing_ttl`, and `standing_rules` instead.
+   item, mint with the verdict's `uses`, `standing_ttl`, and `standing_rules` instead.
+   A count allows that many uses; `uses=None` allows unlimited uses.
    The quote must be a verbatim substring after folding whitespace. An unverified
    standing quote leaves the ordinary `mint` budget in place.
 5. Run the declaration's applicable rules against the minted grant. A `deny`
-   returns `Denied`; otherwise, reserve a use.
+   returns `Denied`; otherwise, reserve a use unless `spent_by` names a downstream
+   system that spends it.
 
-Ordinary minting uses the first cited evidence item with a nonempty key as its
-`source_key`. Standing minting uses `standing:` plus the matching owner's evidence
-key. The store reuses a grant for the same kind, tree, and source key. Concurrent
-judges therefore share that grant's budget.
+Ordinary minting uses the first cited evidence item's key, or its id when the key
+is empty, as `source_key`. Standing minting uses the matching owner's evidence key
+or id. One approval mints once per kind and tree. A later mint from the same words
+returns the same grant with its remaining budget. Concurrent judges share it too.
 
 Ask keys name the tool-use id and question index. Ruling keys name the answer and
 revision. Owner-word keys hash the text, so repeating identical words reuses the
-same key. An allow may omit evidence citations. When no cited item has a key,
-ordinary minting uses `action:` plus the action fingerprint as `source_key`.
+same key. An allow without a citation to collected evidence cannot mint a grant.
 
 Keep `Asked()` and `OwnerWords()` in `evidence` when later owner instructions must
 reach the judge. The stored path sees only evidence from the configured providers
@@ -279,8 +288,9 @@ defers, and `Never` never returns an allow.
 
 `mint=1` and `ttl=timedelta(days=1)` are the defaults for ordinary evidence mints.
 Set `mint` to a positive integer for a larger budget, or `ttl=None` for no expiry.
-A verified standing quote produces unlimited uses. `standing_ttl=None` is its
-default lifetime; set a `timedelta` to bound it.
+A verified standing quote uses the judge's count, or unlimited uses when the
+quote sets no limit. `standing_ttl=None` is its default lifetime; set a
+`timedelta` to bound it.
 
 On a `Grant`, `uses=1` means one use, `uses=N` allows N uses, and `uses=None`
 is unlimited. Expiry and revocation stop all three. `Grants.grant(...)` is the
@@ -298,9 +308,9 @@ it does not make a message send or other write idempotent.
 
 ## Settle uses with the event
 
-During dispatch, a successful check reserves a use. Reserved uses count against
-the budget, and the store serializes reservations so two racing calls cannot
-both reserve the last use.
+By default, a successful check during dispatch reserves a use. Reserved uses
+count against the budget, and the store serializes reservations so two racing
+calls cannot both reserve the last use.
 
 The dispatcher commits reservations when the event's final verdict allows.
 If any hook denies, it releases them. A failure after the tool starts does not
@@ -308,6 +318,34 @@ refund a committed use. Unsettled reservations stop counting after two minutes.
 
 Outside dispatch's reservation context, `check(evt)` commits immediately.
 Use the dispatcher when testing a sequence whose final verdict can release a use.
+
+## Let a downstream system spend
+
+Set `spent_by="cc-slack"` in the `Grants(...)` declaration when the `cc-slack`
+daemon spends the grant. The hook names the covering grant and reports its
+remaining budget without reserving a use. The downstream system must spend it
+before performing the action.
+
+Run `capt-hook grant spend` with the grant id, exact scope, and call details.
+Replace the uppercase placeholders with the grant, tree, session, call id, and
+payload digest for the action:
+
+```bash
+uvx capt-hook grant spend GRANT_ID \
+  --scope channel=C_EXAMPLE --scope thread=1.2 \
+  --tree ROOT_SESSION_ID --session SESSION_ID --agent sender \
+  --call TOOL_USE_ID --fingerprint PAYLOAD_DIGEST \
+  --summary 'Reply in C_EXAMPLE/1.2'
+```
+
+Repeat `--scope` for each scope key. All shown options are required except
+`--agent`, which defaults to `main`. `--fingerprint` is the action's payload
+digest; a retry repeats it.
+
+The CLI atomically commits a use and prints JSON with `grant` and `remaining`
+fields. `remaining` is `null` for an unlimited budget. If the grant cannot cover
+the action, it exits non-zero with the reason. A hook's earlier allow does not
+hold a use for this spend.
 
 ## Handle a verdict in your own hook
 
@@ -352,7 +390,7 @@ policy explicitly.
 
 ## Manage grants from the CLI
 
-`capt-hook grant` provides `add`, `import`, `list`, `show`, and `revoke`.
+`capt-hook grant` provides `add`, `import`, `adopt`, `spend`, `list`, `show`, and `revoke`.
 Run the examples through `uvx capt-hook`, like other commands in these guides.
 Replace `ROOT_SESSION_ID` with the intended root session id.
 
@@ -397,6 +435,19 @@ a larger budget needs no verified standing quote.
 The CLI does not enforce the declaration's exact scope keys or validate
 expiry and tree against the approval. Treat direct CLI minting as an owner action.
 
+Any agent can make a grant from another session tree usable in its own with
+`capt-hook grant adopt <id> [--tree T] [--agent NAME]`. Both trees share the
+grant's budget. Adopt a grant using its printed id:
+
+```bash
+uvx capt-hook grant adopt GRANT_ID --tree ROOT_SESSION_ID --agent sender
+```
+
+Omit `--tree` to adopt into the current session; `--agent` defaults to `main`.
+The CLI reads the adopting session from the session environment variables even
+when `--tree` is explicit. `grant show` logs each adoption with its destination
+tree, timestamp, session, and agent.
+
 Inspect and revoke a grant with its printed id in place of `GRANT_ID`:
 
 ```bash
@@ -408,8 +459,10 @@ uvx capt-hook grant revoke GRANT_ID
 
 `list` hides spent, expired, and revoked grants unless `--all` is set.
 An exhausted one-use grant can still cover an identical retry even though it is
-absent from the default list. `show` prints the record and every spend, including
-reserved, committed, and released uses. `revoke` prevents future spends and retries.
+absent from the default list. `show` leads with the live status and remaining
+uses, or the reason the grant is unusable. It then prints the record, adoptions,
+and every spend, including reserved, committed, and released uses.
+`revoke` prevents future spends and retries.
 
 ## Test grants inline
 
@@ -491,8 +544,9 @@ uvx capt-hook test
 ```
 
 An attached grant's allow returns a context note, so its inline expectation is
-`Warn`, even though the hook lifts its block. A `standing` override only produces
-an unlimited mint when an evidence provider supplies the matching owner words.
+`Warn`, even though the hook lifts its block. A `standing` override needs matching
+owner words from an evidence provider. Include `uses` in
+the `llm` override for a counted grant; leaving it unset allows unlimited uses.
 Inline stubs test the declaration and verdict handling. They do not test whether
 the model interprets permission correctly.
 
