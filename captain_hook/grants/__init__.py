@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from captain_hook.grants.declare import Grants, reservations, settle
-from captain_hook.grants.evidence import Asked, EvidenceSource, OwnerWords, Rulings, tree_of, verbatim
+from captain_hook.grants.evidence import (
+    Asked,
+    EvidenceSource,
+    OwnerWords,
+    Rulings,
+    StandingRulings,
+    tree_of,
+    verbatim,
+)
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
 from captain_hook.grants.records import Allowed, Denied, Evidence, Grant, Proposal, Spend
 from captain_hook.grants.rules import ContentMatches, Never, Rule, Ruling, word_diff
@@ -27,6 +35,7 @@ __all__ = [
     "Ruling",
     "Rulings",
     "Spend",
+    "StandingRulings",
     "reservations",
     "settle",
     "tree_of",

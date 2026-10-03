@@ -508,21 +508,25 @@ committed, and released uses.
 
 ## Lift a session guard block
 
-The `general` pack declares three kinds without a judge. The budget is one use
-per ruling and scope across all session trees, with a one-day expiry:
+The `general` pack declares four session grant kinds:
 
 | Kind | Scope | Action it can cover |
 |------|-------|---------------------|
 | `sessions.close` | `terminal=<handle>` | `orca terminal close --terminal <handle>` |
 | `sessions.launchctl` | `service=<launchd label>` | `launchctl bootout`, `kickstart`, `disable`, `kill`, `stop`, or `remove` on one service |
 | `sessions.task-stop` | `task=<id>` | `TaskStop`, using `task_id` or the retired `shell_id` |
+| `sessions.close-settled` | Empty | `orca terminal close --terminal <handle>` for an idle, settled dispatch |
 
-All three read `Rulings(search=...)` for their scope value. Have the owner name
-it in a cc-notes answer before the acting session starts. Inspect the spend with
-`capt-hook grant show <id>`. All three set `replay=timedelta(minutes=2)`: the same
+The first three have no judge. Their budget is one use per evidence item and
+scope across all session trees, with a one-day expiry. They read
+`Rulings(search=...)` for their scope value. Have the owner name it in a cc-notes
+answer before the acting session starts. Inspect the spend with
+`capt-hook grant show <id>`.
+
+All three set `replay=timedelta(minutes=2)`: the same
 scope and payload can reuse a committed spend for less than two minutes. This
 covers the `PermissionRequest` following `PreToolUse` for the same call, or a
-prompt retry. A later identical command needs a new approval.
+prompt retry. A later identical command needs new evidence.
 
 A grant lifts a terminal close or `launchctl` stop only when the guarded call runs
 once. It must be the first command at top level, and the Bash payload text must
@@ -538,6 +542,15 @@ substitutions, or variables. Service targets are `system/<label>` or
 `kill` takes a signal before the target; `stop` and `remove` also accept a bare
 label. No lift covers domain targets such as `gui/501`, the `reboot`, `asuser`,
 `bsexec`, or `unload` verbs, or any other session-guard block.
+
+`sessions.task-stop` also accepts live `OwnTeammate` evidence. The task id must
+match `<name>@session-<8 hex>`, and this agent's own transcript must record an
+`Agent` or `Task` call with `toolUseResult.status` equal to `teammate_spawned` and
+that exact `toolUseResult.teammate_id`. A matching spawn grants one deterministic
+use, recorded as a spend. The team id comes from the Claude process's session id
+at spawn; after a resume it can differ from the hook payload's session id. Bare
+ids and teammates absent from this agent's transcript do not qualify for this
+lift. A lane cannot use its sibling's or root's spawn record.
 
 `sessions.close` also accepts live `CreatedHere` evidence when all checks pass:
 
@@ -561,6 +574,35 @@ creation and idle checks. A terminal whose process tree has no agent can close
 directly. Name one literal terminal; batches stay blocked. `--tab` requires
 `orca terminal list --include-visual-layouts` to prove the terminal is alone in
 its tab; otherwise, the denial says to drop `--tab`.
+
+After `sessions.close` denies, `sessions.close-settled` can lift a close when the
+terminal's process tree is readable, `orca orchestration worker-list` records its
+`dispatchStatus` as `completed` or `failed`, and it passes the idle checks above.
+The caller must be the root session coordinating the dispatch's Run. The hook
+event has no `agent_id`, and the request's `ORCA_TERMINAL_HANDLE` is set and matches
+`result.run.coordinator_handle` from
+`orca orchestration run-show --id <runId> --json`, using the worker row's `runId`.
+Other terminal lanes, in-process teammates, callers outside Orca, and another
+Run's coordinator get no lift.
+
+The grants `Judge` uses capt-hook's small model to decide whether a standing owner
+ruling covers the terminal's Orca record. The proposal's payload names the Run;
+its summary identifies the caller as the Run's coordinator. After the judge
+allows, the guard re-reads the worker row and idle prompt. The same dispatch must
+still hold the terminal as `completed` or `failed`, and the agent must still be
+idle. Otherwise, the guard blocks the close, releases the reserved spend, and
+sets `systemMessage` to
+`sessions: the terminal's dispatch or idle prompt changed while the judge decided.`
+
+`StandingRulings` reads cc-notes answers `c9b27c1` for settled-dispatch cleanup and
+`6190a4a` for failed-launch orphans by id with `ccn answer show`. Only answers last
+written before the acting session started count; each stays pinned to its live
+revision. A missing answer (exit 3) supplies no evidence. The grant has empty
+scope, unlimited uses, and no expiry; the judge checks each close again. Live or
+unsettled dispatches, busy agents, terminals without a dispatch, unreadable
+process trees, loops, and batches do not qualify for this lift.
+
+The sessions guard does not block `orca-gc --run <run> [--dispatch <ctx>]`.
 
 The owner can mint one close from a terminal; replace the placeholders:
 

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 OWNER_WINDOW = 60
 RULINGS_TIMEOUT = 5
+CCN_NOT_FOUND = 3
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
 MACHINE_ENVELOPES = (
     "<task-notification",
@@ -264,11 +265,14 @@ def ccn_answers(evt: BaseHookEvent, term: str) -> list[dict[str, Any]]:
     return json.loads(done.stdout)
 
 
-def ccn_answer(evt: BaseHookEvent, answer_id: str) -> dict[str, Any]:
+def ccn_answer(evt: BaseHookEvent, answer_id: str) -> dict[str, Any] | None:
     argv = ["ccn", "answer", "show", answer_id, "--json", "-R", str(evt.cwd or reqenv.cwd())]
     done = subprocess.run(
-        argv, capture_output=True, text=True, timeout=RULINGS_TIMEOUT, env=reqenv.env_map(), check=True
+        argv, capture_output=True, text=True, timeout=RULINGS_TIMEOUT, env=reqenv.env_map(), check=False
     )
+    if done.returncode == CCN_NOT_FOUND:
+        return None
+    done.check_returncode()
     return json.loads(done.stdout)
 
 
@@ -278,6 +282,18 @@ def written_at(answer: dict[str, Any]) -> datetime:
 
 def ruling_key(answer: dict[str, Any]) -> str:
     return f"ccn:{answer['id']}@{written_at(answer).isoformat()}"
+
+
+def ruling_evidence(answer: dict[str, Any]) -> Evidence:
+    return Evidence(
+        id=f"ccn:{answer['id'][:7]}",
+        source="ccn-answer",
+        quote=answer["body"],
+        said_at=written_at(answer),
+        detail=f"ruling {answer['id'][:7]}: {answer['title']}",
+        key=ruling_key(answer),
+        live=True,
+    )
 
 
 def names(body: str, term: str) -> bool:
@@ -302,15 +318,29 @@ class Rulings:
             return []
         cutoff = self.started(evt)
         return [
-            Evidence(
-                id=f"ccn:{answer['id'][:7]}",
-                source="ccn-answer",
-                quote=answer["body"],
-                said_at=written_at(answer),
-                detail=f"ruling {answer['id'][:7]}: {answer['title']}",
-                key=ruling_key(answer),
-                live=True,
-            )
+            ruling_evidence(answer)
             for answer in ccn_answers(evt, term)
             if names(answer.get("body", ""), term) and written_at(answer) < cutoff
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class StandingRulings:
+    """The owner's standing class rulings: the cc-notes answers *ids* name, whatever action they cover.
+
+    A ruling permits a class of actions rather than naming one, so a declaration reading it needs a judge
+    to decide whether the action falls in that class. As with :class:`Rulings`, only answers last written
+    before the acting session started count, each pinned live to its revision; an id the repository has
+    no answer for collects nothing.
+    """
+
+    ids: tuple[str, ...]
+    started: Callable[[BaseHookEvent], datetime] = field(default=session_started)
+
+    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
+        cutoff = self.started(evt)
+        return [
+            ruling_evidence(answer)
+            for answer in (ccn_answer(evt, answer_id) for answer_id in self.ids)
+            if answer is not None and written_at(answer) < cutoff
         ]

@@ -8,12 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The general pack denies the harness's `TaskStop` tool.** The mandatory guard matches
-  the exact tool name on `PreToolUse` and `PermissionRequest`. A bare task id does not tell a
-  disposable shell task from a workflow, agent, or teammate session, so the caller's own
-  child workflows and subagents stay protected too. The denial names the target and asks
-  the caller to let it finish, or ask the owner to end it or name it in a cc-notes answer
-  for a later session.
+- **The general pack denies `TaskStop` unless a grant permits it.** The
+  mandatory guard matches the exact tool name on `PreToolUse` and `PermissionRequest`. A
+  bare task id does not tell a disposable shell task from a workflow, agent, or teammate
+  session, so the caller's own child workflows and subagents need a grant too. The denial
+  names the target and asks the caller to let it finish, or ask the owner to end it or name
+  it in a cc-notes answer for a later session.
 - **Session guards spend grants for an owner-named terminal close, launchd service stop,
   or `TaskStop`.** The `sessions.close`, `sessions.launchctl`, and `sessions.task-stop`
   kinds scope permission to a terminal handle, service label, or task id. The budget is
@@ -42,6 +42,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grant refusal reasons reach the user as `sessions: ...`. This replaces the unreleased
   `# ccx:owner-authorized=<answer id>` annotation, which allowed unlimited reuse and
   answers written during the acting session.
+- **A standing owner ruling can lift a close of a settled dispatch's idle terminal.** The
+  general pack's `sessions.close-settled` kind runs only after the per-terminal
+  `sessions.close` lift denies. Only the root session coordinating the dispatch's Run
+  qualifies. The hook event has no `agent_id`, and the request's `ORCA_TERMINAL_HANDLE` is set
+  and matches that Run's `coordinator_handle` from `orca orchestration run-show`.
+  It requires a literal
+  `orca terminal close --terminal <handle>` whose dispatch Orca's worker list records with
+  `dispatchStatus` of `completed` or `failed`, a successful `tui-idle` check, an idle
+  prompt on the screen, and a readable terminal process tree. New `StandingRulings` evidence in
+  `grants/evidence.py` reads cc-notes answers by id with `ccn answer show`: `c9b27c1` for
+  settled-dispatch `orca-gc` closes and `6190a4a` for failed-launch orphans. Only rulings
+  last written before the acting session started count; each is pinned live to its
+  revision, and an id absent from the repository (exit 3) supplies no evidence. The grants
+  `Judge`, capt-hook's small model, decides whether a ruling covers the terminal's Orca
+  record; the proposal names the Run and describes the caller as its coordinator.
+  The minted grant has empty scope, unlimited uses, and no expiry; each close
+  spends it again and is judged again. After the judge allows, the guard re-reads the
+  worker row and idle prompt. The same dispatch must still hold the terminal as
+  `completed` or `failed`, and the agent must still be idle. A failed recheck blocks the
+  close, releases the reserved spend, and reports the change in `systemMessage`.
+  Other terminal lanes, in-process teammates, callers outside Orca, and another Run's
+  coordinator get no lift. Live or unsettled dispatches, busy agents,
+  terminals without dispatches, rulings written during the session, unreadable process
+  trees, loops, and batches never receive this lift.
+- **An agent can stop a teammate its own transcript proves it spawned.**
+  `sessions.task-stop` now accepts `OwnTeammate` evidence for a `<name>@session-<8 hex>`
+  task id. The acting agent's transcript must record an `Agent` or `Task` call whose
+  `toolUseResult` has `status: teammate_spawned` and that exact `teammate_id`; the stop is
+  logged as a spend of a one-use deterministic grant. The team id is the Claude process's
+  session id at spawn and can differ from the hook payload's session id after a resume.
+  This fixes the refusal of `aig-no-delete-plan@session-67c0e5da` from session `900424b6`
+  by proving the spawn instead of matching session ids. Bare ids, teammates this agent
+  never spawned, a sibling's teammates, the root's teammates when a lane asks, and other
+  sessions' teammates receive no own-teammate lift.
+- **Tests pin the sessions guard's acceptance of `orca-gc` invocations.**
+  The guard accepts `orca-gc --run <run> [--dispatch <ctx>]`; no guard code change was
+  needed for it.
+- **Grants support unlimited uses and absent cc-notes answers.**
+  `Grants.mint` accepts `None` for unlimited uses, and `ccn_answer` returns `None` when
+  `ccn answer show` reports not-found with exit 3.
 
 ### Fixed
 
