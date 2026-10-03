@@ -40,6 +40,10 @@ EVENT_DESCRIPTIONS: dict[Event, tuple[str, str]] = {
         "Each streamed chunk of an assistant reply",
         "Rewrite the displayed text (`displayContent`); no rewrite shows the chunk as-is",
     ),
+    Event.ResourcePressure: (
+        "Host-fired by capt-hookd, not Claude Code: a child process stays resource-heavy (`evt.stage`)",
+        "Warn the session, judge and stop disposable children; warn or allow acknowledges the stage",
+    ),
 }
 
 PRIMITIVES: dict[str, Callable[..., object]] = {

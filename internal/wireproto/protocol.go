@@ -53,6 +53,7 @@ const (
 	OpSnapshotRequest = "snapshot_request"
 	OpSnapshotResult  = "snapshot_result"
 	OpSnapshotCancel  = "snapshot_cancel"
+	OpAbandon         = "abandon"
 )
 
 // EventRequest is one exact hook dispatch admitted by the Go host.

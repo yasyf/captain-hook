@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 from captain_hook.types import (
+    ALL_EVENTS,
+    CLAUDE_EVENTS,
+    HOST_EVENTS,
     Event,
     HookSpec,
     TestFile,
@@ -20,6 +23,7 @@ class TestEventFlag:
             PostToolUseFailureEvent,
             PreCompactEvent,
             PreToolUseEvent,
+            ResourcePressureEvent,
             SessionEndEvent,
             SessionStartEvent,
             StopEvent,
@@ -42,8 +46,9 @@ class TestEventFlag:
             Event.SessionEnd: SessionEndEvent,
             Event.PermissionRequest: PermissionRequestEvent,
             Event.MessageDisplay: MessageDisplayEvent,
+            Event.ResourcePressure: ResourcePressureEvent,
         }
-        assert len(mapping) == 13
+        assert len(mapping) == 14
         for member, expected_cls in mapping.items():
             assert member.event_class is expected_cls
 
@@ -63,7 +68,13 @@ class TestEventFlag:
         for m in Event:
             assert m.value > 0 and (m.value & (m.value - 1)) == 0
             seen.add(m.value)
-        assert len(seen) == 13
+        assert len(seen) == 14
+
+    def test_host_events_split_from_claude_events(self) -> None:
+        assert HOST_EVENTS == Event.ResourcePressure
+        assert CLAUDE_EVENTS | HOST_EVENTS == ALL_EVENTS
+        assert not CLAUDE_EVENTS & HOST_EVENTS
+        assert len(list(CLAUDE_EVENTS)) == 13
 
 
 class TestHookSpec:

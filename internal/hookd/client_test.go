@@ -45,7 +45,7 @@ func TestScriptedHostHelper(t *testing.T) {
 		}
 	})
 	if _, err := daemonkit.Serve(context.Background(), scriptedHostDaemon(), func(daemonkit.Ctx) (daemonkit.Product, error) {
-		return &hostProduct{manager: manager, hub: newNotificationHub()}, nil
+		return &hostProduct{manager: manager, hub: newNotificationHub(), monitor: testResourceMonitor(t, manager)}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -86,6 +86,36 @@ def remember_model_rejection(specialty: str, model: str, exc: BaseException, bac
             UNSUPPORTED_MODELS[(specialty, model)] = ModelRejection(backend.provider, resolved, str(exc))
 
 
+def run_spec(
+    prompt: str,
+    backend: LlmBackend,
+    model: TModel,
+    response_model: type[BaseModel] | None,
+    *,
+    agent: bool,
+    cwd: str | None,
+    timeout: int,
+    attempts: int | None,
+    tools: tuple[str, ...] | None,
+) -> str | BaseModel:
+    from spawnllm import ClaudeConfig, RunSpec, run_sync
+
+    spec = RunSpec(
+        prompt=prompt,
+        model=backend.resolve_model(model),
+        response_model=response_model,
+        agent=agent,
+        cwd=cwd,
+        timeout=timeout,
+        provider_configs={} if tools is None else {"claude": ClaudeConfig(tools=tools)},
+        **({} if attempts is None else {"max_attempts": attempts}),
+    )
+    resp = run_sync(spec, backend=backend)
+    if resp.error is not None:
+        raise resp.error.ex
+    return resp.result.raw if response_model is None else resp.result.parsed
+
+
 def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int | None:
     match transcript:
         case "full":
@@ -409,6 +439,9 @@ class HookContext:
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
+        attempts: int | None = None,
+        tools: tuple[str, ...] | None = None,
+        evidence: bool = True,
         response_model: type[M],
         **kwargs: Any,
     ) -> M: ...
@@ -427,6 +460,9 @@ class HookContext:
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
+        attempts: int | None = None,
+        tools: tuple[str, ...] | None = None,
+        evidence: bool = True,
         response_model: None = None,
         **kwargs: Any,
     ) -> str: ...
@@ -444,13 +480,28 @@ class HookContext:
         diff: bool | str = False,
         agent: bool = False,
         backend: LlmBackend | None = None,
+        attempts: int | None = None,
+        tools: tuple[str, ...] | None = None,
+        evidence: bool = True,
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
+        """Ask the selected backend once the request's deadline still has room, clamping the call's timeout to it.
+
+        ``attempts`` caps the provider attempts spawnllm makes for one call and ``tools`` names the
+        built-in tools the model may use (``()`` for none); either one routes the call through a
+        :class:`spawnllm.RunSpec` of its own, and ``None`` keeps spawnllm's defaults. A deadline
+        already passed once the backend is selected raises ``TimeoutError`` without a provider call.
+        ``evidence=False`` records no transcript evidence for the call, so the session transcript is
+        never resolved: the lane for a prompt built from no transcript at all, such as a host event's.
+        """
         from spawnllm import BackendCallError, call_sync, extract_sync
 
         reqenv.checkpoint()
         serving = backend or ready_backend(specialty, model)
+        reqenv.checkpoint()
+        if reqenv.deadline_within(0):
+            raise TimeoutError("the caller deadline passed before the model call")
         with UNSUPPORTED_MODELS_LOCK:
             rejection = UNSUPPORTED_MODELS.get((specialty, model))
         if rejection is not None:
@@ -462,10 +513,23 @@ class HookContext:
         prompt = self.assemble_prompt(
             template, args, kwargs, transcript=transcript, tool_results=tool_results, budget=budget, diff_text=diff_text
         )
-        self.release_preparation(prompt)
+        if evidence:
+            self.release_preparation(prompt)
         cwd = resolve_project_dir()
         timeout = reqenv.clamp_timeout(timeout)
         try:
+            if attempts is not None or tools is not None:
+                return run_spec(
+                    prompt,
+                    serving,
+                    model,
+                    response_model,
+                    agent=agent,
+                    cwd=cwd,
+                    timeout=timeout,
+                    attempts=attempts,
+                    tools=tools,
+                )
             if response_model is not None:
                 return extract_sync(
                     prompt,

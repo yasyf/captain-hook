@@ -31,6 +31,24 @@ func TestWorkerFrameRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAbandonFrameCarriesOnlyTheRequestID(t *testing.T) {
+	t.Parallel()
+	var encoded bytes.Buffer
+	if err := EncodeFrame(&encoded, Frame{Protocol: Schema, Op: OpAbandon, ID: 42}); err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
+	}
+	if body := encoded.Bytes()[4:]; string(body) != `{"protocol":1,"op":"abandon","id":42}` {
+		t.Fatalf("abandon frame body = %s", body)
+	}
+	got, err := DecodeFrame(&encoded)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if got.Op != OpAbandon || got.ID != 42 || got.Request != nil || got.Response != nil || got.Error != "" {
+		t.Fatalf("round trip = %#v", got)
+	}
+}
+
 func TestWorkerFrameRejectsOldLFAndUnknownFields(t *testing.T) {
 	t.Parallel()
 	for name, payload := range map[string][]byte{

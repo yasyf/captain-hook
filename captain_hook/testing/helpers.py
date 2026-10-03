@@ -25,6 +25,7 @@ from captain_hook.context import HookContext
 from captain_hook.dispatch import execute_hook, surfacing_handler_errors
 from captain_hook.events import (
     BaseHookEvent,
+    ResourcePressureEvent,
     SessionEndEvent,
     SessionStartEvent,
     StopEvent,
@@ -358,6 +359,23 @@ def mock_session_end_event(
     )
 
 
+def mock_resource_pressure_event(
+    payload: dict[str, Any],
+    *,
+    permission_mode: str | None = None,
+    cwd: str | None = None,
+    transcript: Session | RemoteSession | None = None,
+    transcript_path: str | Path | None = None,
+    session_dir: Path | None = None,
+) -> ResourcePressureEvent:
+    return ResourcePressureEvent(
+        _raw=dict(payload)
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
+        ctx=build_context(transcript, transcript_path, session_dir),
+    )
+
+
 def mock_session_start_event(
     source: str = "startup",
     *,
@@ -463,6 +481,8 @@ def mock_event(
             return mock_session_start_event(source=extra.pop("source", "startup"), **ctx_kw)
         case Event.SessionEnd:
             return mock_session_end_event(reason=extra.pop("reason", "other"), **ctx_kw)
+        case Event.ResourcePressure:
+            return mock_resource_pressure_event(extra.pop("payload"), **ctx_kw)
         case Event.SubagentStop:
             return mock_subagent_stop_event(
                 agent_type=extra.pop("agent_type", ""),
@@ -534,6 +554,8 @@ def input_to_event(
             evt = mock_session_start_event(source=inp.source or "startup", agent_id=inp.agent_id, **ctx_kw)
         case Event.SessionEnd:
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
+        case Event.ResourcePressure:
+            evt = mock_resource_pressure_event(inp.tool_input or {}, **ctx_kw)
         case _:
             # {file} is an opt-in substitution: only fires when a FileFixture materialized a real
             # path AND the command spells the literal token, so no other brace in a command is touched.
@@ -646,6 +668,8 @@ def transcript_event_payloads(
             yield base | {"reason": "other"}
         case Event.Stop | Event.SubagentStop | Event.SubagentStart | Event.Notification | Event.PreCompact:
             yield base
+        case Event.ResourcePressure:
+            return
 
 
 def system_message_matches(result: HookResult | None, pattern: str | None) -> bool:

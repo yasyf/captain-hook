@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from captain_hook.worker.protocol import (
     MAX_SNAPSHOT_FRAME,
+    OP_ABANDON,
     OP_ERROR,
     OP_SNAPSHOT_RESULT,
     EventRequest,
@@ -21,6 +22,7 @@ from captain_hook.worker.protocol import (
     adopt_message,
     background_begin_message,
     background_end_message,
+    decode_abandon,
     decode_event,
     decode_hello,
     decode_snapshot_reply,
@@ -104,6 +106,7 @@ class WorkerService:
         self._warm_stop = threading.Event()
         self._write_guard = threading.Lock()
         self._guard = threading.Condition()
+        self._serving: dict[int, EventRequest] = {}
         self._outstanding = 0
         self._background_outstanding = 0
         self._failure: BaseException | None = None
@@ -115,10 +118,13 @@ class WorkerService:
     def run(self) -> None:
         try:
             while (message := read_message(self._input)) is not None:
-                if message.get("op") in {OP_SNAPSHOT_RESULT, OP_ERROR}:
-                    self._complete_snapshot(message)
-                else:
-                    self._submit(decode_event(message))
+                match message.get("op"):
+                    case op if op in {OP_SNAPSHOT_RESULT, OP_ERROR}:
+                        self._complete_snapshot(message)
+                    case op if op == OP_ABANDON:
+                        self._abandon(decode_abandon(message))
+                    case _:
+                        self._submit(decode_event(message))
         finally:
             with self._warm_guard:
                 self._warm_stop.set()
@@ -138,11 +144,24 @@ class WorkerService:
     def _submit(self, request: EventRequest) -> None:
         with self._guard:
             self._outstanding += 1
+            self._serving[request.id] = request
         executor = self._mandatory_executor if self._guarded(request) else self._executor
         future = executor.submit(self._serve, request)
         future.add_done_callback(self._done)
 
+    def _abandon(self, request_id: int) -> None:
+        with self._guard:
+            if (request := self._serving.get(request_id)) is not None:
+                request.abandon.set()
+
     def _serve(self, request: EventRequest) -> None:
+        try:
+            self._reply(request)
+        finally:
+            with self._guard:
+                self._serving.pop(request.id, None)
+
+    def _reply(self, request: EventRequest) -> None:
         if request.deadline_passed():
             self._write(error_response(request.id, "deadline passed before dispatch"))
             return

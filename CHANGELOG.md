@@ -268,6 +268,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from a real `# ccx:raw` comment: heredoc bodies, quoted text, and a session-wide
   `CAPT_HOOK_CCX_RAW=1` record nothing. A dispatch that names a refused verb is blocked only
   when a small model confidently finds it asks for the refused action itself.
+- **The resource monitor's judge stage stops when the host stops waiting.** The host now sends the
+  worker an `abandon` frame when it cancels a stage, the worker's hooks unwind at their next checkpoint,
+  and a judge verdict that arrives after that never signals. The judge makes exactly one provider attempt
+  with no tools, inside one absolute deadline cut from the stage deadline and
+  `HOOKS_PERFORMANCE_JUDGE_TIMEOUT_SECONDS`; a backend selection that spends the budget makes no model call.
+  Exclusion screening reads interpreter and launcher options with their values, scans every token for
+  consequential verbs, and refuses a command whose options it cannot classify instead of judging it. Command
+  lines shown to the model and in refusal notices are redacted per argv element, so a credential value
+  containing spaces is masked whole. `capt-hook run ResourcePressure` refuses the host event on the cold path.
+- **The resource monitor bounds its descendant walk per tick across every session.** Sessions share one
+  4,096-row walk budget per tick, split round-robin from a rotating start, with each walk argv read charged
+  to a visited row. Fresh argv reads for stage payloads are outside this budget. A walk that runs out
+  resumes from its saved frontier, so a 10,000-process tree is sampled after three ticks
+  instead of never. A frontier row whose pid or parent changed is dropped and re-walked from the anchor.
+  Registrations and the tick share one process census in flight, a registration reuses a table younger than
+  one sample interval, and a failed census is never reused. Only a child whose start time, microseconds
+  included, follows registration can be tracked.
 
 ### Fixed
 

@@ -44,6 +44,7 @@ class RequestOverrides:
     client_ppid: int
     session_id: str
     deadline_unix_ms: int = 0
+    abandon: threading.Event = field(default_factory=threading.Event)
     abandoned: list[str] = field(default_factory=list[str])
     evidence_gaps: list[str] = field(default_factory=list[str])
     warmups: list[str] = field(default_factory=list[str])
@@ -207,6 +208,11 @@ def deadline_at(unix_ms: int) -> Generator[None]:
         yield
 
 
+def abandon_signal() -> threading.Event:
+    """The flag the host sets once it stops waiting on the bound request's reply; a fresh flag for the cold CLI."""
+    return threading.Event() if (ov := _OVERRIDES.get()) is None else ov.abandon
+
+
 def abandoned() -> list[str]:
     """The hooks whose verdicts the bound request's dispatch gave up on; a scratch list for the cold CLI."""
     return [] if (ov := _OVERRIDES.get()) is None else ov.abandoned
@@ -251,8 +257,10 @@ def abandonable(flag: Cutoff) -> Generator[None]:
 
 
 def checkpoint() -> None:
-    """Unwind the running hook once its verdict can no longer be delivered; a no-op outside a hook fan-out."""
+    """Unwind the running hook once its fan-out or host request stops waiting."""
     if (flag := _ABANDONED.get()) is not None and flag.is_set():
+        raise Abandoned
+    if (ov := _OVERRIDES.get()) is not None and ov.abandon.is_set():
         raise Abandoned
 
 
