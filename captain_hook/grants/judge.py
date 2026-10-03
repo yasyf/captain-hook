@@ -95,7 +95,7 @@ class Judge:
     rules: str
     contexts: Sequence[PromptContext] = ()
     model: TModel = "small"
-    specialty: TSpecialty = "general"
+    specialty: TSpecialty = "review"
     deadline: float = 20
     transcript: bool | int | Literal["recent", "full"] = False
     root_transcript: bool | int | Literal["recent", "full"] = False
