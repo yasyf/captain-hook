@@ -268,7 +268,7 @@ def guard_rows() -> list[tuple[Any, object]]:
     ]
 
 
-def test_stop_tools_are_the_stop_guards_names_and_flag_exactly_the_rows_it_blocks() -> None:
+def test_stop_tools_are_the_stop_guards_names_and_flag_exactly_the_rows_naming_them() -> None:
     _state.hooks.clear()
     importlib.reload(stops)
     assert set(DEFINITION["tools"]) == set(stops.STOP_TOOLS)
@@ -279,7 +279,8 @@ def test_stop_tools_are_the_stop_guards_names_and_flag_exactly_the_rows_it_block
     for row, expected in rows:
         for event in (Event.PreToolUse, Event.PermissionRequest):
             raw = json.dumps(input_to_event(event, row)._raw).encode()
-            assert guard.mandatory(event.name, raw) is isinstance(expected, Block), (event, row)
+            assert guard.mandatory(event.name, raw) is (row.tool in stops.STOP_TOOLS), (event, row)
+            assert row.tool in stops.STOP_TOOLS or not isinstance(expected, Block), (event, row)
 
 
 def test_every_inline_guard_row_the_prefilter_matches_is_mandatory_or_allowed() -> None:

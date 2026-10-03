@@ -22,6 +22,11 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   check-in nudge, a tooling nudge that asks for a tool-fix lane after a first-party tool refuses, a
   manual workaround next to a tool, or a command repeated by hand, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
   comment that was already over budget only warns), `rm` safety, and a plain-English reply rewrite.
+  An owner ruling lifts a terminal close, launchd service stop, or `TaskStop` through
+  [grants](grants.qmd#lift-a-session-guard-block), with one use per ruling and scope across
+  all session trees and a two-minute window for identical retries. A lifted Bash call must
+  run once at top level, first in the payload, with only pipe successors. A session may
+  also close an idle Orca terminal it proves it created itself.
   The rewrite sends each assistant reply through Cerebras (`qwen-3.8-27b`) and does nothing until
   `CEREBRAS_API_KEY` is set. With the key set, it hides the reply's streamed chunks and shows the
   rewrite in their place once the last chunk arrives. Code blocks, names, numbers, and commands carry

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from captain_hook.grants import (
     GrantVerdict,
     Judge,
     Never,
+    OwnerWords,
     Proposal,
     Rulings,
     reservations,
@@ -341,6 +343,22 @@ def test_rulings_count_only_when_written_before_the_session(tmp_path: Path, monk
     )
     assert [item.id for item in items] == ["ccn:543e865"]
     assert items[0].key == "ccn:543e865aaaa@2026-10-01T10:00:00+00:00"
+    assert items[0].live
+
+
+def test_a_ruling_names_a_term_only_as_a_whole_word(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    answer = {
+        "id": "543e865aaaa",
+        "title": "close",
+        "body": "close term_ab and com.x.helper, not term_a-2.",
+        "updated_at": "2026-10-01T10:00:00Z",
+    }
+    monkeypatch.setattr(evidence_module, "ccn_answers", lambda evt, term: [answer])
+    rulings = Rulings(search=lambda action: action.scope["terminal"], started=lambda evt: store.now())
+    for unnamed in ("term_a", "com.x"):
+        assert rulings.collect(event(tmp_path), Proposal(scope={"terminal": unnamed})) == []
+    for named in ("term_ab", "com.x.helper", "term_a-2"):
+        assert rulings.collect(event(tmp_path), Proposal(scope={"terminal": named}))
 
 
 def entry(grants: Grants) -> RegisteredHook:
@@ -473,10 +491,14 @@ def test_an_approval_spent_on_one_destination_never_covers_another(tmp_path: Pat
 
 
 def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
-    ruling = Evidence(id="ccn:543e865", source="ccn-answer", quote="ok", key="ccn:543e865@2026-10-01T10:00:00+00:00")
+    ruling = Evidence(
+        id="ccn:543e865", source="ccn-answer", quote="ok", key="ccn:543e865@2026-10-01T10:00:00+00:00", live=True
+    )
     minted(uses=None, evidence=[ruling])
     edited = ruling.model_copy(update={"key": "ccn:543e865@2026-10-02T10:00:00+00:00"})
-    denied = declared(evidence=(Fixed((edited,)),)).check(event(tmp_path))
+    denied = declared(judge=Judge("rules"), evidence=(Fixed((edited,)),)).check(
+        event(tmp_path, allow=False, reason="No ruling covers it.")
+    )
     assert isinstance(denied, Denied) and "changed after the grant was minted" in denied.reason
     assert declared(evidence=(Fixed((ruling,)),)).check(event(tmp_path, call="c2"))
 
@@ -498,6 +520,69 @@ def test_a_late_settle_releases_and_reports_the_lost_use(tmp_path: Path) -> None
         db.execute("UPDATE spends SET at = ?", ((store.now() - timedelta(minutes=5)).isoformat(),))
     assert settle(reserved, allowed=True) is False
     assert [spend.state for spend in store.spends(grant.id)] == ["released"]
+
+
+def test_a_judgeless_declaration_mints_one_use_from_the_evidence_that_names_the_action(tmp_path: Path) -> None:
+    ruling = Evidence(id="ccn:543e865", source="ccn-answer", quote="close C1", key="ccn:543e865@r", live=True)
+    grants = Grants("test.close", ("channel", "thread"), evidence=(Fixed((ruling,)),))
+    allowed = grants.check(event(tmp_path), Proposal(scope=SCOPE, summary="close C1"))
+    assert isinstance(allowed, Allowed) and allowed.remaining == 0
+    assert allowed.grant.source_key == f"{ruling.key}#{json.dumps(SCOPE)}" and allowed.grant.uses == 1
+    assert [spend.relied_on for spend in store.spends(allowed.grant.id)] == [["ccn:543e865"]]
+    denied = grants.check(event(tmp_path, call="c2"), Proposal(scope=SCOPE, payload={"tab": True}, summary="again"))
+    assert isinstance(denied, Denied) and "was spent" in denied.reason
+
+
+def test_one_judgeless_approval_covers_each_scope_it_names_once_across_trees(tmp_path: Path) -> None:
+    ruling = Evidence(id="ccn:543e865", source="ccn-answer", quote="close C1 and C2", key="ccn:543e865@r", live=True)
+    grants = Grants("test.close", ("channel", "thread"), evidence=(Fixed((ruling,)),))
+    first = grants.check(event(tmp_path), Proposal(scope=SCOPE))
+    second = grants.check(event(tmp_path, call="c2"), Proposal(scope=SCOPE | {"channel": "C2"}))
+    assert isinstance(first, Allowed) and isinstance(second, Allowed) and first.grant.id != second.grant.id
+    elsewhere = grants.check(event(tmp_path, session="other-root", call="c3"), Proposal(scope=SCOPE, summary="x"))
+    assert isinstance(elsewhere, Denied) and "another session tree" in elsewhere.reason
+
+
+def test_a_replay_window_bounds_free_retries_of_a_one_use_grant(tmp_path: Path) -> None:
+    minted()
+    assert declared(replay=timedelta(minutes=2)).check(event(tmp_path, "one"))
+    assert declared(replay=timedelta(minutes=2)).check(event(tmp_path, "one", call="toolu_2"))
+    denied = declared(replay=timedelta(0)).check(event(tmp_path, "one", call="toolu_3"))
+    assert isinstance(denied, Denied) and "was spent" in denied.reason
+
+
+def test_a_judgeless_declaration_with_nothing_naming_the_action_denies_without_a_reason(tmp_path: Path) -> None:
+    denied = Grants("test.close", ("channel", "thread"), evidence=(Fixed(()),)).check(
+        event(tmp_path), Proposal(scope=SCOPE)
+    )
+    assert isinstance(denied, Denied) and denied.reason == ""
+
+
+def test_a_stored_grant_whose_live_evidence_is_gone_covers_nothing(tmp_path: Path) -> None:
+    created = Evidence(
+        id="created:t", source="created", quote="orca terminal create", key="created:s/main/t", live=True
+    )
+    minted(evidence=[created])
+    grants = Grants("test.write", ("channel", "thread"), evidence=(Fixed(()),))
+    denied = grants.check(event(tmp_path), Proposal(scope=SCOPE))
+    assert isinstance(denied, Denied) and "rests on created:t" in denied.reason
+    assert Grants("test.write", ("channel", "thread"), evidence=(Fixed((created,)),)).check(
+        event(tmp_path, call="c2"), Proposal(scope=SCOPE)
+    )
+
+
+def test_owner_words_need_a_judge_to_read_them() -> None:
+    with pytest.raises(ValueError, match="need a judge"):
+        Grants("test.write", ("channel", "thread"), evidence=(OwnerWords(),))
+
+
+def test_an_attachment_needs_a_declaration_with_an_action() -> None:
+    from captain_hook import hook
+
+    with pytest.raises(ValueError, match="needs a declaration with an action"):
+        hook(Event.PreToolUse, "m", block=True, grants=Grants("test.close", ("channel", "thread")))
+    with pytest.raises(TypeError, match="declares no action"):
+        Grants("test.close", ("channel", "thread")).check(MagicMock())
 
 
 def test_grants_refuse_a_fire_cap() -> None:
@@ -539,7 +624,11 @@ def test_the_judge_mints_a_counted_grant_when_the_owner_names_a_number(tmp_path:
     first = grants.check(event(tmp_path, "one", allow=True, reason="ok", relied_on=["words:1"], standing=words, uses=3))
     assert isinstance(first, Allowed) and first.grant.uses == 3 and first.remaining == 2
     again = {"allow": True, "reason": "ok", "relied_on": ["words:1"]}
-    assert [bool(grants.check(event(tmp_path, f"t{n}", call=f"c{n}", **again))) for n in range(3)] == [True, True, False]
+    assert [bool(grants.check(event(tmp_path, f"t{n}", call=f"c{n}", **again))) for n in range(3)] == [
+        True,
+        True,
+        False,
+    ]
 
 
 def test_an_adopted_grant_covers_the_adopting_tree_and_shares_its_budget(tmp_path: Path) -> None:
@@ -561,7 +650,9 @@ def test_a_downstream_spender_names_the_grant_and_pays_through_the_cli(tmp_path:
     paid = CliRunner().invoke(grant_cli, argv)
     assert paid.exit_code == 0 and '"remaining": 0' in paid.output
     assert [spend.state for spend in store.spends(grant.id)] == ["committed"]
-    refused = CliRunner().invoke(grant_cli, [*argv[:-6], "--call", "post-2", "--fingerprint", "f2", "--summary", "reply"])
+    refused = CliRunner().invoke(
+        grant_cli, [*argv[:-6], "--call", "post-2", "--fingerprint", "f2", "--summary", "reply"]
+    )
     assert refused.exit_code == 1 and f"grant {grant.id} was spent at" in refused.output
     assert isinstance(declared(spent_by="cc-slack").check(event(tmp_path, "two", call="c2")), Denied)
 

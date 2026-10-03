@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook.grants import store
-from captain_hook.grants.evidence import tree_of, verbatim
-from captain_hook.grants.judge import Judge, JudgeFailed
+from captain_hook.grants.evidence import Asked, OwnerWords, tree_of, verbatim
+from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
 from captain_hook.grants.records import Allowed, Denied, Evidence, Grant, Proposal
 
 if TYPE_CHECKING:
@@ -66,14 +66,20 @@ class Grants:
     Attributes:
         kind: The grant kind this declaration spends and mints, e.g. ``slack.write``.
         scope: The canonical scope keys; every action and grant carries exactly these.
-        action: Maps the event to the action a grant must cover.
+        action: Maps the event to the action a grant must cover; a hook that passes each action to
+            :meth:`check` itself, as a guard does for every call in one command, declares none.
         rules: Deterministic rules run against each candidate grant before any judge.
-        judge: The LLM check over the owner's words; without one, a scope match is enough.
+        judge: The LLM check over the owner's words. Without one, a scope match is enough for a
+            stored grant, and the first evidence item collected is the approval itself, minted once
+            per scope across every session tree, so a judge-less declaration reads only sources that
+            name the action, such as ``Rulings``.
         evidence: Where the owner's words live, read when no stored grant covers the action.
         mint: Uses of a grant minted from session evidence.
         ttl: How long a grant minted from session evidence lives.
         standing_ttl: How long a standing grant minted from the owner's verbatim words lives.
         standing_rules: Rule names a standing grant asserts.
+        replay: How long after a one-use grant's spend the identical action goes again without a second
+            use, for a retry whose result was lost; keep it short when the effect does not dedupe.
         spent_by: The downstream system that spends this kind's grants with ``capt-hook grant spend``;
             when set, a check names the covering grant without reserving a use.
         would_allow: What the agent can do to get permission, appended to every deny.
@@ -81,7 +87,7 @@ class Grants:
 
     kind: str
     scope: tuple[str, ...]
-    action: Callable[[BaseHookEvent], Proposal]
+    action: Callable[[BaseHookEvent], Proposal] | None = None
     rules: Sequence[Rule] = ()
     judge: Judge | None = None
     evidence: Sequence[EvidenceSource] = ()
@@ -89,11 +95,14 @@ class Grants:
     ttl: timedelta | None = timedelta(days=1)
     standing_ttl: timedelta | None = None
     standing_rules: tuple[str, ...] = ()
+    replay: timedelta = timedelta.max
     spent_by: str | None = None
     would_allow: str = "Ask the user for permission for exactly this action."
     hook: str = field(default="grants")
 
     def __post_init__(self) -> None:
+        if self.judge is None and any(isinstance(source, Asked | OwnerWords) for source in self.evidence):
+            raise ValueError(f"{self.kind}: the owner's words and answers need a judge to read them")
         DECLARED[self.kind] = self
 
     def canonical(self, scope: dict[str, str] | Proposal) -> dict[str, str]:
@@ -114,8 +123,12 @@ class Grants:
         rules: Sequence[str] = (),
         source_key: str | None = None,
         links: dict[str, str] | None = None,
+        across_trees: bool = False,
     ) -> Grant:
-        """Mint a grant in *evt*'s session tree, or return the one already minted from *source_key*."""
+        """Mint a grant in *evt*'s session tree, or return the one already minted from *source_key*.
+
+        With *across_trees*, the grant already minted from *source_key* in any tree is returned.
+        """
         return store.mint(
             Grant(
                 id=store.new_id(),
@@ -131,29 +144,32 @@ class Grants:
                 links=links or {},
                 author=author(evt, self.hook),
                 created=store.now(),
-            )
+            ),
+            across_trees=across_trees,
         )
 
-    def stale_rulings(self, grant: Grant, items: Sequence[Evidence]) -> str | None:
-        current = {item.key for item in items if item.source == "ccn-answer"}
-        return next(
-            (item.id for item in grant.evidence if item.source == "ccn-answer" and item.key not in current), None
-        )
+    def stale(self, grant: Grant, items: Sequence[Evidence]) -> str | None:
+        current = {item.key for item in items if item.live}
+        return next((item.id for item in grant.evidence if item.live and item.key not in current), None)
 
     def applicable(self, grant: Grant) -> list[Rule]:
         return [rule for rule in self.rules if rule.always or rule.name in grant.rules]
 
-    def check(self, evt: BaseHookEvent) -> Allowed | Denied:
-        """Spend a grant that covers *evt*'s action, minting one from the owner's words when none is stored.
+    def check(self, evt: BaseHookEvent, action: Proposal | None = None) -> Allowed | Denied:
+        """Spend a grant that covers *action*, minting one from the owner's words when none is stored.
 
-        Stored grants of this kind in the session tree come first, newest first: a rule that denies
-        skips the grant, a rule that allows settles it unless the owner has spoken since it was
-        minted, and anything else goes to the judge with the grant's evidence and the owner's later
-        words. With no stored grant, the judge reads the declared evidence; its allow mints a grant
-        keyed on the approval it relied on and spends it. Every use is reserved and settles with the
-        event's verdict.
+        *action* defaults to the declaration's ``action`` of *evt*. Stored grants of this kind in the
+        session tree come first, newest first: a rule that denies skips the grant, live evidence the
+        sources no longer collect skips it, a rule that allows settles it unless the owner has spoken
+        since it was minted, and anything else goes to the judge with the grant's evidence and the
+        owner's later words. With no stored grant, the judge reads the declared evidence; its allow
+        mints a grant keyed on the approval it relied on and spends it. Every use is reserved and
+        settles with the event's verdict.
         """
-        action = self.action(evt)
+        if action is None:
+            if self.action is None:
+                raise TypeError(f"{self.kind} declares no action, so check needs the action to cover")
+            action = self.action(evt)
         scope = self.canonical(action)
         tree = tree_of(evt)
         collected: list[Evidence] | None = None
@@ -165,23 +181,23 @@ class Grants:
             return collected
 
         refusals: list[str] = []
-        found = store.matching(self.kind, tree, scope, fingerprint(action))
+        found = store.matching(self.kind, tree, scope, fingerprint(action), self.replay)
         refusals.extend(why for _, why in found[:1] if why is not None)
         for grant in (grant for grant, why in found if why is None):
             rulings = [rule.evaluate(grant, action) for rule in self.applicable(grant)]
             if denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
                 refusals.append(f"grant {grant.id}: {denied.note}")
                 continue
-            if stale := self.stale_rulings(grant, session()):
+            if any(item.live for item in grant.evidence) and (stale := self.stale(grant, session())):
                 refusals.append(f"grant {grant.id} rests on {stale}, which changed after the grant was minted.")
                 continue
+            reason, relied = f"covered by grant {grant.id}", [item.id for item in grant.evidence]
             since = [
                 item
-                for item in session()
+                for item in (session() if self.judge is not None else ())
                 if item.source in OWNER_SOURCES and item.said_at is not None and item.said_at > grant.created
             ]
             allowed_by_rule = any(ruling.verdict == "allow" for ruling in rulings)
-            reason, relied = f"covered by grant {grant.id}", [item.id for item in grant.evidence]
             if self.judge is not None and (since or not allowed_by_rule):
                 try:
                     verdict = self.judge(
@@ -201,17 +217,27 @@ class Grants:
                 return self.spend(evt, grant, action, reason, relied)
             except store.SpentError as exc:
                 refusals.append(str(exc))
-        if self.judge is None or not self.evidence:
+        if not self.evidence:
             return Denied(" ".join(refusals) or f"No {self.kind} grant covers {action.summary}.", self.would_allow)
-        return self.from_evidence(evt, self.judge, action, session(), refusals)
+        return self.from_evidence(evt, action, session(), refusals)
 
     def from_evidence(
-        self, evt: BaseHookEvent, judge: Judge, action: Proposal, items: list[Evidence], refusals: list[str]
+        self, evt: BaseHookEvent, action: Proposal, items: list[Evidence], refusals: list[str]
     ) -> Allowed | Denied:
-        try:
-            verdict = judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
-        except JudgeFailed as exc:
-            return Denied(f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow, undecided=True)
+        if self.judge is None:
+            if not items:
+                return Denied(" ".join(refusals), self.would_allow)
+            named = items[0]
+            verdict = GrantVerdict(
+                reason=f"{named.detail or named.id} covers {action.summary}", allow=True, relied_on=[named.id]
+            )
+        else:
+            try:
+                verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
+            except JudgeFailed as exc:
+                return Denied(
+                    f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow, undecided=True
+                )
         if not verdict.allow:
             return Denied(" ".join([*refusals, verdict.reason]), self.would_allow)
         relied = [item for item in items if item.id in verdict.relied_on]
@@ -232,6 +258,7 @@ class Grants:
                 source_key=said.key or said.id,
             )
         else:
+            approval = relied[0].key or relied[0].id
             grant = self.grant(
                 evt,
                 scope=dict(action.scope),
@@ -239,7 +266,8 @@ class Grants:
                 uses=self.mint,
                 ttl=self.ttl,
                 approved=dict(action.payload) if action.payload else None,
-                source_key=relied[0].key or relied[0].id,
+                source_key=approval if self.judge is not None else f"{approval}#{json.dumps(self.canonical(action))}",
+                across_trees=self.judge is None,
             )
         if grant.scope != self.canonical(action):
             return Denied(
@@ -275,6 +303,7 @@ class Grants:
             summary=action.summary,
             reason=reason,
             relied_on=relied,
+            replay=self.replay,
         )
         if reserved is not None:
             reserved.append(tool_use_id)

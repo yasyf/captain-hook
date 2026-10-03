@@ -140,6 +140,7 @@ def import_(answer_id: str, **options: Any) -> None:
         quote=answer["body"],
         detail=f"ruling {answer['id'][:7]}: {answer['title']}",
         key=ruling_key(answer),
+        live=True,
     )
     click.echo(describe(minted(MintOptions(**options), evidence=evidence, author=f"ccn:{answer['id'][:7]}")))
 
@@ -164,7 +165,9 @@ def show(grant_id: str) -> None:
     click.echo(describe(found))
     click.echo(found.model_dump_json(indent=2))
     for adoption in store.adoptions(grant_id):
-        click.echo(f"{store.stamp(adoption.at)}  adopted into tree {adoption.tree} by {adoption.session}/{adoption.agent}")
+        click.echo(
+            f"{store.stamp(adoption.at)}  adopted into tree {adoption.tree} by {adoption.session}/{adoption.agent}"
+        )
     for spend in store.spends(grant_id):
         click.echo(
             f"{store.stamp(spend.at)}  {spend.state}  {spend.session}/{spend.agent}  {spend.summary}  {spend.reason}"

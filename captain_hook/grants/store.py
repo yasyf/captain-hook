@@ -112,13 +112,17 @@ def parse_spend(row: tuple[Any, ...]) -> Spend:
 SPEND_COLUMNS = "id, grant_id, at, state, session, agent, tool_use_id, fingerprint, summary, reason, relied_on"
 
 
-def mint(grant: Grant) -> Grant:
-    """Store *grant*, or return the grant already minted from the same approval in the same tree."""
+def mint(grant: Grant, *, across_trees: bool = False) -> Grant:
+    """Store *grant*, or return the grant already minted from the same approval in the same tree.
+
+    With *across_trees*, a grant minted from the same approval in any tree is returned instead, so an
+    approval recorded outside every session is spent once however many trees reach for it.
+    """
     with connect() as db, immediate(db):
         if grant.source_key is not None and (
             row := db.execute(
-                "SELECT body FROM grants WHERE kind = ? AND tree = ? AND source_key = ?",
-                (grant.kind, grant.tree, grant.source_key),
+                "SELECT body FROM grants WHERE kind = ? AND source_key = ? AND (? OR tree = ?)",
+                (grant.kind, grant.source_key, across_trees, grant.tree),
             ).fetchone()
         ):
             return Grant.model_validate_json(row[0])
@@ -179,18 +183,22 @@ def remaining(grant: Grant, used: list[Spend], at: datetime) -> int | None:
     return None if grant.uses is None else grant.uses - sum(counted(spend, at) for spend in used)
 
 
-def retried(grant: Grant, used: list[Spend], fingerprint: str | None) -> bool:
-    """Whether *fingerprint* repeats the action a one-shot grant was already spent on."""
-    return grant.uses == 1 and any(spend.state == "committed" and spend.fingerprint == fingerprint for spend in used)
+def retried(grant: Grant, used: list[Spend], fingerprint: str | None, at: datetime, replay: timedelta) -> bool:
+    """Whether *fingerprint* repeats, within *replay* of it, the action a one-shot grant was spent on."""
+    return grant.uses == 1 and any(
+        spend.state == "committed" and spend.fingerprint == fingerprint and at - spend.at < replay for spend in used
+    )
 
 
-def unusable(grant: Grant, used: list[Spend], at: datetime, fingerprint: str | None = None) -> str | None:
+def unusable(
+    grant: Grant, used: list[Spend], at: datetime, fingerprint: str | None = None, replay: timedelta = timedelta.max
+) -> str | None:
     """Why *grant* covers nothing at *at*, or ``None`` while it is live or *fingerprint* retries its one use."""
     if grant.revoked is not None:
         return f"grant {grant.id} was revoked at {stamp(grant.revoked)}."
     if grant.expires is not None and grant.expires <= at:
         return f"grant {grant.id} expired at {stamp(grant.expires)}."
-    if retried(grant, used, fingerprint):
+    if retried(grant, used, fingerprint, at, replay):
         return None
     if (left := remaining(grant, used, at)) is not None and left <= 0:
         last = next(spend for spend in reversed(used) if counted(spend, at))
@@ -198,11 +206,13 @@ def unusable(grant: Grant, used: list[Spend], at: datetime, fingerprint: str | N
     return None
 
 
-def matching(kind: str, tree: str, scope: Mapping[str, str], fingerprint: str) -> list[tuple[Grant, str | None]]:
+def matching(
+    kind: str, tree: str, scope: Mapping[str, str], fingerprint: str, replay: timedelta = timedelta.max
+) -> list[tuple[Grant, str | None]]:
     """The grants of *kind* in *tree* whose scope equals *scope*, newest first, each with why it is unusable."""
     at = now()
     return [
-        (grant, unusable(grant, spends(grant.id), at, fingerprint))
+        (grant, unusable(grant, spends(grant.id), at, fingerprint, replay))
         for grant in reversed(grants(kind, tree))
         if grant.scope == dict(scope)
     ]
@@ -221,11 +231,13 @@ def reserve(
     summary: str,
     reason: str,
     relied_on: list[str],
+    replay: timedelta = timedelta.max,
 ) -> int | None:
     """Spend one use of *grant_id* atomically and return the uses left; raise :class:`SpentError` when none are.
 
-    A one-shot grant already spent on this exact *fingerprint* covers its retry without a second use,
-    so a write whose reply was lost can go again; the downstream system dedupes the effect.
+    A one-shot grant already spent on this exact *fingerprint*, less than *replay* ago, covers its retry
+    without a second use, so a write whose reply was lost can go again; the downstream system dedupes
+    the effect.
     """
     at = now()
     with connect() as db, immediate(db):
@@ -238,9 +250,9 @@ def reserve(
         rows = db.execute(f"SELECT {SPEND_COLUMNS} FROM spends WHERE grant_id = ? ORDER BY id", (grant_id,)).fetchall()
         used = [parse_spend(row) for row in rows]
         left = remaining(grant, used, at)
-        if (why := unusable(grant, used, at, fingerprint)) is not None:
+        if (why := unusable(grant, used, at, fingerprint, replay)) is not None:
             raise SpentError(why)
-        if retried(grant, used, fingerprint):
+        if retried(grant, used, fingerprint, at, replay):
             return left
         db.execute(
             f"INSERT INTO spends ({SPEND_COLUMNS.removeprefix('id, ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

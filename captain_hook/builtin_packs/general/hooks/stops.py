@@ -1,30 +1,46 @@
 from __future__ import annotations
 
+from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, Block, Event, Input, LambdaCondition, on
-from captain_hook.builtin_packs.general.hooks._sessions import clip
+from captain_hook.builtin_packs.general.hooks._sessions import (
+    INLINE_COMMANDS,
+    INLINE_STARTED,
+    INLINE_TRANSCRIPT,
+    LATER_SESSION,
+    TASK_STOP,
+    block_first,
+    clip,
+    inline_ruling,
+    lift,
+)
+from captain_hook.grants import Proposal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from captain_hook import BaseHookEvent, HookResult, ToolRewriteEvent
 
 STOP_TOOLS = frozenset({"TaskStop"})
+stopping = partial(Input, tool="TaskStop", commands=INLINE_COMMANDS, transcript=INLINE_TRANSCRIPT)
 
 
 def names_a_stop_tool(evt: BaseHookEvent) -> bool:
     return evt.tool_name in STOP_TOOLS
 
 
-def describe_target(raw: Mapping[str, object]) -> str:
+def stop_target(raw: object) -> tuple[str, str] | None:
     match raw:
         case {"task_id": str() as task_id}:
-            return f"task `{clip(task_id)}`"
+            return "task", task_id
         case {"shell_id": str() as shell_id}:
-            return f"shell `{clip(shell_id)}`"
+            return "shell", shell_id
         case _:
-            return "an unnamed target"
+            return None
+
+
+def describe_target(target: tuple[str, str] | None) -> str:
+    return "an unnamed target" if target is None else f"{target[0]} `{clip(target[1])}`"
 
 
 @on(
@@ -34,34 +50,48 @@ def describe_target(raw: Mapping[str, object]) -> str:
     skip_planning_agents=False,
     mandatory=True,
     tests={
-        Input(tool="TaskStop", tool_input={"task_id": "wcn64vfub"}): Block(
+        stopping(tool_input={"task_id": "wcn64vfub"}): Block(
             pattern="`TaskStop` on task `wcn64vfub` cannot be verified"
         ),
-        Input(tool="TaskStop", tool_input={"task_id": "wf_f79d45a5-908"}): Block(pattern="on task `wf_f79d45a5-908`"),
-        Input(tool="TaskStop", tool_input={"task_id": "a7e6a10ac1f61999f"}): Block(
-            pattern="which no session may stop, its own children included"
+        stopping(tool_input={"task_id": "wf_f79d45a5-908"}): Block(pattern="on task `wf_f79d45a5-908`"),
+        stopping(tool_input={"task_id": "a7e6a10ac1f61999f"}): Block(pattern="its own children included"),
+        stopping(tool_input={"task_id": "daemonkit-cache-impl"}): Block(
+            pattern=f"Let it finish, or ask the owner to end it or {LATER_SESSION}"
         ),
-        Input(tool="TaskStop", tool_input={"task_id": "daemonkit-cache-impl"}): Block(
-            pattern="Let it finish, or ask the owner to end it"
-        ),
-        Input(tool="TaskStop", tool_input={"shell_id": "bash_3"}): Block(
-            pattern="on shell `bash_3` cannot be verified"
-        ),
-        Input(tool="TaskStop", tool_input={}): Block(pattern="on an unnamed target cannot be verified"),
-        Input(tool="TaskStop", tool_input={"task_id": "wcn64vfub"}, agent_id="sub-1"): Block(
-            pattern="cannot be verified"
-        ),
-        Input(tool="TaskStop", tool_input={"task_id": "wcn64vfub"}, permission_mode="plan"): Block(
-            pattern="cannot be verified"
-        ),
+        stopping(tool_input={"shell_id": "bash_3"}): Block(pattern="on shell `bash_3` cannot be verified"),
+        stopping(tool_input={}): Block(pattern="on an unnamed target cannot be verified"),
+        stopping(tool_input={"task_id": "wcn64vfub"}, agent_id="sub-1"): Block(pattern="cannot be verified"),
+        stopping(tool_input={"task_id": "wcn64vfub"}, permission_mode="plan"): Block(pattern="cannot be verified"),
+        stopping(
+            tool_input={"task_id": "wcn64vfub"},
+            commands={**INLINE_COMMANDS, "ccn answer search wcn64vfub": inline_ruling("Stop wcn64vfub, it hung.")},
+        ): Allow(),
+        stopping(
+            tool_input={"task_id": "wcn64vfub"},
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search wcn64vfub": inline_ruling(
+                    "Stop wcn64vfub.", written=INLINE_STARTED + timedelta(seconds=1)
+                ),
+            },
+        ): Block(pattern="cannot be verified"),
+        stopping(
+            tool_input={"task_id": "wcn64vfub"},
+            commands={**INLINE_COMMANDS, "ccn answer search wcn64vfub": inline_ruling("Stop wcn64vfub2.")},
+        ): Block(pattern="cannot be verified"),
         Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(tool="mcp__orca__TaskStop", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(command="printf 'TaskStop wcn64vfub'"): Allow(),
     },
 )
 def stop_unverified_task(evt: ToolRewriteEvent) -> HookResult | None:
-    return evt.block(
-        f"BLOCKED: `{evt.tool_name}` on {describe_target(evt.input.raw)} cannot be verified: a bare id does not tell "
-        "a disposable shell task from a workflow, agent, or teammate session, which no session may stop, its own "
-        "children included. Let it finish, or ask the owner to end it."
+    target = stop_target(evt.input.raw)
+    message = (
+        f"BLOCKED: `{evt.tool_name}` on {describe_target(target)} "
+        "cannot be verified as a disposable shell task rather than a workflow, agent, or teammate session, its own "
+        f"children included. Let it finish, or ask the owner to end it or {LATER_SESSION}."
     )
+    if target is None:
+        return evt.block(message)
+    action = Proposal(scope={"task": target[1]}, summary=f"stop {target[0]} {target[1]}")
+    return block_first(evt, (lift(evt, TASK_STOP, action, message),))

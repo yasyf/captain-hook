@@ -8,19 +8,22 @@ import shlex
 import subprocess
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial, reduce
 from itertools import product
 from math import prod
-from pathlib import PurePath
-from typing import TYPE_CHECKING
+from pathlib import Path, PurePath
+from typing import TYPE_CHECKING, Any
 
 from cc_transcript.tools import BashCall
+from loguru import logger
 
 from captain_hook import Event, Input, LambdaCondition, on
 from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
-from captain_hook.command_schemas import OSASCRIPT
+from captain_hook.command_schemas import ORCA, OSASCRIPT
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
+from captain_hook.grants import Allowed, Evidence, Grants, Proposal, Rulings
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
 from captain_hook.util import proc, reqenv
 from captain_hook.util.payload import command_texts
@@ -28,7 +31,6 @@ from captain_hook.util.shell import safe_parse_command_line
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
-    from pathlib import Path
 
     from cc_transcript.command import Word
 
@@ -124,10 +126,22 @@ RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
 SPELLING_LIMIT = 60
 SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
 PROBE_TIMEOUT = 2.0
-ANSWER_TIMEOUT = 30.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 LAST_SCAN = threading.local()
-ANSWER_BODIES: dict[tuple[str | None, str, str | None], str] = {}
+IDLE_WAIT_MS = 1000
+SCREEN_LINES = 40
+PROMPT_WINDOW = 8
+WORKER_PAGE = 100
+BORDER = re.compile(r"^[─━\s]*$")
+BUSY = ("esc to interrupt", "ctrl+c to interrupt", "Running…", "background terminal running")
+CLAUDE_PROMPT = "❯"
+CODEX_PROMPT = "› Ask Codex to do anything"
+DONE_MARKER = re.compile(r"^✻ .* · done ")
+LANE_NAME = re.compile(r"[\w.-]+")
+LAUNCH_RECEIPTS = ".claude/scratch/orca-launch"
+RECEIPT_SLACK = timedelta(seconds=1)
+RETRY_WINDOW = timedelta(minutes=2)
+LATER_SESSION = "name it in a cc-notes answer for a later session"
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_TABLE = (
     "    1     0     1    0 Thu Jan  1 00:00:00 2026 /sbin/launchd\n"
@@ -150,9 +164,69 @@ INLINE_TABLE = (
     "17002 17001 17002  501 Thu Jan  1 00:00:00 2026 /Users/dev/.daemonkit/cache/ab/cc-slack watch --channel C1\n"
 )
 INLINE_TERMINALS = {"term_idle": 15000, "term_agent": 16000, "term_shim": 17000, "term_gone": 18000}
-INLINE_OWNER_ANSWER = "0207568"
 INLINE_SESSION = "c0ffee00-0000-4000-8000-000000000000"
 INLINE_OWNER_TERMINAL = "term_c59a87bf-0000-4000-8000-000000000000"
+INLINE_TRANSCRIPT = [{"type": "user", "message": {"role": "user", "content": "Ship the release."}}]
+INLINE_STARTED = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def inline_ruling(body: str, *, written: datetime = INLINE_STARTED - timedelta(days=1)) -> str:
+    return json.dumps(
+        [{"id": "0207568aaaa", "title": "Close terminals", "body": body, "updated_at": written.isoformat()}]
+    )
+
+
+def inline_create(
+    handle: str, command: str = "orca terminal create --worktree active --command codex --json"
+) -> list[dict[str, Any]]:
+    return [
+        *INLINE_TRANSCRIPT,
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_create", "name": "Bash", "input": {"command": command}}],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_create",
+                        "content": json.dumps({"ok": True, "result": {"terminal": {"handle": handle}}}),
+                    }
+                ],
+            },
+        },
+    ]
+
+
+def inline_workers(*handles: str) -> str:
+    rows = [{"dispatchId": f"ctx_{index}", "agentTerminalHandle": handle} for index, handle in enumerate(handles)]
+    return json.dumps({"ok": True, "result": {"workers": rows, "page": {}, "scope": {"source": "all"}}})
+
+
+def inline_screen(*tail: str) -> str:
+    return json.dumps({"ok": True, "result": {"terminal": {"source": "screen", "tail": list(tail)}}})
+
+
+def inline_tab(handle: str, *panes: str) -> dict[str, str]:
+    leaves = [{"type": "terminal", "handle": pane, "tabId": "tab-1"} for pane in panes]
+    layout = leaves[0] if len(leaves) == 1 else {"type": "split", "children": leaves}
+    shown = {"ptyId": f"pty-{handle}", "tabId": "tab-1", "worktreePath": "/w"}
+    return {
+        f"orca terminal show --terminal {handle} --json": json.dumps({"result": {"terminal": shown}}),
+        "orca terminal list --worktree path:/w": json.dumps(
+            {"result": {"visualLayouts": [{"root": {"tabs": [{"tabId": "tab-1", "panes": layout}]}}]}}
+        ),
+    }
+
+
+INLINE_IDLE = inline_screen("✻ Worked for 2m · done ", "", "─" * 20, CLAUDE_PROMPT, "─" * 20)
+INLINE_BUSY = inline_screen("✶ Thinking… (esc to interrupt)", "─" * 20, CLAUDE_PROMPT, "─" * 20)
 INLINE_COMMANDS = {
     "ps -A -ww -o": INLINE_TABLE,
     "ps -E -ww -o lstart=,command= -p": "",
@@ -179,13 +253,14 @@ INLINE_COMMANDS = {
             }
         }
     ),
-    "ccn answer show": "{}",
-    f"ccn answer show {INLINE_OWNER_ANSWER}": json.dumps(
-        {"body": f"Owner: close exactly {INLINE_OWNER_TERMINAL} and term_agent, nothing else."}
-    ),
+    "ccn answer search": "[]",
+    f"ccn answer search {INLINE_OWNER_TERMINAL}": inline_ruling(f"Owner: close exactly {INLINE_OWNER_TERMINAL}."),
+    "orca orchestration worker-list": inline_workers(),
+    "orca terminal wait": json.dumps({"ok": True, "result": {"wait": {"satisfied": True}}}),
+    "orca terminal read": INLINE_IDLE,
 }
 
-guarded = partial(Input, commands=INLINE_COMMANDS)
+guarded = partial(Input, commands=INLINE_COMMANDS, transcript=INLINE_TRANSCRIPT)
 
 
 def nested(depth: int, payload: str, *, wrapper: str = "bash -c") -> str:
@@ -262,9 +337,10 @@ def probe_timeout(reason: str, ceiling: float = PROBE_TIMEOUT) -> float | Unread
     return min(ceiling, budget - 0.25)
 
 
-def probe(argv: tuple[str, ...], ceiling: float = PROBE_TIMEOUT) -> str | Unreadable:
+def probe(argv: tuple[str, ...], ceiling: float = PROBE_TIMEOUT, *, unset: tuple[str, ...] = ()) -> str | Unreadable:
     if isinstance(timeout := probe_timeout(f"run `{argv[0]}`", ceiling), Unreadable):
         return timeout
+    env = {key: value for key, value in os.environ.items() if key not in unset}
     try:
         done = subprocess.run(
             argv,
@@ -273,7 +349,7 @@ def probe(argv: tuple[str, ...], ceiling: float = PROBE_TIMEOUT) -> str | Unread
             stdin=subprocess.DEVNULL,
             timeout=timeout,
             check=False,
-            env=os.environ | {"PATH": os.pathsep.join((os.environ["PATH"], *PROBE_FALLBACK_DIRS))},
+            env=env | {"PATH": os.pathsep.join((os.environ["PATH"], *PROBE_FALLBACK_DIRS))},
         )
     except FileNotFoundError:
         return Unreadable(f"`{argv[0]}` is not installed on the hook's PATH")
@@ -301,30 +377,6 @@ def terminal_pid(handle: str) -> int | Unreadable:
         return pids[pty]
     except (ValueError, TypeError, KeyError):
         return Unreadable("Orca reports no process for the terminal")
-
-
-def answer_body(answer: str, cwd: Path | None, session: str | None) -> str | Unreadable:
-    key = (session, answer, None if cwd is None else str(cwd))
-    if (cached := ANSWER_BODIES.get(key)) is not None:
-        return cached
-    location = () if cwd is None else ("-R", str(cwd))
-    shown = probe(("ccn", "answer", "show", answer, "--json", *location), ANSWER_TIMEOUT)
-    if isinstance(shown, Unreadable):
-        return shown
-    try:
-        body = json.loads(shown)["body"]
-    except (ValueError, TypeError, KeyError):
-        return Unreadable("it has no body")
-    if not isinstance(body, str):
-        return Unreadable("it has no body")
-    ANSWER_BODIES[key] = body
-    return body
-
-
-def answer_names(answer: str, handle: str, cwd: Path | None, session: str | None) -> bool | Unreadable:
-    if isinstance(body := answer_body(answer, cwd, session), Unreadable):
-        return body
-    return re.search(rf"(?<![\w-]){re.escape(handle)}(?![\w-])", body) is not None
 
 
 class Facts:
@@ -674,9 +726,235 @@ class Scan:
         return [call for call in self.calls if literal_head(call)]
 
 
-def block_first(evt: ToolRewriteEvent, messages: Iterable[str | None]) -> HookResult | None:
-    message = next((message for message in messages if message is not None), None)
-    return None if message is None else evt.block(message)
+def orca_json(argv: tuple[str, ...], *path: str, unset: tuple[str, ...] = ()) -> Any:
+    if isinstance(shown := probe(argv, unset=unset), Unreadable):
+        return shown
+    try:
+        return reduce(lambda node, key: node[key], path, json.loads(shown))
+    except (ValueError, TypeError, KeyError):
+        return Unreadable(f"`{' '.join(argv[:3])}` printed no {path[-1]}")
+
+
+def created_handle(text: str) -> str | None:
+    try:
+        return json.loads(text)["result"]["terminal"]["handle"]
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def receipt_names(lane: str, handle: str, start: datetime, end: datetime) -> bool:
+    if LANE_NAME.fullmatch(lane) is None:
+        return False
+    return any(
+        start <= datetime.fromtimestamp(receipt.stat().st_mtime, UTC) <= end
+        and created_handle(receipt.read_text()) == handle
+        for receipt in (Path.home() / LAUNCH_RECEIPTS).glob(f"*/{lane}.terminal.json")
+    )
+
+
+def bare_orca(call: Call) -> bool:
+    head = call.source.words[0] if call.source.words else None
+    return head is not None and head.value == "orca" and not call.source.env and not call.substituted
+
+
+def created_by(use: Any, handle: str, cwd: Path | None) -> BashCall | None:
+    if not isinstance(bash := use.call, BashCall) or use.result is None:
+        return None
+    line = safe_parse_command_line(bash.command)
+    calls = () if line is None else Cmd(line, raw=bash.command, cwd=cwd).calls()
+    if len(calls) == 1 and bare_orca(calls[0]):
+        values = ORCA.bind(calls[0]).values
+        if (values.get("group"), values.get("verb")) == (("terminal",), ("create",)):
+            return bash if created_handle(use.result.content) == handle else None
+    start, end = use.ts - RECEIPT_SLACK, (use.result_ts or use.ts) + RECEIPT_SLACK
+    launched = f"terminal={handle}" in use.result.content and any(
+        receipt_names(call.args[0], handle, start, end) for call in calls if call.name == "orca-launch.sh" and call.args
+    )
+    return bash if launched else None
+
+
+def runs_once(call: Call, scan: Scan) -> bool:
+    occurrence = call.occurrence
+    return (
+        occurrence.nesting == 0
+        and occurrence.index == 0
+        and occurrence.line.raw.strip().startswith(call.source.raw)
+        and all(other is call or other.occurrence.prev_op == "|" for other in scan.calls)
+    )
+
+
+def dispatch_of(handle: str) -> str | Unreadable | None:
+    cursor: tuple[str, ...] = ()
+    while True:
+        argv = ("orca", "orchestration", "worker-list", "--limit", str(WORKER_PAGE), *cursor, "--json")
+        if isinstance(page := orca_json(argv, "result", unset=("ORCA_TERMINAL_HANDLE",)), Unreadable):
+            return page
+        try:
+            if page["scope"]["source"] != "all":
+                return Unreadable("Orca scoped its worker list to one Run")
+            holder = next(
+                (
+                    row["dispatchId"]
+                    for row in page["workers"]
+                    if handle in (row.get("agentTerminalHandle"), (row.get("resource") or {}).get("terminalHandle"))
+                ),
+                None,
+            )
+            after = (page.get("page") or {}).get("nextCursor")
+        except (TypeError, KeyError):
+            return Unreadable("Orca's worker list has no workers")
+        if holder is not None or not after:
+            return holder
+        cursor = ("--cursor", after)
+
+
+def idle_screen(tail: list[str]) -> bool:
+    if any(marker in line for line in tail for marker in BUSY):
+        return False
+    lines = [line.strip() for line in tail if not BORDER.match(line)]
+    prompt = next(
+        (
+            index
+            for index in range(len(lines) - 1, max(len(lines) - PROMPT_WINDOW, 0) - 1, -1)
+            if lines[index] == CLAUDE_PROMPT or lines[index].startswith(CODEX_PROMPT)
+        ),
+        None,
+    )
+    if prompt is None:
+        return False
+    said = [line for line in lines[:prompt] if not DONE_MARKER.match(line)]
+    return not said or not said[-1].endswith("?")
+
+
+def idle(handle: str) -> bool | Unreadable:
+    wait = ("orca", "terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", str(IDLE_WAIT_MS))
+    if isinstance(satisfied := orca_json((*wait, "--json"), "result", "wait", "satisfied"), Unreadable):
+        return satisfied
+    read = ("orca", "terminal", "read", "--terminal", handle, "--screen", "--limit", str(SCREEN_LINES), "--json")
+    if isinstance(screen := orca_json(read, "result", "terminal"), Unreadable):
+        return screen
+    return satisfied is True and screen.get("source") == "screen" and idle_screen(screen.get("tail") or [])
+
+
+def tab_nodes(node: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(node, dict):
+        if "tabId" in node and "panes" in node:
+            yield node
+        for child in node.values():
+            yield from tab_nodes(child)
+    elif isinstance(node, list):
+        for child in node:
+            yield from tab_nodes(child)
+
+
+def lone_pane(handle: str) -> bool | Unreadable:
+    if isinstance(
+        shown := orca_json(("orca", "terminal", "show", "--terminal", handle, "--json"), "result"), Unreadable
+    ):
+        return shown
+    try:
+        tab, worktree = shown["terminal"]["tabId"], shown["terminal"]["worktreePath"]
+    except (TypeError, KeyError):
+        return Unreadable("Orca shows no tab for the terminal")
+    listing = ("orca", "terminal", "list", "--worktree", f"path:{worktree}", "--include-visual-layouts", "--json")
+    if isinstance(layouts := orca_json(listing, "result", "visualLayouts"), Unreadable):
+        return layouts
+    panes = next((node["panes"] for node in tab_nodes(layouts) if node["tabId"] == tab), None)
+    if not isinstance(panes, dict):
+        return Unreadable("Orca's layout has no such tab")
+    return panes.get("type") == "terminal" and panes.get("handle") == handle
+
+
+@dataclass(frozen=True, slots=True)
+class CreatedHere:
+    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
+        handle = action.scope["terminal"]
+        found = next(
+            (
+                (use, bash)
+                for turn in evt.ctx.t.turns
+                for use in turn.tool_uses
+                if (bash := created_by(use, handle, evt.cwd)) is not None
+            ),
+            None,
+        )
+        if found is None:
+            return []
+        use, bash = found
+        holder = dispatch_of(handle)
+        ready = idle(handle) if holder is None else False
+        if holder is not None or ready is not True:
+            logger.bind(terminal=handle, dispatch=holder, idle=ready).info("a terminal this session created is busy")
+            return []
+        return [
+            Evidence(
+                id=f"created:{handle}",
+                source="created",
+                quote=clip(bash.command, 200),
+                said_at=use.result_ts or use.ts,
+                detail=f"this session created {handle}; no dispatch names it and its agent idles at a prompt",
+                key=f"created:{evt.session_id}/{evt.agent_id or 'main'}/{handle}",
+                live=True,
+            )
+        ]
+
+
+def rulings_naming(key: str) -> Rulings:
+    return Rulings(search=lambda action: action.scope[key])
+
+
+TERMINAL_CLOSE = Grants(
+    "sessions.close",
+    ("terminal",),
+    evidence=(rulings_naming("terminal"), CreatedHere()),
+    replay=RETRY_WINDOW,
+    would_allow="Close an idle terminal this session created, or have the owner name the terminal id in a "
+    "cc-notes answer before the closing session starts.",
+    hook="sessions",
+)
+LAUNCHD_STOP = Grants(
+    "sessions.launchctl",
+    ("service",),
+    evidence=(rulings_naming("service"),),
+    replay=RETRY_WINDOW,
+    would_allow="Have the owner name the service label in a cc-notes answer before the acting session starts.",
+    hook="sessions",
+)
+TASK_STOP = Grants(
+    "sessions.task-stop",
+    ("task",),
+    evidence=(rulings_naming("task"),),
+    replay=RETRY_WINDOW,
+    would_allow="Have the owner name the task id in a cc-notes answer before the stopping session starts.",
+    hook="sessions",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Ungranted:
+    message: str
+    reason: str
+
+
+def lift(evt: BaseHookEvent, grants: Grants, action: Proposal, message: str) -> Ungranted | None:
+    try:
+        verdict = grants.check(evt, action)
+    except Exception as exc:
+        logger.bind(kind=grants.kind).opt(exception=True).warning("grant check failed; keeping the block")
+        return Ungranted(message, f"{grants.hook}: the grant check failed ({type(exc).__name__}: {exc}).")
+    if isinstance(verdict, Allowed):
+        return None
+    return Ungranted(message, f"{grants.hook}: {verdict.message}" if verdict.reason else "")
+
+
+def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:
+    match next((message for message in messages if message is not None), None):
+        case Ungranted(message, reason):
+            return evt.block(message, system_message=reason or None)
+        case str() as message:
+            return evt.block(message)
+        case _:
+            return None
 
 
 guard = partial(

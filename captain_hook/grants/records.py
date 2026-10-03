@@ -20,6 +20,8 @@ class Evidence(BaseModel):
         said_at: When the owner said them, when the source records it.
         detail: Context the judge reads beside the quote, such as the question and the options shown.
         key: The approval's identity; every grant minted from it shares one budget.
+        live: Whether its source collects it again before a stored grant spends; a grant whose live
+            evidence the source no longer collects covers nothing.
     """
 
     id: str
@@ -28,6 +30,7 @@ class Evidence(BaseModel):
     said_at: datetime | None = None
     detail: str = ""
     key: str = ""
+    live: bool = False
 
 
 class Grant(BaseModel):
