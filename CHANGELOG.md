@@ -88,6 +88,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_fires` slot. The worker's deny reaches the client only when the worker recognizes the
   failure and its reply arrives; transport silence stays the client's call, which retries a
   timed-out guard once and then warns.
+- **The mandatory collector returns by the cutoff however a publishing hook's thread is
+  scheduled.** The closure waits for a verdict's publication no longer than the cutoff and fails
+  the phase when a publisher outlives it inside the lock, so a hook descheduled mid-publication
+  can no longer hold the reply past the caller's deadline or turn a late settlement into a
+  settled phase. Nothing that blocks runs under that lock, and the ledger row follows an accepted
+  verdict on the hook's own thread. A verdict counts only if it finished settling by the cutoff
+  and the collector did not give up on it: one refused at the cutoff records no completion, and
+  one that settled past the cutoff or still held the lock when the collector stopped waiting
+  lands in the failed phase. Neither writes a row, and both refund their `max_fires` slot.
 
 ### Changed
 

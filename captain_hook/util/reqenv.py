@@ -58,14 +58,30 @@ class Cutoff(threading.Event):
 
     A :func:`checkpoint` under it unwinds once the collector gave up, or once the absolute
     *deadline_unix_ms* passed while a descheduled collector had not yet said so. :meth:`close`
-    and :meth:`publish` share one lock, so whatever a hook publishes (its ledger row, its
-    completion, its settled future) either lands whole before the closure or not at all.
+    and :meth:`publish` share one lock, so what a hook publishes (its completion, its settled
+    future) either lands whole before the closure or not at all; the ledger row and the fire
+    slot follow an accepted publication on the hook's own thread, so nothing under the lock
+    blocks. Two checks keep what the closer counts and what a publisher keeps in agreement.
+    Under the lock, a publication whose settlement ends past the cutoff, whether the clock or
+    the closer got there first, is marked late and refused, so a delayed closer that finds the
+    lock free still sees it. After the lock, a publication that left it once the closure began
+    waits for the closer's outcome and is refused unless the closer took the lock and found
+    nothing late, so a publisher the closer gave up on while it still held the lock is refused
+    too. A refused publication never keeps a row or a slot. :meth:`close` waits for a
+    publication in flight no longer than its *timeout*, sets the flag either way, and returns
+    whether everything it closed over settled in time: ``False`` when a publisher outlived the
+    bound inside the lock or settled late before it, so the closer must not count what it then
+    finds settled.
     """
 
     def __init__(self, deadline_unix_ms: int | None = None) -> None:
         super().__init__()
         self.deadline_unix_ms = deadline_unix_ms
         self._closure = threading.Lock()
+        self._late = False
+        self._closing = threading.Event()
+        self._decided = threading.Event()
+        self._counted = True
 
     def is_set(self) -> bool:
         return super().is_set() or (self.deadline_unix_ms is not None and time.time() * 1000 >= self.deadline_unix_ms)
@@ -73,15 +89,29 @@ class Cutoff(threading.Event):
     def seconds_left(self) -> float | None:
         return None if self.deadline_unix_ms is None else max(0.0, self.deadline_unix_ms / 1000 - time.time())
 
-    def close(self) -> None:
-        with self._closure:
-            self.set()
+    def close(self, *, timeout: float | None = None) -> bool:
+        self._closing.set()
+        held = self._closure.acquire(timeout=-1 if timeout is None else timeout)
+        self._counted = held and not self._late
+        self.set()
+        self._decided.set()
+        if held:
+            self._closure.release()
+        return self._counted
 
     def publish[T](self, fn: Callable[[], T]) -> T:
         with self._closure:
             if self.is_set():
                 raise Abandoned
-            return fn()
+            published = fn()
+            if self.is_set():
+                self._late = True
+                raise Abandoned
+        if self._closing.is_set():
+            self._decided.wait()
+            if not self._counted:
+                raise Abandoned
+        return published
 
 
 _OVERRIDES: ContextVar[RequestOverrides | None] = ContextVar("captain_hook_request", default=None)

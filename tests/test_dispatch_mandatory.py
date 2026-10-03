@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -69,14 +69,62 @@ def paused_before_publish(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Ev
     return reached, release
 
 
-def closing_once(monkeypatch: pytest.MonkeyPatch, reached: threading.Event) -> None:
+def closing_once(
+    monkeypatch: pytest.MonkeyPatch, reached: threading.Event, *, then: Callable[[], None] | None = None
+) -> None:
     original = dispatch_module.wait
 
     def wait_for_the_barrier(futures: Any, timeout: float | None = None) -> Any:
         assert reached.wait(timeout=5.0)
+        if then is not None:
+            then()
         return original(futures, timeout=0)
 
     monkeypatch.setattr(dispatch_module, "wait", wait_for_the_barrier)
+
+
+def held_under_the_closure(monkeypatch: pytest.MonkeyPatch, name: str) -> tuple[threading.Event, threading.Event]:
+    reached, release = threading.Event(), threading.Event()
+    original = reqenv.note_mandatory_completed
+
+    def note_then_hold(key: str) -> None:
+        original(key)
+        if key.startswith(f"{name}."):
+            reached.set()
+            assert release.wait(timeout=5.0)
+
+    monkeypatch.setattr(reqenv, "note_mandatory_completed", note_then_hold)
+    return reached, release
+
+
+def held_after_settling(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    reached, release = threading.Event(), threading.Event()
+    original = reqenv.Cutoff.publish
+
+    def publish_then_hold[T](self: reqenv.Cutoff, fn: Callable[[], T]) -> T:
+        def settle_then_hold() -> T:
+            settled = fn()
+            reached.set()
+            assert release.wait(timeout=5.0)
+            return settled
+
+        return original(self, settle_then_hold)
+
+    monkeypatch.setattr(reqenv.Cutoff, "publish", publish_then_hold)
+    return reached, release
+
+
+def held_at_closure_exit(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    reached, release = threading.Event(), threading.Event()
+    original = reqenv.Cutoff.__init__
+
+    def bound_with_a_held_exit(self: reqenv.Cutoff, deadline_unix_ms: int | None = None) -> None:
+        original(self, deadline_unix_ms)
+        if deadline_unix_ms is not None:
+            self._closure = ClosureHeldOnExit(self._closure, reached, release)
+
+    monkeypatch.setattr(reqenv.Cutoff, "__init__", bound_with_a_held_exit)
+    return reached, release
 
 
 @pytest.fixture
@@ -127,6 +175,27 @@ class Exhausted(CustomCondition):
 
     def check(self, evt: Any) -> bool:
         raise EvidenceIncomplete(self.status, "foreground transcript deadline exhausted")
+
+
+@dataclass(frozen=True, slots=True)
+class ClosureHeldOnExit:
+    lock: threading.Lock
+    reached: threading.Event
+    release_gate: threading.Event
+
+    def acquire(self, *, timeout: float = -1) -> bool:
+        return self.lock.acquire(timeout=timeout)
+
+    def release(self) -> None:
+        self.lock.release()
+
+    def __enter__(self) -> bool:
+        return self.lock.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.reached.set()
+        assert self.release_gate.wait(timeout=5.0)
+        self.lock.release()
 
 
 class TestDispatchEvent:
@@ -567,6 +636,162 @@ class TestMandatoryLane:
         assert ran == ["policy"]
         assert spent.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
 
+    def test_a_publisher_holding_the_closure_past_the_cutoff_never_holds_the_collector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ticking_clock: Callable[[float], None]
+    ) -> None:
+        recorded: list[str] = []
+        monkeypatch.setattr(dispatch_module, "record_fire", lambda entry, evt, result: recorded.append(entry.name))
+        ran: list[str] = []
+        pool = ThreadPoolExecutor(max_workers=2)
+        overrides = outside_margin()
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            reached, release = held_under_the_closure(racing, "holder")
+            closing_once(racing, reached, then=lambda: ticking_clock(31.0))
+
+            @on(Event.PreToolUse, mandatory=True)
+            def holder(evt: Any) -> None:
+                ran.append("holder")
+
+            @on(Event.PreToolUse, mandatory=True, max_fires=1)
+            def policy(evt: Any) -> Any:
+                ran.append("policy")
+                assert reached.wait(timeout=5.0)
+                return evt.block("permission denied")
+
+            with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="holder: still running"):
+                dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+            assert overrides.mandatory_phase.failed
+            release.set()
+            pool.shutdown(wait=True)
+        assert sorted(ran) == ["holder", "policy"]
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+        assert recorded == []
+
+        ticking_clock(-31.0)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=2))
+        retried = outside_margin()
+        with reqenv.use_request(retried):
+            envelope = dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        assert sorted(ran) == ["holder", "holder", "policy", "policy"]
+        assert reason(envelope) == "permission denied"
+        assert recorded == ["policy"]
+        assert retried.mandatory_completed == [
+            completion_key(hook, ordinal) for ordinal, hook in enumerate(app._state.hooks)
+        ]
+        assert retried.mandatory_phase.outcome == "settled"
+
+    def test_a_verdict_accepted_before_the_cutoff_settles_while_its_row_is_still_in_flight(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ticking_clock: Callable[[float], None]
+    ) -> None:
+        reached, release = threading.Event(), threading.Event()
+        recorded: list[str] = []
+
+        def recording_after_the_commit(entry: Any, evt: Any, result: Any) -> None:
+            recorded.append(entry.name)
+            reached.set()
+            assert release.wait(timeout=5.0)
+
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True, max_fires=1)
+        def policy(evt: Any) -> Any:
+            ran.append("policy")
+            return evt.block("permission denied")
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        overrides = outside_margin()
+        pool = ThreadPoolExecutor(max_workers=1)
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            racing.setattr(dispatch_module, "record_fire", recording_after_the_commit)
+            closing_once(racing, reached, then=lambda: ticking_clock(31.0))
+            with reqenv.use_request(overrides):
+                envelope = dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+            assert recorded == ["policy"]
+            assert overrides.mandatory_phase.outcome == "settled"
+            release.set()
+            pool.shutdown(wait=True)
+        assert reason(envelope) == "permission denied"
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+
+        ticking_clock(-31.0)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+        spent = outside_margin()
+        with reqenv.use_request(spent):
+            assert dispatch(Event.PreToolUse, event(), session_dir=tmp_path) is None
+        assert ran == ["policy"]
+        assert spent.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+
+    @pytest.mark.parametrize(
+        ("hold", "delayed_collector"),
+        [
+            pytest.param(held_after_settling, False, id="held-inside-the-closure-past-the-bound"),
+            pytest.param(held_at_closure_exit, False, id="held-at-the-closure-exit-after-its-last-check"),
+            pytest.param(
+                lambda racing: held_under_the_closure(racing, "policy"),
+                True,
+                id="settled-past-the-cutoff-before-a-delayed-collector-closes",
+            ),
+        ],
+    )
+    def test_a_publication_settling_past_the_cutoff_fails_the_phase_and_keeps_no_row_or_slot(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        ticking_clock: Callable[[float], None],
+        hold: Callable[[pytest.MonkeyPatch], tuple[threading.Event, threading.Event]],
+        delayed_collector: bool,
+    ) -> None:
+        recorded: list[str] = []
+        monkeypatch.setattr(dispatch_module, "record_fire", lambda entry, evt, result: recorded.append(entry.name))
+        ran: list[str] = []
+
+        @on(Event.PreToolUse, mandatory=True, max_fires=1)
+        def policy(evt: Any) -> Any:
+            ran.append("policy")
+            return evt.block("permission denied")
+
+        def event() -> PreToolUseEvent:
+            return PreToolUseEvent(_raw=HEALTHY, ctx=HookContext(SessionStore(tmp_path), lazy_transcript(None), None))
+
+        overrides = outside_margin()
+        pool = ThreadPoolExecutor(max_workers=1)
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            reached, release = hold(racing)
+
+            def cross_the_cutoff() -> None:
+                ticking_clock(31.0)
+                if delayed_collector:
+                    release.set()
+                    pool.submit(lambda: None).result(timeout=5.0)
+
+            closing_once(racing, reached, then=cross_the_cutoff)
+            with reqenv.use_request(overrides), pytest.raises(MandatoryDeadlinePassed, match="still publishing"):
+                dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+            release.set()
+            pool.shutdown(wait=True)
+        assert overrides.mandatory_phase.failed
+        assert overrides.mandatory_completed == [completion_key(app._state.hooks[0], 0)]
+        assert recorded == []
+
+        ticking_clock(-31.0)
+        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: ThreadPoolExecutor(max_workers=1))
+        retried = outside_margin()
+        with reqenv.use_request(retried):
+            envelope = dispatch(Event.PreToolUse, event(), session_dir=tmp_path)
+        assert ran == ["policy", "policy"]
+        assert reason(envelope) == "permission denied"
+        assert recorded == ["policy"]
+        assert retried.mandatory_phase.outcome == "settled"
+
     def test_a_verdict_reached_after_the_cutoff_is_the_events_error(
         self, tmp_path: Path, ticking_clock: Callable[[float], None]
     ) -> None:
@@ -856,6 +1081,41 @@ class TestMandatoryDenial:
         envelope = replied(response)
         assert decision(envelope) == "deny"
         assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in reason(envelope)
+        assert "permission denied" not in response.stdout
+        assert recorded == []
+
+    def test_a_publisher_holding_the_closure_past_the_deadline_is_denied_in_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded: list[str] = []
+        pool = ThreadPoolExecutor(max_workers=2)
+
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            racing.setattr(dispatch_module, "record_fire", lambda entry, evt, result: recorded.append(entry.name))
+            reached, release = held_under_the_closure(racing, "holder")
+            closing_once(
+                racing,
+                reached,
+                then=lambda: racing.setattr(reqenv, "time", SimpleNamespace(time=lambda: FROZEN_NOW + 60.0)),
+            )
+
+            @on(Event.PreToolUse, mandatory=True)
+            def holder(evt: Any) -> None:
+                return None
+
+            @on(Event.PreToolUse, mandatory=True)
+            def slack_policy(evt: Any) -> Any:
+                assert reached.wait(timeout=5.0)
+                return evt.block("permission denied")
+
+            response = self.respond(deadline_unix_ms=int((FROZEN_NOW + 30.0) * 1000))
+            release.set()
+            pool.shutdown(wait=True)
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "did not complete (MandatoryDeadlinePassed: holder: still running" in reason(envelope)
         assert "permission denied" not in response.stdout
         assert recorded == []
 
