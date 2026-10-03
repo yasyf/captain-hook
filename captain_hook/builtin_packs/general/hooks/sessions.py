@@ -45,6 +45,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_class_rulings,
     inline_create,
     inline_ruling,
+    inline_run,
     inline_screen,
     inline_tab,
     inline_worker,
@@ -59,6 +60,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     settled_close,
     shell_scripts,
     spell,
+    still_settled,
     unresolvable,
 )
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
@@ -199,8 +201,9 @@ TMUX_ENDINGS = frozenset({"kill-server", "kill-session", "kill-pane", "kill-wind
 STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
 SERVE_RULING = inline_ruling("Owner: restart com.example.orca-serve once.")
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
-SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings()}
+SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings(), **inline_run("term_root")}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
+settling = partial(guarded, env={"ORCA_TERMINAL_HANDLE": "term_root"})
 ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
 
 
@@ -835,8 +838,11 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     action = Proposal(scope={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
     if (named := lift(evt, TERMINAL_CLOSE, action, denied)) is None or agent is None:
         return named
-    settled = settled_close(handle, tab)
-    return named if settled is None else lift(evt, SETTLED_CLOSE, settled, denied)
+    if (settled := settled_close(evt, handle, tab)) is None:
+        return named
+    if (ungranted := lift(evt, SETTLED_CLOSE, settled, denied)) is not None or still_settled(settled):
+        return ungranted
+    return Ungranted(denied, "sessions: the terminal's dispatch or idle prompt changed while the judge decided.")
 
 
 def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Ungranted | None:
@@ -1013,12 +1019,12 @@ def orca_vm_run_flag(call: Call) -> str | None:
             command="orca orchestration worker-stop --dispatch ctx-1",
             commands={**INLINE_COMMANDS, "ccn answer search ctx-1": inline_ruling("stop ctx-1")},
         ): Block(pattern="worker-stop ends the worker"),
-        guarded(
+        settling(
             command=AGENT_CLOSE,
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
             llm=CLASS_ALLOW,
         ): Allow(),
-        guarded(
+        settling(
             command=AGENT_CLOSE,
             commands={
                 **SETTLED_COMMANDS,
@@ -1026,7 +1032,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
             },
             llm={"allow": True, "relied_on": ["ccn:6190a4a"]},
         ): Allow(),
-        guarded(
+        settling(
             command=AGENT_CLOSE,
             commands={
                 **SETTLED_COMMANDS,
@@ -1034,7 +1040,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
             },
             llm=CLASS_ALLOW,
         ): Block(pattern="where pid 16002"),
-        guarded(
+        settling(
             command=AGENT_CLOSE,
             commands={
                 **SETTLED_COMMANDS,
@@ -1043,7 +1049,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
             },
             llm=CLASS_ALLOW,
         ): Block(pattern="where pid 16002"),
-        guarded(
+        settling(
             command=AGENT_CLOSE,
             commands={
                 **SETTLED_COMMANDS,
@@ -1052,15 +1058,32 @@ def orca_vm_run_flag(call: Call) -> str | None:
             },
             llm=CLASS_ALLOW,
         ): Block(pattern="where pid 16002"),
-        guarded(
+        settling(
             command=AGENT_CLOSE,
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
         ): Block(pattern="where pid 16002"),
-        guarded(
+        settling(
             command="for t in term_agent; do orca terminal close --terminal $t; done",
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
             llm=CLASS_ALLOW,
         ): Block(pattern="leave ending them to the owner"),
+        settling(
+            command=AGENT_CLOSE,
+            commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
+            env={"ORCA_TERMINAL_HANDLE": "term_lane"},
+            llm=CLASS_ALLOW,
+        ): Block(pattern="where pid 16002"),
+        settling(
+            command=AGENT_CLOSE,
+            commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
+            agent_id="sibling-lane",
+            llm=CLASS_ALLOW,
+        ): Block(pattern="where pid 16002"),
+        guarded(
+            command=AGENT_CLOSE,
+            commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
+            llm=CLASS_ALLOW,
+        ): Block(pattern="where pid 16002"),
         guarded(command=f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_d83bbb927995"): Allow(),
         guarded(command=f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_1 --dispatch ctx_2"): Allow(),
         guarded(command=f"cd /Users/dev/monorepo && {ORCA_GC} --run run_1 --dispatch ctx_1 2>&1 | tail -20"): Allow(),

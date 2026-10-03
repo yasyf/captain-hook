@@ -25,6 +25,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_class_rulings,
     inline_create,
     inline_ruling,
+    inline_run,
     inline_spawn,
     inline_tab,
     inline_worker,
@@ -129,7 +130,9 @@ TWO_AGENT_TERMINALS = table(
 OWNER_CLOSE = f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json"
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 IDLE_CLOSE = "orca terminal close --terminal term_idle --json"
-SETTLED = INLINE_COMMANDS | inline_class_rulings()
+SETTLED = INLINE_COMMANDS | inline_class_rulings() | inline_run("term_root")
+ROOT = {"ORCA_TERMINAL_HANDLE": "term_root"}
+SETTLED_WORKER = {"dispatchId": "ctx_settled", "dispatchStatus": "completed", "runId": "run_inline"}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
 ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
 CLOSE_FIX = (
@@ -139,8 +142,8 @@ CLOSE_FIX = (
 REAL_CCN_ANSWERS = evidence_module.ccn_answers
 
 
-def overrides(client_ppid: int = HOOK_SHELL) -> reqenv.RequestOverrides:
-    state = {"CAPTAIN_HOOK_STATE_DIR": os.environ["CAPTAIN_HOOK_STATE_DIR"]}
+def overrides(client_ppid: int = HOOK_SHELL, env: dict[str, str] | None = None) -> reqenv.RequestOverrides:
+    state = {"CAPTAIN_HOOK_STATE_DIR": os.environ["CAPTAIN_HOOK_STATE_DIR"], **(env or {})}
     return reqenv.RequestOverrides(env=state, cwd="/w", client_ppid=client_ppid, session_id="s1")
 
 
@@ -198,17 +201,27 @@ def reason(envelope: dict[str, Any] | None) -> str | None:
 
 
 def envelope_of(
-    inp: Input, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
+    inp: Input,
+    tmp_path: Path,
+    *,
+    event: Event = Event.PreToolUse,
+    client_ppid: int = HOOK_SHELL,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     evt = input_to_event(event, inp)
-    with reqenv.use_request(overrides(client_ppid)):
+    with reqenv.use_request(overrides(client_ppid, env)):
         return dispatch(event, evt, session_dir=tmp_path)
 
 
 def decide_input(
-    inp: Input, tmp_path: Path, *, event: Event = Event.PreToolUse, client_ppid: int = HOOK_SHELL
+    inp: Input,
+    tmp_path: Path,
+    *,
+    event: Event = Event.PreToolUse,
+    client_ppid: int = HOOK_SHELL,
+    env: dict[str, str] | None = None,
 ) -> str | None:
-    return reason(envelope_of(inp, tmp_path, event=event, client_ppid=client_ppid))
+    return reason(envelope_of(inp, tmp_path, event=event, client_ppid=client_ppid, env=env))
 
 
 def bash(command: str, **fields: Any) -> Input:
@@ -662,7 +675,7 @@ class TestTerminalClose:
         ):
             with stubbed_commands(SETTLED | {"orca orchestration worker-list": inline_worker(handle, status, stage)}):
                 close = bash(f"orca terminal close --terminal {handle} --json", llm=CLASS_ALLOW)
-                assert decide_input(close, tmp_path) is None
+                assert decide_input(close, tmp_path, env=ROOT) is None
         [grant] = store.grants("sessions.close-settled")
         assert grant.uses is None and grant.scope == {}
         assert [(spend.state, spend.relied_on) for spend in store.spends(grant.id)] == [
@@ -672,19 +685,31 @@ class TestTerminalClose:
         assert spends("sessions.close") == []
 
     @pytest.mark.parametrize(
-        ("commands", "llm"),
+        ("commands", "llm", "env", "fields"),
         [
             pytest.param(
                 {"orca orchestration worker-list": inline_worker("term_agent", "dispatched", "input_accepted")},
                 CLASS_ALLOW,
+                ROOT,
+                {},
                 id="live-dispatch",
             ),
-            pytest.param({"orca terminal read": INLINE_BUSY}, CLASS_ALLOW, id="busy-agent"),
+            pytest.param({"orca terminal read": INLINE_BUSY}, CLASS_ALLOW, ROOT, {}, id="busy-agent"),
             pytest.param(
-                inline_class_rulings(written=INLINE_STARTED + timedelta(minutes=1)), CLASS_ALLOW, id="stale-ruling"
+                inline_class_rulings(written=INLINE_STARTED + timedelta(minutes=1)),
+                CLASS_ALLOW,
+                ROOT,
+                {},
+                id="stale-ruling",
             ),
-            pytest.param({}, {}, id="judge-declines"),
-            pytest.param({"orca orchestration worker-list": _sessions.inline_workers()}, CLASS_ALLOW, id="no-dispatch"),
+            pytest.param({}, {}, ROOT, {}, id="judge-declines"),
+            pytest.param(
+                {"orca orchestration worker-list": _sessions.inline_workers()}, CLASS_ALLOW, ROOT, {}, id="no-dispatch"
+            ),
+            pytest.param({}, CLASS_ALLOW, {"ORCA_TERMINAL_HANDLE": "term_lane"}, {}, id="sibling-lane-terminal"),
+            pytest.param({}, CLASS_ALLOW, ROOT, {"agent_id": "sibling-lane"}, id="in-process-lane"),
+            pytest.param({}, CLASS_ALLOW, {}, {}, id="outside-orca"),
+            pytest.param(inline_run("term_other_root"), CLASS_ALLOW, ROOT, {}, id="another-runs-root"),
         ],
     )
     def test_a_class_ruling_never_lifts_a_close_the_orca_record_or_the_judge_rules_out(
@@ -694,13 +719,49 @@ class TestTerminalClose:
         tmp_path: Path,
         commands: dict[str, str],
         llm: dict[str, Any],
+        env: dict[str, str],
+        fields: dict[str, Any],
     ) -> None:
         settled = {"orca orchestration worker-list": inline_worker("term_agent", "completed")}
         with stubbed_commands(SETTLED | settled | commands):
-            message = decide_input(bash(AGENT_CLOSE, llm=llm), tmp_path)
+            message = decide_input(bash(AGENT_CLOSE, llm=llm, **fields), tmp_path, env=env)
         assert message is not None
         assert "where pid 16002" in message
         assert [spend for grant in store.grants("sessions.close-settled") for spend in store.spends(grant.id)] == []
+
+    @pytest.mark.parametrize(
+        ("idles", "workers"),
+        [
+            pytest.param([True, False], [SETTLED_WORKER, SETTLED_WORKER], id="goes-busy"),
+            pytest.param(
+                [True, True],
+                [SETTLED_WORKER, {**SETTLED_WORKER, "dispatchId": "ctx_next", "dispatchStatus": "dispatched"}],
+                id="re-dispatched",
+            ),
+            pytest.param(
+                [True, True], [SETTLED_WORKER, {**SETTLED_WORKER, "dispatchId": "ctx_next"}], id="another-dispatch"
+            ),
+        ],
+    )
+    def test_a_class_lift_rechecks_the_orca_record_after_the_judge_allows(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        idles: list[bool],
+        workers: list[dict[str, str]],
+    ) -> None:
+        monkeypatch.setattr(_sessions, "idle", lambda handle, seen=iter(idles): next(seen))
+        monkeypatch.setattr(_sessions, "worker_of", lambda handle, seen=iter(workers): next(seen))
+        with stubbed_commands(SETTLED):
+            envelope = envelope_of(bash(AGENT_CLOSE, llm=CLASS_ALLOW), tmp_path, env=ROOT)
+        assert envelope is not None
+        assert "where pid 16002" in (reason(envelope) or "")
+        assert "changed while the judge decided" in envelope["systemMessage"]
+        assert [
+            spend.state for grant in store.grants("sessions.close-settled") for spend in store.spends(grant.id)
+        ] == ["released"]
 
     @pytest.mark.parametrize(
         "command",

@@ -578,8 +578,21 @@ its tab; otherwise, the denial says to drop `--tab`.
 After `sessions.close` denies, `sessions.close-settled` can lift a close when the
 terminal's process tree is readable, `orca orchestration worker-list` records its
 `dispatchStatus` as `completed` or `failed`, and it passes the idle checks above.
+The caller must be the root session coordinating the dispatch's Run. The hook
+event has no `agent_id`, and the request's `ORCA_TERMINAL_HANDLE` is set and matches
+`result.run.coordinator_handle` from
+`orca orchestration run-show --id <runId> --json`, using the worker row's `runId`.
+Other terminal lanes, in-process teammates, callers outside Orca, and another
+Run's coordinator get no lift.
+
 The grants `Judge` uses capt-hook's small model to decide whether a standing owner
-ruling covers the terminal's Orca record.
+ruling covers the terminal's Orca record. The proposal's payload names the Run;
+its summary identifies the caller as the Run's coordinator. After the judge
+allows, the guard re-reads the worker row and idle prompt. The same dispatch must
+still hold the terminal as `completed` or `failed`, and the agent must still be
+idle. Otherwise, the guard blocks the close, releases the reserved spend, and
+sets `systemMessage` to
+`sessions: the terminal's dispatch or idle prompt changed while the judge decided.`
 
 `StandingRulings` reads cc-notes answers `c9b27c1` for settled-dispatch cleanup and
 `6190a4a` for failed-launch orphans by id with `ccn answer show`. Only answers last

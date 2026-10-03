@@ -44,7 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers written during the acting session.
 - **A standing owner ruling can lift a close of a settled dispatch's idle terminal.** The
   general pack's `sessions.close-settled` kind runs only after the per-terminal
-  `sessions.close` lift denies. It requires a literal
+  `sessions.close` lift denies. Only the root session coordinating the dispatch's Run
+  qualifies. The hook event has no `agent_id`, and the request's `ORCA_TERMINAL_HANDLE` is set
+  and matches that Run's `coordinator_handle` from `orca orchestration run-show`.
+  It requires a literal
   `orca terminal close --terminal <handle>` whose dispatch Orca's worker list records with
   `dispatchStatus` of `completed` or `failed`, a successful `tui-idle` check, an idle
   prompt on the screen, and a readable terminal process tree. New `StandingRulings` evidence in
@@ -53,8 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last written before the acting session started count; each is pinned live to its
   revision, and an id absent from the repository (exit 3) supplies no evidence. The grants
   `Judge`, capt-hook's small model, decides whether a ruling covers the terminal's Orca
-  record. The minted grant has empty scope, unlimited uses, and no expiry; each close
-  spends it again and is judged again. Live or unsettled dispatches, busy agents,
+  record; the proposal names the Run and describes the caller as its coordinator.
+  The minted grant has empty scope, unlimited uses, and no expiry; each close
+  spends it again and is judged again. After the judge allows, the guard re-reads the
+  worker row and idle prompt. The same dispatch must still hold the terminal as
+  `completed` or `failed`, and the agent must still be idle. A failed recheck blocks the
+  close, releases the reserved spend, and reports the change in `systemMessage`.
+  Other terminal lanes, in-process teammates, callers outside Orca, and another Run's
+  coordinator get no lift. Live or unsettled dispatches, busy agents,
   terminals without dispatches, rulings written during the session, unreadable process
   trees, loops, and batches never receive this lift.
 - **An agent can stop a teammate its own transcript proves it spawned.**

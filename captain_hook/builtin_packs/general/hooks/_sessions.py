@@ -148,8 +148,9 @@ SETTLED_CLOSE_RULES = (
     "The owner's standing rulings in the evidence cover a class of Orca terminal closes rather than one named "
     "terminal: c9b27c1 lets the root close a settled dispatch's idle terminal, as orca-gc does, and 6190a4a lets it "
     "close an orphan terminal its own failed launch created. The proposed action's payload is Orca's record for the "
-    "terminal: the dispatch holding it and that dispatch's status. The guard has already proven the status is "
-    "completed or failed and the terminal's agent idles at a prompt. Allow only when a ruling's words cover closing "
+    "terminal: the dispatch holding it, its Run, and that dispatch's status. The guard has already proven the status "
+    "is completed or failed, the terminal's agent idles at a prompt, and the caller is the root session coordinating "
+    "that Run. Allow only when a ruling's words cover closing "
     "a terminal with this record, and cite that ruling. Deny when the rulings exclude this record, or limit the class "
     "to terminals it is not."
 )
@@ -267,6 +268,11 @@ def inline_class_rulings(*, written: datetime = INLINE_STARTED - timedelta(days=
         )
         for ident, body in bodies.items()
     }
+
+
+def inline_run(coordinator: str) -> dict[str, str]:
+    shown = {"ok": True, "result": {"run": {"id": "run_inline", "coordinator_handle": coordinator}}}
+    return {"orca orchestration run-show --id run_inline": json.dumps(shown)}
 
 
 def inline_screen(*tail: str) -> str:
@@ -960,18 +966,37 @@ class CreatedHere:
         ]
 
 
-def settled_close(handle: str, tab: bool) -> Proposal | None:
+def settled_worker(handle: str) -> dict[str, Any] | None:
     worker = worker_of(handle)
     if not isinstance(worker, dict) or worker.get("dispatchStatus") not in SETTLED or idle(handle) is not True:
+        return None
+    return worker
+
+
+def coordinates(evt: BaseHookEvent, run: str | None) -> bool:
+    caller = reqenv.getenv("ORCA_TERMINAL_HANDLE")
+    if evt.agent_id is not None or not caller or not run:
+        return False
+    shown = ("orca", "orchestration", "run-show", "--id", run, "--json")
+    return orca_json(shown, "result", "run", "coordinator_handle") == caller
+
+
+def settled_close(evt: BaseHookEvent, handle: str, tab: bool) -> Proposal | None:
+    if (worker := settled_worker(handle)) is None or not coordinates(evt, run := worker.get("runId")):
         return None
     dispatch, status = worker["dispatchId"], worker["dispatchStatus"]
     stage = ((worker.get("projection") or {}).get("stage") or {}).get("detail")
     return Proposal(
         scope={},
-        payload={"terminal": handle, "tab": tab, "dispatch": dispatch, "run": worker.get("runId"), "status": status},
-        summary=f"close terminal {handle}, whose dispatch {dispatch} is {status} ({stage}) and whose agent idles "
-        "at a prompt",
+        payload={"terminal": handle, "tab": tab, "dispatch": dispatch, "run": run, "status": status},
+        summary=f"the coordinator of run {run} closes terminal {handle}, whose dispatch {dispatch} is {status} "
+        f"({stage}) and whose agent idles at a prompt",
     )
+
+
+def still_settled(action: Proposal) -> bool:
+    worker = settled_worker(action.payload["terminal"])
+    return worker is not None and worker["dispatchId"] == action.payload["dispatch"]
 
 
 def spawned(use: Any, task: str) -> bool:
