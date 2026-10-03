@@ -165,15 +165,34 @@ def ask_evidence(use: Any) -> list[Evidence]:
     return answer_evidence(use.ref.tool_use_id or f"{use.ts:%s}", *result, use.result_ts or use.ts)
 
 
-def recorded_asks(evt: BaseHookEvent) -> list[Evidence]:
+def recorded(evt: BaseHookEvent, kind: str) -> list[Evidence]:
     from captain_hook.grants import store
 
     at = store.now()
     return [
         item
-        for grant in store.grants("ask", tree_of(evt))
+        for grant in store.grants(kind, tree_of(evt))
         if grant.revoked is None and (grant.expires is None or grant.expires > at)
         for item in grant.evidence
+    ]
+
+
+def lapsed(evt: BaseHookEvent, since: datetime) -> list[Evidence]:
+    """The owner's recorded words and answers in *evt*'s tree said after *since* whose records have expired.
+
+    A grant minted before them still reaches the judge with them, so an expired record never ends a
+    withdrawal while the grant it withdrew stays usable.
+    """
+    from captain_hook.grants import store
+
+    at = store.now()
+    return [
+        item
+        for kind in store.EVIDENCE_KINDS
+        for grant in store.grants(kind, tree_of(evt))
+        if grant.revoked is None and grant.expires is not None and grant.expires <= at
+        for item in grant.evidence
+        if item.said_at is not None and item.said_at > since
     ]
 
 
@@ -187,7 +206,7 @@ class Asked:
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
         needles = self.needles(evt) if self.needles else ()
         read = {item.id: item for use in owner_uses(evt, needles, self.window) for item in ask_evidence(use)}
-        merged = {item.id: item for item in recorded_asks(evt)} | read
+        merged = {item.id: item for item in recorded(evt, "ask")} | read
         return sorted(merged.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
 
@@ -199,12 +218,6 @@ def machine_written(text: str, markers: Sequence[str] = ()) -> bool:
 def words_evidence(text: str, at: datetime | None) -> Evidence:
     key = f"words:{sha256(f'{at.isoformat() if at else ""}|{text}'.encode()).hexdigest()[:12]}"
     return Evidence(id=key, source="words", quote=text, said_at=at, key=key)
-
-
-def recorded_words(evt: BaseHookEvent) -> list[Evidence]:
-    from captain_hook.grants import store
-
-    return [item for grant in store.grants("words", tree_of(evt)) for item in grant.evidence]
 
 
 def queued_words(turn: Any) -> list[tuple[str, Any]]:
@@ -232,7 +245,7 @@ class OwnerWords:
     window: int = OWNER_WINDOW
 
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
-        items = {item.id: item for item in recorded_words(evt) if not machine_written(item.quote, self.machine)}
+        items = {item.id: item for item in recorded(evt, "words") if not machine_written(item.quote, self.machine)}
         needles = self.needles(evt) if self.needles else ()
         for session, prompts_are_owner in owner_sessions(evt, needles):
             for turn in session.recent_messages(self.window).turns:

@@ -15,8 +15,9 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook.grants import store
-from captain_hook.grants.evidence import Asked, OwnerWords, tree_of, verbatim
+from captain_hook.grants.evidence import Asked, OwnerWords, lapsed, tree_of, verbatim
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
+from captain_hook.grants.orca import adopt_coordinator
 from captain_hook.grants.records import Allowed, Denied, Evidence, Grant, Proposal
 
 if TYPE_CHECKING:
@@ -180,6 +181,7 @@ class Grants:
             action = self.action(evt)
         scope = self.canonical(action)
         tree = tree_of(evt)
+        adopt_coordinator(evt)
         collected: list[Evidence] | None = None
 
         def session() -> list[Evidence]:
@@ -200,11 +202,15 @@ class Grants:
                 refusals.append(f"grant {grant.id} rests on {stale}, which changed after the grant was minted.")
                 continue
             reason, relied = f"covered by grant {grant.id}", [item.id for item in grant.evidence]
-            since = [
-                item
-                for item in (session() if self.judge is not None else ())
-                if item.source in OWNER_SOURCES and item.said_at is not None and item.said_at > grant.created
-            ]
+            later = [*session(), *lapsed(evt, grant.created)] if self.judge is not None else []
+            since = sorted(
+                {
+                    item.id: item
+                    for item in later
+                    if item.source in OWNER_SOURCES and item.said_at is not None and item.said_at > grant.created
+                }.values(),
+                key=lambda item: item.said_at.timestamp() if item.said_at else 0.0,
+            )
             allowed_by_rule = any(ruling.verdict == "allow" for ruling in rulings)
             if self.judge is not None and (since or not allowed_by_rule):
                 try:

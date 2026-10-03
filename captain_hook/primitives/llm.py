@@ -106,7 +106,7 @@ def llm_evaluate[M: BaseModel](
     the event fires inside a subagent or teammate lane, adds that window of the root session that
     spawned the lane as ``<root_transcript>``, so a judge can read the user's words a lane never saw.
     ``root_excerpt`` maps the event to needles (a quote, a thread, the text being judged) and adds every
-    root event that mentions one as ``<root_excerpt>``, however far back the root transcript it sits.
+    event in the last 16 MiB of the root transcript that mentions one as ``<root_excerpt>``.
     """
     from cc_transcript.render import clip
 

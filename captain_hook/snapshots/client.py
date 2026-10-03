@@ -187,6 +187,8 @@ class Bridge:
             process.stdin.write(encode_frame(frame))
             process.stdin.flush()
             response = read_frame(process.stdout)
+            if response.get("op") == "error" and response.get("id") == self._id:
+                raise SnapshotProtocolError(f"snapshot host failed the request: {response.get('error')}")
             if (
                 type(response.get("protocol")) is not int
                 or type(response.get("id")) is not int

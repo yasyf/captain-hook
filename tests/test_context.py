@@ -639,7 +639,7 @@ class TestCallLlm:
         )
         assert HookContext(session=SessionStore(None), transcript=lane, settings=None).root_transcript_block() == ""
 
-    def test_root_excerpt_keeps_only_matching_events_from_the_whole_root(self) -> None:
+    def test_root_excerpt_keeps_only_matching_events_from_the_root(self) -> None:
         from captain_hook.context import render_window
         from captain_hook.prompt import Prompt
         from captain_hook.testing.helpers import fixture_file, fixture_session
@@ -683,6 +683,19 @@ class TestCallLlm:
         assert asked.startswith("<root_excerpt>\nuser: before") and "status 7" not in asked
         outside = HookContext(session=SessionStore(None), transcript=ctx.transcript, settings=None)
         assert outside.root_excerpt(["x"]) is None
+
+    def test_root_excerpt_reads_only_the_roots_trailing_window(self) -> None:
+        from captain_hook.context import render_window
+        from captain_hook.testing.helpers import fixture_file
+        from captain_hook.transcripts import root_excerpt
+
+        root = fixture_file(
+            [T.user("approve the old draft"), *(T.user(f"status {i}") for i in range(50)), T.user("approve the new")]
+        )
+        last = len(root.read_bytes().splitlines(keepends=True)[-1])
+        for tail_bytes in (last, last + 10):
+            excerpt = root_excerpt(root, ["approve"], around=0, tail_bytes=tail_bytes)
+            assert render_window(excerpt, window=None, tool_results=False, budget=None) == "user: approve the new"
 
     def test_root_excerpt_keeps_an_answer_that_later_agent_echoes_outnumber(self) -> None:
         from captain_hook.testing.helpers import fixture_file

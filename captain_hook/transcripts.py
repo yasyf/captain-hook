@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 from collections import deque
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 # must not smuggle path separators or traversal past that trust boundary.
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 ROOT_TAIL_EVENTS = 256
+ROOT_EXCERPT_BYTES = 16 * 1024 * 1024
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -326,11 +328,18 @@ def root_transcript(path: str | Path, events: int) -> LazyTranscript:
     )
 
 
-def root_excerpt(path: str | Path, needles: Sequence[str], *, around: int = 2, limit: int = 20) -> Session:
-    """The earliest and the newest ``limit`` events of a lane's root session transcript whose line contains
-    any of ``needles``, each with ``around`` events either side, streamed from the whole file so an answer
-    far older than the tail still reaches the judge. The earliest are kept because a quote is first said by
-    whoever it came from and echoed by agents after, so the newest alone drop the words and keep the echoes.
+def root_excerpt(
+    path: str | Path,
+    needles: Sequence[str],
+    *,
+    around: int = 2,
+    limit: int = 20,
+    tail_bytes: int = ROOT_EXCERPT_BYTES,
+) -> Session:
+    """The earliest and the newest ``limit`` events in the last ``tail_bytes`` of a lane's root session
+    transcript whose line contains any of ``needles``, each with ``around`` events either side. Owner words
+    older than that tail reach a grant judge through the store's recorded ``words`` and ``ask`` records.
+    The earliest are kept because a quote is first said by whoever it came from and echoed by agents after.
     A needle matches as typed or JSON-escaped, with or without its non-ASCII escaped.
     """
     from cc_transcript.parser import parse_events_from_bytes
@@ -352,6 +361,11 @@ def root_excerpt(path: str | Path, needles: Sequence[str], *, around: int = 2, l
     after = 0
     reqenv.checkpoint()
     with Path(path).open("rb") as transcript:
+        if (start := transcript.seek(0, os.SEEK_END) - tail_bytes) > 0:
+            transcript.seek(start - 1)
+            transcript.readline()
+        else:
+            transcript.seek(0)
         for line in transcript:
             if any(form in line for form in forms):
                 window = [*before, line]

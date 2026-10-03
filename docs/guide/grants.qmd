@@ -199,7 +199,7 @@ The defaults are `model="small"`, `specialty="review"`, and `deadline=20` second
 `contexts` accepts the same prompt contexts as other LLM hooks.
 `transcript` and `root_transcript` default to `False`; set either to a message
 count, `"recent"`, or `"full"` when the judge needs more context.
-`root_excerpt` maps an event to search needles in the root transcript.
+`root_excerpt` maps an event to search needles in the last 16 MiB of the root transcript.
 `tool_results=False` keeps tool output out of those windows by default.
 
 The evidence providers determine which words can authorize an action:
@@ -220,11 +220,14 @@ judge raises `ValueError`: those sources need a judge to interpret the owner's w
 selection, typed answer, and per-question notes. It distinguishes what was shown
 from what was chosen. The builtin `general` pack records answers on
 `PostToolUse(AskUserQuestion)` as tree-bound `ask` grants with one use and a
-24-hour expiry. These are evidence records; the declaration mints its own kind
-after the judge allows.
+7-day expiry, and a root session's own prompts on `UserPromptSubmit` as `words`
+grants with the same expiry. These are evidence records; the declaration mints its
+own kind after the judge allows.
 
 `Asked` and `OwnerWords` default to a window of 60 and accept a `needles` callback
-to include root-session excerpts farther back. Set
+to include matching events from the last 16 MiB of the root transcript. Evidence
+reads never scan a whole transcript: owner words older than these windows reach the
+judge only through the recorded `ask` and `words` records. Set
 `needles=lambda evt: ("C_EXAMPLE",)` to search for that channel id.
 `OwnerWords(machine=("<machine-message>",))` excludes prompts containing that marker.
 Tool output, teammate messages, and notifications are not owner evidence.
@@ -257,8 +260,10 @@ one answer naming two terminals mints two grants. Rulings are live evidence, so
 stored grants recheck the answer's revision before spending; editing the answer
 stops its existing grant from covering the action.
 
-Stored `ask` evidence is collected only while its record is unexpired and
-unrevoked. `Asked` also reads recent transcript answers. To stop an already minted
+Stored `ask` and `words` evidence is collected only while its record is unexpired
+and unrevoked. The judge of a stored grant also reads expired records said after the
+grant was minted, so a withdrawal never lapses while the grant is usable. `Asked`
+also reads recent transcript answers. To stop an already minted
 permission, revoke the grant of the declaration's kind.
 
 ## Follow the check order
@@ -488,6 +493,25 @@ Omit `--tree` to adopt into the current session; `--agent` defaults to `main`.
 The CLI reads the adopting session from the session environment variables even
 when `--tree` is explicit. `grant show` logs each adoption with its destination
 tree, timestamp, session, and agent.
+
+An Orca lane adopts its Run coordinator's grants without a command. The builtin
+`general` pack records the Orca terminal of each attended Claude session from
+`ORCA_TERMINAL_HANDLE`, once per session. A `claude -p` session is unattended and
+records nothing.
+
+On a grants check in an Orca terminal, the framework finds the
+dispatched worker for that terminal with `orca orchestration worker-list`, and reads
+the Run's coordinator terminal with `orca orchestration run-show`. It then adopts
+every spendable grant minted in the session tree recorded for that terminal. The
+coordinator's recorded `words` and `ask` records are never adopted, so one approval
+still spends once. Each adoption is logged with agent `orca:<run>`, so both trees
+share the budget, and `grant show` lists the lane.
+
+A lane pins the coordinator session it first binds for each Run. When the coordinator
+terminal's record moves to another session, the lane adopts nothing more from it.
+The session re-reads the Run from Orca after one minute, or when its terminal
+changes, so a finished worker stops adopting. Outside Orca, or with no recorded
+coordinator session, nothing is adopted.
 
 Inspect and revoke a grant with its printed id in place of `GRANT_ID`:
 
