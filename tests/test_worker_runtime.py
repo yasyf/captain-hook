@@ -183,7 +183,7 @@ def test_guard_stays_empty_unless_every_mandatory_hook_completed(hooks: list[str
 def test_guard_stays_empty_without_a_registered_general_guard() -> None:
     state = app.State()
     state.hooks.append(mandatory_hook("other_guard", pack="other"))
-    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)]).dispatch(request(mandatory=True))
     assert response.guard == ""
 
 
@@ -191,16 +191,18 @@ def test_guard_stays_empty_while_the_general_pack_has_a_load_error() -> None:
     state = app.State()
     state.hooks.append(mandatory_hook("guard_sessions"))
     state.load_errors.append(app.LoadError("/hooks/stops.py", ImportError("broken copy"), pack="general"))
-    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)]).dispatch(request(mandatory=True))
     assert response.guard == ""
 
 
 def test_guard_counts_another_packs_mandatory_hook_beside_the_general_guard() -> None:
     state = app.State()
     state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("other_guard", pack="other")))
-    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)]).dispatch(request(mandatory=True))
     assert response.guard == ""
-    response, _ = runtime_with(state, [hook.state_key for hook in state.hooks]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(
+        state, [completion_key(hook, ordinal) for ordinal, hook in enumerate(state.hooks)]
+    ).dispatch(request(mandatory=True))
     assert response.guard == "completed"
 
 
@@ -208,7 +210,9 @@ def test_guard_stays_empty_while_a_pack_with_mandatory_hooks_has_a_load_error() 
     state = app.State()
     state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("other_guard", pack="other")))
     state.load_errors.append(app.LoadError("/hooks/other_sibling.py", ImportError("broken copy"), pack="other"))
-    response, _ = runtime_with(state, [hook.state_key for hook in state.hooks]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(
+        state, [completion_key(hook, ordinal) for ordinal, hook in enumerate(state.hooks)]
+    ).dispatch(request(mandatory=True))
     assert response.guard == ""
 
 
@@ -216,7 +220,7 @@ def test_guard_ignores_a_load_error_in_a_pack_without_mandatory_hooks() -> None:
     state = app.State()
     state.hooks.append(mandatory_hook("guard_sessions"))
     state.load_errors.append(app.LoadError("/hooks/advisory.py", ImportError("broken copy"), pack="advisory"))
-    response, _ = runtime_with(state, [state.hooks[0].state_key]).dispatch(request(mandatory=True))
+    response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)]).dispatch(request(mandatory=True))
     assert response.guard == "completed"
 
 
