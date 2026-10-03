@@ -1,5 +1,8 @@
 name: Documentation
 
+env:
+  GD_BUILD_TIMEOUT: "360"
+
 on:
   workflow_dispatch:
   push:
