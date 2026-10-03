@@ -81,6 +81,7 @@
     },
     "max_retained_bytes": {
       "default": 1073741824,
+      "description": "Hard cap on retained accounted bytes. It must be at least the store's startup footprint (the pre-sized delivery and expired-query tables plus the default tool registries); a smaller value is rejected as an invalid configuration. Background admissions are capped at max_retained_bytes - reserved_hook_accounted_bytes, so a footprint above that difference refuses every background admission while foreground hook admissions proceed.",
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991,
       "title": "Max Retained Bytes",
