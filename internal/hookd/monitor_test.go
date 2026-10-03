@@ -1165,7 +1165,107 @@ func TestMonitorCapsSessionsPerAnchor(t *testing.T) {
 	}
 }
 
-func TestMonitorAnOversizedTreeSuspendsSamplingWithinBudget(t *testing.T) {
+func (h *monitorHarness) addChain(parent, first, n int) {
+	start := h.clock.Now().Unix() - 100
+	for pid := first; pid < first+n; pid++ {
+		h.source.add(procRow{PID: pid, PPID: parent, PGID: first, StartUnix: start, Comm: "sh"}, "sh")
+		parent = pid
+	}
+}
+
+type walkState struct {
+	walking bool
+	visited int
+	cached  int
+	tracked []int
+}
+
+func (h *monitorHarness) walkState(id string) walkState {
+	h.monitor.mu.Lock()
+	defer h.monitor.mu.Unlock()
+	session := h.monitor.sessions[id]
+	state := walkState{walking: session.walk != nil, cached: len(session.argvs), tracked: sortedTracked(session.tracked)}
+	if session.walk != nil {
+		state.visited = len(session.walk.visited)
+	}
+	return state
+}
+
+func (h *monitorHarness) argvReadsPerTick(ticks int) []int {
+	reads := make([]int, 0, ticks)
+	for range ticks {
+		_, before := h.source.reads()
+		h.step()
+		_, after := h.source.reads()
+		reads = append(reads, after-before)
+	}
+	return reads
+}
+
+func TestMonitorABurstOfRegistrationsTakesOneCensus(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	for _, id := range []string{"s1", "s2", "s3"} {
+		h.monitor.observe(h.sessionRequest("PreToolUse", id, nil), testHookPID)
+	}
+	if h.sessions() != 3 || h.source.censuses() != 1 {
+		t.Fatalf("three registrations in one interval: sessions = %d, censuses = %d, want 3 and 1", h.sessions(), h.source.censuses())
+	}
+	h.clock.Advance(h.monitor.settings.SampleInterval)
+	h.monitor.observe(h.sessionRequest("PreToolUse", "s4", nil), testHookPID)
+	if h.source.censuses() != 2 {
+		t.Fatalf("a registration one interval later took %d censuses in total, want a fresh one (2)", h.source.censuses())
+	}
+	h.tickOnly()
+	h.monitor.observe(h.sessionRequest("PreToolUse", "s5", nil), testHookPID)
+	if h.sessions() != 5 || h.source.censuses() != 3 {
+		t.Fatalf("a registration right after a tick: sessions = %d, censuses = %d, want 5 and the tick's census (3)", h.sessions(), h.source.censuses())
+	}
+}
+
+func TestMonitorRegistrationsDuringATickJoinItsCensus(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	gate := make(chan struct{})
+	h.source.holdSnapshots(gate)
+	var joined sync.WaitGroup
+	joined.Add(1)
+	go func() {
+		defer joined.Done()
+		h.monitor.tick(h.clock.Now())
+	}()
+	h.waitFor(func() bool { return h.source.censuses() == 1 }, "the tick never started its census")
+	for _, id := range []string{"s1", "s2"} {
+		joined.Add(1)
+		go func() {
+			defer joined.Done()
+			h.monitor.observe(h.sessionRequest("PreToolUse", id, nil), testHookPID)
+		}()
+	}
+	h.waitFor(func() bool { return h.source.probeReads() == 6 }, "the registrations never resolved their anchors")
+	close(gate)
+	joined.Wait()
+	if h.sessions() != 2 || h.source.censuses() != 1 {
+		t.Fatalf("two registrations during the tick's census: sessions = %d, censuses = %d, want 2 and 1", h.sessions(), h.source.censuses())
+	}
+}
+
+func TestMonitorNeverReusesAFailedCensus(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	h.source.snapshotErr = errFakeSnapshot
+	h.monitor.observe(h.sessionRequest("PreToolUse", "s1", nil), testHookPID)
+	if h.sessions() != 0 {
+		t.Fatal("a registration whose census failed was admitted")
+	}
+	h.source.snapshotErr = nil
+	h.register()
+	if h.source.censuses() != 2 {
+		t.Fatalf("the registration after a failed census took %d censuses in total, want a fresh one (2)", h.source.censuses())
+	}
+}
+
+func TestMonitorResumesAnOversizedWalkAcrossTicks(t *testing.T) {
 	t.Parallel()
 	h := newMonitorHarness(t, nil)
 	log := &lockedBuffer{}
@@ -1173,37 +1273,165 @@ func TestMonitorAnOversizedTreeSuspendsSamplingWithinBudget(t *testing.T) {
 	h.register()
 	h.source.remove(testShellPID)
 	h.source.remove(testHookPID)
-	_, argvBefore := h.source.reads()
-	const oversized = 10_000
-	for pid := 1000; pid < 1000+oversized; pid++ {
-		h.spawn(pid, testClaudePID, hogRate{cpu: 1}, "yes")
+	const descendants = 10_000
+	h.addChain(testClaudePID, 1000, descendants-1)
+	leaf := 1000 + descendants - 1
+	h.spawn(leaf, leaf-1, hogRate{cpu: 1}, "yes")
+	reads := h.argvReadsPerTick(3)
+	if !slices.Equal(reads[:2], []int{resourceTickBudget, resourceTickBudget}) {
+		t.Fatalf("argv reads on the first two ticks = %v, want one per visited parent (%d)", reads[:2], resourceTickBudget)
 	}
-	h.steps(6)
-	if got := h.stages(); len(got) != 0 {
-		t.Fatalf("an exhausted walk dispatched %v", got)
+	if total := reads[0] + reads[1] + reads[2]; total != descendants || slices.Max(reads) > resourceTickBudget {
+		t.Fatalf("argv reads per tick = %v, want at most %d per tick and %d in total with no restart", reads, resourceTickBudget, descendants)
 	}
-	if _, argv := h.source.reads(); argv != argvBefore {
-		t.Fatalf("an exhausted walk read argv %d times", argv-argvBefore)
+	if state := h.walkState("s1"); state.walking || state.cached != descendants || !slices.Equal(state.tracked, []int{leaf}) {
+		t.Fatalf("after %d ticks: %+v, want a finished walk that tracks the deep leaf", len(reads), state)
+	}
+	more := h.argvReadsPerTick(6)
+	if slices.Max(more) > 1 || h.source.censuses() != 10 {
+		t.Fatalf("argv reads per tick on later walks = %v with %d censuses, want only the warn payload's read", more, h.source.censuses())
+	}
+	records := h.records()
+	if len(records) != 1 || records[0].stage() != "warn" || records[0].process()["pid"] != float64(leaf) {
+		t.Fatalf("records = %v, want one warn for the deep leaf", h.stages())
 	}
 	if got := strings.Count(log.String(), "exceeded"); got != 1 {
-		t.Fatalf("exhaustion was logged %d times, want once: %q", got, log.String())
+		t.Fatalf("the spanning walk was logged %d times, want once: %q", got, log.String())
 	}
-	for pid := 1000 + resourceTickBudget/2; pid < 1000+oversized; pid++ {
-		h.source.remove(pid)
-		delete(h.hogs, pid)
-	}
-	h.steps(2)
-	cap := h.monitor.settings.MaxTrackedPerSession
-	if _, argv := h.source.reads(); argv-argvBefore != cap {
-		t.Fatalf("argv reads once the tree fits = %d, want one per tracked child (%d)", argv-argvBefore, cap)
+}
+
+func TestMonitorRecordsWalkProgressBetweenTicks(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	h.register()
+	h.source.remove(testShellPID)
+	h.source.remove(testHookPID)
+	h.addChain(testClaudePID, 1000, 2*resourceTickBudget+1)
+	h.step()
+	if state := h.walkState("s1"); !state.walking || state.visited != resourceTickBudget {
+		t.Fatalf("after one tick: %+v, want %d rows walked and the walk pending", state, resourceTickBudget)
 	}
 	h.step()
-	records := h.records()
-	if len(records) != 1 || records[0].stage() != "warn" || records[0].process()["pid"] != float64(1000) {
-		t.Fatalf("records once the tree fits = %v", h.stages())
+	if state := h.walkState("s1"); !state.walking || state.visited != 2*resourceTickBudget {
+		t.Fatalf("after two ticks: %+v, want the walk resumed to %d rows", state, 2*resourceTickBudget)
 	}
-	if _, argv := h.source.reads(); argv-argvBefore != cap+1 {
-		t.Fatalf("argv reads after the warn = %d, want the tracked set plus the staged child's payload (%d)", argv-argvBefore, cap+1)
+	h.step()
+	if state := h.walkState("s1"); state.walking || state.cached != 2*resourceTickBudget {
+		t.Fatalf("after three ticks: %+v, want the walk finished and every parent cached", state)
+	}
+}
+
+func TestMonitorSessionsShareOneTickBudget(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	h.register()
+	h.registerSecondSession()
+	for _, pid := range []int{testShellPID, testHookPID, 111, 112} {
+		h.source.remove(pid)
+	}
+	const chain = 5000
+	h.addChain(testClaudePID, 1000, chain)
+	h.addChain(110, 20_000, chain)
+	_, before := h.source.reads()
+	h.step()
+	_, after := h.source.reads()
+	s1, s2 := h.walkState("s1"), h.walkState("s2")
+	if after-before > resourceTickBudget || s1.visited+s2.visited > resourceTickBudget || s1.visited == 0 || s2.visited == 0 {
+		t.Fatalf("one tick read %d argvs and walked s1 = %d, s2 = %d rows; want both progressing within %d", after-before, s1.visited, s2.visited, resourceTickBudget)
+	}
+	reads := h.argvReadsPerTick(2)
+	if slices.Max(reads) > resourceTickBudget || after-before+reads[0]+reads[1] != 2*(chain-1) {
+		t.Fatalf("argv reads per tick = %v after %d, want at most %d each and %d in total", reads, after-before, resourceTickBudget, 2*(chain-1))
+	}
+	for _, id := range []string{"s1", "s2"} {
+		if state := h.walkState(id); state.walking || state.cached != chain-1 {
+			t.Fatalf("%s after three ticks: %+v, want a finished walk", id, state)
+		}
+	}
+}
+
+func TestMonitorDropsAFrontierRowWhoseIdentityChanged(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	h.register()
+	h.source.remove(testShellPID)
+	h.source.remove(testHookPID)
+	const chain = 5000
+	h.addChain(testClaudePID, 1000, chain-1)
+	leaf := 1000 + chain - 1
+	h.spawn(leaf, leaf-1, hogRate{}, "yes")
+	frontier := 1000 + resourceTickBudget
+	h.step()
+	old := h.source.rows[frontier]
+	h.source.add(procRow{PID: frontier, PPID: frontier - 1, PGID: frontier, StartUnix: h.clock.Now().Unix(), Comm: "yes"}, "yes")
+	if reads := h.argvReadsPerTick(1); reads[0] != 0 {
+		t.Fatalf("the stale frontier row cost %d argv reads", reads[0])
+	}
+	h.monitor.mu.Lock()
+	_, trusted := h.monitor.sessions["s1"].argvs[old.identity()]
+	h.monitor.mu.Unlock()
+	if state := h.walkState("s1"); state.walking || len(state.tracked) != 0 || trusted {
+		t.Fatalf("after the identity change: %+v, old identity cached = %t; want the frontier row dropped with its subtree", state, trusted)
+	}
+	h.steps(2)
+	h.monitor.mu.Lock()
+	_, rewalked := h.monitor.sessions["s1"].argvs[h.source.rows[frontier].identity()]
+	h.monitor.mu.Unlock()
+	if state := h.walkState("s1"); state.walking || !rewalked || !slices.Equal(state.tracked, []int{frontier, leaf}) {
+		t.Fatalf("after the next walk: %+v, new identity cached = %t; want its subtree re-walked and tracked", state, rewalked)
+	}
+}
+
+func (h *monitorHarness) addBornNow(pid int) {
+	born := h.clock.Now()
+	h.source.add(procRow{
+		PID: pid, PPID: testClaudePID, PGID: pid, StartUnix: born.Unix(), StartUsec: int32(born.Nanosecond() / 1000), Comm: "yes",
+	}, "yes")
+}
+
+func TestMonitorAWarmTableNeverAdmitsAChildBornBeforeRegistration(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	h.tickOnly()
+	h.clock.Advance(100 * time.Millisecond)
+	h.addBornNow(testHogPID)
+	h.hogs[testHogPID] = hogRate{cpu: 1}
+	h.usage[testHogPID] = procUsage{CPUKnown: true}
+	h.source.setUsage(testHogPID, h.usage[testHogPID])
+	h.clock.Advance(100 * time.Millisecond)
+	censuses := h.source.censuses()
+	h.register()
+	if h.source.censuses() != censuses {
+		t.Fatal("the registration took a fresh census instead of reusing the warm table")
+	}
+	h.clock.Advance(100 * time.Millisecond)
+	h.addBornNow(testHogPID + 1)
+	h.steps(6)
+	if got := h.stages(); len(got) != 0 {
+		t.Fatalf("a child born before registration in the same second was dispatched: %v", got)
+	}
+	if state := h.walkState("s1"); !slices.Equal(state.tracked, []int{testHogPID + 1}) {
+		t.Fatalf("tracked = %v, want only the child born after registration", state.tracked)
+	}
+}
+
+func TestMonitorChargesLeafArgvReadsToTheWalk(t *testing.T) {
+	t.Parallel()
+	h := newMonitorHarness(t, nil)
+	h.register()
+	h.source.remove(testShellPID)
+	h.source.remove(testHookPID)
+	for pid := 1000; pid < 1000+resourceTickBudget+1; pid++ {
+		h.spawn(pid, testClaudePID, hogRate{cpu: 1}, "codex", "exec")
+	}
+	if reads := h.argvReadsPerTick(3); !slices.Equal(reads, []int{resourceTickBudget, 1, 0}) {
+		t.Fatalf("argv reads per tick = %v, want each leaf read once inside its tick's share", reads)
+	}
+	if state := h.walkState("s1"); len(state.tracked) != 0 {
+		t.Fatalf("agent leaves were tracked: %v", state.tracked)
+	}
+	if got := h.stages(); len(got) != 0 {
+		t.Fatalf("agent leaves were dispatched: %v", got)
 	}
 }
 

@@ -10,16 +10,18 @@ import (
 )
 
 type fakeProcSource struct {
-	mu          sync.Mutex
-	rows        map[int]procRow
-	usages      map[int]procUsage
-	argvs       map[int][]string
-	cwds        map[int]string
-	snapshots   int
-	usageReads  int
-	argvReads   int
-	usageGate   chan struct{}
-	snapshotErr error
+	mu           sync.Mutex
+	rows         map[int]procRow
+	usages       map[int]procUsage
+	argvs        map[int][]string
+	cwds         map[int]string
+	snapshots    int
+	probes       int
+	usageReads   int
+	argvReads    int
+	usageGate    chan struct{}
+	snapshotGate chan struct{}
+	snapshotErr  error
 }
 
 func newFakeProcSource() *fakeProcSource {
@@ -69,25 +71,48 @@ func (f *fakeProcSource) holdUsage(gate chan struct{}) {
 	f.usageGate = gate
 }
 
+func (f *fakeProcSource) holdSnapshots(gate chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshotGate = gate
+}
+
 func (f *fakeProcSource) reads() (usage, argv int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.usageReads, f.argvReads
 }
 
-func (f *fakeProcSource) snapshot() (map[int]procRow, error) {
+func (f *fakeProcSource) censuses() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.snapshots
+}
+
+func (f *fakeProcSource) probeReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.probes
+}
+
+func (f *fakeProcSource) snapshot() (map[int]procRow, error) {
+	f.mu.Lock()
 	f.snapshots++
-	if f.snapshotErr != nil {
-		return nil, f.snapshotErr
+	gate, err, rows := f.snapshotGate, f.snapshotErr, maps.Clone(f.rows)
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
 	}
-	return maps.Clone(f.rows), nil
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (f *fakeProcSource) probe(pid int) (procRow, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.probes++
 	row, ok := f.rows[pid]
 	return row, ok
 }

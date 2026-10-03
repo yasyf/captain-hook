@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"slices"
@@ -58,8 +59,18 @@ type resourceMonitor struct {
 	dispatch  func(context.Context, wireproto.EventRequest) (wireproto.EventResponse, error)
 	logWriter io.Writer
 
-	mu       sync.Mutex
-	sessions map[string]*monitoredSession
+	mu            sync.Mutex
+	sessions      map[string]*monitoredSession
+	lastCensus    *procCensus
+	pendingCensus *procCensus
+	ticks         int
+}
+
+type procCensus struct {
+	at    time.Time
+	done  chan struct{}
+	table map[int]procRow
+	err   error
 }
 
 type monitoredSession struct {
@@ -81,6 +92,14 @@ type monitoredSession struct {
 
 	argvs   map[procIdentity]cachedArgv
 	tracked map[int]*trackedChild
+	walk    *descendantWalk
+}
+
+type descendantWalk struct {
+	pending []procRow
+	visited []procRow
+	argvs   map[procIdentity]cachedArgv
+	ticks   int
 }
 
 type cachedArgv struct {
@@ -203,7 +222,7 @@ func (m *resourceMonitor) observe(request wireproto.EventRequest, peer int) {
 	if !ok {
 		return
 	}
-	table, err := m.source.snapshot()
+	table, err := m.census(m.settings.SampleInterval)
 	if err != nil {
 		fmt.Fprintf(m.logWriter, "captain: resource session %s: %v\n", fields.SessionID, err)
 		return
@@ -228,6 +247,40 @@ func (m *resourceMonitor) observe(request wireproto.EventRequest, peer int) {
 		argvs: make(map[procIdentity]cachedArgv), tracked: make(map[int]*trackedChild),
 	}
 	fmt.Fprintf(m.logWriter, "captain: resource session %s registered under claude pid %d\n", fields.SessionID, anchor.PID)
+}
+
+func (m *resourceMonitor) census(maxAge time.Duration) (map[int]procRow, error) {
+	census, leads := m.joinCensus(maxAge)
+	if leads {
+		census.table, census.err = m.source.snapshot()
+		m.settleCensus(census)
+	}
+	<-census.done
+	return census.table, census.err
+}
+
+func (m *resourceMonitor) joinCensus(maxAge time.Duration) (*procCensus, bool) {
+	now := m.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case m.lastCensus != nil && now.Sub(m.lastCensus.at) < maxAge:
+		return m.lastCensus, false
+	case m.pendingCensus != nil:
+		return m.pendingCensus, false
+	}
+	m.pendingCensus = &procCensus{at: now, done: make(chan struct{})}
+	return m.pendingCensus, true
+}
+
+func (m *resourceMonitor) settleCensus(census *procCensus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pendingCensus = nil
+	if census.err == nil {
+		m.lastCensus = census
+	}
+	close(census.done)
 }
 
 func (m *resourceMonitor) observeKnown(request wireproto.EventRequest, peer int, session *monitoredSession) {
@@ -305,6 +358,7 @@ type sessionSnapshot struct {
 	argvs        map[procIdentity]cachedArgv
 	inflight     bool
 	tracked      map[int]*trackedChild
+	walk         *descendantWalk
 }
 
 type stageDecision struct {
@@ -321,6 +375,7 @@ type childTransition struct {
 }
 
 type tickSample struct {
+	fits        bool
 	argvs       map[procIdentity]cachedArgv
 	tracked     map[int]*trackedChild
 	transitions []childTransition
@@ -328,22 +383,30 @@ type tickSample struct {
 }
 
 func (m *resourceMonitor) tick(now time.Time) {
-	table, err := m.source.snapshot()
+	table, err := m.census(0)
 	if err != nil {
 		fmt.Fprintf(m.logWriter, "captain: resource snapshot: %v\n", err)
 		return
 	}
 	children := childIndex(table)
-	for _, snapshot := range m.snapshotSessions() {
-		m.tickSession(snapshot, table, children, now)
+	snapshots := m.snapshotSessions()
+	budget := resourceTickBudget
+	for i, snapshot := range snapshots {
+		budget -= m.tickSession(snapshot, table, children, budget/(len(snapshots)-i), now)
 	}
 }
 
 func (m *resourceMonitor) snapshotSessions() []sessionSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	snapshots := make([]sessionSnapshot, 0, len(m.sessions))
-	for _, session := range m.sessions {
+	ids := slices.Sorted(maps.Keys(m.sessions))
+	if len(ids) != 0 {
+		ids = slices.Concat(ids[m.ticks%len(ids):], ids[:m.ticks%len(ids)])
+	}
+	m.ticks++
+	snapshots := make([]sessionSnapshot, 0, len(ids))
+	for _, id := range ids {
+		session := m.sessions[id]
 		tracked := make(map[int]*trackedChild, len(session.tracked))
 		for pid, child := range session.tracked {
 			tracked[pid] = child.clone()
@@ -351,27 +414,32 @@ func (m *resourceMonitor) snapshotSessions() []sessionSnapshot {
 		snapshots = append(snapshots, sessionSnapshot{
 			session: session, id: session.id, anchor: session.anchor, registeredAt: session.registeredAt,
 			root: session.request.Root, settings: session.settings, baseline: session.baseline,
-			argvs: session.argvs, inflight: session.inflight, tracked: tracked,
+			argvs: session.argvs, inflight: session.inflight, tracked: tracked, walk: session.walk,
 		})
 	}
 	return snapshots
 }
 
-func (m *resourceMonitor) tickSession(snapshot sessionSnapshot, table map[int]procRow, children map[int][]int, now time.Time) {
+func (m *resourceMonitor) tickSession(
+	snapshot sessionSnapshot, table map[int]procRow, children map[int][]int, budget int, now time.Time,
+) int {
 	if reason := sessionStale(snapshot, table); reason != "" {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if m.sessions[snapshot.id] == snapshot.session {
 			m.unregisterLocked(snapshot.id, reason)
 		}
-		return
+		return 0
 	}
-	live, argvs, ok := m.walk(snapshot, table, children)
-	if !ok {
-		m.markExhausted(snapshot)
-		return
+	walk, spent := m.walk(snapshot, table, children, budget)
+	if len(walk.pending) != 0 {
+		m.deferSample(snapshot, walk, budget)
+		return spent
 	}
-	sample := tickSample{argvs: argvs, tracked: m.selectTracked(snapshot, live, argvs)}
+	sample := tickSample{
+		fits: walk.ticks == 1, argvs: walk.argvs,
+		tracked: m.selectTracked(snapshot, walk.live(table, snapshot.anchor.PID), walk.argvs),
+	}
 	window := max(1, int(snapshot.settings.Sustain/m.settings.SampleInterval))
 	for pid, child := range sample.tracked {
 		usage, _ := m.source.usage(pid)
@@ -401,6 +469,7 @@ func (m *resourceMonitor) tickSession(snapshot sessionSnapshot, table map[int]pr
 		}
 	}
 	m.applyTick(snapshot, sample)
+	return spent
 }
 
 func sessionStale(snapshot sessionSnapshot, table map[int]procRow) string {
@@ -416,46 +485,73 @@ func sessionStale(snapshot sessionSnapshot, table map[int]procRow) string {
 	return ""
 }
 
-func (m *resourceMonitor) markExhausted(snapshot sessionSnapshot) {
+func (m *resourceMonitor) deferSample(snapshot sessionSnapshot, walk *descendantWalk, budget int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session := snapshot.session
-	if m.sessions[snapshot.id] != session || session.exhausted {
+	if m.sessions[snapshot.id] != session {
+		return
+	}
+	session.walk = walk
+	if session.exhausted {
 		return
 	}
 	session.exhausted = true
-	fmt.Fprintf(m.logWriter, "captain: resource session %s: descendant walk exceeded %d rows; sampling suspended until it fits\n", session.id, resourceTickBudget)
+	fmt.Fprintf(m.logWriter, "captain: resource session %s: descendant walk exceeded its %d-row tick share; sampling waits for each walk to finish across ticks\n", session.id, budget)
 }
 
-func (m *resourceMonitor) walk(snapshot sessionSnapshot, table map[int]procRow, children map[int][]int) (map[int]procRow, map[procIdentity]cachedArgv, bool) {
-	live := make(map[int]procRow)
-	argvs := make(map[procIdentity]cachedArgv)
-	budget := resourceTickBudget
-	queue := []int{snapshot.anchor.PID}
-	for len(queue) != 0 {
-		parent := queue[0]
-		queue = queue[1:]
-		for _, pid := range children[parent] {
-			if budget == 0 {
-				return nil, nil, false
+func (m *resourceMonitor) walk(
+	snapshot sessionSnapshot, table map[int]procRow, children map[int][]int, budget int,
+) (*descendantWalk, int) {
+	walk := snapshot.walk
+	if walk == nil {
+		walk = &descendantWalk{pending: childRows(table, children, snapshot.anchor.PID), argvs: make(map[procIdentity]cachedArgv)}
+	}
+	walk.ticks++
+	spent := 0
+	for ; len(walk.pending) != 0 && spent < budget; spent++ {
+		walked := walk.pending[0]
+		walk.pending = walk.pending[1:]
+		row, ok := table[walked.PID]
+		if !ok || !sameLink(row, walked) {
+			continue
+		}
+		if len(children[row.PID]) != 0 {
+			if m.resolveArgv(snapshot.argvs, walk.argvs, row).agent() {
+				continue
 			}
-			budget--
-			row := table[pid]
-			if len(children[pid]) != 0 {
-				if m.resolveArgv(snapshot.argvs, argvs, row).agent() {
-					continue
-				}
-				queue = append(queue, pid)
-			} else if cached, ok := snapshot.argvs[row.identity()]; ok {
-				argvs[row.identity()] = cached
-				if cached.agent() {
-					continue
-				}
+			walk.pending = append(walk.pending, childRows(table, children, row.PID)...)
+		} else if _, cached := snapshot.argvs[row.identity()]; cached || snapshot.candidate(row) {
+			if m.resolveArgv(snapshot.argvs, walk.argvs, row).agent() {
+				continue
 			}
-			live[pid] = row
+		}
+		walk.visited = append(walk.visited, row)
+	}
+	return walk, spent
+}
+
+func (w *descendantWalk) live(table map[int]procRow, anchor int) map[int]procRow {
+	live := make(map[int]procRow, len(w.visited))
+	for _, walked := range w.visited {
+		_, parentLive := live[walked.PPID]
+		if row, ok := table[walked.PID]; ok && sameLink(row, walked) && (walked.PPID == anchor || parentLive) {
+			live[row.PID] = row
 		}
 	}
-	return live, argvs, true
+	return live
+}
+
+func sameLink(row, walked procRow) bool {
+	return row.identity() == walked.identity() && row.PPID == walked.PPID
+}
+
+func childRows(table map[int]procRow, children map[int][]int, parent int) []procRow {
+	rows := make([]procRow, 0, len(children[parent]))
+	for _, pid := range children[parent] {
+		rows = append(rows, table[pid])
+	}
+	return rows
 }
 
 func (c cachedArgv) agent() bool {
@@ -492,15 +588,21 @@ func (m *resourceMonitor) selectTracked(snapshot sessionSnapshot, live map[int]p
 			break
 		}
 		row := live[pid]
-		if _, baseline := snapshot.baseline[row.identity()]; baseline || row.StartUnix < snapshot.registeredAt.Unix() {
-			continue
-		}
-		if m.resolveArgv(snapshot.argvs, argvs, row).agent() {
+		if !snapshot.candidate(row) || m.resolveArgv(snapshot.argvs, argvs, row).agent() {
 			continue
 		}
 		tracked[pid] = &trackedChild{row: row}
 	}
 	return tracked
+}
+
+func (s sessionSnapshot) candidate(row procRow) bool {
+	_, baseline := s.baseline[row.identity()]
+	return !baseline && !startedAt(row).Before(s.registeredAt)
+}
+
+func startedAt(row procRow) time.Time {
+	return time.Unix(row.StartUnix, int64(row.StartUsec)*1000)
 }
 
 func descendants(table map[int]procRow, children map[int][]int, root int) []int {
@@ -540,7 +642,7 @@ func sortedTracked(tracked map[int]*trackedChild) []int {
 func advance(child *trackedChild, settings wireproto.ResourceSettings, window int, now time.Time) (*stageDecision, string) {
 	above := child.cpu.sustained(settings.CPUFraction, window) ||
 		child.disk.sustained(float64(settings.DiskBytesPerSecond), window)
-	runtime := now.Sub(time.Unix(child.row.StartUnix, int64(child.row.StartUsec)*1000))
+	runtime := now.Sub(startedAt(child.row))
 	switch child.state {
 	case childObserving:
 		if !above || runtime < settings.MinRuntime {
@@ -598,7 +700,8 @@ func (m *resourceMonitor) applyTick(snapshot sessionSnapshot, sample tickSample)
 	if m.sessions[snapshot.id] != session {
 		return
 	}
-	session.exhausted = false
+	session.walk = nil
+	session.exhausted = session.exhausted && !sample.fits
 	session.argvs = sample.argvs
 	consistent := session.inflight == snapshot.inflight
 	for pid, child := range snapshot.tracked {
@@ -751,7 +854,7 @@ func (m *resourceMonitor) payload(
 	process := resourceProcess{
 		PID: row.PID, PPID: row.PPID, PGID: row.PGID, StartUnix: row.StartUnix, StartUsec: row.StartUsec, Comm: row.Comm,
 		Argv:     argv,
-		RuntimeS: math.Round(now.Sub(time.Unix(row.StartUnix, int64(row.StartUsec)*1000)).Seconds()*1000) / 1000,
+		RuntimeS: math.Round(now.Sub(startedAt(row)).Seconds()*1000) / 1000,
 		Ancestry: ancestry(table, row.PPID, snapshot.anchor.PID),
 	}
 	if cwd, ok := m.source.cwd(row.PID); ok {
