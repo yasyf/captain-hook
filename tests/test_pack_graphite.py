@@ -979,6 +979,22 @@ def test_a_timed_out_queue_check_holds_the_push_naming_what_it_could_not_verify(
     assert_fires(result, "deny", f"timed out for {named},")
 
 
+@pytest.mark.parametrize("command", ['ccx vcs ship -m "fix"', "ccx vcs stack submit", "gt submit"])
+def test_a_timed_out_stack_list_allows_the_push_without_a_fault(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    from captain_hook import faults
+
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
+    with stubbed_commands(commands), timing_out(STACK_LIST) as budgets:
+        result = dispatch_command(command, repo, tmp_path)
+    assert budgets
+    assert_not_denied(result)
+    assert faults.drain(str(repo)) == []
+
+
 def test_the_queue_check_times_out_inside_the_hook_deadline(
     isolate_modules: None, ccx_installed: None, tmp_path: Path
 ) -> None:

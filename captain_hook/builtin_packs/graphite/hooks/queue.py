@@ -130,7 +130,12 @@ def git_pushes(call: Call, session_cwd: Path | None) -> list[Push]:
 def stack_pushes(call: Call, session_cwd: Path | None, *, upstack: bool) -> list[Push] | None:
     if (cwd := lookup_dir(call, session_cwd)) is None:
         return None
-    match parsed(["ccx", "vcs", "stack", "list", "--json"], cwd):
+    try:
+        listed = parsed(["ccx", "vcs", "stack", "list", "--json"], cwd)
+    except subprocess.TimeoutExpired:
+        logger.bind(cwd=str(cwd)).warning("queued-push check skipped: ccx vcs stack list timed out")
+        return None
+    match listed:
         case {"branches": list(branches)}:
             current = next((index for index, branch in enumerate(branches) if branch["current"]), -1)
             return [
