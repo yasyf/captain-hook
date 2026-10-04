@@ -496,18 +496,24 @@ def foreign(row: ProcessRow, session: str) -> bool:
 
 def spawned_rows(ownership: Ownership, since: datetime, names: frozenset[str], session: str) -> list[ProcessRow]:
     table = ownership.table
-    agents = {
-        row.pid: table.nearest(row.ppid, is_agent)
-        for row in table.rows.values()
-        if row.started >= since - RECEIPT_SLACK
+    floor = since - RECEIPT_SLACK
+    groups: dict[int, list[ProcessRow]] = {}
+    for row in table.rows.values():
+        groups.setdefault(row.pgid, []).append(row)
+    fresh = {
+        pgid for pgid, members in groups.items() if pgid not in table.rows and all(m.started >= floor for m in members)
     }
+    agents = {row.pid: table.nearest(row.ppid, is_agent) for row in table.rows.values() if row.started >= floor}
     rows = [
         row
         for row in table.rows.values()
         if row.pid in agents
         and row.pid not in ownership.protected
         and not hosts_agent(row)
-        and agents[row.pid] in (None, ownership.owner)
+        and (
+            (agents[row.pid] is None and row.pgid in fresh)
+            or (ownership.owner is not None and agents[row.pid] == ownership.owner)
+        )
         and launched(row, names)
         and not foreign(row, session)
     ]

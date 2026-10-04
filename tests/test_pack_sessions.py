@@ -562,6 +562,22 @@ class TestSpawnRecords:
         assert killing(51159, tmp_path, session) is None
         assert "no agent ancestor to vouch for it" in (killing(51170, tmp_path, session) or "")
 
+    def test_a_sleep_in_a_live_or_older_group_does_not_hide_the_orphan(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        loop = orphan(27213, "/bin/zsh /w/_scratch-old/loop.sh", pgid=27207, started=now - timedelta(hours=1))
+        spawned = (
+            orphan(51159, "sleep 3123"),
+            ProcessRow(7801, 7777, 7777, 501, now, "sleep 1"),
+            loop,
+            ProcessRow(27300, 27213, 27207, 501, now, "sleep 0.5"),
+        )
+        session = launch("nohup sleep 3123 >/dev/null 2>&1 &", tmp_path, fake_table, *spawned)
+        assert killing(51159, tmp_path, session) is None
+        assert "no agent ancestor to vouch for it" in (killing(7801, tmp_path, session) or "")
+        assert "no agent ancestor to vouch for it" in (killing(27300, tmp_path, session) or "")
+
     def test_a_recorded_child_still_under_this_sessions_agent_may_be_killed(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
