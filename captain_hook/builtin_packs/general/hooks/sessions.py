@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from cc_transcript.command import PAYLOAD_DEPTH_LIMIT
 
-from captain_hook import Allow, Block, Event, Input, LambdaCondition, Tool, on
+from captain_hook import Allow, Block
 from captain_hook.bindings import Ref, Resolved, segments
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
@@ -28,12 +28,9 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     SETTLED_CLOSE,
     TERMINAL_CLOSE,
     Scan,
-    SpawnRecord,
-    Spawns,
     Ungranted,
     Unreadable,
     applescripts,
-    backgrounds,
     block_first,
     clip,
     describe,
@@ -59,15 +56,12 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     lone_pane,
     nested,
     pid_verdict,
-    read_ownership,
     runs_once,
     settled_close,
     shell_scripts,
-    spawned_rows,
     spell,
     still_settled,
     unresolvable,
-    utc_now,
 )
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.grants import Grant, Proposal
@@ -77,7 +71,7 @@ from captain_hook.util.shell import SHELLS
 if TYPE_CHECKING:
     from cc_transcript.command import Word
 
-    from captain_hook import BaseHookEvent, HookResult, ToolRewriteEvent
+    from captain_hook import HookResult, ToolRewriteEvent
     from captain_hook.builtin_packs.general.hooks._sessions import Facts, Unparsed
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Arguments, Scalar
@@ -560,51 +554,6 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
 def kill_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:
     scan = Scan.of(evt)
     return block_first(evt, (kill_verdict(call, scan.facts) for call in scan.literal_calls))
-
-
-spawn_recorder = partial(on, only_if=[Tool("Bash"), LambdaCondition(backgrounds)])
-
-
-@spawn_recorder(
-    Event.PreToolUse,
-    tests={
-        Input(command="nohup sleep 300 >/dev/null 2>&1 &", session_id=INLINE_SESSION): Allow(),
-        Input(command="sleep 1 && echo done", session_id=INLINE_SESSION): Allow(),
-    },
-)
-def note_background_launch(evt: BaseHookEvent) -> HookResult | None:
-    if evt.tool_use_id is not None:
-        with Spawns.mutate(evt) as spawns:
-            spawns.pending[evt.tool_use_id] = utc_now()
-    return None
-
-
-@spawn_recorder(
-    Event.PostToolUse | Event.PostToolUseFailure,
-    tests={
-        Input(command="nohup sleep 300 >/dev/null 2>&1 &", session_id=INLINE_SESSION): Allow(),
-        Input(command="sleep 300 &", session_id=INLINE_SESSION, error="Exit code 1"): Allow(),
-    },
-)
-def record_background_spawns(evt: BaseHookEvent) -> HookResult | None:
-    if evt.tool_use_id is None or (since := Spawns.load(evt).pending.get(evt.tool_use_id)) is None:
-        return None
-    ownership = read_ownership()
-    names = frozenset(call.name for call in evt.cmd.calls())
-    with Spawns.mutate(evt) as spawns:
-        del spawns.pending[evt.tool_use_id]
-        if isinstance(ownership, Unreadable):
-            return None
-        rows = ownership.table.rows
-        spawns.records = {
-            key: record
-            for key, record in spawns.records.items()
-            if (row := rows.get(record.pid)) is not None and record.matches(row)
-        } | {
-            (record := SpawnRecord.of(row, evt.agent_id or "main")).key: record
-            for row in spawned_rows(ownership, since, names, evt.session_id)
-        }
-    return None
 
 
 def renice_verdict(call: Call, facts: Facts) -> str | None:
