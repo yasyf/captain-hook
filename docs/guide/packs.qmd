@@ -11,8 +11,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 `capt-hook` ships seven builtin packs. Five are always active in every repo:
 
 - `general` — language-agnostic guards: git/jj command safety, a session guard that denies
-  `pkill`/`killall`, a `kill` or `renice` of any pid, since a process under this session may
-  belong to a nested agent, a teammate, or a sibling worker,
+  `pkill`/`killall`, a `kill` or `renice` of a pid unless this session can prove it
+  started the process, since ancestry alone does not establish ownership,
   the harness's `TaskStop` tool, since a bare task id does not tell a disposable shell task
   from a workflow, agent, or teammate session,
   `orca terminal close`/`worktree rm`/`worker-stop`, `launchctl` teardown, session-ending

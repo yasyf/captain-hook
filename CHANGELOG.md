@@ -131,8 +131,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   launchd. The read must match the table row's start time and command, so a recycled pid never
   inherits the proof. Agent sessions, terminal hosts, and their ancestors stay protected, and
   every target of a multi-pid `kill` or `renice` must pass, where the guard checked only the
-  first. macOS hides the environment of Apple platform binaries such as `/bin/sleep`, so those
-  stay denied.
+  first.
+- **A session can kill or renice recorded background children after their shell exits.** The
+  general pack records background Bash spawns in state shared by every lane of the root
+  session. This covers macOS platform binaries such as `/bin/zsh` and `/bin/sleep`, whose
+  environments `ps -E` hides. The target's pid, start time and command must match its record;
+  protected processes and children under other or nested agents stay denied. A one-time
+  allowance, logged with a warning, covers orphans under
+  `~/.claude/worktrees/<repo>/_scratch-*/` started before 2026-10-04 02:00 UTC. `TaskStop`
+  is unchanged.
 - **A long-lived hook worker can spawn again once the user's process count grows.** daemonkit
   lowers `RLIMIT_NPROC` across each spawn to the user's process count plus 400, and the worker
   kept that cap for life. Hours later every `ps`, `git`, and `claude` spawn from the worker

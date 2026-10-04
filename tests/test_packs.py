@@ -41,6 +41,7 @@ GENERAL_HOOKS = {
     "questions",
     "review",
     "sessions",
+    "spawns",
     "stops",
     "tasks",
     "tombstones",
