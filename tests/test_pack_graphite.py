@@ -815,7 +815,10 @@ def test_a_ship_onto_a_queued_pr_is_denied_even_at_the_enqueued_head(
         PR_LOOKUP: pr_lookup(26315),
         QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"][:8])]),
     }
-    assert_fires(dispatch_stubbed('ccx vcs ship -m "fix"', repo, tmp_path, commands), "deny", "`feat`")
+    result = dispatch_stubbed('ccx vcs ship -m "fix"', repo, tmp_path, commands)
+    assert_fires(result, "deny", "`feat`")
+    assert_fires(result, "deny", "ccx vcs stack new <name>")
+    assert "--tip-only" not in json.dumps(result)
 
 
 def test_a_push_to_a_pr_not_queued_is_allowed(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
@@ -868,15 +871,39 @@ def test_a_tip_only_ship_leaves_a_queued_parent_alone(
     result = dispatch_stubbed(command, repo, tmp_path, commands)
     if denied:
         assert_fires(result, "deny", "holds `feat`")
+        assert_fires(result, "deny", "ccx vcs ship --tip-only")
     else:
         assert_not_denied(result)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ['ccx vcs ship --new-branch follow-up -m "fix"', 'git commit --allow-empty -m x && ccx vcs ship -m "fix"'],
+)
+def test_a_ship_held_only_by_its_queued_parent_names_tip_only(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat", "follow-up")
+    current = "feat" if "--new-branch" in command else "follow-up"
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", current], check=True)
+    commands = {
+        STACK_LIST: stack_list(*dict.fromkeys(["feat", current]), current=current),
+        PR_LOOKUP: pr_lookup(26315, None),
+        QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)]),
+    }
+    result = dispatch_stubbed(command, repo, tmp_path, commands)
+    assert_fires(result, "deny", "holds `feat`")
+    assert_fires(result, "deny", "ccx vcs ship --tip-only")
 
 
 def test_a_tip_only_ship_of_a_queued_pr_is_denied(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo, heads = queued_repo(tmp_path, "feat")
     commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"])])}
-    assert_fires(dispatch_stubbed('ccx vcs ship --tip-only -m "fix"', repo, tmp_path, commands), "deny", "`feat`")
+    result = dispatch_stubbed('ccx vcs ship --tip-only -m "fix"', repo, tmp_path, commands)
+    assert_fires(result, "deny", "`feat`")
+    assert_fires(result, "deny", "ccx vcs stack new <name>")
 
 
 @pytest.mark.parametrize("command", ["git push # ccx:raw", "ccx vcs ship -m x  # ccx:raw"])

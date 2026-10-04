@@ -85,6 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Graphite queue refusal names `--tip-only` when only queued parents block a ship.**
+  A plain `ccx vcs ship` pushes its downstack too, so a queued parent's local ref can block
+  a child ship if it differs from the admitted head. The refusal now recommends
+  `ccx vcs ship --tip-only` when it would leave every held branch untouched, pushing only
+  the shipped branch and leaving the queued parent at its admitted head. Other holds still
+  recommend `ccx vcs stack new <name>`.
 - **A permission event walks the process tree once, and a repeat request from the same
   client reuses it.** `SkipPermissions()` and `evt.disallowed_tools` each walked from the
   client's parent to the nearest `claude` with one `ps` per hop, and the per-event memo lived
