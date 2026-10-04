@@ -879,3 +879,44 @@ assert soft == hard
 assert proc.process_table() is not None
 """
     subprocess.run([sys.executable, "-c", script], check=True, timeout=30)
+
+
+@pytest.mark.parametrize(
+    ("command", "decision"), [("pkill -x sleep", "deny"), ("orca terminal list --json", None)], ids=["deny", "allow"]
+)
+def test_evaluate_answers_a_host_request_with_the_guard_completion_a_worker_reports(
+    tmp_path: Path, command: str, decision: str | None
+) -> None:
+    """PIN: a client whose host refused a mandatory event gets the guard's own verdict, not a transport deny.
+
+    On 2026-10-03 a host restarting for a release refused every guarded call for the client's whole
+    deadline, and the client denied each as ``transport-refused``.
+    """
+    payload = {"session_id": "s1", "cwd": str(tmp_path), "tool_name": "Bash", "tool_input": {"command": command}}
+    request = {
+        "schema": 1,
+        "event": "PreToolUse",
+        "root": str(tmp_path),
+        "cwd": str(tmp_path),
+        "env": {},
+        "payload_raw": json.dumps(payload),
+        "client_pid": os.getpid(),
+        "client_ppid": os.getppid(),
+        "deadline_unix_ms": 0,
+        "mandatory": True,
+    }
+    live = {key: value for key, value in os.environ.items() if key != "CAPT_HOOK_TEST_NO_LIVE"}
+    evaluated = subprocess.run(
+        [sys.executable, "-P", "-m", "captain_hook.worker", "evaluate"],
+        input=json.dumps(request).encode(),
+        capture_output=True,
+        cwd=tmp_path,
+        env={**live, "HOME": str(tmp_path / "home")},
+        timeout=180,
+    )
+
+    assert evaluated.returncode == 0, evaluated.stderr.decode()
+    response = json.loads(evaluated.stdout)
+    assert response["guard"] == "completed", response
+    envelope = json.loads(response["stdout"].splitlines()[-1]) if response["stdout"].strip() else {}
+    assert envelope.get("hookSpecificOutput", {}).get("permissionDecision") == decision, response

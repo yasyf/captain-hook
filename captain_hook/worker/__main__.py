@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import json
 import os
 import resource
 import sys
@@ -98,5 +99,37 @@ def main() -> None:
         protocol_output.close()
 
 
+def evaluate() -> None:
+    """Answer one host event request read from stdin with this build's runtime, for a client whose host is unreachable.
+
+    The request is the exact body the client would have sent the host, and the reply is the
+    ``EventResponse`` a host worker returns, so the client grades the guard's completion the same way.
+    Background work is dropped: the reply is the whole job.
+    """
+    from captain_hook.worker.protocol import OP_EVENT, PROTOCOL, decode_event
+
+    request = decode_event({"protocol": PROTOCOL, "op": OP_EVENT, "id": 1, "request": json.load(sys.stdin)})
+    reply = os.fdopen(os.dup(sys.stdout.fileno()), "w")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    from captain_hook.daemon.context import install_context_io
+    from captain_hook.snapshots.client import client_scope
+    from captain_hook.worker.runtime import ProductRuntime
+
+    bound_transcript_parse_pool()
+    skip_bundled_cli_version_probe()
+    install_context_io()
+    runtime = ProductRuntime(install_writer=False)
+    try:
+        with client_scope():
+            response, _ = runtime.dispatch(request)
+    finally:
+        runtime.close()
+    with reply:
+        json.dump(response.message(), reply)
+
+
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["evaluate"]:
+        evaluate()
+    else:
+        main()
