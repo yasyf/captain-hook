@@ -171,6 +171,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowance, logged with a warning, covers orphans under
   `~/.claude/worktrees/<repo>/_scratch-*/` started before 2026-10-04 02:00 UTC. `TaskStop`
   is unchanged.
+- **Unrelated background processes no longer hide a session's orphaned child.** Spawn recording
+  from #289 (12.84.6) counted matching processes under daemon poll loops and older orphan loops
+  as competing orphan groups, leaving the real child unrecorded. An orphan candidate now needs
+  a process group whose leader has exited and whose live members all started within the Bash
+  call's window. Children under this session's own agent are unchanged.
 - **A long-lived hook worker can spawn again once the user's process count grows.** daemonkit
   lowers `RLIMIT_NPROC` across each spawn to the user's process count plus 400, and the worker
   kept that cap for life. Hours later every `ps`, `git`, and `claude` spawn from the worker
