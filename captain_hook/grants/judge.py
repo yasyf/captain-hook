@@ -37,6 +37,15 @@ FRAME = """
     one action (for example "reply in that thread without asking"); otherwise leave it empty. When
     those words name how many such actions they permit ("send these three replies"), also set uses
     to that number; leave uses empty when they set no limit.
+    When <widenable_scope> is present, the owner's words may cover more than this action's own scope:
+    standing words for every thread of a channel, a ruling for a class of destinations, or one approval
+    for several named places. Set scope to the values those words cover for the keys it lists, each a
+    list of the exact values the words name, or "*" for every value of that key; keys you leave out keep
+    this action's value. Widen only as far as the words reach, and leave scope empty when they name only
+    this action's own scope.
+    When you refuse, set refusal to one plain sentence for the agent, under 150 characters, with no
+    quotation marks, ids, dates, or times: what the owner's words permit and what this action does
+    beyond them.
     Reason first, quoting the owner words you relied on, then set allow.
 """
 
@@ -49,7 +58,14 @@ class GrantVerdict(BaseModel):
     relied_on: list[str] = Field(default_factory=list[str])
     standing: str | None = None
     uses: int | None = Field(default=None, ge=1)
+    scope: dict[str, str | list[str]] | None = None
+    refusal: str = ""
     withdrawn: bool = False
+
+    @property
+    def explained(self) -> str:
+        """Why the judge refused, in the words meant for the agent."""
+        return self.refusal or self.reason
 
 
 class JudgeFailed(Exception):
@@ -115,6 +131,7 @@ class Judge:
         evidence: Sequence[Evidence],
         rulings: Sequence[Ruling],
         grant: Grant | None = None,
+        widen: Sequence[str] = (),
     ) -> GrantVerdict:
         from pydantic import ValidationError
         from spawnllm import BackendCallError
@@ -129,6 +146,7 @@ class Judge:
             .context("owner_since_grant" if grant is not None else "evidence", render_evidence(evidence))
             .context("proposed_action", render_action(action))
             .context("rules_evaluated", "\n".join(ruling.line() for ruling in rulings) or None)
+            .context("widenable_scope", ", ".join(widen) or None)
         )
         try:
             with reqenv.deadline_in(self.deadline):

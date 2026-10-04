@@ -5,12 +5,22 @@ from typing import TYPE_CHECKING
 
 from captain_hook import Allow, Block, Event, Input, LambdaCondition, Tool, on
 from captain_hook.grants import store
-from captain_hook.grants.evidence import answer_evidence, machine_written, parse_answer, tree_of, words_evidence
+from captain_hook.grants.evidence import (
+    answer_evidence,
+    machine_written,
+    parse_answer,
+    queued_words,
+    shell_evidence,
+    spawn_evidence,
+    tree_of,
+    words_evidence,
+)
 from captain_hook.grants.orca import record_terminal
 from captain_hook.grants.records import Evidence, Grant
 
 if TYPE_CHECKING:
     from captain_hook import BaseHookEvent, HookResult, PostToolUseEvent, UserPromptSubmitEvent
+    from captain_hook.events import StopEvent
 
 RECORD_TTL = timedelta(days=7)
 MINTING = frozenset({"add", "import"})
@@ -52,6 +62,38 @@ def record_answers(evt: PostToolUseEvent) -> HookResult | None:
 def record_owner_words(evt: UserPromptSubmitEvent) -> HookResult | None:
     if evt.ctx.root_path is None and (prompt := evt.user_prompt) and not machine_written(prompt):
         record(evt, "words", words_evidence(prompt, store.now()))
+    return None
+
+
+@on(
+    Event.UserPromptSubmit | Event.Stop,
+    respect_gitignore=False,
+    skip_planning_agents=False,
+)
+def record_queued_words(evt: UserPromptSubmitEvent | StopEvent) -> HookResult | None:
+    if evt.ctx.root_path is not None or evt.agent_id is not None:
+        return None
+    for turn in evt.ctx.t.current_turn.turns:
+        for text, event in queued_words(turn):
+            if text and not machine_written(text):
+                record(evt, "words", words_evidence(text, event.meta.timestamp))
+    return None
+
+
+@on(
+    Event.PostToolUse,
+    only_if=[Tool("Agent", "Task", "Bash")],
+    respect_gitignore=False,
+    skip_planning_agents=False,
+)
+def record_children(evt: PostToolUseEvent) -> HookResult | None:
+    payload = evt.tool_response
+    if not isinstance(payload, dict):
+        return None
+    agent = f"{evt.session_id}/{evt.agent_id or 'main'}"
+    for kind, item in (("spawn", spawn_evidence(payload, agent)), ("shell", shell_evidence(payload, agent))):
+        if item is not None:
+            record(evt, kind, item.model_copy(update={"said_at": store.now()}))
     return None
 
 

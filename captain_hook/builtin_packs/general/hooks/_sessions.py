@@ -24,7 +24,19 @@ from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, workf
 from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
-from captain_hook.grants import Allowed, Evidence, Grants, Judge, Proposal, Rulings, StandingRulings
+from captain_hook.grants import (
+    Allowed,
+    Asked,
+    Denied,
+    Evidence,
+    Grants,
+    Judge,
+    OwnerWords,
+    Proposal,
+    Rulings,
+    StandingRulings,
+)
+from captain_hook.grants.evidence import EvidenceSource, children, names
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
 from captain_hook.util import proc, reqenv
 from captain_hook.util.payload import command_texts
@@ -158,6 +170,16 @@ SETTLED_CLOSE_RULES = (
     "a terminal with this record, and cite that ruling. Deny when the rulings exclude this record, or limit the class "
     "to terminals it is not."
 )
+OWNER_NAMED_RULES = (
+    "The pending action ends something that may host a session: it closes an Orca terminal, stops, restarts, or "
+    "unloads a launchd service, or stops a background task with TaskStop. The scope names the exact terminal handle, "
+    "service label, or task id. Allow only when the owner's own words, a prompt, a message they queued, or an "
+    "AskUserQuestion answer, name this exact target, by its handle, label, or id, or by the lane or agent name a "
+    "`<name>@session-<id>` task id begins with, and ask for it to be closed, stopped, restarted, or kicked, or pick an "
+    "option that does. Words about another target, a general instruction to clean up, and words that only describe "
+    "the target permit nothing. One owner instruction permits one such action."
+)
+OWNER_NAMED_TTL = timedelta(hours=1)
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
@@ -1122,6 +1144,8 @@ class OwnTeammate:
         task = action.scope["task"]
         if TEAMMATE_TASK.fullmatch(task) is None:
             return []
+        if recorded := children(evt, "spawn", task):
+            return recorded
         found = next((use for turn in evt.ctx.t.turns for use in turn.tool_uses if spawned(use, task)), None)
         if found is None:
             return []
@@ -1135,6 +1159,30 @@ class OwnTeammate:
                 key=f"teammate:{evt.session_id}/{evt.agent_id or 'main'}/{task}",
                 live=True,
             )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class OwnShell:
+    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
+        return children(evt, "shell", action.scope["task"])
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerNaming:
+    """The owner's words and answers that name the action's *key* target, or the lane its task id begins with."""
+
+    key: str
+    sources: tuple[EvidenceSource, ...] = (Asked(), OwnerWords())
+
+    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
+        target = action.scope[self.key]
+        named = {target, target.partition("@session-")[0]} - {""}
+        return [
+            item
+            for source in self.sources
+            for item in source.collect(evt, action)
+            if any(names(f"{item.quote}\n{item.detail}", name) for name in named)
         ]
 
 
@@ -1162,12 +1210,35 @@ LAUNCHD_STOP = Grants(
 TASK_STOP = Grants(
     "sessions.task-stop",
     ("task",),
-    evidence=(OwnTeammate(), rulings_naming("task")),
+    evidence=(OwnTeammate(), OwnShell(), rulings_naming("task")),
     replay=RETRY_WINDOW,
-    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or have the owner "
-    "name the task id in a cc-notes answer before the stopping session starts.",
+    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
+    "this agent started, or have the owner name the task id in a cc-notes answer before the stopping session starts.",
     hook="sessions",
 )
+
+
+def owner_named(kind: str, key: str, target: str) -> Grants:
+    return Grants(
+        f"{kind}.owner",
+        (key,),
+        judge=Judge(rules=OWNER_NAMED_RULES),
+        evidence=(OwnerNaming(key),),
+        ttl=OWNER_NAMED_TTL,
+        replay=RETRY_WINDOW,
+        would_allow=f"Ask the owner to name the {target} and say to end it; their answer lifts this block once.",
+        hook="sessions",
+    )
+
+
+TERMINAL_CLOSE_NAMED = owner_named("sessions.close", "terminal", "terminal")
+LAUNCHD_STOP_NAMED = owner_named("sessions.launchctl", "service", "service")
+TASK_STOP_NAMED = owner_named("sessions.task-stop", "task", "task")
+OWNER_NAMED = {
+    TERMINAL_CLOSE.kind: TERMINAL_CLOSE_NAMED,
+    LAUNCHD_STOP.kind: LAUNCHD_STOP_NAMED,
+    TASK_STOP.kind: TASK_STOP_NAMED,
+}
 SETTLED_CLOSE = Grants(
     "sessions.close-settled",
     (),
@@ -1175,8 +1246,8 @@ SETTLED_CLOSE = Grants(
     evidence=(StandingRulings(CLASS_RULINGS),),
     mint=None,
     ttl=None,
-    would_allow="Close only an idle terminal whose dispatch Orca records as settled, under a standing owner ruling "
-    "that predates the closing session.",
+    would_allow="Close only an idle terminal whose dispatch Orca records as settled, under a standing owner decision "
+    "recorded in cc-notes before the closing session.",
     hook="sessions",
 )
 
@@ -1185,19 +1256,43 @@ SETTLED_CLOSE = Grants(
 class Ungranted:
     message: str
     reason: str
+    detail: str = ""
 
 
-def lift(evt: BaseHookEvent, grants: Grants, action: Proposal, message: str) -> Ungranted | None:
-    verdict = grants.decide(evt, action)
-    if isinstance(verdict, Allowed):
+def spawning_root(evt: BaseHookEvent) -> bool:
+    return evt.agent_id is None and evt.ctx.root_path is None
+
+
+def refusal(message: str, hook: str, refused: Denied) -> Ungranted:
+    return Ungranted(message, refused.message if refused.reason else "", f"{hook}: {refused.explained}")
+
+
+def owner_lift(evt: BaseHookEvent, grants: Grants, action: Proposal, ungranted: Ungranted) -> Ungranted | None:
+    """``None`` when the owner named *action*'s target in their own words, for the spawning root only, once."""
+    if (named := OWNER_NAMED.get(grants.kind)) is None or not spawning_root(evt):
+        return ungranted
+    if isinstance(verdict := named.decide(evt, action), Allowed):
         return None
-    return Ungranted(message, f"{grants.hook}: {verdict.message}" if verdict.reason else "")
+    if not verdict.reason:
+        return ungranted
+    return Ungranted(ungranted.message, verdict.message, f"{ungranted.detail} {verdict.explained}".strip())
+
+
+def lift(evt: BaseHookEvent, grants: Grants, action: Proposal, message: str, *, owner: bool = True) -> Ungranted | None:
+    """``None`` when a grant lifts the block, else the block with why nothing covered it.
+
+    With *owner*, a kind with an owner-named lift tries it after its own evidence.
+    """
+    if isinstance(verdict := grants.decide(evt, action), Allowed):
+        return None
+    ungranted = refusal(message, grants.hook, verdict)
+    return owner_lift(evt, grants, action, ungranted) if owner else ungranted
 
 
 def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:
     match next((message for message in messages if message is not None), None):
-        case Ungranted(message, reason):
-            return evt.block(message, system_message=reason or None)
+        case Ungranted(message, reason, detail):
+            return evt.block(reason or message, system_message=detail or None)
         case str() as message:
             return evt.block(message)
         case _:

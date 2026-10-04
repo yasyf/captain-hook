@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Grant scopes accept exact values, sets, and any non-empty value.** A scope value is
+  a string, a list of named values, or `"*"`; `covers` checks every key against an action's
+  exact values. `ANY` and `covers` are exported from `captain_hook.grants`, and stored
+  grant matching and spending use the same coverage check. `capt-hook grant add` and
+  `import` accept repeated `--scope k=value` options for a set and `--scope 'k=*'` for any
+  non-empty value. `grant spend` still takes one exact action value per key.
+- **An agent can request a grant without spending it.** `Grants.request` takes a scope,
+  a verbatim quote from the owner's recorded words or answers, an optional use count,
+  and an optional payload for the judge. A judge must allow the request before it
+  records a grant with `standing_ttl`. Repeating a request against the same owner
+  evidence key and scope returns that grant. The default use count is unlimited.
+- **The spawning root can act once on an owner instruction naming a session target.**
+  `sessions.close.owner`, `sessions.launchctl.owner`, and `sessions.task-stop.owner`
+  judge the owner's prompts, queued messages, and `AskUserQuestion` answers. The words
+  must name the exact terminal handle, service label, task id, or lane name at the start
+  of a `<name>@session-<id>` task id. The instruction must ask for that target to end, restart,
+  or be kicked, or choose an option that does. These lifts run after the existing
+  cc-notes, created-here, own-teammate, own-shell, and settled-dispatch checks that
+  apply to the action. These declarations default to one use and a one-hour expiry,
+  with a two-minute window for identical retries. Lanes receive no owner-named lift;
+  words naming no matching target cause no judge call.
 - **The general pack denies `TaskStop` unless a grant permits it.** The
   mandatory guard matches the exact tool name on `PreToolUse` and `PermissionRequest`. A
   bare task id does not tell a disposable shell task from a workflow, agent, or teammate
@@ -100,6 +121,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `no-verdict`. If local evaluation cannot run, crashes, or times out, the client still denies
   with the original transport kind. Non-mandatory events never evaluate locally, and the local
   path drops async hooks and reviewer dispatch. Transcript evidence still depends on the host.
+- **Recorded child tasks keep their ownership proof after compaction.** The general
+  pack records `Agent` and `Task` responses with `status: teammate_spawned` and `Bash`
+  responses with a `backgroundTaskId` on `PostToolUse`, keyed to the spawning agent.
+  The own-teammate `TaskStop` lift checks the recorded spawn before the transcript;
+  `OwnShell` gives the agent one stop of a background shell it started. Spawn and shell
+  records stay in their own session tree when grants are adopted elsewhere.
+- **Queued owner messages remain available after transcript windows move past them.**
+  The general pack records human `queued_command` attachments on root-session `Stop`
+  and `UserPromptSubmit` events alongside prompts and `AskUserQuestion` answers. A
+  minting check with no collected evidence returns without calling the judge.
 - **A permission event walks the process tree once, and a repeat request from the same
   client reuses it.** `SkipPermissions()` and `evt.disallowed_tools` each walked from the
   client's parent to the nearest `claude` with one `ps` per hop, and the per-event memo lived
@@ -267,6 +298,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Judges can widen only the scope keys a declaration permits.** `Grants.widen` names
+  those keys, and `GrantVerdict.scope` supplies the values the owner's words cover.
+  The resulting scope must still cover the action; `"*"` excludes an empty value, so
+  permission for every thread cannot admit a top-level post. Unlimited standing words
+  and rulings mint once per approval and covered scope. Counted approvals share one
+  budget across the places they name, including plain approvals with `verdict.uses`
+  or the declaration's `mint` count. Only an exact action scope records its approved
+  payload.
+- **Grant refusals tell the agent why the action remains blocked.** `GrantVerdict.refusal`
+  supplies a plain sentence; `Denied.reason` carries the agent's reason, `Denied.detail`
+  keeps the full refusals, and `Denied.message` joins a shortened reason with
+  `would_allow`. The shortening removes quotation marks and recognized record ids,
+  changes `ruling` to `decision`, and clips the first sentence. A hook declared with
+  `grants=` uses that message when a reason exists, keeps its own message otherwise,
+  and sends the full detail in `systemMessage`. Exhausted approvals name the action
+  that spent them in the agent text; grant ids and spend times stay in the detail.
 - **Grant declarations can check explicit proposals and mint without a judge.** `Grants.action`
   is optional when a handler passes a `Proposal` to `check(evt, action)`; attaching a
   declaration without an action through `hook(..., grants=...)` raises `ValueError`.
