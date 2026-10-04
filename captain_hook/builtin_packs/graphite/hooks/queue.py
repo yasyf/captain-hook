@@ -288,9 +288,10 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
             downstack_only = downstack_only and (not found or tip_only_clears(call, evt.cwd, found))
         moved = moved or moves_heads(call)
     if not held and unverified:
-        return evt.warn(
+        return evt.block(
             f"The merge-queue check timed out for {', '.join(dict.fromkeys(unverified))}, "
-            "so this push went ahead without checking whether one of them is queued."
+            "so this push is held until it can rule out a queued PR. "
+            "Rerun the push once `ccx vcs pr status` answers for them."
         )
     if not held:
         return None
