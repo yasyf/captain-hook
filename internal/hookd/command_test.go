@@ -46,6 +46,22 @@ func scriptClient(t *testing.T, client *scriptedClient, open error) {
 	t.Cleanup(func() { openEventClient = previous })
 }
 
+type localEvaluation struct {
+	response wireproto.EventResponse
+	err      error
+	requests []wireproto.EventRequest
+}
+
+func scriptLocal(t *testing.T, local *localEvaluation) {
+	t.Helper()
+	previous := evaluateLocally
+	evaluateLocally = func(request wireproto.EventRequest, _ time.Duration) (wireproto.EventResponse, error) {
+		local.requests = append(local.requests, request)
+		return local.response, local.err
+	}
+	t.Cleanup(func() { evaluateLocally = previous })
+}
+
 func runEvent(t *testing.T, event, payload string) (int, string, string) {
 	t.Helper()
 	t.Setenv("CLAUDE_PROJECT_DIR", "/project")
@@ -80,9 +96,14 @@ func TestRunDeniesAMandatoryEventTheGuardDidNotComplete(t *testing.T) {
 			t.Run(tc.name+" / "+name, func(t *testing.T) {
 				client := tc.client
 				scriptClient(t, &client, tc.open)
+				local := localEvaluation{err: errors.New("captain: the capt-hook /Users/x tool env is not installed")}
+				scriptLocal(t, &local)
 				code, stdout, stderr := runEvent(t, tc.event, payload)
 				if want := wireproto.DenyEnvelope(tc.event, tc.kind) + "\n"; code != 0 || stdout != want {
 					t.Fatalf("exit=%d stdout=%q, want exit 0 with %q", code, stdout, want)
+				}
+				if transport := strings.HasPrefix(tc.kind, "transport-") || tc.kind == "host-unavailable"; transport != (len(local.requests) == 1) {
+					t.Fatalf("local evaluations = %d, want one only after a transport failure", len(local.requests))
 				}
 				if !strings.Contains(stderr, "("+tc.kind+")") || strings.Contains(stderr, "/Users") ||
 					strings.Contains(stderr, "boom") || strings.Contains(stderr, "Traceback") {
@@ -132,12 +153,61 @@ func TestRunRetriesATimedOutGuardOnceThenDenies(t *testing.T) {
 				previous := openEventClient
 				openEventClient = func() (eventClient, error) { return client, nil }
 				t.Cleanup(func() { openEventClient = previous })
+				scriptLocal(t, &localEvaluation{err: context.DeadlineExceeded})
 				code, stdout, stderr := runEvent(t, event, payload)
 				want := wireproto.DenyEnvelope(event, "transport-timeout") + "\n"
 				if code != 0 || client.requests != 2 || stdout != want ||
 					stderr != "capt-hookd: the session guard did not complete (transport-timeout); denied\n" {
 					t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d, want exit 0 with %q after two timeouts",
 						code, stdout, stderr, client.requests, want)
+				}
+			})
+		}
+	}
+}
+
+func TestRunAnswersAMandatoryEventLocallyWhenTheHostTransportFails(t *testing.T) {
+	refused := errors.Join(fmt.Errorf("captain: %w", daemonkit.ErrDraining), context.DeadlineExceeded)
+	deny := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",` +
+		`"permissionDecisionReason":"BLOCKED: pkill signals every process matching a name"}}` + "\n"
+	failures := map[string]struct {
+		open   error
+		client scriptedClient
+	}{
+		"transport-refused": {nil, scriptedClient{err: refused}},
+		"transport-timeout": {nil, scriptedClient{err: context.DeadlineExceeded}},
+		"transport-error":   {nil, scriptedClient{err: errors.New("captain: decode event response: boom")}},
+		"host-unavailable":  {errors.New("captain: open signed host: absent"), scriptedClient{}},
+	}
+	for kind, failure := range failures {
+		for name, tc := range map[string]struct {
+			local          wireproto.EventResponse
+			stdout, stderr string
+		}{
+			"the guard's own deny": {
+				wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: deny, Guard: wireproto.GuardCompleted},
+				deny, "",
+			},
+			"the guard's allow": {
+				wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Guard: wireproto.GuardCompleted}, "", "",
+			},
+			"no guard completion": {
+				wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+				wireproto.DenyEnvelope("PreToolUse", "no-verdict") + "\n",
+				"capt-hookd: the session guard did not complete (no-verdict); denied\n",
+			},
+		} {
+			t.Run(kind+" / "+name, func(t *testing.T) {
+				client := failure.client
+				scriptClient(t, &client, failure.open)
+				local := localEvaluation{response: tc.local}
+				scriptLocal(t, &local)
+				code, stdout, stderr := runEvent(t, "PreToolUse", destructivePayload)
+				if code != 0 || stdout != tc.stdout || stderr != tc.stderr {
+					t.Fatalf("exit=%d stdout=%q stderr=%q, want 0 %q %q", code, stdout, stderr, tc.stdout, tc.stderr)
+				}
+				if len(local.requests) != 1 || !local.requests[0].Mandatory || local.requests[0].PayloadRaw != destructivePayload {
+					t.Fatalf("local requests = %+v, want the one mandatory request", local.requests)
 				}
 			})
 		}
@@ -214,7 +284,12 @@ func TestRunKeepsNonMandatoryOutcomesAsTheyWere(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := tc.client
 			scriptClient(t, &client, tc.open)
+			local := localEvaluation{}
+			scriptLocal(t, &local)
 			code, stdout, stderr := runEvent(t, tc.event, tc.payload)
+			if len(local.requests) != 0 {
+				t.Fatalf("local requests = %+v, want none for an unguarded event", local.requests)
+			}
 			if code != tc.code || stdout != tc.stdout || stderr != tc.stderr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q, want %d %q %q", code, stdout, stderr, tc.code, tc.stdout, tc.stderr)
 			}

@@ -1,6 +1,7 @@
 package hookd
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -135,10 +137,13 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			response, err = dispatch(client, request, timeout)
 		}
 	}
-	if err != nil {
-		if request.Mandatory {
-			return denyMandatory(stdout, stderr, request.Event, failureKind(err, client != nil))
+	if err != nil && request.Mandatory {
+		kind := failureKind(err, client != nil)
+		if response, err = evaluateLocally(request, timeout); err != nil {
+			return denyMandatory(stdout, stderr, request.Event, kind)
 		}
+	}
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -173,6 +178,36 @@ var openEventClient = func() (eventClient, error) {
 		return nil, err
 	}
 	return client, nil
+}
+
+// evaluateLocally answers a mandatory event the host never took with this
+// build's own Python runtime in a child process: the same packs, dispatch, and
+// guard-completion report a host worker returns, so the caller grades it the
+// same way and a host restart or wedge never stands in for the guard's verdict.
+var evaluateLocally = func(request wireproto.EventRequest, timeout time.Duration) (wireproto.EventResponse, error) {
+	python, err := installedPython()
+	if err != nil {
+		return wireproto.EventResponse{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	request.DeadlineUnixMS = deadline.UnixMilli()
+	payload, err := wireproto.MarshalEventRequest(request)
+	if err != nil {
+		return wireproto.EventResponse{}, err
+	}
+	cmd := exec.CommandContext(ctx, python, "-P", "-m", "captain_hook.worker", "evaluate")
+	cmd.Dir, cmd.Stdin = workerDir(request.Root), bytes.NewReader(payload)
+	result, err := cmd.Output()
+	if err != nil {
+		return wireproto.EventResponse{}, fmt.Errorf("captain: evaluate locally: %w", err)
+	}
+	var response wireproto.EventResponse
+	if err := decodeStrict(result, &response); err != nil {
+		return wireproto.EventResponse{}, fmt.Errorf("captain: decode local event response: %w", err)
+	}
+	return response, response.Validate()
 }
 
 // denyMandatory answers a mandatory event whose guard did not complete: the
