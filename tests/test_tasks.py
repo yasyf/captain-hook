@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -141,6 +142,19 @@ class TestListId:
         write_task(tasks_root / "session-756e25cc", "1", "in_progress")
         assert Tasks.list_id("900424b6", transcript) == "session-756e25cc"
         assert len(Tasks.for_session(Tasks.list_id("900424b6", transcript))) == 1
+
+    def test_lead_resumed_into_a_new_team_reads_the_newest_teams_list(self, tasks_root: Path, tmp_path: Path) -> None:
+        transcript = tmp_path / "900424b6.jsonl"
+        subagents = transcript.with_suffix("") / "subagents"
+        metas = [("a-old", "session-756e25cc"), ("b-new", "session-67c0e5da"), ("c-old", "session-756e25cc")]
+        for index, (name, team) in enumerate(metas):
+            self.write_meta(transcript, name, teamName=team)
+            os.utime(subagents / f"agent-{name}.meta.json", (1_000 + index, 1_000 + index))
+        os.utime(subagents / "agent-b-new.meta.json", (2_000, 2_000))
+        write_task(tasks_root / "session-756e25cc", "1", "completed")
+        write_task(tasks_root / "session-67c0e5da", "7", "in_progress")
+        assert Tasks.list_id("67c0e5da", transcript) == "session-67c0e5da"
+        assert [task.id for task in Tasks.for_session(Tasks.list_id("67c0e5da", transcript))] == ["7"]
 
     def test_team_name_is_sanitized(self, tmp_path: Path) -> None:
         transcript = tmp_path / "s.jsonl"
