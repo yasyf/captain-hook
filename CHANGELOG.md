@@ -106,6 +106,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Counted approvals for several uses no longer pin the first action's text.**
+  `Grants.from_evidence` used to record the first payload as `approved`, so later
+  writes could be refused as changed content and need a second judgement.
+  Multi-use approvals now bind their scope and budget, so the judge checks each later
+  write against the owner's words without a diff against another write.
+  One-use approvals keep the payload pin, so an identical retry of an unspent approval
+  still settles without calling the judge.
 - **An agent can stop its own `Monitor` task.** The `PostToolUse` `record_children`
   hook now records a `Monitor` response's `taskId` as shell evidence for the agent that
   armed it. The existing `OwnShell` evidence source lets that agent spend a `TaskStop`

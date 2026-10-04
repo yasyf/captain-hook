@@ -221,6 +221,19 @@ def test_the_judge_mints_one_grant_per_approval(tmp_path: Path) -> None:
     assert isinstance(second, Denied) and f"Grant {first.grant.id} was spent" in second.explained
 
 
+def test_a_counted_approval_binds_its_budget_not_the_first_text(tmp_path: Path) -> None:
+    said = owner("send these three replies in that thread")
+    grants = declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(Fixed((said,)),))
+    verdict = {"allow": True, "reason": "three replies", "relied_on": [said.id], "uses": 3}
+    first = grants.check(event(tmp_path, "one", **verdict))
+    assert isinstance(first, Allowed) and first.grant.uses == 3 and first.grant.approved is None
+    second = event(tmp_path, "two", call="c2", **verdict)
+    allowed = grants.check(second)
+    assert isinstance(allowed, Allowed) and allowed.grant.id == first.grant.id and allowed.remaining == 1
+    assert second.ctx.call_llm.call_count == 1
+    assert "- one" not in str(second.ctx.call_llm.call_args.args[0])
+
+
 def test_racing_judges_share_one_approval(tmp_path: Path) -> None:
     said = owner("yes post it", ident="ask:toolu_9#0")
     grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
