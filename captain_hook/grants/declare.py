@@ -459,10 +459,11 @@ class Grants:
     ) -> Allowed | Denied:
         """Record the grant an agent asks for on the owner's behalf, without spending it.
 
-        *quote* must sit verbatim in the owner's own words, and the judge must read those words as
-        permitting every action *scope* admits, *uses* times or without limit. The grant rests on the
-        quoted words and expires with ``standing_ttl``; asking again for the same words and scope returns
-        the grant already recorded.
+        *quote* must sit verbatim in the owner's own words, or else in a ruling an evidence source
+        collects, and the judge must read those words as permitting every action *scope* admits, *uses*
+        times or without limit. The grant rests on the quoted words, pinned to the ruling's revision when a
+        ruling holds them, and expires with ``standing_ttl``; asking again for the same words and scope
+        returns the grant already recorded.
         """
         if self.judge is None:
             raise TypeError(f"{self.kind} declares no judge, so it records no grant an agent asks for")
@@ -474,9 +475,14 @@ class Grants:
             summary=summary,
         )
         items = [item for source in self.evidence for item in source.collect(evt, action)]
-        said = verbatim(quote, [item for item in items if item.source in OWNER_SOURCES])
+        said = verbatim(quote, [item for item in items if item.source in OWNER_SOURCES]) or verbatim(
+            quote, [item for item in items if item.source in RULING_SOURCES]
+        )
         if said is None:
-            return Denied(f"The quote for {summary} is not verbatim in the owner's own words.", self.would_allow)
+            return Denied(
+                f"The quote for {summary} is not verbatim in the owner's own words or a ruling recording them.",
+                self.would_allow,
+            )
         try:
             verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
         except JudgeFailed as exc:

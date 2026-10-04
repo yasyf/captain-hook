@@ -385,6 +385,30 @@ def test_a_requested_channel_set_grant_needs_verbatim_words_and_the_judge(tmp_pa
     assert allowed(posted).grant.id == recorded.grant.id
 
 
+def test_a_requested_thread_grant_rests_on_the_ruling_that_quotes_the_owner(tmp_path: Path) -> None:
+    grants = slack(CLASS_RULING)
+    recorded = allowed(
+        grants.request(
+            call(tmp_path, ALERTS, thread="1.1", allow=True, reason="The ruling covers replies in alert threads."),
+            scope={"channel": ALERTS, "thread": "1.1"},
+            quote=CLASS_RULING.quote,
+        )
+    )
+    assert recorded.remaining is None and recorded.grant.scope == {"channel": ALERTS, "thread": "1.1"}
+    (basis,) = recorded.grant.evidence
+    assert (basis.id, basis.key, basis.live) == (CLASS_RULING.id, CLASS_RULING.key, True)
+    posted = grants.check(call(tmp_path, ALERTS, thread="1.1", text="mechanism", allow=True, reason="ok"))
+    assert allowed(posted).grant.id == recorded.grant.id
+    paraphrase = refused(
+        grants.request(
+            call(tmp_path, ALERTS, thread="2.2", allow=True, reason="ok"),
+            scope={"channel": ALERTS, "thread": "2.2"},
+            quote="reply in alert threads",
+        )
+    )
+    assert "not verbatim" in paraphrase.reason
+
+
 def test_a_counted_approval_spends_across_the_places_it_names(tmp_path: Path) -> None:
     grants = slack(POST_ANSWER)
     threads = ["1.1", "2.2"]
