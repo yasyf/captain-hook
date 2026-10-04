@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from captain_hook.types import HookResult
 
 OWNER_SOURCES = frozenset({"ask", "words"})
+RULING_SOURCES = frozenset({"ccn-answer"})
 DECLARED: dict[str, Grants] = {}
 _RESERVED: ContextVar[list[str] | None] = ContextVar("captain_hook_grant_reservations", default=None)
 
@@ -54,6 +55,11 @@ def call_id(evt: BaseHookEvent) -> str:
 def fingerprint(action: Proposal) -> str:
     material = json.dumps([dict(action.scope), dict(action.payload)], sort_keys=True, default=str)
     return sha256(material.encode()).hexdigest()[:16]
+
+
+def cited(items: Sequence[Evidence], ids: Sequence[str]) -> list[Evidence]:
+    named = {ident.strip().strip("[]") for ident in ids}
+    return [item for item in items if item.id in named or item.id.partition(":")[2] in named]
 
 
 def author(evt: BaseHookEvent, hook: str) -> str:
@@ -172,8 +178,10 @@ class Grants:
         sources no longer collect skips it, a rule that allows settles it unless the owner has spoken
         since it was minted, and anything else goes to the judge with the grant's evidence and the
         owner's later words. With no stored grant, the judge reads the declared evidence; its allow
-        mints a grant keyed on the approval it relied on and spends it. Every use is reserved and
-        settles with the event's verdict.
+        mints a grant keyed on the approval it relied on and spends it. Unlimited standing words and
+        rulings permit a class of actions, so they mint one standing grant per destination; a counted
+        approval keeps one budget, and any other approval covers one destination. Every use is reserved
+        and settles with the event's verdict.
         """
         if action is None:
             if self.action is None:
@@ -254,12 +262,15 @@ class Grants:
                 )
         if not verdict.allow:
             return Denied(" ".join([*refusals, verdict.reason]), self.would_allow)
-        relied = [item for item in items if item.id in verdict.relied_on]
+        relied = cited(items, verdict.relied_on)
         if not relied:
             return Denied(
                 " ".join([*refusals, "The judge allowed without citing any of the owner's words."]), self.would_allow
             )
         owners = [item for item in items if item.source in OWNER_SOURCES]
+        destination = f"#{json.dumps(self.canonical(action))}"
+        per_destination = destination if verdict.uses is None else ""
+        ruling = next((item for item in relied if item.source in RULING_SOURCES), None)
         if verdict.standing and (said := verbatim(verdict.standing, owners)) is not None:
             quoted = said.model_copy(update={"quote": verdict.standing, "detail": said.quote})
             grant = self.grant(
@@ -269,7 +280,17 @@ class Grants:
                 uses=verdict.uses,
                 ttl=self.standing_ttl,
                 rules=self.standing_rules,
-                source_key=said.key or said.id,
+                source_key=f"{said.key or said.id}{per_destination}",
+            )
+        elif ruling is not None and self.judge is not None:
+            grant = self.grant(
+                evt,
+                scope=dict(action.scope),
+                evidence=relied,
+                uses=verdict.uses,
+                ttl=self.standing_ttl,
+                rules=self.standing_rules,
+                source_key=f"{ruling.key or ruling.id}{per_destination}",
             )
         else:
             approval = relied[0].key or relied[0].id
@@ -280,7 +301,7 @@ class Grants:
                 uses=self.mint,
                 ttl=self.ttl,
                 approved=dict(action.payload) if action.payload else None,
-                source_key=approval if self.judge is not None else f"{approval}#{json.dumps(self.canonical(action))}",
+                source_key=approval if self.judge is not None else f"{approval}{destination}",
                 across_trees=self.judge is None,
             )
         if grant.scope != self.canonical(action):

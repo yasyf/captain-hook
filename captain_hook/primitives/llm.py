@@ -97,6 +97,7 @@ def llm_evaluate[M: BaseModel](
     diff: bool | str = False,
     retries: int = 2,
     once_per_turn: bool = True,
+    evidence: bool = True,
 ) -> M | str | None:
     """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
 
@@ -107,6 +108,8 @@ def llm_evaluate[M: BaseModel](
     ``None`` on a skip; raises when the call still fails after the final retry, at once when the
     backend rejects the model itself, and at once when the caller's deadline is inside
     :data:`LLM_RETRY_FLOOR_SECONDS`, since a retry clamped to the seconds left cannot finish.
+    ``evidence=False`` keeps the event's transcripts open after the call, for a caller that judges
+    again within the same event.
     ``root_transcript`` takes a window like ``transcript`` and, when the event fires inside a subagent
     or teammate lane, adds that window of the root session that spawned the lane as
     ``<root_transcript>``, so a judge can read the user's words a lane never saw. ``root_excerpt``
@@ -166,6 +169,7 @@ def llm_evaluate[M: BaseModel](
                 specialty=specialty,
                 model=model,
                 agent=agent,
+                evidence=evidence,
                 response_model=response_model,
             )
         except ValidationError as e:

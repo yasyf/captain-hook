@@ -263,6 +263,48 @@ def test_verbatim_standing_words_mint_an_unlimited_grant(tmp_path: Path) -> None
     assert isinstance(again, Allowed) and again.grant.id == allowed.grant.id
 
 
+def test_standing_words_mint_one_grant_per_destination_they_cover(tmp_path: Path) -> None:
+    said = owner("reply in any alert thread without asking")
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
+    standing = {"allow": True, "reason": "standing", "relied_on": [said.id], "standing": said.quote}
+    first = grants.check(event(tmp_path, "one", **standing))
+    other = Proposal(scope={"channel": "C1", "thread": "3.4"}, payload={"text": "two"}, summary="reply in C1/3.4")
+    second = grants.check(event(tmp_path, "two", call="c2", **standing), other)
+    assert isinstance(first, Allowed) and isinstance(second, Allowed)
+    assert second.grant.id != first.grant.id and second.grant.scope == other.scope
+    assert second.remaining is None
+
+
+def test_a_ruling_the_judge_relies_on_covers_each_action_in_its_class(tmp_path: Path) -> None:
+    ruling = Evidence(
+        id="ccn:543e865", source="ccn-answer", quote="reply in any alert thread", key="ccn:543e865@r", live=True
+    )
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((ruling,)),), standing_rules=("no-edit",))
+    first = grants.check(event(tmp_path, "mechanism", allow=True, reason="ruled", relied_on=[ruling.id]))
+    assert isinstance(first, Allowed) and first.remaining is None and first.grant.rules == ["no-edit"]
+    again = grants.check(event(tmp_path, "fix live", call="c2", allow=True, reason="ruled", relied_on=[ruling.id]))
+    assert isinstance(again, Allowed) and again.grant.id == first.grant.id
+    other = Proposal(scope={"channel": "C1", "thread": "3.4"}, payload={"text": "x"}, summary="reply in C1/3.4")
+    elsewhere = grants.check(event(tmp_path, "x", call="c3", allow=True, reason="ruled", relied_on=[ruling.id]), other)
+    assert isinstance(elsewhere, Allowed) and elsewhere.grant.scope == other.scope
+
+
+@pytest.mark.parametrize("cite", ["543e865", "[ccn:543e865]", " ccn:543e865 "])
+def test_a_cited_id_counts_without_its_prefix_or_brackets(tmp_path: Path, cite: str) -> None:
+    ruling = Evidence(id="ccn:543e865", source="ccn-answer", quote="ok", key="ccn:543e865@r", live=True)
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((ruling,)),))
+    assert isinstance(grants.check(event(tmp_path, allow=True, reason="ruled", relied_on=[cite])), Allowed)
+
+
+def test_the_judge_leaves_the_transcript_open_for_a_second_judgement(tmp_path: Path) -> None:
+    minted(approved={"text": "the approved text"})
+    said = owner("yes post it", ident="ask:toolu_9#0")
+    evt = event(tmp_path, "changed", allow=False, reason="not this text")
+    declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(Fixed((said,)),)).check(evt)
+    assert evt.ctx.call_llm.call_count == 2
+    assert all(call.kwargs["evidence"] is False for call in evt.ctx.call_llm.call_args_list)
+
+
 def test_standing_words_the_owner_never_said_mint_one_use(tmp_path: Path) -> None:
     said = owner("post this one")
     grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))

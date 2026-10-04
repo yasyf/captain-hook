@@ -289,16 +289,24 @@ permission, revoke the grant of the declaration's kind.
    item, mint with the verdict's `uses`, `standing_ttl`, and `standing_rules` instead.
    A count allows that many uses; `uses=None` allows unlimited uses.
    The quote must be a verbatim substring after folding whitespace. An unverified
-   standing quote leaves the ordinary `mint` budget in place.
+   standing quote leaves the ordinary `mint` budget in place. An allow that cites a
+   cc-notes ruling mints the same way, because a ruling permits a class of actions
+   and never a single one.
 5. Run the declaration's applicable rules against the minted grant. A `deny`
    returns `Denied`; otherwise, reserve a use unless `spent_by` names a downstream
    system that spends it.
 
 With a judge, ordinary minting uses the first cited evidence item's key, or its id
-when the key is empty, as `source_key`. Standing minting uses the matching owner's
-evidence key or id. One approval mints once per kind and tree. A later mint from the
+when the key is empty, as `source_key`. One approval mints once per kind and tree,
+so an approval spent on one destination never covers another. A later mint from the
 same words returns the same grant with its remaining budget. Concurrent judges
 share it too.
+
+Standing minting uses the matching owner's evidence key or id, and ruling minting the
+cited ruling's key. With `uses=None` the canonical scope is appended as
+`<key>#<scope json>`, so words like "reply in any alert thread" mint one unlimited
+grant per thread they cover, each judged on its first action. A counted standing quote keeps
+the bare key, so its uses stay one budget across destinations.
 
 Without a judge, minting uses `<key>#<scope json>` as `source_key`, with the id in
 place of an empty key and the canonical scope serialized as JSON. It calls
@@ -311,7 +319,9 @@ Naming two scopes in one answer permits a separate grant for each.
 Ask keys name the tool-use id and question index. Ruling keys name the answer and
 revision. Owner-word keys hash the text and timestamp, so
 collecting the same message again reuses its key. An allow without a citation to
-collected evidence cannot mint a grant.
+collected evidence cannot mint a grant. A citation matches an evidence id as written,
+inside square brackets, or without its `source:` prefix, so `543e865` cites
+`ccn:543e865`.
 
 Keep `Asked()` and `OwnerWords()` in `evidence` when later owner instructions must
 reach the judge. The stored path sees only evidence from the configured providers
