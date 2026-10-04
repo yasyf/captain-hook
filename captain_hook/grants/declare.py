@@ -119,9 +119,9 @@ class Grants:
             when set, a check names the covering grant without reserving a use.
         would_allow: What the agent can do to get permission, appended to every deny.
         judge_fails_open: When the judge gives no verdict, the action goes ahead on the covering grant, or
-            on a one-use grant resting on the evidence collected, and ``Allowed.unjudged`` names the
-            failure. Sources that collect nothing still deny, and :meth:`request` still records no grant
-            unjudged.
+            on a one-use grant resting on the evidence collected that asserts ``standing_rules``, and
+            ``Allowed.unjudged`` names the failure. Sources that collect nothing, a judge that refused a
+            stored grant earlier in the same check, and :meth:`request` still deny.
     """
 
     kind: str
@@ -257,6 +257,7 @@ class Grants:
             return collected
 
         refusals: list[Refusal] = []
+        judged_no = False
         found = store.matching(self.kind, tree, scope, fingerprint(action), self.replay)
         refusals.extend(unusable_refusal(why) for _, why in found[:1] if why is not None)
         for grant in (grant for grant, why in found if why is None):
@@ -304,6 +305,7 @@ class Grants:
                 if verdict.withdrawn:
                     store.revoke(grant.id)
                 if not verdict.allow:
+                    judged_no = True
                     refusals.append(Refusal(verdict.explained, f"grant {grant.id}: {verdict.reason}"))
                     continue
                 reason, relied = verdict.reason, verdict.relied_on
@@ -315,7 +317,7 @@ class Grants:
             if not refusals:
                 return Denied(f"No {self.kind} grant covers {action.summary}.", self.would_allow)
             return Denied(refusals[-1].agent, self.would_allow, detail=" ".join(why.detail for why in refusals))
-        return self.from_evidence(evt, action, session(), refusals)
+        return self.from_evidence(evt, action, session(), refusals, fails_open=self.judge_fails_open and not judged_no)
 
     def from_evidence(
         self,
@@ -323,6 +325,8 @@ class Grants:
         action: Proposal,
         items: list[Evidence],
         refusals: list[Refusal],
+        *,
+        fails_open: bool,
     ) -> Allowed | Denied:
         def denied(*why: Refusal) -> Denied:
             reasons = [*refusals, *why]
@@ -341,7 +345,7 @@ class Grants:
             try:
                 verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=(), widen=self.widen)
             except JudgeFailed as exc:
-                if not self.judge_fails_open:
+                if not fails_open:
                     return Denied(
                         f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow, undecided=True
                     )
@@ -422,6 +426,7 @@ class Grants:
             evidence=items,
             ttl=self.ttl,
             approved=dict(action.payload) or None,
+            rules=self.standing_rules,
             source_key=f"unjudged:{call_id(evt)}",
         )
         settled = self.settled(evt, grant, action, verdict, denied)

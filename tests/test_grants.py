@@ -373,6 +373,31 @@ def test_a_judge_that_fails_open_spends_the_covering_grant(tmp_path: Path) -> No
     assert isinstance(allowed, Allowed) and allowed.grant.id == grant.id and allowed.unjudged == "TimeoutError"
 
 
+def test_a_judge_that_fails_open_keeps_the_standing_rules(tmp_path: Path) -> None:
+    evt = event(tmp_path, "@channel heads up")
+    evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
+    never = Never("no-broadcast", lambda action: "@channel" in action.payload["text"], "it never covers a broadcast")
+    grants = declared(
+        judge=Judge("rules"),
+        evidence=(Fixed((owner("post updates"),)),),
+        rules=(never,),
+        standing_rules=("no-broadcast",),
+        judge_fails_open=True,
+    )
+    denied = grants.check(evt)
+    assert isinstance(denied, Denied) and "never covers a broadcast" in denied.reason
+
+
+def test_a_judge_that_fails_open_never_overrides_its_own_refusal(tmp_path: Path) -> None:
+    minted(evidence=[owner("post it", ident="words:0")])
+    evt = event(tmp_path)
+    refusal = GrantVerdict(reason="the owner withdrew it", allow=False)
+    evt.ctx.call_llm = MagicMock(side_effect=[refusal, *(TimeoutError() for _ in range(5))])  # type: ignore[method-assign]
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("hold on"),)),), judge_fails_open=True)
+    denied = grants.check(evt)
+    assert isinstance(denied, Denied) and denied.undecided
+
+
 def test_a_judge_never_turns_incomplete_evidence_into_a_failed_verdict(tmp_path: Path) -> None:
     evt = event(tmp_path)
     evt.ctx.call_llm = MagicMock(side_effect=EvidenceIncomplete("deadline", "transcript"))  # type: ignore[method-assign]

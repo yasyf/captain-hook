@@ -533,9 +533,11 @@ ordinary handler can leave only a logged failure and no block.
 Declare `judge_fails_open=True` when a judge failure should let the action through
 instead. The check spends the covering grant, or mints a one-use grant on the
 evidence it collected, and `Allowed.unjudged` names the failure, such as
-`TimeoutError`. The hook should show that text to the agent and log it. A
-declaration whose sources collect no evidence still denies, a judge that answers
-no still denies, and `Grants.request` records a grant only on a verdict.
+`TimeoutError`. The minted grant asserts `standing_rules`, so a rule such as
+no-broadcast still denies. The hook should show that text to the agent and log
+it. A declaration whose sources collect no evidence still denies. A judge that
+answers no still denies, even when a later judge call in the same check fails.
+`Grants.request` records a grant only on a verdict.
 
 `hook(..., grants=...)` sets `on_incomplete` to `captain_hook.app.GRANTS_INCOMPLETE`.
 An abandoned or incomplete check blocks. The handler form above sets the same
