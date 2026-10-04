@@ -215,6 +215,9 @@ def test_registered_warming_reuses_facts_across_claimants_only_under_the_same_au
         after = fixture.client.call("stats")["data"]["counters"]
         assert after["source_bytes_read"] == before["source_bytes_read"]
         session.release()
+        fixture.context["work_class"] = "background"
+        assert warm.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is True
+        writes = warm.fact_cache_writes
 
         authority = fixture.context["authority"]
         fixture.context["authority"] = {
@@ -228,7 +231,24 @@ def test_registered_warming_reuses_facts_across_claimants_only_under_the_same_au
         before_restricted = fixture.client.call("stats")["data"]["counters"]
         assert restricted.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is True
         after_restricted = fixture.client.call("stats")["data"]["counters"]
-        assert after_restricted["source_bytes_read"] > before_restricted["source_bytes_read"]
+        assert after_restricted["source_bytes_read"] == before_restricted["source_bytes_read"]
+        assert restricted.fact_cache_writes == writes + 1
+        fixture.context["claimant"] = "restricted-repeat"
+        repeated = RegisteredWarmState(GraphSources(direct_paths=(attachment,)), fixture.client)
+        assert repeated.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3) is True
+        assert repeated.fact_cache_writes == restricted.fact_cache_writes
+
+        excluded = tmp_path / "excluded"
+        excluded.mkdir()
+        fixture.context["authority"] = {
+            "kind": "restricted_roots",
+            "effective_uid": authority["effective_uid"],
+            "roots": [str(excluded)],
+        }
+        denied = RegisteredWarmState(GraphSources(direct_paths=(attachment,)), fixture.client)
+        with pytest.raises(EvidenceIncomplete) as error:
+            denied.step(read_bytes=8 * 1024 * 1024, deadline_seconds=3)
+        assert error.value.status == "permission_denied"
     finally:
         fixture.close()
 
