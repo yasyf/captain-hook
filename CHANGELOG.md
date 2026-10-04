@@ -106,13 +106,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **An agent can stop its own `Monitor` and background `Bash` tasks.** The `TaskStop`
-  guard refused a root session's own Monitor task `b166f8m04` as unverifiable. New
-  `OwnShellTask` evidence matches the requested id against `toolUseResult.taskId` from a
-  `Monitor` call or `toolUseResult.backgroundTaskId` from a background `Bash` call in the
-  stopping agent's own transcript. Commands containing the word `claude` or `codex`,
-  including `codex-ask`, receive no shell-task grant. Another agent's transcript supplies
-  no proof, including a root's transcript when a lane asks.
+- **An agent can stop its own `Monitor` task.** The `PostToolUse` `record_children`
+  hook now records a `Monitor` response's `taskId` as shell evidence for the agent that
+  armed it. The existing `OwnShell` evidence source lets that agent spend a `TaskStop`
+  grant, fixing the refusal of the root's `Monitor` task `b166f8m04`. Another agent,
+  including a lane in the same session, cannot use that record. An `Agent` response
+  carrying a `taskId` supplies no shell evidence.
 - **Transient Orca CLI calls no longer protect their parent from `kill`.** The CLI execs
   the Orca app binary with `app.asar.unpacked/out/cli/index.js`, so the `Orca.app/` marker
   misclassified every request as the app. A drive's own `desk-runner.py` then counted as an
