@@ -70,14 +70,16 @@ class Tasks(Sequence[Task]):
         """Resolve the id of the task list a session writes to.
 
         An explicit ``CLAUDE_CODE_TASK_LIST_ID`` wins. A team lead's list is named after its
-        team, recorded in the ``teamName`` of any teammate's ``subagents/*.meta.json`` beside
-        the transcript; a resumed lead keeps that list under a new session id. Otherwise the
-        list is the session's own.
+        team, recorded in the ``teamName`` of its teammates' ``subagents/*.meta.json`` beside
+        the transcript. Each resume of a lead starts a new team, so one transcript can carry
+        several; the list is the team of the most recently written teammate meta. Otherwise
+        the list is the session's own.
         """
         if explicit := reqenv.getenv("CLAUDE_CODE_TASK_LIST_ID"):
             return explicit
         if transcript_path is not None:
-            for meta in (transcript_path.with_suffix("") / "subagents").glob("agent-*.meta.json"):
+            metas = (transcript_path.with_suffix("") / "subagents").glob("agent-*.meta.json")
+            for meta in sorted(metas, key=lambda path: path.stat().st_mtime, reverse=True):
                 if team := json.loads(meta.read_text()).get("teamName"):
                     return UNSAFE_LIST_CHARS.sub("-", team)
         return session_id
