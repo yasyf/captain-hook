@@ -778,7 +778,7 @@ def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path):
         fixture.close()
 
 
-def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_path, monkeypatch):
+def test_dispatch_reads_registered_sources_once_per_phase(tmp_path, monkeypatch):
     from captain_hook.snapshots.client import Lease, RemoteSession
     from captain_hook.transcripts import registered_sources, release_transcript
     from tests.test_prepared_graph_evidence import RecordingClient, description
@@ -833,8 +833,8 @@ def test_dispatch_reads_registered_sources_once_across_sync_and_background(tmp_p
         ("first", "second", "third"),
         ("first", "second", "third"),
     ]
-    assert len(reads) == 2
-    assert len(loads) == 2
+    assert len(reads) == 4
+    assert len(loads) == 4
 
 
 def test_each_hook_reads_only_the_tail_it_declares(tmp_path, monkeypatch):

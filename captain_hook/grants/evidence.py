@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cache
@@ -264,10 +264,10 @@ def words_evidence(text: str, at: datetime | None) -> Evidence:
     return Evidence(id=key, source="words", quote=text, said_at=at, key=key)
 
 
-def queued_words(turn: Any) -> list[tuple[str, Any]]:
+def queued_words(events: Iterable[Any]) -> list[tuple[str, Any]]:
     return [
         (event.detail.prompt or "", event)
-        for event in turn.events
+        for event in events
         if isinstance(event, AttachmentEvent)
         and isinstance(event.detail, QueuedCommand)
         and event.detail.origin == "human"
@@ -294,7 +294,7 @@ class OwnerWords:
         for session, prompts_are_owner in owner_sessions(evt, needles):
             for turn in session.recent_messages(self.window).turns:
                 said = [(turn.prompt, turn.started_at)] if prompts_are_owner else []
-                said += [(text, event.meta.timestamp) for text, event in queued_words(turn)]
+                said += [(text, event.meta.timestamp) for text, event in queued_words(turn.events)]
                 for text, at in said:
                     if text and not machine_written(text, self.machine):
                         item = words_evidence(text, at)

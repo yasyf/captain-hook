@@ -941,3 +941,29 @@ def test_a_lane_resolves_its_run_through_orcas_worker_list(status: str, expected
     with stubbed_commands(commands):
         assert orca_module.resolve("term_lane") == expected
         assert orca_module.resolve("term_other") == (None, None)
+
+
+def test_queued_words_record_from_a_turn_over_the_record_bound(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_queued_words
+    from captain_hook.context import HookContext
+    from captain_hook.events import StopEvent
+    from captain_hook.session import SessionStore
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    queued = {
+        "type": "attachment",
+        "attachment": {
+            "type": "queued_command",
+            "prompt": "ship it once the build is green",
+            "commandMode": "prompt",
+            "origin": {"kind": "human"},
+        },
+    }
+    bulk = [T.assistant("x" * 300_000) for _ in range(5)]
+    transcript = disk_fixture_session([T.user("start the release"), queued, *bulk])
+    evt = StopEvent(_raw={"session_id": TREE}, ctx=HookContext(SessionStore(tmp_path), transcript, None))
+
+    record_queued_words(evt)
+
+    assert [item.quote for item in evidence_module.recorded(evt, "words")] == ["ship it once the build is green"]

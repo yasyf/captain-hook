@@ -73,10 +73,9 @@ def record_owner_words(evt: UserPromptSubmitEvent) -> HookResult | None:
 def record_queued_words(evt: UserPromptSubmitEvent | StopEvent) -> HookResult | None:
     if evt.ctx.root_path is not None or evt.agent_id is not None:
         return None
-    for turn in evt.ctx.t.current_turn.turns:
-        for text, event in queued_words(turn):
-            if text and not machine_written(text):
-                record(evt, "words", words_evidence(text, event.meta.timestamp))
+    for text, event in queued_words(evt.ctx.t.current_turn.events):
+        if text and not machine_written(text):
+            record(evt, "words", words_evidence(text, event.meta.timestamp))
     return None
 
 

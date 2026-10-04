@@ -642,7 +642,7 @@ def prepare_hook_events(
             try:
                 matched[index] = matches_conditions(entries[index].spec, forks[index])
             except EvidenceIncomplete as exc:
-                if not fails_open(exc):
+                if not (async_ or fails_open(exc)):
                     raise
                 if entries[index].spec.on_incomplete is None:
                     note_evidence_gap(entries[index], exc)
@@ -1020,8 +1020,6 @@ def run_background_group(
                 try:
                     execute_hook(entries[index], events[index], session_dir)
                 except EvidenceIncomplete as exc:
-                    if not fails_open(exc):
-                        raise
                     note_evidence_gap(entries[index], exc)
     finally:
         for index in group:
