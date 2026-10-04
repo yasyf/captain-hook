@@ -39,6 +39,7 @@ from captain_hook.grants import evidence as evidence_module
 from captain_hook.grants import orca as orca_module
 from captain_hook.grants.cli import grant as grant_cli
 from captain_hook.hook_lint import result_violations
+from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
 from tests.helpers import make_ctx
 
@@ -331,6 +332,77 @@ def test_a_judge_that_gives_no_verdict_denies(tmp_path: Path) -> None:
     evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
     denied = declared(judge=Judge("rules"), evidence=(Fixed((owner("x"),)),)).check(evt)
     assert isinstance(denied, Denied) and "no verdict" in denied.reason and denied.undecided
+
+
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [(TimeoutError(), "TimeoutError"), (RuntimeError("backend down\nretry later"), "RuntimeError: backend down")],
+)
+def test_a_judge_that_fails_open_lets_the_action_through_on_one_use(
+    tmp_path: Path, error: Exception, cause: str
+) -> None:
+    evt = event(tmp_path, "unjudged")
+    evt.ctx.call_llm = MagicMock(side_effect=error)  # type: ignore[method-assign]
+    said = owner("post the status")
+    allowed = declared(judge=Judge("rules"), evidence=(Fixed((said,)),), judge_fails_open=True).check(evt)
+    assert isinstance(allowed, Allowed) and allowed.unjudged == cause
+    assert allowed.grant.uses == 1 and allowed.grant.approved == {"text": "unjudged"}
+    assert [item.id for item in allowed.grant.evidence] == [said.id] and "fails open" in allowed.reason
+
+
+def test_a_judge_that_fails_open_still_denies_with_no_evidence(tmp_path: Path) -> None:
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
+    denied = declared(judge=Judge("rules"), evidence=(Fixed(()),), judge_fails_open=True).check(evt)
+    assert isinstance(denied, Denied) and not denied.undecided
+    evt.ctx.call_llm.assert_not_called()
+
+
+def test_a_judge_that_fails_open_still_denies_on_its_refusal(tmp_path: Path) -> None:
+    evt = event(tmp_path, allow=False, reason="the owner never asked for this")
+    denied = declared(judge=Judge("rules"), evidence=(Fixed((owner("x"),)),), judge_fails_open=True).check(evt)
+    assert isinstance(denied, Denied) and "never asked" in denied.explained
+
+
+def test_a_judge_that_fails_open_spends_the_covering_grant(tmp_path: Path) -> None:
+    grant = minted(evidence=[owner("post it", ident="words:0")])
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
+    later = owner("actually, hold on")
+    allowed = declared(judge=Judge("rules"), evidence=(Fixed((later,)),), judge_fails_open=True).check(evt)
+    assert isinstance(allowed, Allowed) and allowed.grant.id == grant.id and allowed.unjudged == "TimeoutError"
+
+
+def test_a_judge_that_fails_open_keeps_the_standing_rules(tmp_path: Path) -> None:
+    evt = event(tmp_path, "@channel heads up")
+    evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
+    never = Never("no-broadcast", lambda action: "@channel" in action.payload["text"], "it never covers a broadcast")
+    grants = declared(
+        judge=Judge("rules"),
+        evidence=(Fixed((owner("post updates"),)),),
+        rules=(never,),
+        standing_rules=("no-broadcast",),
+        judge_fails_open=True,
+    )
+    denied = grants.check(evt)
+    assert isinstance(denied, Denied) and "never covers a broadcast" in denied.reason
+
+
+def test_a_judge_that_fails_open_never_overrides_its_own_refusal(tmp_path: Path) -> None:
+    minted(evidence=[owner("post it", ident="words:0")])
+    evt = event(tmp_path)
+    refusal = GrantVerdict(reason="the owner withdrew it", allow=False)
+    evt.ctx.call_llm = MagicMock(side_effect=[refusal, *(TimeoutError() for _ in range(5))])  # type: ignore[method-assign]
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("hold on"),)),), judge_fails_open=True)
+    denied = grants.check(evt)
+    assert isinstance(denied, Denied) and denied.undecided
+
+
+def test_a_judge_never_turns_incomplete_evidence_into_a_failed_verdict(tmp_path: Path) -> None:
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=EvidenceIncomplete("deadline", "transcript"))  # type: ignore[method-assign]
+    with pytest.raises(EvidenceIncomplete):
+        declared(judge=Judge("rules"), evidence=(Fixed((owner("x"),)),), judge_fails_open=True).check(evt)
 
 
 def test_a_denied_event_releases_its_reservation(tmp_path: Path) -> None:

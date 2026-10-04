@@ -118,6 +118,10 @@ class Grants:
         spent_by: The downstream system that spends this kind's grants with ``capt-hook grant spend``;
             when set, a check names the covering grant without reserving a use.
         would_allow: What the agent can do to get permission, appended to every deny.
+        judge_fails_open: When the judge gives no verdict, the action goes ahead on the covering grant, or
+            on a one-use grant resting on the evidence collected that asserts ``standing_rules``, and
+            ``Allowed.unjudged`` names the failure. Sources that collect nothing, a judge that refused a
+            stored grant earlier in the same check, and :meth:`request` still deny.
     """
 
     kind: str
@@ -134,6 +138,7 @@ class Grants:
     replay: timedelta = timedelta.max
     spent_by: str | None = None
     would_allow: str = "Ask the user for permission for exactly this action."
+    judge_fails_open: bool = False
     hook: str = field(default="grants")
 
     def __post_init__(self) -> None:
@@ -252,6 +257,7 @@ class Grants:
             return collected
 
         refusals: list[Refusal] = []
+        judged_no = False
         found = store.matching(self.kind, tree, scope, fingerprint(action), self.replay)
         refusals.extend(unusable_refusal(why) for _, why in found[:1] if why is not None)
         for grant in (grant for grant, why in found if why is None):
@@ -282,30 +288,36 @@ class Grants:
                 key=lambda item: item.said_at.timestamp() if item.said_at else 0.0,
             )
             allowed_by_rule = any(ruling.verdict == "allow" for ruling in rulings)
+            unjudged = ""
             if self.judge is not None and (since or not allowed_by_rule):
                 try:
                     verdict = self.judge(
                         evt, hook=self.hook, action=action, evidence=since, rulings=rulings, grant=grant
                     )
                 except JudgeFailed as exc:
-                    return Denied(
-                        f"{exc}, and a grant it cannot judge never covers an action.", self.would_allow, undecided=True
-                    )
+                    if not self.judge_fails_open:
+                        return Denied(
+                            f"{exc}, and a grant it cannot judge never covers an action.",
+                            self.would_allow,
+                            undecided=True,
+                        )
+                    verdict, unjudged = self.failed_open(exc, relied), exc.cause
                 if verdict.withdrawn:
                     store.revoke(grant.id)
                 if not verdict.allow:
+                    judged_no = True
                     refusals.append(Refusal(verdict.explained, f"grant {grant.id}: {verdict.reason}"))
                     continue
                 reason, relied = verdict.reason, verdict.relied_on
             try:
-                return self.spend(evt, grant, action, reason, relied)
+                return replace(self.spend(evt, grant, action, reason, relied), unjudged=unjudged)
             except store.SpentError as exc:
                 refusals.append(unusable_refusal(exc.why))
         if not self.evidence:
             if not refusals:
                 return Denied(f"No {self.kind} grant covers {action.summary}.", self.would_allow)
             return Denied(refusals[-1].agent, self.would_allow, detail=" ".join(why.detail for why in refusals))
-        return self.from_evidence(evt, action, session(), refusals)
+        return self.from_evidence(evt, action, session(), refusals, fails_open=self.judge_fails_open and not judged_no)
 
     def from_evidence(
         self,
@@ -313,6 +325,8 @@ class Grants:
         action: Proposal,
         items: list[Evidence],
         refusals: list[Refusal],
+        *,
+        fails_open: bool,
     ) -> Allowed | Denied:
         def denied(*why: Refusal) -> Denied:
             reasons = [*refusals, *why]
@@ -331,9 +345,11 @@ class Grants:
             try:
                 verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=(), widen=self.widen)
             except JudgeFailed as exc:
-                return Denied(
-                    f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow, undecided=True
-                )
+                if not fails_open:
+                    return Denied(
+                        f"{exc}, and an action it cannot judge never goes ahead.", self.would_allow, undecided=True
+                    )
+                return self.unjudged(evt, action, items, exc, denied)
         if not verdict.allow:
             return denied(Refusal(verdict.explained, verdict.reason))
         relied = cited(items, verdict.relied_on)
@@ -390,6 +406,35 @@ class Grants:
                     f" {action.summary or render_scope(action.scope)}.",
                 )
             )
+        return self.settled(evt, grant, action, verdict, denied)
+
+    def failed_open(self, failed: JudgeFailed, relied: Sequence[str]) -> GrantVerdict:
+        return GrantVerdict(reason=f"{failed}, and {self.kind} fails open", allow=True, relied_on=list(relied))
+
+    def unjudged(
+        self,
+        evt: BaseHookEvent,
+        action: Proposal,
+        items: Sequence[Evidence],
+        failed: JudgeFailed,
+        denied: Callable[..., Denied],
+    ) -> Allowed | Denied:
+        verdict = self.failed_open(failed, [item.id for item in items])
+        grant = self.grant(
+            evt,
+            scope=self.canonical(action),
+            evidence=items,
+            ttl=self.ttl,
+            approved=dict(action.payload) or None,
+            rules=self.standing_rules,
+            source_key=f"unjudged:{call_id(evt)}",
+        )
+        settled = self.settled(evt, grant, action, verdict, denied)
+        return replace(settled, unjudged=failed.cause) if isinstance(settled, Allowed) else settled
+
+    def settled(
+        self, evt: BaseHookEvent, grant: Grant, action: Proposal, verdict: GrantVerdict, denied: Callable[..., Denied]
+    ) -> Allowed | Denied:
         rulings = [rule.evaluate(grant, action) for rule in self.applicable(grant)]
         if rule_denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
             return denied(

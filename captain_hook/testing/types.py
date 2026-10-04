@@ -191,7 +191,8 @@ class Input:
             session :class:`~captain_hook.types.Waiting`.
         llm: Per-test LLM stub overrides merged over the default stub verdict
             (``fire``/``block``/``action``/``reasoning``), e.g. ``llm={"fire": False}``
-            to exercise an LLM hook's judge-declines path.
+            to exercise an LLM hook's judge-declines path; an ``error`` key holding an
+            exception raises it from the model call, e.g. ``llm={"error": TimeoutError()}``.
         seen: Keys already observed this session, per ``once``/``unseen`` scope
             (``seen={"scope": ["key"]}``; the unscoped call site is ``""``). Backed by a
             real temporary session directory, so ``evt.ctx.s.once`` dedups exactly as it

@@ -815,6 +815,13 @@ class TestStubbedContext:
         ctx = StubbedContext.wrapping(build_context(), {"fire": False})
         assert ctx.call_llm("judge", response_model=Verdict).fire is False
 
+    def test_call_llm_raises_a_stubbed_error(self):
+        from captain_hook.testing.helpers import StubbedContext, build_context
+
+        ctx = StubbedContext.wrapping(build_context(), {"error": TimeoutError("slow")})
+        with pytest.raises(TimeoutError, match="slow"):
+            ctx.call_llm("judge")
+
 
 class TestIsolatedStateRoot:
     def test_state_dir_points_at_yielded_root_inside(self):

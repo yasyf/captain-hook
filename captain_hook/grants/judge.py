@@ -69,7 +69,15 @@ class GrantVerdict(BaseModel):
 
 
 class JudgeFailed(Exception):
-    """The judge gave no valid verdict in time; a grant it cannot judge never allows."""
+    """The judge gave no valid verdict in time; a grant it cannot judge never allows unless its declaration fails open.
+
+    Attributes:
+        cause: What stopped the verdict, such as ``TimeoutError``.
+    """
+
+    def __init__(self, cause: str) -> None:
+        super().__init__(f"the judge gave no verdict ({cause})")
+        self.cause = cause
 
 
 def render_evidence(items: Sequence[Evidence]) -> str | None:
@@ -105,7 +113,7 @@ class Judge:
         contexts: Extra prompt contexts the hook renders, such as a preview diff.
         model: spawnllm model tier; capt-hook's small judge model by default.
         specialty: spawnllm specialty for the call.
-        deadline: Seconds the judge may take before the check denies.
+        deadline: Seconds the judge may take before it fails.
         transcript: Recent-session window the judge reads, as ``llm_evaluate`` takes it.
         root_transcript: The spawning session's window, for a lane.
         root_excerpt: Maps the event to needles whose root-session mentions the judge reads.
@@ -133,10 +141,8 @@ class Judge:
         grant: Grant | None = None,
         widen: Sequence[str] = (),
     ) -> GrantVerdict:
-        from pydantic import ValidationError
-        from spawnllm import BackendCallError
-
         from captain_hook.primitives.llm import llm_evaluate
+        from captain_hook.snapshots.client import EvidenceIncomplete
 
         prompt = (
             Prompt()
@@ -165,8 +171,11 @@ class Judge:
                     once_per_turn=False,
                     evidence=False,
                 )
-        except (TimeoutError, BackendCallError, ValidationError) as exc:
-            raise JudgeFailed(f"the judge gave no verdict ({type(exc).__name__})") from exc
+        except EvidenceIncomplete:
+            raise
+        except Exception as exc:
+            detail = str(exc).partition("\n")[0]
+            raise JudgeFailed(f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__) from exc
         if not isinstance(verdict, GrantVerdict):
-            raise JudgeFailed("the judge gave no verdict")
+            raise JudgeFailed(f"{type(verdict).__name__} instead of a verdict")
         return verdict

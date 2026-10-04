@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A grant declaration can fail open when its judge gives no verdict.**
+  `Grants(judge_fails_open=True)` spends the covering grant, or mints a one-use grant
+  on the evidence collected, when the judge times out, its backend errors, or it
+  returns no verdict. `Allowed.unjudged` names the failure, and `JudgeFailed.cause`
+  carries it. The minted grant asserts `standing_rules`. Empty evidence and a judge's
+  refusal earlier in the same check still deny, and `Grants.request` never records a
+  grant unjudged. Any judge exception other than incomplete
+  transcript evidence is now a `JudgeFailed`.
+- **An inline test can make the model call fail.** `Input(llm={"error": TimeoutError()})`
+  raises that exception from the stubbed `call_llm`, so a hook can test its judge-failure path.
 - **Grant scopes accept exact values, sets, and any non-empty value.** A scope value is
   a string, a list of named values, or `"*"`; `covers` checks every key against an action's
   exact values. `ANY` and `covers` are exported from `captain_hook.grants`, and stored
