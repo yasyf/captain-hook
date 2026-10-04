@@ -116,6 +116,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A timed-out merge-queue check lets the push through.** When `ccx vcs pr status` or
+  the pull request lookup outlasted the graphite pack's 45-second check, the push was
+  held. It now goes ahead with a one-line note naming the PRs or branches it could not
+  check. A push to a PR the check sees queued is still denied.
 - **The session guard lets agents quit apps that host no session.** `osascript` that
   quits a named application was blocked for every app, including Slack. The guard now
   blocks only terminals, editors, Orca, Captain Hook, tmux, and any app whose process
