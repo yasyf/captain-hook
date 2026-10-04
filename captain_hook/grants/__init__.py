@@ -13,10 +13,11 @@ from captain_hook.grants.evidence import (
     verbatim,
 )
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
-from captain_hook.grants.records import Allowed, Denied, Evidence, Grant, Proposal, Spend
+from captain_hook.grants.records import ANY, Allowed, Denied, Evidence, Grant, Proposal, Spend, covers
 from captain_hook.grants.rules import ContentMatches, Never, Rule, Ruling, word_diff
 
 __all__ = [
+    "ANY",
     "Proposal",
     "Allowed",
     "Asked",
@@ -36,6 +37,7 @@ __all__ = [
     "Rulings",
     "Spend",
     "StandingRulings",
+    "covers",
     "reservations",
     "settle",
     "tree_of",

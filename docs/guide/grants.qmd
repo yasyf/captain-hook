@@ -67,6 +67,7 @@ MESSAGE_WRITES = Grants(
         model="medium",
     ),
     evidence=(Asked(), OwnerWords()),
+    widen=("channel", "thread"),
     standing_rules=("no-edit", "no-broadcast"),
     would_allow="Ask the user to approve this destination and the complete payload.",
     hook="message_writes",
@@ -86,10 +87,11 @@ lifts that hook's block and returns `evt.context(...)` with one sentence:
 ``<hook>: allowed by grant `<id>`, N use(s) left.`` The id is in a code span;
 unlimited grants say `unlimited uses` instead of `N use(s) left`.
 
-A deny keeps the hook's own message as the agent-facing block, without appending
-anything. The reason and `would_allow` go to the user as `system_message`, prefixed
-with `<hook>: `. Other hooks still decide the event, and Claude Code's permission
-flow still applies.
+A deny with a reason replaces the agent-facing block with `Denied.message`: the
+short refusal followed by `would_allow`. Without a reason, the hook keeps its own
+message. The full explanation goes to the user as `system_message`, prefixed with
+`<hook>: `. Other hooks still decide the event, and Claude Code's permission flow
+still applies.
 
 `grants=` requires `block=True`, tool events, and a declaration with an `action`
 function. Registration raises `ValueError` otherwise. Narrow the event with
@@ -104,7 +106,7 @@ function. Registration raises `ValueError` otherwise. Narrow the event with
 | `id` | Stable handle, normally 12 hex characters |
 | `kind` | Declaration that accepts it, such as `message.write` |
 | `tree` | Root session id where it was minted; other trees can adopt it |
-| `scope` | Exact destination values as `dict[str, str]` |
+| `scope` | Destination patterns as `dict[str, str \| list[str]]` |
 | `approved` | Approved payload as a dictionary, or `None` |
 | `uses` | Total use budget of `1`, another positive integer, or `None` for unlimited |
 | `expires` | Expiry timestamp, or `None` |
@@ -126,16 +128,38 @@ Uses live in separate spend records. Each records its timestamp, state, session,
 agent, tool-use id, payload fingerprint, summary, reason, and cited evidence ids.
 `uses` stays fixed; the store computes the remaining budget from these records.
 
-## Choose exact scope keys
+## Choose scope keys and patterns {#choose-exact-scope-keys}
 
 Every proposal must carry exactly the keys in `Grants.scope`. Missing or extra
-keys raise `ValueError`. `Grants.grant(...)` applies the same check when minting
-through the declaration. Matching requires equality of the whole scope.
+keys raise `ValueError`. An action carries one exact string per key.
+`Grants.grant(...)` requires the same keys, but each grant value can be a pattern:
+
+| Grant value | Covered action values |
+|-------------|-----------------------|
+| `"C_EXAMPLE"` | That exact string |
+| `"*"` | Any non-empty string |
+| `["C_EXAMPLE", "C_OTHER"]` | Either listed string |
+
+Lists are sets of exact values; `Grants` sorts and deduplicates them when minting.
+`ANY`, exported from `captain_hook.grants`, is `"*"`. The same module exports
+`covers(scope, action_scope)`, which requires identical keys and coverage of every
+action value. Both stored-grant matching and reservations use this check.
+`captain_hook.grants.records.render_scope` formats patterns for messages, such as
+`channel={C_EXAMPLE, C_OTHER}, thread=any`.
 
 For the messaging declaration, `{"channel": "C_EXAMPLE", "thread": ""}` means
 a top-level post. It does not cover a reply. An omitted `thread` is an error,
-and an empty string is not a wildcard. Normalize identifiers in `action` before
-constructing the proposal; scope matching does not resolve aliases.
+and an empty string is not a wildcard. A grant with `thread="*"` covers replies
+but never a top-level post with `thread=""`. A list can name the empty string
+explicitly. Normalize identifiers in `action` before constructing the proposal;
+scope matching does not resolve aliases.
+
+`Grants(widen=("channel", "thread"))` names keys the judge may broaden when
+minting from evidence. It can return a list of named destinations or `"*"` when
+the owner's words cover that class. Omitted keys keep the action's value.
+`Grants.widened()` rejects an undeclared key, a change to a key outside `widen`,
+or a pattern that no longer covers the action. Repeating an unchanged exact value
+is allowed. The default `widen=()` keeps the action's scope exact.
 
 Tree binding is separate from scope. The framework uses `evt.ctx.root_path.stem`
 when a spawning session is known, otherwise `evt.session_id`. A lane can spend
@@ -187,8 +211,25 @@ Tree, budget, expiry, revocation, and live-evidence checks still apply.
 
 `Judge` receives the proposal, the evaluated rules, and the evidence. For a
 stored grant, it also receives that grant's evidence and the owner's later words.
-Its `GrantVerdict` has `allow`, `reason`, `relied_on`, and optional `standing` and
-`uses` fields. `relied_on` names evidence ids.
+Its `GrantVerdict` includes these fields:
+
+| Field | Meaning |
+|-------|---------|
+| `allow` | Whether the evidence permits the action |
+| `reason` | Full reasoning, including the owner's words |
+| `relied_on` | Evidence ids supporting an allow |
+| `standing` | Verbatim owner quote permitting more than one action, or `None` |
+| `uses` | Positive use count, or `None` when the words set no count |
+| `scope` | Values the words cover for widenable keys, or `None` |
+| `refusal` | One plain sentence for the agent when permission is denied |
+| `withdrawn` | Whether to revoke the stored grant under review |
+
+When minting, the judge receives the declaration's `widen` keys in
+`<widenable_scope>`. It returns a list of exact values or `"*"` for each key it
+broadens. The declaration validates that scope before minting. `refusal` should
+say what the approval covers and how the action exceeds it, in fewer than 150
+characters without quotation marks, ids, dates, or times. When `refusal` is empty,
+the agent's reason comes from `reason`.
 
 `standing` holds the owner's verbatim quote permitting more than one action.
 For "send these three replies" the judge sets `standing` to that quote and
@@ -221,8 +262,11 @@ selection, typed answer, and per-question notes. It distinguishes what was shown
 from what was chosen. The builtin `general` pack records answers on
 `PostToolUse(AskUserQuestion)` as tree-bound `ask` grants with one use and a
 7-day expiry, and a root session's own prompts on `UserPromptSubmit` as `words`
-grants with the same expiry. These are evidence records; the declaration mints its
-own kind after the judge allows.
+grants with the same expiry. On `Stop` and `UserPromptSubmit`, it also records
+human `queued_command` attachments from the root session's current turn as
+`words`. Teammates and sessions with a root transcript do not record those queued
+messages. These are evidence records; the declaration mints its own kind after
+the judge allows.
 
 `Asked` and `OwnerWords` default to a window of 60 and accept a `needles` callback
 to include matching events from the last 16 MiB of the root transcript. Evidence
@@ -270,8 +314,8 @@ permission, revoke the grant of the declaration's kind.
 
 `Grants.check(evt)` stops at the first allow:
 
-1. Read stored grants of this kind minted in or adopted into this tree with the
-   exact scope, newest first.
+1. Read stored grants of this kind minted in or adopted into this tree whose
+   scope patterns cover the action, newest first.
    Skip revoked, expired, or exhausted grants, except for an eligible identical
    retry. Evaluate the applicable deterministic rules.
 2. If the grant has live evidence, collect the configured sources again and skip
@@ -282,31 +326,34 @@ permission, revoke the grant of the declaration's kind.
    matching grant after these checks.
 3. If no stored candidate covers the call, use the configured evidence to decide
    whether to mint. A judge decides when present; otherwise, the first collected
-   item supplies approval, and no items means a deny. An allow mints with the
-   declaration's `mint` budget and `ttl` and stores the proposed payload as
-   `approved`. An empty payload sets `approved=None`.
+   item supplies approval. With no evidence, deny without calling the judge.
+   An allow must cite collected evidence and pass the scope-widening check.
+   Ordinary approvals use the verdict's `uses` when set, otherwise the
+   declaration's `mint`, with the declaration's `ttl`. Store the proposed payload
+   as `approved` only when it is non-empty and the minted scope equals the
+   action's own exact scope.
 4. If the allow includes a `standing` quote found in an `ask` or `words` evidence
    item, mint with the verdict's `uses`, `standing_ttl`, and `standing_rules` instead.
    A count allows that many uses; `uses=None` allows unlimited uses.
    The quote must be a verbatim substring after folding whitespace. An unverified
-   standing quote leaves the ordinary `mint` budget in place. An allow that cites a
-   cc-notes ruling mints the same way, because a ruling permits a class of actions
-   and never a single one.
+   standing quote keeps the ordinary budget and lifetime. With a judge, an allow
+   that cites a cc-notes ruling also uses the standing budget, lifetime, and rules.
 5. Run the declaration's applicable rules against the minted grant. A `deny`
    returns `Denied`; otherwise, reserve a use unless `spent_by` names a downstream
    system that spends it.
 
 With a judge, ordinary minting uses the first cited evidence item's key, or its id
-when the key is empty, as `source_key`. One approval mints once per kind and tree,
-so an approval spent on one destination never covers another. A later mint from the
-same words returns the same grant with its remaining budget. Concurrent judges
-share it too.
+when the key is empty, as `source_key`. One approval mints once per kind and tree.
+Its scope can cover several destinations, but its budget is shared across them.
+A later mint from the same approval returns the same grant with its remaining
+budget; it does not expand that grant's scope. Concurrent judges share it too.
 
 Standing minting uses the matching owner's evidence key or id, and ruling minting the
 cited ruling's key. With `uses=None` the canonical scope is appended as
-`<key>#<scope json>`, so words like "reply in any alert thread" mint one unlimited
-grant per thread they cover, each judged on its first action. A counted standing quote keeps
-the bare key, so its uses stay one budget across destinations.
+`<key>#<scope json>`, so the same words mint one unlimited grant per scope the
+judge reads them as covering. A `thread="*"` grant can cover several threads;
+without widening, separate threads get separate grants. A counted standing quote
+keeps the bare key, so its uses stay one budget across destinations.
 
 Without a judge, minting uses `<key>#<scope json>` as `source_key`, with the id in
 place of an empty key and the canonical scope serialized as JSON. It calls
@@ -335,9 +382,11 @@ defers, and `Never` never returns an allow.
 
 `mint=1` and `ttl=timedelta(days=1)` are the defaults for ordinary evidence mints.
 Set `mint` to a positive integer for a larger budget, or `ttl=None` for no expiry.
-A verified standing quote uses the judge's count, or unlimited uses when the
-quote sets no limit. `standing_ttl=None` is its default lifetime; set a
-`timedelta` to bound it.
+A judge's positive `uses` overrides `mint` for an ordinary approval too.
+A verified standing quote or judged ruling uses the judge's count, or unlimited
+uses when it sets no count. `standing_ttl=None` is its default lifetime; set a
+`timedelta` to bound it. A counted grant shares one budget across every destination
+its pattern covers; naming two places does not give each its own count.
 
 On a `Grant`, `uses=1` means one use, `uses=N` allows N uses, and `uses=None`
 is unlimited. Expiry and revocation stop all three. `Grants.grant(...)` is the
@@ -358,6 +407,25 @@ revocation still reject an identical retry. The store's `retried`, `unusable`,
 
 The downstream tool must deduplicate the effect. A grant tracks permission;
 it does not make a message send or other write idempotent.
+
+## Request a grant without spending it
+
+`Grants.request(evt, scope=..., quote=..., uses=None, payload=None)` records a
+grant an agent requests on the owner's behalf. It requires a judge; without one,
+it raises `TypeError`. Supply the declaration's scope keys with exact values,
+lists, or `"*"`, and the owner's quote. The quote must occur verbatim in collected
+`ask` or `words` evidence after folding whitespace. A paraphrase is refused before
+the judge runs.
+
+The judge receives the requested scope, quote, use count, and optional payload.
+It must allow before the grant is recorded. The grant rests on the quoted words,
+uses `standing_ttl` and `standing_rules`, and has no approved payload; `payload`
+provides context for the judge. `uses=None` requests an unlimited budget.
+
+The method returns `Allowed` with the grant and its remaining budget, or `Denied`.
+It reserves and spends no use. Repeating a request with the same quote's evidence
+key and scope returns the existing grant. A later `check` evaluates and spends
+that grant for an action.
 
 ## Settle uses with the event
 
@@ -404,7 +472,26 @@ hold a use for this spend.
 
 Call `MESSAGE_WRITES.check(evt)` when a handler needs the grant record or remaining
 budget. It returns a truthy `Allowed(grant, remaining, reason)` or a falsey
-`Denied(reason, would_allow)`. `Denied.message` joins the refusal and remediation.
+`Denied(reason, would_allow, undecided=False, detail="")`.
+
+`Denied.reason` is the refusal for the agent. `Denied.detail` holds the collected
+refusals and full judge reasoning for the user. `Denied.message` joins
+`brief(reason)` with `would_allow`; with no reason, it is just `would_allow`.
+`Denied.explained` returns the detail when present, otherwise the reason and
+remediation.
+
+`captain_hook.grants.records.brief` takes the first sentence, strips quotation
+marks and recognized record ids, replaces `ruling` with `decision`, and clips long
+text at a word near 160 characters. Write `would_allow` as one short remediation
+sentence. The combined block must meet `hook_lint.copy_violations`: at most two
+sentences and 300 characters, with no quoted phrases, record or commit-hash-like
+ids, dates, or the word `ruling` in its prose. Check the combined message;
+`brief` does not enforce every copy rule or shorten `would_allow`.
+
+For a spent approval, the agent's text names the action that used it. The grant id,
+spend time, session, and agent remain in the detail. `store.unusable()` returns
+`Unusable(agent, detail)` when a grant cannot spend, and `SpentError.why` carries
+that value when reservation fails.
 
 For a hook that checks several calls within one event, pass each `Proposal`
 directly to `check(evt, action)`. The explicit proposal overrides the declaration's
@@ -435,7 +522,7 @@ def message_writes(evt: BaseHookEvent) -> HookResult:
         return evt.block("The grant check failed. Retry after fixing the check.")
     if isinstance(verdict, Allowed):
         return evt.context(f"Allowed by grant `{verdict.grant.id}`.")
-    return evt.block(verdict.message)
+    return evt.block(verdict.message, system_message=verdict.explained)
 ```
 
 The `grants=` attachment already converts store, parse, evidence, and judge errors
@@ -462,6 +549,13 @@ uvx capt-hook grant add --kind message.write \
   --quote 'Post the reviewed update in this thread.'
 ```
 
+For `add` and `import`, repeating a scope key makes a set:
+`--scope channel=C_EXAMPLE --scope channel=C_OTHER` covers either channel.
+Use `--scope 'thread=*'` for any non-empty thread value; quote the asterisk so
+the shell leaves it intact. These patterns share the grant's use budget.
+`spend` takes the action's exact value for each key and rejects repeated keys;
+it does not spend a set or expand a wildcard.
+
 Use `--uses N` for a finite budget or `--unlimited` for a standing grant.
 `--for` accepts durations such as `30m`, `8h`, or `7d`; omitting it sets no expiry.
 Repeat `--rule` to assert declared rule names; `--uses` defaults to `1`.
@@ -483,7 +577,8 @@ judge therefore asks the judge about the first use.
 
 Only the owner runs `add` and `import`, from an interactive terminal. The builtin
 guard blocks agent-run Bash calls to both, and the CLI rejects noninteractive
-input. Agents retry the action itself so its hook can collect the owner's evidence.
+input. Agents retry the action itself so its hook can collect the owner's evidence,
+or a hook uses `Grants.request` to judge a request without spending it.
 
 The CLI records the owner's chosen scope, budget, expiry, and tree without judging
 the approval or enforcing a declaration's exact scope keys. Imported cc-notes
@@ -513,9 +608,9 @@ On a grants check in an Orca terminal, the framework finds the
 dispatched worker for that terminal with `orca orchestration worker-list`, and reads
 the Run's coordinator terminal with `orca orchestration run-show`. It then adopts
 every spendable grant minted in the session tree recorded for that terminal. The
-coordinator's recorded `words` and `ask` records are never adopted, so one approval
-still spends once. Each adoption is logged with agent `orca:<run>`, so both trees
-share the budget, and `grant show` lists the lane.
+coordinator's `words`, `ask`, `spawn`, and `shell` records stay in their own tree;
+automatic adoption transfers spendable grants. Each adoption is logged with
+agent `orca:<run>`, so both trees share the budget, and `grant show` lists the lane.
 
 A lane pins the coordinator session it first binds for each Run. When the coordinator
 terminal's record moves to another session, the lane adopts nothing more from it.
@@ -542,7 +637,7 @@ committed, and released uses.
 
 ## Lift a session guard block
 
-The `general` pack declares four session grant kinds:
+The `general` pack declares these session grant kinds:
 
 | Kind | Scope | Action it can cover |
 |------|-------|---------------------|
@@ -550,6 +645,9 @@ The `general` pack declares four session grant kinds:
 | `sessions.launchctl` | `service=<launchd label>` | `launchctl bootout`, `kickstart`, `disable`, `kill`, `stop`, or `remove` on one service |
 | `sessions.task-stop` | `task=<id>` | `TaskStop`, using `task_id` or the retired `shell_id` |
 | `sessions.close-settled` | Empty | `orca terminal close --terminal <handle>` for an idle, settled dispatch |
+| `sessions.close.owner` | `terminal=<handle>` | A close the owner names in their words or answer |
+| `sessions.launchctl.owner` | `service=<launchd label>` | A service action the owner names in their words or answer |
+| `sessions.task-stop.owner` | `task=<id>` | A task stop the owner names by id or lane name |
 
 The first three have no judge. Their budget is one use per evidence item and
 scope across all session trees, with a one-day expiry. They read
@@ -578,13 +676,23 @@ label. No lift covers domain targets such as `gui/501`, the `reboot`, `asuser`,
 `bsexec`, or `unload` verbs, or any other session-guard block.
 
 `sessions.task-stop` also accepts live `OwnTeammate` evidence. The task id must
-match `<name>@session-<8 hex>`, and this agent's own transcript must record an
-`Agent` or `Task` call with `toolUseResult.status` equal to `teammate_spawned` and
-that exact `toolUseResult.teammate_id`. A matching spawn grants one deterministic
-use, recorded as a spend. The team id comes from the Claude process's session id
-at spawn; after a resume it can differ from the hook payload's session id. Bare
-ids and teammates absent from this agent's transcript do not qualify for this
-lift. A lane cannot use its sibling's or root's spawn record.
+match `<name>@session-<8 hex>`. On `PostToolUse`, the general pack records an
+`Agent` or `Task` result with `status: teammate_spawned` and its `teammate_id`
+as a `spawn` record keyed to the spawning session and agent. `OwnTeammate` reads
+that record first, so compaction does not erase the proof. Without a record, it
+looks for the matching result in this agent's own transcript.
+
+A matching spawn grants one deterministic use. The team id comes from the Claude
+process's session id at spawn; after a resume it can differ from the hook payload's
+session id. Bare teammate ids do not qualify. A lane cannot use its sibling's or
+root's spawn record.
+
+`OwnShell` gives the same one-use lift for a background shell this agent started.
+The pack records a Bash result's non-empty `backgroundTaskId` as a `shell` record
+on `PostToolUse`. `TaskStop` must name that task id, and the record must belong to
+the calling session and agent. Both child record kinds stay in their own tree
+during coordinator adoption. These lifts share the two-minute identical-retry
+window of `sessions.task-stop`.
 
 `sessions.close` also accepts live `CreatedHere` evidence when all checks pass:
 
@@ -636,6 +744,27 @@ scope, unlimited uses, and no expiry; the judge checks each close again. Live or
 unsettled dispatches, busy agents, terminals without a dispatch, unreadable
 process trees, loops, and batches do not qualify for this lift.
 
+Its remediation is: "Close only an idle terminal whose dispatch Orca records as
+settled, under a standing owner decision recorded in cc-notes before the closing
+session."
+
+The `.owner` kinds try the owner's current words after the existing cc-notes,
+created-here, own-teammate, own-shell, and settled-dispatch lifts. Only the
+spawning root qualifies: the event has no `agent_id` and `evt.ctx.root_path` is
+`None`. A teammate or a session with a root transcript gets no owner-named lift.
+
+`OwnerNaming` collects prompts, human-queued messages, and `AskUserQuestion`
+answers that name the exact terminal handle, service label, or task id. For a
+`<name>@session-<id>` task, its lane name also qualifies. Matching includes the
+question and option context, so the owner can select an option that names the
+target. With no naming evidence, the hook makes no judge call.
+
+The judge applies `OWNER_NAMED_RULES`: the words must ask to close, stop, restart,
+or kick that target, or choose an option that does. A description, a general
+cleanup request, or words naming another target do not authorize it. These
+declarations default to a one-use mint budget and a one-hour expiry, with a
+two-minute identical-retry window. The command-shape restrictions above still apply.
+
 The sessions guard does not block `orca-gc --run <run> [--dispatch <ctx>]`.
 
 The owner can mint one close from a terminal; replace the placeholders:
@@ -645,8 +774,9 @@ uvx capt-hook grant add --kind sessions.close --scope terminal=TERMINAL_HANDLE \
   --tree ROOT_SESSION_ID --for 1d --quote 'Close TERMINAL_HANDLE once.'
 ```
 
-Denials name the remedy. Grant refusal reasons reach the user in `systemMessage`,
-prefixed with `sessions: `.
+Denials give the agent the short refusal and remedy when a grant check supplies a
+reason. The full detail reaches the user in `systemMessage`, with the session
+check prefixed by `sessions: `. With no reason, the guard keeps its own block text.
 
 ## Test grants inline
 
@@ -711,7 +841,7 @@ hook(
         Input(
             file="/tmp/report.txt", content="Changed report",
             session_id="example-root", grants=[APPROVED],
-        ): Block(pattern="Report writes need permission", system_message="inline test stub"),
+        ): Block(pattern="inline test stub", system_message="inline test stub"),
         Input(
             file="/tmp/report.txt", content="Changed report",
             session_id="example-root", grants=[APPROVED],
@@ -729,8 +859,9 @@ uvx capt-hook test
 
 An attached grant's allow returns a context note, so its inline expectation is
 `Warn`, even though the hook lifts its block. A `standing` override needs matching
-owner words from an evidence provider. Include `uses` in
-the `llm` override for a counted grant; leaving it unset allows unlimited uses.
+owner words from an evidence provider. Include `uses` in the `llm` override for a
+counted grant; leaving it unset on a standing approval allows unlimited uses.
+Use `scope` to test widening and `refusal` to check the agent-facing message.
 Inline stubs test the declaration and verdict handling. They do not test whether
 the model interprets permission correctly.
 

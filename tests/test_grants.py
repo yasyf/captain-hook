@@ -104,7 +104,7 @@ def test_a_one_shot_grant_covers_one_action_then_names_its_spend(tmp_path: Path)
     assert isinstance(first, Allowed) and first.grant.id == grant.id and first.remaining == 0
     second = declared().check(event(tmp_path, "two", call="toolu_2"))
     assert isinstance(second, Denied)
-    assert f"grant {grant.id} was spent at" in second.reason
+    assert f"Grant {grant.id} was spent at" in second.explained
     assert "on reply in C1/1.2" in second.reason
 
 
@@ -125,14 +125,14 @@ def test_an_unlimited_grant_stops_at_its_expiry(tmp_path: Path) -> None:
     assert all(declared().check(event(tmp_path, f"t{n}", call=f"c{n}")) for n in range(5))
     store.save(grant.model_copy(update={"expires": store.now() - timedelta(seconds=1)}))
     denied = declared().check(event(tmp_path, "late", call="late"))
-    assert isinstance(denied, Denied) and "expired at" in denied.reason
+    assert isinstance(denied, Denied) and "expired at" in denied.explained
 
 
 def test_a_revoked_grant_covers_nothing(tmp_path: Path) -> None:
     grant = minted(uses=None)
     store.revoke(grant.id)
     assert not declared().check(event(tmp_path))
-    assert "revoked" in store.unusable(store.load(grant.id), [], store.now())  # type: ignore[operator]
+    assert "revoked" in str(store.unusable(store.load(grant.id), [], store.now()))
 
 
 def test_a_grant_never_crosses_session_trees(tmp_path: Path) -> None:
@@ -218,7 +218,7 @@ def test_the_judge_mints_one_grant_per_approval(tmp_path: Path) -> None:
     second = grants.check(
         event(tmp_path, "second", call="c2", allow=True, reason="approved", relied_on=["ask:toolu_9#0"])
     )
-    assert isinstance(second, Denied) and f"grant {first.grant.id} was spent" in second.reason
+    assert isinstance(second, Denied) and f"Grant {first.grant.id} was spent" in second.explained
 
 
 def test_racing_judges_share_one_approval(tmp_path: Path) -> None:
@@ -459,7 +459,7 @@ def test_a_hook_with_grants_keeps_its_block_and_tells_the_user_why(tmp_path: Pat
     result = execute_hook(entry(declared()), event(tmp_path))
     assert result == HookResult(
         action=Action.block,
-        message="Needs the owner's permission.",
+        message="No test.write grant covers reply in C1/1.2. Ask the user for permission for exactly this action.",
         system_message="needs_grant: No test.write grant covers reply in C1/1.2."
         " Ask the user for permission for exactly this action.",
     )
@@ -469,8 +469,8 @@ def test_a_failing_grant_check_keeps_the_block(tmp_path: Path) -> None:
     broken = Grants("test.write", ("channel", "thread"), lambda evt: Proposal(scope={}))
     result = execute_hook(entry(broken), event(tmp_path))
     assert result is not None and result.action is Action.block
-    assert result.message == "Needs the owner's permission."
-    assert "the grant check failed (ValueError" in (result.system_message or "")
+    assert (result.message or "").startswith("The grant check failed (ValueError")
+    assert "The grant check failed (ValueError" in (result.system_message or "")
 
 
 def test_a_hook_with_grants_fails_closed() -> None:
@@ -565,7 +565,7 @@ def test_an_approval_spent_on_one_destination_never_covers_another(tmp_path: Pat
     second = Grants(
         "test.write", ("channel", "thread"), other.action, judge=Judge("rules"), evidence=(Fixed((said,)),)
     ).check(event(tmp_path, "one", call="c2", allow=True, reason="ok", relied_on=[said.id]))
-    assert isinstance(second, Denied) and "already covers" in second.reason
+    assert isinstance(second, Denied) and "already went to grant" in second.explained
 
 
 def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
@@ -577,7 +577,7 @@ def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
     denied = declared(judge=Judge("rules"), evidence=(Fixed((edited,)),)).check(
         event(tmp_path, allow=False, reason="No ruling covers it.")
     )
-    assert isinstance(denied, Denied) and "changed after the grant was minted" in denied.reason
+    assert isinstance(denied, Denied) and "changed after the grant was minted" in denied.explained
     assert declared(evidence=(Fixed((ruling,)),)).check(event(tmp_path, call="c2"))
 
 
@@ -608,7 +608,7 @@ def test_a_judgeless_declaration_mints_one_use_from_the_evidence_that_names_the_
     assert allowed.grant.source_key == f"{ruling.key}#{json.dumps(SCOPE)}" and allowed.grant.uses == 1
     assert [spend.relied_on for spend in store.spends(allowed.grant.id)] == [["ccn:543e865"]]
     denied = grants.check(event(tmp_path, call="c2"), Proposal(scope=SCOPE, payload={"tab": True}, summary="again"))
-    assert isinstance(denied, Denied) and "was spent" in denied.reason
+    assert isinstance(denied, Denied) and "was spent" in denied.explained
 
 
 def test_one_judgeless_approval_covers_each_scope_it_names_once_across_trees(tmp_path: Path) -> None:
@@ -618,7 +618,7 @@ def test_one_judgeless_approval_covers_each_scope_it_names_once_across_trees(tmp
     second = grants.check(event(tmp_path, call="c2"), Proposal(scope=SCOPE | {"channel": "C2"}))
     assert isinstance(first, Allowed) and isinstance(second, Allowed) and first.grant.id != second.grant.id
     elsewhere = grants.check(event(tmp_path, session="other-root", call="c3"), Proposal(scope=SCOPE, summary="x"))
-    assert isinstance(elsewhere, Denied) and "another session tree" in elsewhere.reason
+    assert isinstance(elsewhere, Denied) and "which does not include this action" in elsewhere.explained
 
 
 def test_a_replay_window_bounds_free_retries_of_a_one_use_grant(tmp_path: Path) -> None:
@@ -626,7 +626,7 @@ def test_a_replay_window_bounds_free_retries_of_a_one_use_grant(tmp_path: Path) 
     assert declared(replay=timedelta(minutes=2)).check(event(tmp_path, "one"))
     assert declared(replay=timedelta(minutes=2)).check(event(tmp_path, "one", call="toolu_2"))
     denied = declared(replay=timedelta(0)).check(event(tmp_path, "one", call="toolu_3"))
-    assert isinstance(denied, Denied) and "was spent" in denied.reason
+    assert isinstance(denied, Denied) and "was spent" in denied.explained
 
 
 def test_a_judgeless_declaration_with_nothing_naming_the_action_denies_without_a_reason(tmp_path: Path) -> None:
@@ -643,7 +643,7 @@ def test_a_stored_grant_whose_live_evidence_is_gone_covers_nothing(tmp_path: Pat
     minted(evidence=[created])
     grants = Grants("test.write", ("channel", "thread"), evidence=(Fixed(()),))
     denied = grants.check(event(tmp_path), Proposal(scope=SCOPE))
-    assert isinstance(denied, Denied) and "rests on created:t" in denied.reason
+    assert isinstance(denied, Denied) and "rests on created:t" in denied.explained
     assert Grants("test.write", ("channel", "thread"), evidence=(Fixed((created,)),)).check(
         event(tmp_path, call="c2"), Proposal(scope=SCOPE)
     )
@@ -731,7 +731,7 @@ def test_a_downstream_spender_names_the_grant_and_pays_through_the_cli(tmp_path:
     refused = CliRunner().invoke(
         grant_cli, [*argv[:-6], "--call", "post-2", "--fingerprint", "f2", "--summary", "reply"]
     )
-    assert refused.exit_code == 1 and f"grant {grant.id} was spent at" in refused.output
+    assert refused.exit_code == 1 and f"Grant {grant.id} was spent at" in refused.output
     assert isinstance(declared(spent_by="cc-slack").check(event(tmp_path, "two", call="c2")), Denied)
 
 
@@ -740,7 +740,7 @@ def test_a_downstream_spend_refuses_another_tree(tmp_path: Path) -> None:
     argv = ["spend", grant.id, "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", "elsewhere"]
     argv += ["--session", "elsewhere", "--call", "p", "--fingerprint", "f", "--summary", "reply"]
     refused = CliRunner().invoke(grant_cli, argv)
-    assert refused.exit_code == 1 and "another session tree" in refused.output
+    assert refused.exit_code == 1 and "which does not include this action" in refused.output
 
 
 def test_a_downstream_spender_names_a_spent_one_shot_for_the_same_payload_again(tmp_path: Path) -> None:
@@ -756,7 +756,7 @@ def test_spending_an_unknown_grant_names_it(tmp_path: Path) -> None:
     refused = CliRunner().invoke(
         grant_cli, [*argv, "--session", TREE, "--call", "p", "--fingerprint", "f", "--summary", "s"]
     )
-    assert refused.exit_code == 1 and "no grant 000000000000" in refused.output
+    assert refused.exit_code == 1 and "No grant 000000000000 exists" in refused.output
 
 
 def recorded_words(quote: str, *, expires: datetime, ago: timedelta = timedelta(days=2)) -> Grant:

@@ -2,12 +2,58 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+ANY = "*"
+ScopeValue = str | list[str]
+BRIEF_CHARS = 160
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+QUOTE_MARK = re.compile(r"[\"“”]|(?<!\w)['‘’]|['‘’](?!\w)")
+
+
+RECORD_ID = re.compile(
+    r"\[?\b(?:ask|words|ccn|board|teammate|shell|created|toolu)[:_][\w#@.:/-]+\]?"
+    r"|(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12}(?![\w-])"
+)
+RULING_WORD = re.compile(r"\b(ruling)(s?)\b", re.IGNORECASE)
+
+
+def brief(text: str) -> str:
+    """*text*'s first sentence for a block message: no quotation marks or record ids, clipped at a word."""
+    plain = RULING_WORD.sub(r"decision\2", RECORD_ID.sub("", QUOTE_MARK.sub("", text.strip())))
+    sentence = SENTENCE_END.split(" ".join(plain.split()), maxsplit=1)[0]
+    if len(sentence) <= BRIEF_CHARS:
+        return sentence
+    return sentence[:BRIEF_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+
+
+def matches(allowed: ScopeValue, value: str) -> bool:
+    """Whether a grant's scope value admits *value*: itself, any non-empty value for ``*``, or a member of a set."""
+    if isinstance(allowed, list):
+        return value in allowed
+    return allowed == value or (allowed == ANY and value != "")
+
+
+def covers(scope: Mapping[str, ScopeValue], action: Mapping[str, str]) -> bool:
+    """Whether a grant's *scope* admits every scope value of an action, key for key."""
+    return set(scope) == set(action) and all(matches(scope[key], str(action[key])) for key in scope)
+
+
+def render_scope(scope: Mapping[str, ScopeValue]) -> str:
+    """A scope as ``key=value`` pairs, a set as ``{a, b}`` and ``*`` as any."""
+    shown = (
+        f"{key}={{{', '.join(value)}}}"
+        if isinstance(value, list)
+        else f"{key}={'any' if value == ANY else value or 'none'}"
+        for key, value in scope.items()
+    )
+    return ", ".join(shown) or "any action"
 
 
 class Evidence(BaseModel):
@@ -40,7 +86,8 @@ class Grant(BaseModel):
         id: Twelve hex characters, named in every allow and deny.
         kind: The declaration that may spend it, e.g. ``slack.write``.
         tree: The root session id of the tree it was given in; only that tree spends it.
-        scope: Exact values of the declaration's scope keys that an action must carry.
+        scope: The declaration's scope keys, each an exact value, ``*`` for any non-empty value, or a set
+            of values; an action is covered when every one of its scope values is admitted.
         approved: The exact payload the owner saw, for content rules and the judge's diff.
         uses: Uses the grant allows in all; ``None`` is unlimited.
         expires: When it stops covering anything.
@@ -56,7 +103,7 @@ class Grant(BaseModel):
     id: str
     kind: str
     tree: str
-    scope: dict[str, str]
+    scope: dict[str, ScopeValue]
     approved: dict[str, Any] | None = None
     uses: int | None = 1
     expires: datetime | None = None
@@ -131,15 +178,29 @@ class Allowed:
 
 @dataclass(frozen=True, slots=True)
 class Denied:
-    """No grant covers the action: why, what would allow it, and whether the judge failed to decide."""
+    """No grant covers the action: why, what would allow it, and whether the judge failed to decide.
+
+    Attributes:
+        reason: Why nothing covered the action, one sentence for the agent that proposed it.
+        would_allow: What the agent can do to get permission.
+        undecided: The judge gave no verdict, so the same action may be retried.
+        detail: Every refusal and the judge's full reasoning, for the user and the logs.
+    """
 
     reason: str
     would_allow: str
     undecided: bool = False
+    detail: str = ""
 
     def __bool__(self) -> bool:
         return False
 
     @property
     def message(self) -> str:
-        return f"{self.reason} {self.would_allow}".strip()
+        """The reason and the remediation: two sentences that meet a block message's copy bar."""
+        return f"{brief(self.reason)} {self.would_allow}".strip() if self.reason else self.would_allow
+
+    @property
+    def explained(self) -> str:
+        """Every refusal behind this denial in full, for the user."""
+        return self.detail or f"{self.reason} {self.would_allow}".strip()

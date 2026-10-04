@@ -38,6 +38,8 @@ from captain_hook.events import PreToolUseEvent
 from captain_hook.grants import evidence as evidence_module
 from captain_hook.grants import orca as orca_grants
 from captain_hook.grants import store
+from captain_hook.grants.evidence import words_evidence
+from captain_hook.hook_lint import copy_violations
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete
@@ -736,7 +738,7 @@ class TestTerminalClose:
             again = envelope_of(bash(f"{OWNER_CLOSE} --tab"), tmp_path)
         assert spends("sessions.close") == [("committed", f"close terminal {INLINE_OWNER_TERMINAL}", ["ccn:0207568"])]
         assert again is not None
-        assert CLOSE_FIX in (reason(again) or "")
+        assert "already used on close terminal" in (reason(again) or "")
         assert "was spent" in again["systemMessage"]
 
     def test_a_ruling_naming_another_terminal_keeps_the_block(
@@ -780,8 +782,8 @@ class TestTerminalClose:
         with stubbed_commands(orca):
             envelope = envelope_of(bash(AGENT_CLOSE), tmp_path)
         assert envelope is not None
-        assert CLOSE_FIX in (reason(envelope) or "")
-        assert "sessions: the grant check failed (FileNotFoundError" in envelope["systemMessage"]
+        assert "The grant check failed (FileNotFoundError" in (reason(envelope) or "")
+        assert "sessions: The grant check failed (FileNotFoundError" in envelope["systemMessage"]
 
     def test_a_batch_of_closes_stays_blocked_when_a_ruling_names_both(
         self,
@@ -864,7 +866,7 @@ class TestTerminalClose:
         with stubbed_commands(SETTLED | settled | commands):
             message = decide_input(bash(AGENT_CLOSE, llm=llm, **fields), tmp_path, env=env)
         assert message is not None
-        assert "where pid 16002" in message
+        assert "where pid 16002" in message or _sessions.SETTLED_CLOSE.would_allow in message
         assert [spend for grant in store.grants("sessions.close-settled") for spend in store.spends(grant.id)] == []
 
     @pytest.mark.parametrize(
@@ -1149,3 +1151,122 @@ def test_denies_without_touching_transcript_evidence(
     assert loaded == released == []
     assert request.evidence_gaps == ["starved_sibling: deadline: foreground transcript deadline exhausted"]
     assert evt.ctx.transcript.pins.pending == 0
+
+
+SERVE_KICK = "launchctl kickstart -k system/com.example.orca-serve"
+SERVE_WEDGED = "kickstart com.example.orca-serve, it is wedged"
+LANE_DONE = "stop aig-no-delete-plan, it is done"
+OWNER_AT = INLINE_STARTED + timedelta(minutes=5)
+
+
+def owner_turn(text: str) -> list[dict[str, Any]]:
+    stamp = OWNER_AT.isoformat().replace("+00:00", "Z")
+    return [{"type": "user", "timestamp": stamp, "message": {"role": "user", "content": text}}]
+
+
+def owner_allows(text: str) -> dict[str, Any]:
+    return {"allow": True, "reason": "The owner named it.", "relied_on": [words_evidence(text, OWNER_AT).id]}
+
+
+class TestOwnerNamedLifts:
+    def test_the_root_restarts_a_service_the_owner_named_once(self, general_pack: None, tmp_path: Path) -> None:
+        said = words_evidence(SERVE_WEDGED, OWNER_AT).id
+        kick = bash(SERVE_KICK, transcript=owner_turn(SERVE_WEDGED), llm=owner_allows(SERVE_WEDGED))
+        assert decide_input(kick, tmp_path) is None
+        assert spends("sessions.launchctl.owner") == [
+            ("committed", "launchctl kickstart com.example.orca-serve", [said])
+        ]
+        bootout = bash(
+            "launchctl bootout system/com.example.orca-serve",
+            transcript=owner_turn(SERVE_WEDGED),
+            llm=owner_allows(SERVE_WEDGED),
+        )
+        refused = decide_input(bootout, tmp_path)
+        assert refused is not None and "already used on launchctl kickstart" in refused
+        assert not copy_violations(refused)
+
+    def test_a_lane_never_takes_the_owner_named_lift(self, general_pack: None, tmp_path: Path) -> None:
+        lane = bash(
+            SERVE_KICK,
+            agent_id="lane-1",
+            transcript=INLINE_TRANSCRIPT,
+            root_transcript=owner_turn(SERVE_WEDGED),
+            llm=owner_allows(SERVE_WEDGED),
+        )
+        assert decide_input(lane, tmp_path) is not None
+        assert spends("sessions.launchctl.owner") == []
+
+    def test_words_naming_another_service_lift_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        other = "kickstart com.example.orca-serve-2"
+        kick = bash(SERVE_KICK, transcript=owner_turn(other), llm=owner_allows(other))
+        assert decide_input(kick, tmp_path) is not None
+        assert spends("sessions.launchctl.owner") == []
+
+    def test_a_judge_refusal_reaches_the_agent_in_the_block(self, general_pack: None, tmp_path: Path) -> None:
+        verdict = {
+            "allow": False,
+            "reason": "describes",
+            "refusal": "The owner described the service but never asked to restart it.",
+        }
+        kick = bash(SERVE_KICK, transcript=owner_turn(f"{SERVE_WEDGED}?"), llm=verdict)
+        message = decide_input(kick, tmp_path)
+        assert message is not None and message.startswith(
+            "The owner described the service but never asked to restart it."
+        )
+        assert not copy_violations(message)
+
+    def test_the_root_stops_a_teammate_the_owner_named_by_lane(self, general_pack: None, tmp_path: Path) -> None:
+        named = stop({"task_id": OBSERVED_LANE}, transcript=owner_turn(LANE_DONE), llm=owner_allows(LANE_DONE))
+        assert decide_input(named, tmp_path) is None
+        assert spends("sessions.task-stop.owner") == [
+            ("committed", f"stop task {OBSERVED_LANE}", [words_evidence(LANE_DONE, OWNER_AT).id])
+        ]
+
+
+def finished(inp: Input, response: dict[str, Any], tmp_path: Path) -> None:
+    evt = input_to_event(Event.PostToolUse, inp)
+    evt._raw["tool_response"] = response
+    with reqenv.use_request(overrides()):
+        dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
+
+
+class TestRecordedChildren:
+    def test_a_teammate_spawn_recorded_before_compaction_still_lifts_its_stop(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        spawn = Input(
+            tool="Agent", tool_input={"name": "aig-no-delete-plan", "prompt": "plan"}, session_id="s1", cwd="/w"
+        )
+        finished(spawn, {"status": "teammate_spawned", "teammate_id": OBSERVED_LANE}, tmp_path)
+        assert decide_input(stop({"task_id": OBSERVED_LANE}), tmp_path) is None
+        assert decide_input(stop({"task_id": OBSERVED_LANE}, agent_id="lane-1"), tmp_path) is not None
+
+    def test_a_background_shell_this_agent_started_stops(self, general_pack: None, tmp_path: Path) -> None:
+        shell = Input(command="sleep 600", session_id="s1", cwd="/w")
+        finished(shell, {"stdout": "", "backgroundTaskId": "blmtrzuxz"}, tmp_path)
+        assert decide_input(stop({"task_id": "blmtrzuxz"}), tmp_path) is None
+        assert decide_input(stop({"task_id": "blmtrzuxz"}, agent_id="lane-1"), tmp_path) is not None
+        assert spends("sessions.task-stop") == [("committed", "stop task blmtrzuxz", ["shell:blmtrzuxz"])]
+
+
+class TestRecordedOwnerWords:
+    def test_a_message_the_owner_queued_is_recorded_when_the_turn_ends(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        queued = {
+            "type": "attachment",
+            "timestamp": OWNER_AT.isoformat().replace("+00:00", "Z"),
+            "attachment": {
+                "type": "queued_command",
+                "prompt": "post the fix in the alert thread",
+                "commandMode": "prompt",
+                "origin": {"kind": "human"},
+            },
+        }
+        turn = Input(session_id="s1", cwd="/w", transcript=[*INLINE_TRANSCRIPT, queued])
+        envelope_of(turn, tmp_path, event=Event.Stop)
+        recorded = [item.quote for grant in store.grants("words", "s1") for item in grant.evidence]
+        assert recorded == ["post the fix in the alert thread"]
+        lane = Input(session_id="s1", cwd="/w", agent_id="lane-1", transcript=[*INLINE_TRANSCRIPT, queued])
+        envelope_of(lane, tmp_path, event=Event.Stop)
+        assert len(store.grants("words", "s1")) == 1

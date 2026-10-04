@@ -55,6 +55,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     literal_pid,
     lone_pane,
     nested,
+    owner_lift,
     pid_verdict,
     runs_once,
     settled_close,
@@ -836,13 +837,15 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     if not runs_once(call, scan):
         return denied
     action = Proposal(scope={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
-    if (named := lift(evt, TERMINAL_CLOSE, action, denied)) is None or agent is None:
-        return named
-    if (settled := settled_close(evt, handle, tab)) is None:
-        return named
-    if (ungranted := lift(evt, SETTLED_CLOSE, settled, denied)) is not None or still_settled(settled):
-        return ungranted
-    return Ungranted(denied, "sessions: the terminal's dispatch or idle prompt changed while the judge decided.")
+    if (ungranted := lift(evt, TERMINAL_CLOSE, action, denied, owner=False)) is None:
+        return None
+    if agent is not None and (settled := settled_close(evt, handle, tab)) is not None:
+        if (ungranted := lift(evt, SETTLED_CLOSE, settled, denied, owner=False)) is None:
+            if still_settled(settled):
+                return None
+            changed = "sessions: the terminal's dispatch or idle prompt changed while the judge decided."
+            return Ungranted(denied, "", changed)
+    return owner_lift(evt, TERMINAL_CLOSE, action, ungranted)
 
 
 def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Ungranted | None:
@@ -1061,7 +1064,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
         settling(
             command=AGENT_CLOSE,
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
-        ): Block(pattern="where pid 16002"),
+        ): Block(pattern="under a standing owner decision"),
         settling(
             command="for t in term_agent; do orca terminal close --terminal $t; done",
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},

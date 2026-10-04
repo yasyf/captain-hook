@@ -7,15 +7,17 @@ import secrets
 import sqlite3
 from collections.abc import Generator, Mapping
 from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from captain_hook.grants.records import Adoption, Grant, Spend, SpendState
+from captain_hook.grants.records import Adoption, Grant, Spend, SpendState, covers, render_scope
 from captain_hook.util.paths import resolve_state_dir
 
 RESERVATION_TTL = timedelta(minutes=2)
 EVIDENCE_KINDS = ("ask", "words")
+RECORD_KINDS = (*EVIDENCE_KINDS, "spawn", "shell")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS grants (
     id TEXT PRIMARY KEY,
@@ -58,8 +60,23 @@ CREATE INDEX IF NOT EXISTS spends_by_call ON spends (tool_use_id, state);
 """
 
 
+@dataclass(frozen=True, slots=True)
+class Unusable:
+    """Why a grant covers nothing: plainly for the agent, and with its id and time for the user."""
+
+    agent: str
+    detail: str
+
+    def __str__(self) -> str:
+        return self.detail
+
+
 class SpentError(Exception):
-    """A spend found the grant exhausted, expired, or revoked; the message says which and when."""
+    """A spend found the grant missing, exhausted, expired, or revoked; the message says which and when."""
+
+    def __init__(self, why: Unusable) -> None:
+        super().__init__(why.detail)
+        self.why = why
 
 
 def grants_path() -> Path:
@@ -199,29 +216,36 @@ def retried(grant: Grant, used: list[Spend], fingerprint: str | None, at: dateti
 
 def unusable(
     grant: Grant, used: list[Spend], at: datetime, fingerprint: str | None = None, replay: timedelta = timedelta.max
-) -> str | None:
+) -> Unusable | None:
     """Why *grant* covers nothing at *at*, or ``None`` while it is live or *fingerprint* retries its one use."""
     if grant.revoked is not None:
-        return f"grant {grant.id} was revoked at {stamp(grant.revoked)}."
+        return Unusable(
+            "The approval that covered this was revoked.", f"Grant {grant.id} was revoked at {stamp(grant.revoked)}."
+        )
     if grant.expires is not None and grant.expires <= at:
-        return f"grant {grant.id} expired at {stamp(grant.expires)}."
+        return Unusable(
+            "The approval that covered this has expired.", f"Grant {grant.id} expired at {stamp(grant.expires)}."
+        )
     if retried(grant, used, fingerprint, at, replay):
         return None
     if (left := remaining(grant, used, at)) is not None and left <= 0:
         last = next(spend for spend in reversed(used) if counted(spend, at))
-        return f"grant {grant.id} was spent at {stamp(last.at)} by {last.session}/{last.agent} on {last.summary}."
+        return Unusable(
+            f"The approval that covered this was already used on {last.summary}.",
+            f"Grant {grant.id} was spent at {stamp(last.at)} by {last.session}/{last.agent} on {last.summary}.",
+        )
     return None
 
 
 def matching(
     kind: str, tree: str, scope: Mapping[str, str], fingerprint: str, replay: timedelta = timedelta.max
-) -> list[tuple[Grant, str | None]]:
-    """The grants of *kind* in *tree* whose scope equals *scope*, newest first, each with why it is unusable."""
+) -> list[tuple[Grant, Unusable | None]]:
+    """The grants of *kind* in *tree* whose scope covers *scope*, newest first, each with why it is unusable."""
     at = now()
     return [
         (grant, unusable(grant, spends(grant.id), at, fingerprint, replay))
         for grant in reversed(grants(kind, tree))
-        if grant.scope == dict(scope)
+        if covers(grant.scope, scope)
     ]
 
 
@@ -249,11 +273,19 @@ def reserve(
     at = now()
     with connect() as db, immediate(db):
         if (row := db.execute("SELECT body FROM grants WHERE id = ?", (grant_id,)).fetchone()) is None:
-            raise SpentError(f"no grant {grant_id}.")
+            raise SpentError(
+                Unusable("The permission named for this action does not exist.", f"No grant {grant_id} exists.")
+            )
         grant = Grant.model_validate_json(row[0])
         adopted = db.execute("SELECT 1 FROM adoptions WHERE grant_id = ? AND tree = ?", (grant_id, tree)).fetchone()
-        if (grant.tree != tree and adopted is None) or grant.scope != dict(scope):
-            raise SpentError(f"grant {grant.id} covers {grant.scope} in another session tree or destination.")
+        if (grant.tree != tree and adopted is None) or not covers(grant.scope, scope):
+            raise SpentError(
+                Unusable(
+                    f"The permission named for this action covers {render_scope(grant.scope)} in another session.",
+                    f"Grant {grant.id} covers {render_scope(grant.scope)} in session tree {grant.tree}, which does not"
+                    " include this action.",
+                )
+            )
         rows = db.execute(f"SELECT {SPEND_COLUMNS} FROM spends WHERE grant_id = ? ORDER BY id", (grant_id,)).fetchall()
         used = [parse_spend(row) for row in rows]
         left = remaining(grant, used, at)
@@ -298,6 +330,18 @@ def settle(tool_use_id: str, *, allowed: bool) -> bool:
     return not (allowed and stale)
 
 
+def approval_spends(key: str) -> list[Spend]:
+    """Committed uses of every grant minted from the approval *key*, oldest first."""
+    with connect() as db:
+        rows = db.execute(
+            f"SELECT {', '.join(f's.{column}' for column in SPEND_COLUMNS.split(', '))} FROM spends s"
+            " WHERE s.state = 'committed' AND s.grant_id IN (SELECT g.id FROM grants g,"
+            " json_each(g.body, '$.evidence') e WHERE json_extract(e.value, '$.key') = ?) ORDER BY s.id",
+            (key,),
+        ).fetchall()
+    return [parse_spend(row) for row in rows]
+
+
 def adopt(grant_id: str, *, tree: str, session: str, agent: str) -> Adoption:
     """Make *grant_id* usable in *tree* too, sharing its budget, and log who adopted it."""
     load(grant_id)
@@ -313,14 +357,15 @@ def adopt(grant_id: str, *, tree: str, session: str, agent: str) -> Adoption:
 def adopt_tree(source: str, *, tree: str, session: str, agent: str) -> int:
     """Adopt every spendable grant minted in *source* into *tree*, logged like :func:`adopt`.
 
-    The owner's recorded words and answers stay in their own tree, so a second tree never mints a fresh
-    budget from an approval *source* already spent. Returns how many adoptions were new.
+    The owner's recorded words and answers, and the spawns and shells recorded for each agent, stay in their
+    own tree, so a second tree never mints a fresh budget from an approval *source* already spent. Returns how
+    many adoptions were new.
     """
     with connect() as db:
         return db.execute(
             "INSERT OR IGNORE INTO adoptions (grant_id, tree, at, session, agent)"
             " SELECT id, ?, ?, ?, ? FROM grants WHERE tree = ? AND kind NOT IN (SELECT value FROM json_each(?))",
-            (tree, now().isoformat(), session, agent, source, json.dumps(EVIDENCE_KINDS)),
+            (tree, now().isoformat(), session, agent, source, json.dumps(RECORD_KINDS)),
         ).rowcount
 
 
