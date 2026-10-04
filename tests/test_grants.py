@@ -748,6 +748,19 @@ def test_a_downstream_spender_names_the_grant_and_pays_through_the_cli(tmp_path:
     assert isinstance(declared(spent_by="cc-slack").check(event(tmp_path, "two", call="c2")), Denied)
 
 
+def test_a_downstream_spender_releases_the_use_of_a_write_that_never_happened(tmp_path: Path) -> None:
+    grant = minted(uses=1)
+    argv = ["spend", grant.id, "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", TREE]
+    argv += ["--session", TREE, "--call", "post-1", "--fingerprint", "f1", "--summary", "reply"]
+    assert CliRunner().invoke(grant_cli, argv).exit_code == 0
+    released = CliRunner().invoke(grant_cli, ["release", grant.id, "--call", "post-1"])
+    assert released.exit_code == 0 and '"released": 1' in released.output and '"remaining": 1' in released.output
+    assert [spend.state for spend in store.spends(grant.id)] == ["released"]
+    again = CliRunner().invoke(grant_cli, [*argv[:-6], "--call", "post-2", "--fingerprint", "f2", "--summary", "reply"])
+    assert again.exit_code == 0 and '"remaining": 0' in again.output
+    assert '"released": 0' in CliRunner().invoke(grant_cli, ["release", grant.id, "--call", "post-1"]).output
+
+
 def test_a_downstream_spend_refuses_another_tree(tmp_path: Path) -> None:
     grant = minted()
     argv = ["spend", grant.id, "--scope", "channel=C1", "--scope", "thread=1.2", "--tree", "elsewhere"]
