@@ -17,8 +17,9 @@ uvx capt-hook helper install
 
 The formula fills the Cellar; `helper install` deploys `~/Applications/Captain Hook.app` from it
 and verifies the host answers. The helper embedded in that exact path owns
-the per-user host and its Python workers. There is no unsigned or project-local daemon and
-no cold fallback when the host is missing.
+the per-user host and its Python workers. There is no unsigned or project-local daemon.
+If the host transport fails without a reply, the client evaluates a mandatory session-guard
+event once with this build's installed Python runtime. The guard must complete to allow the call.
 
 ### Linux amd64
 
@@ -38,10 +39,10 @@ uvx capt-hook init
 
 `init` creates `.claude/hooks/` with a starter hook, wires Claude Code's settings to dispatch every hook event through the signed host, and registers the plugin so the authoring skills load from it (nothing is copied into your repo). Prefer `uv tool install capt-hook` if you want the bare `capt-hook` on your PATH, or `uv add capt-hook` only if you're consuming it as a library — every command here uses the `uvx` form.
 
-The app is the version authority: every event runs the exact `capt-hook` build the installed
-host names, and the host upgrades itself in the background when a new release ships — the wheel
-and app cannot drift apart. captain-hook never substitutes an older protocol, starts a private
-daemon, or reruns the event cold.
+The app is the version authority: its workers run the exact `capt-hook` build the installed
+host names, and the host upgrades itself in the background when a new release ships.
+captain-hook never substitutes an older protocol, starts a private daemon, or replays a failed
+event on the host.
 
 ## 3. Read a hook
 

@@ -224,8 +224,8 @@ This is the practical control on the trust boundary above. A hook can run any co
 ## The signed host
 
 Every hook event used to pay for a fresh Python interpreter, framework import, and hook discovery.
-The current runtime has one per-user Go host and long-lived Python product workers. It is the
-only dispatch path, not an opt-in accelerator beside a cold path.
+The current runtime normally dispatches through one per-user Go host and long-lived Python
+product workers.
 
 The host executable is fixed at
 `~/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. The app release embeds a universal
@@ -258,8 +258,9 @@ The client reads the event from stdin, takes the project root from the first of
 `CLAUDE_PROJECT_DIR`, `FACTORY_PROJECT_DIR`, and the payload's `cwd`, and sends one request over daemonkit's
 length-framed persistent transport. While the host refuses the event before dispatch, because
 nothing is listening or the host is starting, draining, or out of session slots, the client
-resends it within its own deadline. The client
-exits 1 on its own failures; exit 2 belongs to a hook's blocking verdict alone.
+resends it within its own deadline. If the host transport fails without a reply, the client
+evaluates a mandatory event locally once. Non-mandatory events still
+exit 1 on client failures; exit 2 belongs to a hook's blocking verdict alone.
 
 The host selects a Python worker and exchanges multiplexed,
 length-framed messages over that child's stdin and stdout. Python does not listen on a socket,
@@ -290,11 +291,22 @@ codes separate. The worker refuses an event whose deadline has already passed.
 
 ### Failure is terminal for that dispatch
 
-There is no cold fallback, fail-open mode, replay, or compatibility protocol. A missing app,
-malformed frame, unavailable host, or expired deadline returns a non-zero hook
-process, and a `PreToolUse` or `PermissionRequest` naming a session-ending program is denied
-instead, with exit 0 and the host-unavailable envelope. Once an event is admitted, no transport
-outcome causes captain-hook to run it a second time.
+There is no fail-open mode, replay, or compatibility protocol. The host never runs an event
+twice. When the host never answers a mandatory `PreToolUse` or `PermissionRequest` flagged by
+the session guard prefilter, the client tries one local evaluation after a `host-unavailable`,
+`transport-refused`, `transport-timeout`, or `transport-error` failure. It runs this build's
+installed Python runtime in a child process with `python -P -m captain_hook.worker evaluate`,
+passing the same request prepared for the host. Non-mandatory events never evaluate locally.
+
+The child returns the same `EventResponse` as a host worker, and the client checks guard
+completion the same way. A completed guard's allow or deny passes through unchanged; no
+completion still denies with `no-verdict`. If this build's tool environment is missing or the
+child crashes or times out, the client denies with the original transport kind and exit 0,
+as before. An answered event never gets a local evaluation, even if its guard did not complete.
+
+Local evaluation drops background work, including async hooks and reviewer dispatch.
+Transcript evidence still comes through the host's transcript-client, so hooks that need it
+keep their existing missing-evidence behavior when the host is unreachable.
 
 Workers are disposable. When a worker call times out or its protocol fails, the host retires that
 exact generation, sends `TERM`, escalates to `KILL` after the bounded grace period, waits for it,
@@ -328,7 +340,8 @@ discarded for a recoverable reason.
 
 ### Environment and state
 
-`CAPT_HOOK_CLIENT_TIMEOUT` sets the end-to-end event deadline in seconds; the default is 30.
+`CAPT_HOOK_CLIENT_TIMEOUT` sets the deadline for each host transport attempt and the one-shot
+local evaluation in seconds; the default is 30.
 There are no daemon-disable, fallback-mode, run-directory, idle-timeout, or client-build
 overrides. Host state always uses the fixed per-user `host-v1` directory. Product state and logs
 remain configurable through their existing `CAPTAIN_HOOK_*`, `CAPT_HOOK_DECISIONS_DB`,

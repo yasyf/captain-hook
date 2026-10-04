@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ccx vcs ship --tip-only` when it would leave every held branch untouched, pushing only
   the shipped branch and leaving the queued parent at its admitted head. Other holds still
   recommend `ccx vcs stack new <name>`.
+- **Mandatory session guards can answer locally when the host transport fails.** A host
+  replacement during a 12.84.3 install refused a guarded `orca-gc` call for the client's full
+  30-second deadline, producing a `transport-refused` denial. After a host transport failure,
+  the client now evaluates an unanswered mandatory event once with this build's installed
+  Python runtime and checks the same guard-completion report as a host worker's reply.
+  A completed guard's allow or deny passes through; no completion still denies with
+  `no-verdict`. If local evaluation cannot run, crashes, or times out, the client still denies
+  with the original transport kind. Non-mandatory events never evaluate locally, and the local
+  path drops async hooks and reviewer dispatch. Transcript evidence still depends on the host.
 - **A permission event walks the process tree once, and a repeat request from the same
   client reuses it.** `SkipPermissions()` and `evt.disallowed_tools` each walked from the
   client's parent to the nearest `claude` with one `ps` per hop, and the per-event memo lived
