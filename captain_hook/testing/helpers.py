@@ -78,6 +78,8 @@ class StubbedContext(HookContext):
     def call_llm(
         self, template: str | Prompt, *args: Any, response_model: type[BaseModel] | None = None, **kwargs: Any
     ) -> str | BaseModel:
+        if isinstance(error := self.llm.get("error"), BaseException):
+            raise error
         if response_model is None:
             return "stubbed"
         values = STUB_FIELD_VALUES | self.llm

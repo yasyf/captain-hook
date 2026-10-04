@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries it. Empty evidence and a judge's refusal still deny, and `Grants.request`
   never records a grant unjudged. Any judge exception other than incomplete
   transcript evidence is now a `JudgeFailed`.
+- **An inline test can make the model call fail.** `Input(llm={"error": TimeoutError()})`
+  raises that exception from the stubbed `call_llm`, so a hook can test its judge-failure path.
 - **Grant scopes accept exact values, sets, and any non-empty value.** A scope value is
   a string, a list of named values, or `"*"`; `covers` checks every key against an action's
   exact values. `ANY` and `covers` are exported from `captain_hook.grants`, and stored
