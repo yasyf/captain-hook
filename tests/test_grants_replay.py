@@ -396,7 +396,7 @@ def test_a_requested_thread_grant_rests_on_the_ruling_that_quotes_the_owner(tmp_
     )
     assert recorded.remaining is None and recorded.grant.scope == {"channel": ALERTS, "thread": "1.1"}
     (basis,) = recorded.grant.evidence
-    assert (basis.id, basis.key, basis.live) == (CLASS_RULING.id, CLASS_RULING.key, True)
+    assert basis == CLASS_RULING
     posted = grants.check(call(tmp_path, ALERTS, thread="1.1", text="mechanism", allow=True, reason="ok"))
     assert allowed(posted).grant.id == recorded.grant.id
     paraphrase = refused(
@@ -407,6 +407,27 @@ def test_a_requested_thread_grant_rests_on_the_ruling_that_quotes_the_owner(tmp_
         )
     )
     assert "not verbatim" in paraphrase.reason
+
+
+def test_a_requested_grant_rests_on_the_evidence_the_judge_cites(tmp_path: Path) -> None:
+    aside = Evidence(id="words:aside", source="words", quote="Yes", said_at=store.now(), key="words:aside")
+    grants = slack(aside, CLASS_RULING)
+    recorded = allowed(
+        grants.request(
+            call(tmp_path, ALERTS, thread="1.1", allow=True, reason="ruled", relied_on=["543e865"]),
+            scope={"channel": ALERTS, "thread": "1.1"},
+            quote="Yes",
+        )
+    )
+    assert recorded.grant.evidence == [CLASS_RULING]
+    unnamed = allowed(
+        grants.request(
+            call(tmp_path, ALERTS, thread="2.2", allow=True, reason="said"),
+            scope={"channel": ALERTS, "thread": "2.2"},
+            quote="Yes",
+        )
+    )
+    assert [item.id for item in unnamed.grant.evidence] == [aside.id]
 
 
 def test_a_counted_approval_spends_across_the_places_it_names(tmp_path: Path) -> None:
