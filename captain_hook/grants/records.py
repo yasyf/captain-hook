@@ -169,11 +169,19 @@ class Proposal:
 
 @dataclass(frozen=True, slots=True)
 class Allowed:
-    """A grant covers the action; its use is reserved and commits when the event is allowed."""
+    """A grant covers the action; its use is reserved and commits when the event is allowed.
+
+    Attributes:
+        grant: The grant that covers the action.
+        remaining: Uses left after this one, ``None`` when unlimited.
+        reason: Why the grant covers the action.
+        unjudged: What stopped the judge, when the action goes ahead under a declaration that fails open.
+    """
 
     grant: Grant
     remaining: int | None
     reason: str
+    unjudged: str = ""
 
     def __bool__(self) -> bool:
         return True

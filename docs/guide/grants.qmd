@@ -471,8 +471,8 @@ hold a use for this spend.
 ## Handle a verdict in your own hook
 
 Call `MESSAGE_WRITES.check(evt)` when a handler needs the grant record or remaining
-budget. It returns a truthy `Allowed(grant, remaining, reason)` or a falsey
-`Denied(reason, would_allow, undecided=False, detail="")`.
+budget. It returns a truthy `Allowed(grant, remaining, reason, unjudged="")` or a
+falsey `Denied(reason, would_allow, undecided=False, detail="")`.
 
 `Denied.reason` is the refusal for the agent. `Denied.detail` holds the collected
 refusals and full judge reasoning for the user. `Denied.message` joins
@@ -529,6 +529,13 @@ The `grants=` attachment already converts store, parse, evidence, and judge erro
 inside its check to a block. Judge timeouts, backend failures, and invalid results
 deny permission. A raw `check` can raise other errors; letting them escape an
 ordinary handler can leave only a logged failure and no block.
+
+Declare `judge_fails_open=True` when a judge failure should let the action through
+instead. The check spends the covering grant, or mints a one-use grant on the
+evidence it collected, and `Allowed.unjudged` names the failure, such as
+`TimeoutError`. The hook should show that text to the agent and log it. A
+declaration whose sources collect no evidence still denies, a judge that answers
+no still denies, and `Grants.request` records a grant only on a verdict.
 
 `hook(..., grants=...)` sets `on_incomplete` to `captain_hook.app.GRANTS_INCOMPLETE`.
 An abandoned or incomplete check blocks. The handler form above sets the same
