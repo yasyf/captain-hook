@@ -21,6 +21,7 @@ from captain_hook.grants import (
     Proposal,
     store,
 )
+from captain_hook.grants.records import brief
 from captain_hook.hook_lint import copy_violations
 from tests.helpers import make_ctx
 
@@ -418,3 +419,23 @@ def test_a_counted_approval_spends_across_the_places_it_names(tmp_path: Path) ->
         )
     )
     assert third.reason.startswith("The approval that covered this was already used")
+
+
+@pytest.mark.parametrize(
+    ("judged", "agent"),
+    [
+        pytest.param(
+            "Ruling 543e865 covers replies, not edits [ccn:543e865]. It says more.",
+            "Decision covers replies, not edits.",
+            id="short-id-and-ruling",
+        ),
+        pytest.param(
+            "the reply states 21:50 UTC; Slack posts give Pacific times with no label",
+            "the reply states a stated time; Slack posts give Pacific times with no label.",
+            id="clock-time",
+        ),
+    ],
+)
+def test_brief_reasons_meet_the_copy_bar(judged: str, agent: str) -> None:
+    assert brief(judged) == agent
+    assert copy_violations(f"{brief(judged)} Ask the owner.") == []

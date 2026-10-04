@@ -19,18 +19,21 @@ QUOTE_MARK = re.compile(r"[\"“”]|(?<!\w)['‘’]|['‘’](?!\w)")
 
 RECORD_ID = re.compile(
     r"\[?\b(?:ask|words|ccn|board|teammate|shell|created|toolu)[:_][\w#@.:/-]+\]?"
-    r"|(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12}(?![\w-])"
+    r"|(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])"
 )
-RULING_WORD = re.compile(r"\b(ruling)(s?)\b", re.IGNORECASE)
+CLOCK = re.compile(r"\b20\d\d-\d\d-\d\d\b|\b\d{1,2}:\d\d(?::\d\d)?\s?(?:Z|UTC|PT|PDT|PST|am|pm)?\b", re.IGNORECASE)
+RULING_WORD = re.compile(r"\b([Rr])uling(s?)\b")
+SPACE_BEFORE_MARK = re.compile(r"\s+([.,;:!?])")
 
 
 def brief(text: str) -> str:
-    """*text*'s first sentence for a block message: no quotation marks or record ids, clipped at a word."""
-    plain = RULING_WORD.sub(r"decision\2", RECORD_ID.sub("", QUOTE_MARK.sub("", text.strip())))
-    sentence = SENTENCE_END.split(" ".join(plain.split()), maxsplit=1)[0]
-    if len(sentence) <= BRIEF_CHARS:
-        return sentence
-    return sentence[:BRIEF_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    """*text*'s first sentence for a block message: no quotation marks, record ids, or times, clipped at a word."""
+    plain = CLOCK.sub("a stated time", RECORD_ID.sub("", QUOTE_MARK.sub("", text.strip())))
+    plain = RULING_WORD.sub(lambda word: ("D" if word[1] == "R" else "d") + "ecision" + word[2], plain)
+    sentence = SENTENCE_END.split(SPACE_BEFORE_MARK.sub(r"\1", " ".join(plain.split())), maxsplit=1)[0]
+    if len(sentence) > BRIEF_CHARS:
+        sentence = sentence[:BRIEF_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return sentence if sentence.endswith((".", "!", "?", "…")) else f"{sentence}."
 
 
 def matches(allowed: ScopeValue, value: str) -> bool:
