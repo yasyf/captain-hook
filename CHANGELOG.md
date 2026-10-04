@@ -118,8 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`RemoteSession.events` reads selections larger than the projection bound.** A
   selection whose events exceed one page is read in halving `event_range` windows, so
   `record_queued_words` records queued owner words from a turn over the 1 MiB record
-  bound instead of skipping with `output_limit`. A single event over the bound still
-  skips the hook.
+  bound instead of skipping with `output_limit`.
+- **`RemoteSession.turns` reads windows larger than the record bound.** A turn packs its
+  events and tool uses into one record, so `OwnerWords`, `Asked`, and `owner_uses` failed
+  with `output_limit` once the last 60 messages of a session held more than 1 MiB. Turns
+  are now read in halving `event_range` windows and the pieces of a split turn are
+  joined back into one, with each tool use paired to a result that landed in a later
+  piece. In `turns` and `events`, a single event over the bound is skipped and recorded
+  as a `transcript event` evidence gap instead of failing the whole read.
 - **Counted approvals for several uses no longer pin the first action's text.**
   `Grants.from_evidence` used to record the first payload as `approved`, so later
   writes could be refused as changed content and need a second judgement.

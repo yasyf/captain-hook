@@ -1203,22 +1203,31 @@ class RemoteSession:
 
     @property
     def events(self) -> tuple[Any, ...]:
-        return self._events(0, None)
-
-    def _events(self, start: int, stop: int | None) -> tuple[Any, ...]:
-        window = self if stop is None else self.selected(kind="event_range", start=start, stop=stop)
-        try:
-            return tuple(window.query({"kind": "events", "order": "forward"}))
-        except EvidenceIncomplete as exc:
-            stop = len(self) if stop is None else stop
-            if exc.status != "output_limit" or stop - start < 2:
-                raise
-            middle = (start + stop) // 2
-            return self._events(start, middle) + self._events(middle, stop)
+        return self._windowed("events", 0, None, lambda left, right: left + right)
 
     @property
     def turns(self) -> tuple[Any, ...]:
-        return tuple(self.query({"kind": "turns", "order": "forward"}))
+        return self._windowed("turns", 0, None, joined_turns)
+
+    def _windowed(
+        self,
+        kind: str,
+        start: int,
+        stop: int | None,
+        join: Callable[[tuple[Any, ...], tuple[Any, ...]], tuple[Any, ...]],
+    ) -> tuple[Any, ...]:
+        window = self if stop is None else self.selected(kind="event_range", start=start, stop=stop)
+        try:
+            return tuple(window.query({"kind": kind, "order": "forward"}))
+        except EvidenceIncomplete as exc:
+            if exc.status != "output_limit":
+                raise
+            stop = len(self) if stop is None else stop
+            if stop - start < 2:
+                skip_oversized(self.path, exc)
+                return ()
+            middle = (start + stop) // 2
+            return join(self._windowed(kind, start, middle, join), self._windowed(kind, middle, stop, join))
 
     @property
     def files_touched(self) -> tuple[Any, ...]:
@@ -1252,6 +1261,44 @@ class RemoteSession:
         return self.query(
             {"kind": "has_override", "token": token, "invalidated_by": list(invalidated_by), "subagents": subagents}
         )
+
+
+def skip_oversized(path: Path, exc: EvidenceIncomplete) -> None:
+    from captain_hook.util import reqenv
+
+    logger.bind(path=str(path), reason=exc.reason).warning("transcript event over the record bound skipped")
+    reqenv.evidence_gaps().append(f"transcript event: {exc.status}: {exc.reason}")
+
+
+def joined_turns(left: tuple[Any, ...], right: tuple[Any, ...]) -> tuple[Any, ...]:
+    if not left or not right or left[-1].index != right[0].index:
+        return left + right
+    head, tail = left[-1], right[0]
+    events = head.events + tail.events
+    turn = replace(
+        head,
+        ended_at=tail.ended_at or head.ended_at,
+        events=events,
+        tool_uses=paired(head.tool_uses + tail.tool_uses, events),
+    )
+    return (*left[:-1], turn, *right[1:])
+
+
+def paired(uses: tuple[ToolUse, ...], events: tuple[Any, ...]) -> tuple[ToolUse, ...]:
+    from cc_transcript.models import ToolResultBlock
+
+    results = {
+        block.tool_use_id: (block, event.meta.timestamp)
+        for event in events
+        for block in getattr(event, "blocks", ())
+        if isinstance(block, ToolResultBlock)
+    }
+    return tuple(
+        replace(use, result=found[0], result_ts=found[1])
+        if use.result is None and (found := results.get(use.ref.tool_use_id)) is not None
+        else use
+        for use in uses
+    )
 
 
 CURRENT_CLIENT: contextvars.ContextVar[SnapshotClient | None] = contextvars.ContextVar("snapshot_client", default=None)
