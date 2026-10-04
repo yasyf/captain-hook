@@ -15,7 +15,7 @@ import click
 
 from captain_hook.grants import store
 from captain_hook.grants.evidence import ruling_key
-from captain_hook.grants.records import Evidence, Grant
+from captain_hook.grants.records import Evidence, Grant, ScopeValue
 from captain_hook.util import reqenv
 
 SPAN = re.compile(r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?")
@@ -28,14 +28,21 @@ def parse_span(text: str) -> timedelta:
     return timedelta(days=days, hours=hours, minutes=minutes)
 
 
-def parse_scope(pairs: tuple[str, ...]) -> dict[str, str]:
-    scope: dict[str, str] = {}
+def parse_scope(pairs: tuple[str, ...]) -> dict[str, ScopeValue]:
+    values: dict[str, list[str]] = {}
     for pair in pairs:
         key, eq, value = pair.partition("=")
         if not eq or not key:
             raise click.BadParameter(f"{pair!r} is not key=value", param_hint="--scope")
-        scope[key] = value
-    return scope
+        values.setdefault(key, []).append(value)
+    return {key: found[0] if len(found) == 1 else sorted(set(found)) for key, found in values.items()}
+
+
+def exact_scope(pairs: tuple[str, ...]) -> dict[str, str]:
+    scope = parse_scope(pairs)
+    if sets := [key for key, value in scope.items() if isinstance(value, list)]:
+        raise click.BadParameter(f"an action carries one value per key, not a set for {sets}", param_hint="--scope")
+    return {key: str(value) for key, value in scope.items()}
 
 
 def session_tree() -> str:
@@ -47,7 +54,7 @@ def session_tree() -> str:
 def describe(grant: Grant) -> str:
     used = store.spends(grant.id)
     at = store.now()
-    state = store.unusable(grant, used, at) or (
+    state = str(store.unusable(grant, used, at) or "") or (
         "live, unlimited" if grant.uses is None else f"live, {store.remaining(grant, used, at)} of {grant.uses} left"
     )
     return f"{grant.id}  {grant.kind}  {grant.scope}  tree {grant.tree}  {state}"
@@ -57,7 +64,12 @@ def mint_options[F: Callable[..., Any]](command: F) -> F:
     for option in reversed(
         [
             click.option("--kind", required=True, help="The grant kind a hook declares, e.g. slack.write"),
-            click.option("--scope", "scope", multiple=True, help="One key=value of the kind's scope; repeat per key"),
+            click.option(
+                "--scope",
+                "scope",
+                multiple=True,
+                help="One key=value of the kind's scope; repeat a key for a set of values, or give * for any value",
+            ),
             click.option("--uses", type=int, default=1, show_default=True, help="Uses the grant allows"),
             click.option("--unlimited", is_flag=True, help="No use limit: a standing grant"),
             click.option("--for", "span", default=None, help="Lifetime, like 30m, 8h, or 7d"),
@@ -222,7 +234,7 @@ def spend(
         left = store.reserve(
             grant_id,
             tree=tree,
-            scope=parse_scope(scope),
+            scope=exact_scope(scope),
             state="committed",
             session=session,
             agent=agent,

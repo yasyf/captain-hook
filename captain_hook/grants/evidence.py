@@ -210,6 +210,47 @@ class Asked:
         return sorted(merged.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
 
+def spawn_evidence(payload: dict[str, Any], agent: str) -> Evidence | None:
+    """The teammate a finished ``Agent`` or ``Task`` call reports spawning, as evidence the spawning *agent* owns it."""
+    if payload.get("status") != "teammate_spawned" or not isinstance(task := payload.get("teammate_id"), str):
+        return None
+    return Evidence(
+        id=f"teammate:{task}",
+        source="teammate",
+        quote=task,
+        detail=f"this agent's own {task} spawn result records it as its teammate",
+        key=f"teammate:{agent}/{task}",
+        live=True,
+    )
+
+
+def shell_evidence(payload: dict[str, Any], agent: str) -> Evidence | None:
+    """The background shell a finished ``Bash`` call started, as evidence the calling *agent* owns it."""
+    if not isinstance(task := payload.get("backgroundTaskId"), str) or not task:
+        return None
+    return Evidence(
+        id=f"shell:{task}",
+        source="shell",
+        quote=task,
+        detail=f"this agent's own Bash call started background shell {task}",
+        key=f"shell:{agent}/{task}",
+        live=True,
+    )
+
+
+def children(evt: BaseHookEvent, kind: str, task: str) -> list[Evidence]:
+    """The recorded *kind* children of *evt*'s own agent named *task*: spawns and shells it started."""
+    from captain_hook.grants import store
+
+    owned = f":{evt.session_id}/{evt.agent_id or 'main'}/{task}"
+    return [
+        item
+        for grant in store.grants(kind, tree_of(evt))
+        for item in grant.evidence
+        if item.quote == task and item.key.endswith(owned)
+    ]
+
+
 def machine_written(text: str, markers: Sequence[str] = ()) -> bool:
     """Whether a prompt is a harness envelope or carries a tool's marker, so it is never the owner's words."""
     return text.lstrip().startswith(MACHINE_ENVELOPES) or any(marker in text for marker in markers)
