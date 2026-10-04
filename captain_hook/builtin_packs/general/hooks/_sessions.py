@@ -133,6 +133,7 @@ COMMAND_MARKERS = {
     "/Alacritty.app/": "a terminal emulator",
 }
 AGENT_SHIM_PREFIXES = ("cc-", "orca-")
+ORCA_CLI = "/app.asar.unpacked/out/cli/index.js"
 VERIFY = "Verify a pid you started with `ps -o pid,ppid,pgid,lstart,command -p <pid>`"
 KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
 RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
@@ -183,6 +184,10 @@ OWNER_NAMED_TTL = timedelta(hours=1)
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
+INLINE_ORCA_CLI = (
+    "/Applications/Orca.app/Contents/MacOS/Orca /Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/cli/"
+    "index.js"
+)
 INLINE_TABLE = (
     "    1     0     1    0 Thu Jan  1 00:00:00 2026 /sbin/launchd\n"
     "  900     1   900  501 Thu Jan  1 00:00:00 2026 /Applications/Captain Hook.app/Contents/Helpers/capt-hookd serve\n"
@@ -202,6 +207,10 @@ INLINE_TABLE = (
     f"17000  1743 17000    0 Thu Jan  1 00:00:00 2026 {INLINE_LOGIN} /opt/homebrew/bin/fish\n"
     "17001 17000 17001  501 Thu Jan  1 00:00:00 2026 -/opt/homebrew/bin/fish -l\n"
     "17002 17001 17002  501 Thu Jan  1 00:00:00 2026 /Users/dev/.daemonkit/cache/ab/cc-slack watch --channel C1\n"
+    "18100     1 18100  501 Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json\n"
+    f"18101 18100 18100  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} orchestration worker-list --json\n"
+    "18200     1 18200  501 Thu Jan  1 00:00:00 2026 python3 serve-wrapper.py\n"
+    f"18201 18200 18200  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} serve --port 7777\n"
 )
 INLINE_TERMINALS = {"term_idle": 15000, "term_agent": 16000, "term_shim": 17000, "term_gone": 18000}
 INLINE_SESSION = "c0ffee00-0000-4000-8000-000000000000"
@@ -325,6 +334,10 @@ INLINE_COMMANDS = {
     "ps -E -ww -o lstart=,command= -p 31337": (
         f"Thu Jan  1 00:00:00 2026 sleep 60 CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
     ),
+    "ps -E -ww -o lstart=,command= -p 18100": (
+        "Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json "
+        f"CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
+    ),
     "orca terminal show": "{}",
     **{
         f"orca terminal show --terminal {handle} --json": json.dumps(
@@ -372,9 +385,16 @@ def double_quoted(text: str) -> bool:
     return QUOTED_WORD.fullmatch(text) is not None
 
 
+def orca_cli_request(row: ProcessRow) -> bool:
+    app, cli, arguments = row.command.partition(ORCA_CLI)
+    return bool(cli) and "Orca.app/" in app and arguments.split()[:1] != ["serve"]
+
+
 def process_class(row: ProcessRow) -> str | None:
     if proc.is_claude(row.command.split()):
         return PROCESS_CLASSES["claude"]
+    if orca_cli_request(row):
+        return None
     if (label := PROCESS_CLASSES.get(row.argv0)) is not None:
         return label
     return next((label for marker, label in COMMAND_MARKERS.items() if marker in row.command), None)

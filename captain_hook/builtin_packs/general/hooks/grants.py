@@ -82,7 +82,7 @@ def record_queued_words(evt: UserPromptSubmitEvent | StopEvent) -> HookResult | 
 
 @on(
     Event.PostToolUse,
-    only_if=[Tool("Agent", "Task", "Bash")],
+    only_if=[Tool("Agent", "Task", "Bash", "Monitor")],
     respect_gitignore=False,
     skip_planning_agents=False,
 )
@@ -91,7 +91,10 @@ def record_children(evt: PostToolUseEvent) -> HookResult | None:
     if not isinstance(payload, dict):
         return None
     agent = f"{evt.session_id}/{evt.agent_id or 'main'}"
-    for kind, item in (("spawn", spawn_evidence(payload, agent)), ("shell", shell_evidence(payload, agent))):
+    for kind, item in (
+        ("spawn", spawn_evidence(payload, agent)),
+        ("shell", shell_evidence(payload, agent, evt.tool_name)),
+    ):
         if item is not None:
             record(evt, kind, item.model_copy(update={"said_at": store.now()}))
     return None

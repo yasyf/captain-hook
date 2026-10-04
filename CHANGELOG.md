@@ -106,6 +106,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An agent can stop its own `Monitor` task.** The `PostToolUse` `record_children`
+  hook now records a `Monitor` response's `taskId` as shell evidence for the agent that
+  armed it. The existing `OwnShell` evidence source lets that agent spend a `TaskStop`
+  grant, fixing the refusal of the root's `Monitor` task `b166f8m04`. Another agent,
+  including a lane in the same session, cannot use that record. An `Agent` response
+  carrying a `taskId` supplies no shell evidence.
+- **Transient Orca CLI calls no longer protect their parent from `kill`.** The CLI execs
+  the Orca app binary with `app.asar.unpacked/out/cli/index.js`, so the `Orca.app/` marker
+  misclassified every request as the app. A drive's own `desk-runner.py` then counted as an
+  ancestor of a protected process, blocking its cleanup. CLI requests now bypass that app
+  classification, except `orca serve`, which still protects its ancestors. The existing
+  `CLAUDE_CODE_SESSION_ID` environment proof allows a session to kill its own runner,
+  including one reparented to PID `1`; another session still fails the ownership check.
 - **The Graphite queue refusal names `--tip-only` when only queued parents block a ship.**
   A plain `ccx vcs ship` pushes its downstack too, so a queued parent's local ref can block
   a child ship if it differs from the admitted head. The refusal now recommends

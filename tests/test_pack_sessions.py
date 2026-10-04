@@ -485,8 +485,12 @@ LAUNCH = "nohup /w/_scratch-watch/watch.sh >/dev/null 2>&1 & echo $! > /w/watch.
 WATCH = "/bin/zsh /w/_scratch-watch/watch.sh"
 
 
+def after_launch() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None, microsecond=0) + timedelta(minutes=1)
+
+
 def orphan(pid: int, command: str = WATCH, *, pgid: int | None = None, started: datetime | None = None) -> ProcessRow:
-    begun = started or datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    begun = started or after_launch()
     return ProcessRow(pid, 1, pgid or pid - 1, 501, begun, command)
 
 
@@ -583,7 +587,7 @@ class TestSpawnRecords:
     def test_a_recorded_child_still_under_this_sessions_agent_may_be_killed(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
-        now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        now = after_launch()
         session = launch("sleep 300 &", tmp_path, fake_table, ProcessRow(4400, 27200, 27200, 501, now, "sleep 300"))
         assert killing(4400, tmp_path, session) is None
         assert "runs under claude 14575" in (killing(31337, tmp_path, session) or "")
@@ -591,7 +595,7 @@ class TestSpawnRecords:
     def test_a_child_under_another_sessions_agent_is_not_recorded(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
-        now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        now = after_launch()
         session = launch("sleep 5 &", tmp_path, fake_table, ProcessRow(4300, 115, 4300, 501, now, "sleep 5"))
         assert "runs under claude 14462" in (killing(4300, tmp_path, session) or "")
 
@@ -1263,6 +1267,23 @@ class TestRecordedChildren:
         assert decide_input(stop({"task_id": "blmtrzuxz"}), tmp_path) is None
         assert decide_input(stop({"task_id": "blmtrzuxz"}, agent_id="lane-1"), tmp_path) is not None
         assert spends("sessions.task-stop") == [("committed", "stop task blmtrzuxz", ["shell:blmtrzuxz"])]
+
+    def test_a_monitor_this_agent_armed_stops(self, general_pack: None, tmp_path: Path) -> None:
+        monitor = Input(
+            tool="Monitor",
+            tool_input={"command": "tail -f run.log", "description": "run log"},
+            session_id="s1",
+            cwd="/w",
+        )
+        finished(monitor, {"taskId": "b166f8m04", "timeoutMs": 1800000, "persistent": False}, tmp_path)
+        assert decide_input(stop({"task_id": "b166f8m04"}), tmp_path) is None
+        assert decide_input(stop({"task_id": "b166f8m04"}, agent_id="lane-1"), tmp_path) is not None
+        assert spends("sessions.task-stop") == [("committed", "stop task b166f8m04", ["shell:b166f8m04"])]
+
+    def test_an_agent_payload_naming_a_task_id_records_no_shell(self, general_pack: None, tmp_path: Path) -> None:
+        spawn = Input(tool="Agent", tool_input={"name": "lane", "prompt": "plan"}, session_id="s1", cwd="/w")
+        finished(spawn, {"status": "async_launched", "taskId": "b166f8m04"}, tmp_path)
+        assert decide_input(stop({"task_id": "b166f8m04"}), tmp_path) is not None
 
 
 class TestRecordedOwnerWords:

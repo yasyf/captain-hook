@@ -540,6 +540,11 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
             pattern="ownership of pid 31337"
         ),
         guarded(command="kill 15001", session_id=INLINE_SESSION): Block(pattern="pid 15001"),
+        guarded(command="kill 18100", session_id=INLINE_SESSION): Allow(),
+        guarded(command="kill 18100", session_id="0ther000-0000-4000-8000-000000000000"): Block(
+            pattern="ownership of pid 18100"
+        ),
+        guarded(command="kill 18200", session_id=INLINE_SESSION): Block(pattern="an ancestor of a protected process"),
         guarded(command="kill -0 14575"): Allow(),
         guarded(command="PID=31337; kill -0 $PID"): Allow(),
         guarded(command='PID=31337; kill -0 "$PID" 2>/dev/null || break'): Allow(),
