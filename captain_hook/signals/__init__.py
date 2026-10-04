@@ -147,6 +147,10 @@ def transcript_texts(
         raise EvidenceIncomplete("stale_handle", "signal evidence was not prepared before model execution")
     if key in evt.ctx.signal_evidence:
         return list(evt.ctx.signal_evidence[key])
+    if window == 0:
+        texts = [evt.user_prompt] if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt else []
+        evt.ctx.signal_evidence[key] = tuple(texts)
+        return texts
     if isinstance(evt.ctx.t, RemoteSession):
         texts = evt.ctx.t.signal_texts(window=window, origin=origin, thinking=thinking)
         if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
@@ -174,7 +178,7 @@ def transcript_texts(
                 break
             if eligible(event):
                 texts = texts_of(event) + texts
-        texts = texts[-window:] if window else []
+        texts = texts[-window:]
     if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
         texts = [evt.user_prompt, *texts]
     evt.ctx.signal_evidence[key] = tuple(texts)

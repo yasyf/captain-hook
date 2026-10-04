@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Never
 
 import pytest
 
@@ -373,10 +373,21 @@ class TestFixedWindowCountsProseEntries:
         evt = self.stop_event([T.assistant(f"message {n}") for n in range(5)])
         assert transcript_texts(evt, 2, "assistant") == ["message 3", "message 4"]
 
-    def test_window_zero_reads_no_transcript(self) -> None:
+    def test_window_zero_reads_no_transcript(self, tmp_path: Path) -> None:
+        from captain_hook.events import StopEvent
         from captain_hook.signals import transcript_texts
+        from captain_hook.transcripts import lazy_transcript
+
+        def unread(path: str | Path | None) -> Never:
+            raise AssertionError("window=0 must not read the transcript")
 
         assert transcript_texts(self.stop_event([T.assistant("the tell sits here")]), 0, "assistant") == []
+        ctx = HookContext(
+            session=SessionStore(tmp_path),
+            transcript=lazy_transcript("/fixture/absent.jsonl", loader=unread),
+            settings=None,
+        )
+        assert transcript_texts(StopEvent(_raw={}, ctx=ctx), 0, "assistant") == []
 
 
 class TestMatchSignalsPerText:
