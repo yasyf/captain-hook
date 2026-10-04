@@ -459,10 +459,11 @@ class Grants:
     ) -> Allowed | Denied:
         """Record the grant an agent asks for on the owner's behalf, without spending it.
 
-        *quote* must sit verbatim in the owner's own words, and the judge must read those words as
-        permitting every action *scope* admits, *uses* times or without limit. The grant rests on the
-        quoted words and expires with ``standing_ttl``; asking again for the same words and scope returns
-        the grant already recorded.
+        *quote* must sit verbatim in the owner's own words, or else in a ruling an evidence source
+        collects, and the judge must read those words as permitting every action *scope* admits, *uses*
+        times or without limit. The grant rests on the evidence the judge cites that holds the quote, else
+        the first that does, a ruling kept whole and pinned to its revision, and expires with
+        ``standing_ttl``; asking again for the same words and scope returns the grant already recorded.
         """
         if self.judge is None:
             raise TypeError(f"{self.kind} declares no judge, so it records no grant an agent asks for")
@@ -474,19 +475,29 @@ class Grants:
             summary=summary,
         )
         items = [item for source in self.evidence for item in source.collect(evt, action)]
-        said = verbatim(quote, [item for item in items if item.source in OWNER_SOURCES])
+        owners = [item for item in items if item.source in OWNER_SOURCES]
+        rulings = [item for item in items if item.source in RULING_SOURCES]
+        said = verbatim(quote, owners) or verbatim(quote, rulings)
         if said is None:
-            return Denied(f"The quote for {summary} is not verbatim in the owner's own words.", self.would_allow)
+            return Denied(
+                f"The quote for {summary} is not verbatim in the owner's own words or a ruling recording them.",
+                self.would_allow,
+            )
         try:
             verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
         except JudgeFailed as exc:
             return Denied(f"{exc}, and a grant it cannot judge is never recorded.", self.would_allow, undecided=True)
         if not verdict.allow:
             return Denied(verdict.explained, self.would_allow, detail=verdict.reason)
+        said = verbatim(quote, cited([*owners, *rulings], verdict.relied_on)) or said
         grant = self.grant(
             evt,
             scope=requested,
-            evidence=[said.model_copy(update={"quote": quote, "detail": said.quote})],
+            evidence=[
+                said
+                if said.source in RULING_SOURCES
+                else said.model_copy(update={"quote": quote, "detail": said.quote})
+            ],
             uses=uses,
             ttl=self.standing_ttl,
             rules=self.standing_rules,
