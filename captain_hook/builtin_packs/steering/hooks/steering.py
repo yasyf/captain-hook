@@ -67,8 +67,6 @@ class TypeCheckerContext(CustomCondition):
 
 
 class UntypedSubagentStop(CustomCondition):
-    """True for a ``SubagentStop`` whose payload carries an explicitly empty ``agent_type``."""
-
     def check(self, evt: BaseHookEvent) -> bool:
         return evt.event is Event.SubagentStop and evt.parent_agent_type == ""
 

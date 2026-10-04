@@ -17,12 +17,13 @@ from typing import Any
 import pytest
 from cc_transcript.ids import SessionId
 from click.testing import CliRunner
+from pydantic import ValidationError
 
 from captain_hook.app import on
 from captain_hook.cli import cli, dispatch_event
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.snapshots.client import EvidenceIncomplete, SnapshotProtocolError
-from captain_hook.state import ECHO_WINDOW, UnbornTranscript
+from captain_hook.state import ECHO_WINDOW, RegisteredTranscripts, UnbornTranscript
 from captain_hook.testing.fixtures import T
 from captain_hook.transcripts import (
     TranscriptLoadError,
@@ -905,7 +906,6 @@ TASKS_WARNING = {
 OPTION_DUMP = "Option 1 — refactor now\nOption 2 — defer it\nlet me know which you'd prefer"
 QUEUED_WORDS = "ship it once the build is green"
 UNBORN_REASON = "missing: No such file or directory (os error 2)"
-# The signals pinned from yasyf/cc-skills@01c7920f plugins/show/capt-hook/hooks/wall_of_text.py.
 SHOW_SIGNALS = Signals(
     [
         Signal(pattern=r"(?im)^\s*(?:\*\*)?(?:option|approach|alternative|path)\s*[A-D1-4]\b", weight=2),
@@ -1239,6 +1239,37 @@ def test_unborn_root_keeps_failing_for_a_session_with_registered_transcripts(tmp
 
 
 @pytest.mark.parametrize(
+    ("corrupt", "raised"),
+    [
+        pytest.param(lambda ledger: ledger.write_text("not valid json {{{"), ValidationError, id="malformed"),
+        pytest.param(
+            lambda ledger: ledger.write_text('{"entries": [{"provider": "codex"}]}'),
+            ValidationError,
+            id="invalid-entry",
+        ),
+        pytest.param(lambda ledger: ledger.mkdir(), IsADirectoryError, id="unreadable"),
+    ],
+)
+def test_unborn_root_raises_on_an_unreadable_registered_ledger(tmp_path, probe, snapshot_owner, corrupt, raised):
+    start_session(tmp_path, "startup")
+    corrupt(SessionSlot(first_session_dir(), RegisteredTranscripts).path)
+
+    with pytest.raises(raised):
+        submit_prompt(tmp_path, "first ask")
+    assert probe == []
+    assert unborn_allowance() == UnbornTranscript()
+
+
+def test_unborn_root_reads_an_absent_registered_ledger_as_no_registrations(tmp_path, probe, snapshot_owner):
+    start_session(tmp_path, "startup")
+    assert not SessionSlot(first_session_dir(), RegisteredTranscripts).path.exists()
+
+    assert submit_prompt(tmp_path, "first ask") == (None, [])
+    assert probe == [0]
+    assert unborn_allowance() == UnbornTranscript()
+
+
+@pytest.mark.parametrize(
     ("status", "reason"),
     [
         pytest.param("deadline", "foreground transcript deadline exhausted", id="deadline"),
@@ -1351,8 +1382,6 @@ def test_a_root_seen_written_never_reads_as_unborn_again(tmp_path, snapshot_owne
     [pytest.param("not valid json {{{", id="malformed"), pytest.param('{"path": 3}', id="wrong-type")],
 )
 def test_a_corrupt_unborn_allowance_raises_instead_of_granting(tmp_path, probe, snapshot_owner, content):
-    from pydantic import ValidationError
-
     start_session(tmp_path, "startup")
     SessionSlot(first_session_dir(), UnbornTranscript).path.write_text(content)
 

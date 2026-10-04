@@ -459,8 +459,6 @@ class RegisteredTranscripts(BaseModel):
 
 
 class UnbornTranscript(BaseModel):
-    """The root transcript a session's ``startup`` found not yet written, until its first prompt claims it."""
-
     model_config = ConfigDict(extra="forbid", strict=True)
 
     path: str | None = None

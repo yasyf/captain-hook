@@ -471,7 +471,8 @@ def claim_unborn(session_dir: Path | None, path: str) -> bool:
         if unborn.path != path:
             return False
         unborn.path = None
-    return not SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
+    with SessionSlot(session_dir, RegisteredTranscripts).strict_mutate() as registered:
+        return not registered.entries
 
 
 def resolved_transcript_paths(
