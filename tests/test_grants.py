@@ -335,7 +335,8 @@ def test_a_judge_that_gives_no_verdict_denies(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("error", "cause"), [(TimeoutError(), "TimeoutError"), (RuntimeError("backend down"), "RuntimeError: backend down")]
+    ("error", "cause"),
+    [(TimeoutError(), "TimeoutError"), (RuntimeError("backend down\nretry later"), "RuntimeError: backend down")],
 )
 def test_a_judge_that_fails_open_lets_the_action_through_on_one_use(
     tmp_path: Path, error: Exception, cause: str

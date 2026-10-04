@@ -174,7 +174,8 @@ class Judge:
         except EvidenceIncomplete:
             raise
         except Exception as exc:
-            raise JudgeFailed(f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__) from exc
+            detail = str(exc).partition("\n")[0]
+            raise JudgeFailed(f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__) from exc
         if not isinstance(verdict, GrantVerdict):
             raise JudgeFailed(f"{type(verdict).__name__} instead of a verdict")
         return verdict
