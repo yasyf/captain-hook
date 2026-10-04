@@ -458,7 +458,14 @@ class RegisteredTranscripts(BaseModel):
     entries: list[RegisteredTranscript] = Field(default_factory=list)
 
 
+class UnbornTranscript(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str | None = None
+
+
 SessionStore.track(HookState)
 SessionStore.track(PrimitiveState)
 SessionStore.track(SeenKeys)
 SessionStore.track(RegisteredTranscripts)
+SessionStore.track(UnbornTranscript)

@@ -130,6 +130,32 @@ class SessionSlot(Generic[M]):  # noqa: UP046
             yield obj
             self.set(obj)
 
+    @contextmanager
+    def strict_mutate(self) -> Iterator[M]:
+        """Yield the loaded model under the slot's file lock like :meth:`mutate`, but never fall back.
+
+        For state that grants authority once: an absent file loads a fresh model, while a read,
+        parse, or validation failure raises, and so does a failed persist. The model is written back
+        only when the ``with`` block changed it. A null slot (no session directory) yields a fresh
+        in-memory model and persists nothing.
+        """
+        if self._path is None:
+            yield self._model()
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock = self._path.with_name(self._path.name + ".lock")
+        with FileLock(str(lock)):
+            try:
+                text = self._path.read_text()
+            except FileNotFoundError:
+                obj = self._model()
+            else:
+                obj = self._model.model_validate_json(text)
+            loaded = obj.model_copy(deep=True)
+            yield obj
+            if obj != loaded:
+                atomic_write(self._path, obj.model_dump_json())
+
 
 class SessionStore:
     """Class-keyed store providing typed ``SessionSlot`` access via ``store[ModelClass]``."""

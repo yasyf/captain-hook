@@ -284,27 +284,37 @@ def dispatch_event(
     from captain_hook.heartbeat import record_heartbeat
     from captain_hook.transcripts import (
         ROOT_TAIL_EVENTS,
+        claim_unborn,
         lane_transcript_path,
         lazy_transcript,
+        record_unborn,
         registered_sources,
         root_transcript,
     )
     from captain_hook.util import reqenv
 
-    reqenv.provider()
+    provider = reqenv.provider()
     record_heartbeat(event, raw)
     resolved_path = raw.get("agent_transcript_path") or (
         lane_transcript_path(parent, agent_id)
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
         else raw.get("transcript_path")
     )
-
-    def evidence() -> LazyTranscript:
-        return lazy_transcript(resolved_path, loader=transcript_loader, attach=lambda: registered_sources(session_dir))
-
-    transcript = evidence()
     parent = raw.get("transcript_path")
     in_lane = bool(parent) and resolved_path != parent
+    root_session = bool(parent) and not in_lane and not raw.get("agent_id") and provider == "claude"
+    if root_session and event is Event.SessionStart and raw.get("source") == "startup":
+        record_unborn(session_dir, parent)
+    unborn = threading.Event()
+    if root_session and event is Event.UserPromptSubmit and claim_unborn(session_dir, parent):
+        unborn.set()
+
+    def evidence() -> LazyTranscript:
+        return lazy_transcript(
+            resolved_path, loader=transcript_loader, attach=lambda: registered_sources(session_dir), unborn=unborn
+        )
+
+    transcript = evidence()
     ctx = HookContext(
         session=SessionStore(session_dir),
         transcript=transcript,

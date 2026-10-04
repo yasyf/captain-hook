@@ -14,7 +14,7 @@ from cc_transcript.filterspec import event_meta
 from cc_transcript.ids import SessionId
 
 from captain_hook.session import SessionSlot, ensure_session
-from captain_hook.state import RegisteredTranscript, RegisteredTranscripts
+from captain_hook.state import RegisteredTranscript, RegisteredTranscripts, UnbornTranscript
 from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_project_dir
 
@@ -304,19 +304,20 @@ def lazy_transcript(
     *,
     loader: Callable[[str | Path | None], Session | RemoteSession] | None = None,
     attach: Callable[[], GraphSources] | None = None,
+    unborn: threading.Event | None = None,
 ) -> LazyTranscript:
     resolve = loader or load_transcript
 
     def load() -> Session | RemoteSession:
         from captain_hook.snapshots.client import RemoteSession
 
-        session = guarded_load(path, resolve)
+        session = guarded_load(path, resolve, unborn=unborn)
         if attach and isinstance(session, RemoteSession):
             session = session.with_registered_sources(attach())
         return session
 
     def tail(source: str | Path, count: int) -> Session:
-        return guarded_load(source, lambda _: tail_transcript(source, count))
+        return guarded_load(source, lambda _: tail_transcript(source, count), unborn=unborn)
 
     return LazyTranscript(TranscriptPins(load, partial(tail, path) if path else None), seed=True)
 
@@ -383,16 +384,23 @@ def root_excerpt(
     return lift_session(parse_events_from_bytes(b"".join(line for hit in hits for line in hit)), path=Path(path))
 
 
-def guarded_load[S: Session | RemoteSession](path: str | Path | None, read: Callable[[str | Path | None], S]) -> S:
+def guarded_load[S: Session | RemoteSession](
+    path: str | Path | None, read: Callable[[str | Path | None], S], *, unborn: threading.Event | None = None
+) -> S | Session:
     from captain_hook.snapshots.client import EvidenceIncomplete
 
     reqenv.checkpoint()
     try:
-        return read(path)
-    except EvidenceIncomplete:
+        session = read(path)
+    except EvidenceIncomplete as exc:
+        if unborn is not None and unborn.is_set() and exc.status == "missing":
+            return load_transcript(None)
         raise
     except Exception as exc:
         raise TranscriptLoadError(path) from exc
+    if unborn is not None:
+        unborn.clear()
+    return session
 
 
 def register_transcript(
@@ -448,6 +456,23 @@ def registered_sources(session_dir: Path | None) -> GraphSources:
         direct_paths=tuple(dict.fromkeys(Path(entry.path) for entry in entries if entry.path)),
         session_key=str(session_dir) if session_dir is not None else None,
     )
+
+
+def record_unborn(session_dir: Path | None, path: str) -> None:
+    try:
+        Path(path).stat()
+    except FileNotFoundError:
+        with SessionSlot(session_dir, UnbornTranscript).strict_mutate() as unborn:
+            unborn.path = path
+
+
+def claim_unborn(session_dir: Path | None, path: str) -> bool:
+    with SessionSlot(session_dir, UnbornTranscript).strict_mutate() as unborn:
+        if unborn.path != path:
+            return False
+        unborn.path = None
+    with SessionSlot(session_dir, RegisteredTranscripts).strict_mutate() as registered:
+        return not registered.entries
 
 
 def resolved_transcript_paths(

@@ -13,6 +13,7 @@ from captain_hook import (
     InPlanMode,
     Input,
     NlpSignal,
+    Not,
     Phrase,
     RanCommand,
     Signal,
@@ -63,6 +64,11 @@ class TypeCheckerContext(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return bool((t := evt.ctx.transcript) and self.PATTERN.search(t.assistant_text(n=10)))
+
+
+class UntypedSubagentStop(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        return evt.event is Event.SubagentStop and evt.parent_agent_type == ""
 
 
 nudge(
@@ -658,6 +664,7 @@ tell that decided it) in `reasoning`.""",
         ],
     ),
     events=Event.PostToolUse | Event.Stop | Event.SubagentStop,
+    only_if=[Not(UntypedSubagentStop())],
     skip_if=[InPlanMode()],
     tests={
         Input(

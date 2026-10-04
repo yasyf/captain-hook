@@ -119,6 +119,57 @@ class TestStateStore:
         assert slot.get(PrimitiveState()) == PrimitiveState()
         assert store.load(PrimitiveState) == PrimitiveState()
 
+    def test_strict_mutate_loads_fresh_and_persists_only_a_change(self, tmp_path: Path) -> None:
+        slot = SessionStore(tmp_path)[DefaultModel]
+        with slot.strict_mutate() as model:
+            assert model == DefaultModel()
+        assert not slot.path.exists()
+        with slot.strict_mutate() as model:
+            model.value = 7
+        assert slot.get() == DefaultModel(value=7)
+
+    @pytest.mark.parametrize(
+        ("content", "error"),
+        [
+            pytest.param("not valid json {{{", "ValidationError", id="malformed"),
+            pytest.param('{"path": 3}', "ValidationError", id="wrong-type"),
+            pytest.param('{"path": null, "granted": true}', "ValidationError", id="unknown-field"),
+            pytest.param(None, "IsADirectoryError", id="unreadable"),
+        ],
+    )
+    def test_strict_mutate_raises_where_get_falls_back(self, tmp_path: Path, content: str | None, error: str) -> None:
+        from captain_hook.state import UnbornTranscript
+
+        slot = SessionStore(tmp_path)[UnbornTranscript]
+        if content is None:
+            slot.path.mkdir()
+        else:
+            slot.path.write_text(content)
+        with pytest.raises(Exception) as caught:
+            with slot.strict_mutate():
+                pytest.fail("a strict read must not yield a fallback model")
+        assert type(caught.value).__name__ == error
+        assert slot.get() is None
+
+    def test_strict_mutate_raises_a_failed_persist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def unwritable(path: Path, text: str) -> None:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr("captain_hook.session.atomic_write", unwritable)
+        slot = SessionStore(tmp_path)[DefaultModel]
+        with slot.mutate() as model:
+            model.value = 1
+        with pytest.raises(OSError, match="No space left on device"):
+            with slot.strict_mutate() as model:
+                model.value = 2
+        assert not slot.path.exists()
+
+    def test_strict_mutate_null_slot_persists_nothing(self) -> None:
+        slot = SessionStore(None)[DefaultModel]
+        with slot.strict_mutate() as model:
+            model.value = 3
+        assert slot.get() is None
+
     def test_generic_type(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
         slot = store[MyModel]
