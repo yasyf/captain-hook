@@ -188,6 +188,21 @@ def show(grant_id: str) -> None:
 
 @grant.command()
 @click.argument("grant_id")
+@click.option("--call", "call", required=True, help="Id of the call whose use never took effect")
+def release(grant_id: str, call: str) -> None:
+    """Hand back the use a downstream system spent for a call that never took effect.
+
+    Prints the grant, the uses released, and the uses left as JSON. Run it only when the action
+    certainly did not happen, such as a write the remote system refused.
+    """
+    released = store.release(grant_id, call)
+    found = store.load(grant_id)
+    left = store.remaining(found, store.spends(grant_id), store.now())
+    click.echo(json.dumps({"grant": json.loads(found.model_dump_json()), "released": released, "remaining": left}))
+
+
+@grant.command()
+@click.argument("grant_id")
 def revoke(grant_id: str) -> None:
     """Revoke a grant; it covers nothing from now on."""
     click.echo(describe(store.revoke(grant_id)))

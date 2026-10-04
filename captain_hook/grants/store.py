@@ -330,6 +330,18 @@ def settle(tool_use_id: str, *, allowed: bool) -> bool:
     return not (allowed and stale)
 
 
+def release(grant_id: str, tool_use_id: str) -> int:
+    """Hand back the use *grant_id* committed for *tool_use_id* when that action never took effect.
+
+    Returns how many uses came back: zero when the call spent nothing, such as a retry of a spent one-shot.
+    """
+    with connect() as db, immediate(db):
+        return db.execute(
+            "UPDATE spends SET state = 'released' WHERE grant_id = ? AND tool_use_id = ? AND state = 'committed'",
+            (grant_id, tool_use_id),
+        ).rowcount
+
+
 def approval_spends(key: str) -> list[Spend]:
     """Committed uses of every grant minted from the approval *key*, oldest first."""
     with connect() as db:
