@@ -116,6 +116,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The session guard lets agents quit apps that host no session.** `osascript` that
+  quits a named application was blocked for every app, including Slack. The guard now
+  blocks only terminals, editors, Orca, Captain Hook, tmux, and any app whose process
+  tree runs `claude`, `codex`, `capt-hookd`, or another protected process. It still
+  blocks a quit it cannot attribute to a named app, a log out, a restart, a shutdown,
+  and sleep. When the process table is unreadable, it blocks the quit.
 - **Async hooks no longer drop as a group when post-reply evidence goes stale.**
   The post-reply phase reused the foreground's transcript lease, and a retained lease
   keeps its parent's absolute deadline, so every async hook that read the transcript

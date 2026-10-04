@@ -25,11 +25,13 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     LAUNCHERS,
     NEGATIVE_TARGET,
     RENICE_FIX,
+    SESSION_HOST_APPS,
     SETTLED_CLOSE,
     TERMINAL_CLOSE,
     Scan,
     Ungranted,
     Unreadable,
+    app_host,
     applescripts,
     block_first,
     clip,
@@ -57,6 +59,8 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     nested,
     owner_lift,
     pid_verdict,
+    process_class,
+    quit_targets,
     runs_once,
     settled_close,
     shell_scripts,
@@ -1531,7 +1535,25 @@ def launchctl_stops_service(evt: ToolRewriteEvent) -> HookResult | None:
     return block_first(evt, (launchctl_verdict(call, scan, evt) for call in scan.literal_calls))
 
 
-def osascript_verdict(call: Call) -> str | None:
+def app_quit_verdict(name: str, spelling: str, facts: Facts) -> str | None:
+    if PurePath(name).name.removesuffix(".app").casefold() in SESSION_HOST_APPS:
+        return (
+            f"BLOCKED: `{spelling}` quits {name}, which hosts terminals and agent sessions, so quitting it ends every "
+            "session on it. Ask the owner to run it."
+        )
+    ownership = facts.ownership
+    if isinstance(ownership, Unreadable):
+        return unresolvable(spelling, ownership.reason, f"Ask the owner to quit {name}.")
+    if (host := app_host(name, ownership)) is not None:
+        app, hosted = host
+        return (
+            f"BLOCKED: `{spelling}` quits {name}, whose {describe(app)} hosts {process_class(hosted)} at "
+            f"{describe(hosted)}, so quitting it ends that session. Ask the owner to run it."
+        )
+    return None
+
+
+def osascript_verdict(call: Call, facts: Facts) -> str | None:
     if call.name != "osascript":
         return None
     spelling = spell(call)
@@ -1540,11 +1562,14 @@ def osascript_verdict(call: Call) -> str | None:
             f"BLOCKED: `{spelling}` runs an AppleScript statement built at run time, which may quit Orca, log out, "
             "restart, or sleep the Mac. Spell the statement literally."
         )
-    if any(APPLESCRIPT_ENDING.search(script) for script in scripts):
+    targets, rest = quit_targets("\n".join(scripts))
+    if APPLESCRIPT_ENDING.search(rest):
         return (
-            f"BLOCKED: `{spelling}` quits an application, logs out, restarts, shuts down, or sleeps the Mac, which "
-            "ends every session on it. Ask the owner to run it."
+            f"BLOCKED: `{spelling}` quits an application it does not name, logs out, restarts, shuts down, or "
+            "sleeps the Mac, which ends every session on it. Ask the owner to run it."
         )
+    if verdict := next(filter(None, (app_quit_verdict(name, spelling, facts) for name in targets)), None):
+        return verdict
     if any(script is None for script in shell_scripts(scripts)):
         return (
             f"BLOCKED: `{spelling}` runs a `do shell script` that AppleScript builds at run time, so the guard cannot "
@@ -1555,7 +1580,23 @@ def osascript_verdict(call: Call) -> str | None:
 
 @guard(
     tests={
-        guarded(command="osascript -e 'tell application \"Orca\" to quit'"): Block(pattern="quits an application"),
+        guarded(command="osascript -e 'tell application \"Orca\" to quit'"): Block(pattern="quits Orca, which hosts"),
+        guarded(command="osascript -e 'quit app \"iTerm2\" saving no'"): Block(pattern="quits iTerm2"),
+        guarded(command="osascript -e 'tell application \"Ghostty\"' -e quit -e 'end tell'"): Block(),
+        guarded(command="osascript -e 'tell application \"Zed\" to quit'"): Block(
+            pattern=r"hosts an agent session at pid 19102"
+        ),
+        guarded(command="osascript -e 'tell application \"Slack\" to quit'"): Allow(),
+        guarded(
+            command="osascript -e 'quit app \"Slack\"'; open -a Slack --args --remote-debugging-port=9222"
+        ): Allow(),
+        guarded(command="osascript -e 'tell application \"Slack\"' -e quit -e 'end tell'"): Allow(),
+        guarded(
+            command="osascript -e 'tell application \"Slack\" to quit' -e 'tell application \"Orca\" to quit'"
+        ): Block(pattern="quits Orca"),
+        guarded(command="osascript -e 'tell application \"Slack\" to activate' -e quit"): Block(
+            pattern="quits an application it does not name"
+        ),
         guarded(command="osascript -e 'tell application \"System Events\" to restart'"): Block(),
         guarded(
             command='osascript -e \'tell application "System Events" to keystroke "q" using command down\''
@@ -1568,7 +1609,8 @@ def osascript_verdict(call: Call) -> str | None:
     }
 )
 def osascript_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(osascript_verdict, Scan.of(evt).literal_calls))
+    scan = Scan.of(evt)
+    return block_first(evt, (osascript_verdict(call, scan.facts) for call in scan.literal_calls))
 
 
 def softwareupdate_verdict(call: Call) -> str | None:

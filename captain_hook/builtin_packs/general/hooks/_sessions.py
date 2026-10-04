@@ -133,6 +133,29 @@ COMMAND_MARKERS = {
     "/Alacritty.app/": "a terminal emulator",
 }
 AGENT_SHIM_PREFIXES = ("cc-", "orca-")
+SESSION_HOST_APPS = frozenset(
+    {
+        "alacritty",
+        "captain hook",
+        "code",
+        "cursor",
+        "ghostty",
+        "iterm",
+        "iterm2",
+        "kitty",
+        "orca",
+        "terminal",
+        "tmux",
+        "visual studio code",
+        "warp",
+        "wezterm",
+    }
+)
+APP_QUIT = re.compile(
+    r'(?i)(?:\btell\s+(?:application|app)\s+"([^"]+)"\s+to\s+quit\b|\bquit\s+(?:application|app)\s+"([^"]+)")'
+    r"(?:\s+saving\s+(?:yes|no|ask)\b)?"
+    r'|\btell\s+(?:application|app)\s+"([^"]+)"\s*[\n;]\s*quit\s*[\n;]\s*end\s+tell\b'
+)
 ORCA_CLI = "/app.asar.unpacked/out/cli/index.js"
 VERIFY = "Verify a pid you started with `ps -o pid,ppid,pgid,lstart,command -p <pid>`"
 KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
@@ -211,6 +234,12 @@ INLINE_TABLE = (
     f"18101 18100 18100  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} orchestration worker-list --json\n"
     "18200     1 18200  501 Thu Jan  1 00:00:00 2026 python3 serve-wrapper.py\n"
     f"18201 18200 18200  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} serve --port 7777\n"
+    "19000     1 19000  501 Thu Jan  1 00:00:00 2026 /Applications/Slack.app/Contents/MacOS/Slack\n"
+    "19001 19000 19000  501 Thu Jan  1 00:00:00 2026 /Applications/Slack.app/Contents/Frameworks/Slack Helper.app/"
+    "Contents/MacOS/Slack Helper --type=renderer\n"
+    "19100     1 19100  501 Thu Jan  1 00:00:00 2026 /Applications/Zed.app/Contents/MacOS/zed\n"
+    "19101 19100 19101  501 Thu Jan  1 00:00:00 2026 /bin/zsh -l\n"
+    "19102 19101 19102  501 Thu Jan  1 00:00:00 2026 claude --dangerously-skip-permissions\n"
 )
 INLINE_TERMINALS = {"term_idle": 15000, "term_agent": 16000, "term_shim": 17000, "term_gone": 18000}
 INLINE_SESSION = "c0ffee00-0000-4000-8000-000000000000"
@@ -852,6 +881,25 @@ def applescripts(call: Call) -> list[str] | None:
     if None in statements:
         return None
     return [str(statement) for statement in statements] or ([] if arguments.values.get("program") else [call.cmd.raw])
+
+
+def quit_targets(script: str) -> tuple[list[str], str]:
+    targets: list[str] = []
+
+    def take(match: re.Match[str]) -> str:
+        targets.append(next(name for name in match.groups() if name is not None))
+        return " "
+
+    return targets, APP_QUIT.sub(take, script)
+
+
+def app_host(name: str, ownership: Ownership) -> tuple[ProcessRow, ProcessRow] | None:
+    bundle = f"/{PurePath(name).name.removesuffix('.app')}.app/Contents/MacOS/".casefold()
+    table = ownership.table
+    for row in table.rows.values():
+        if bundle in row.command.casefold() and row.pid in ownership.protected:
+            return row, next(r for r in (row, *table.descendants(row.pid)) if process_class(r) is not None)
+    return None
 
 
 def shell_scripts(scripts: list[str]) -> Iterator[str | None]:
