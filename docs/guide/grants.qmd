@@ -577,14 +577,25 @@ substitutions, or variables. Service targets are `system/<label>` or
 label. No lift covers domain targets such as `gui/501`, the `reboot`, `asuser`,
 `bsexec`, or `unload` verbs, or any other session-guard block.
 
-`sessions.task-stop` also accepts live `OwnTeammate` evidence. The task id must
-match `<name>@session-<8 hex>`, and this agent's own transcript must record an
-`Agent` or `Task` call with `toolUseResult.status` equal to `teammate_spawned` and
-that exact `toolUseResult.teammate_id`. A matching spawn grants one deterministic
-use, recorded as a spend. The team id comes from the Claude process's session id
-at spawn; after a resume it can differ from the hook payload's session id. Bare
-ids and teammates absent from this agent's transcript do not qualify for this
-lift. A lane cannot use its sibling's or root's spawn record.
+`sessions.task-stop` also accepts live evidence from
+`OwnLaunch(source, launched, records)`. The collector scans only the acting agent's
+own transcript (`evt.ctx.t`). Each matching launch grants one deterministic use,
+recorded as a spend.
+
+`OwnLaunch("teammate", spawned, ...)` requires a task id matching
+`<name>@session-<8 hex>` and an `Agent` or `Task` call whose `toolUseResult.status`
+is `teammate_spawned` and whose `toolUseResult.teammate_id` equals that task id.
+The team id comes from the Claude process's session id at spawn; after a resume
+it can differ from the hook payload's session id. Bare ids do not qualify for
+the teammate lift.
+
+`OwnLaunch("background", backgrounded, ...)` accepts a `Bash` call whose
+`toolUseResult.backgroundTaskId` or a `Monitor` call whose `toolUseResult.taskId`
+equals the requested task id exactly. The evidence id is `background:<task>`,
+and its key is `background:<session>/<agent or main>/<task>`. Other ids, prefixes,
+and `Bash` results without `backgroundTaskId` do not qualify. Both collectors
+require this agent's launch record; a lane cannot use its root's or sibling's
+record.
 
 `sessions.close` also accepts live `CreatedHere` evidence when all checks pass:
 

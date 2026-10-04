@@ -22,6 +22,8 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_OWNER_TERMINAL,
     INLINE_STARTED,
     INLINE_TRANSCRIPT,
+    Scan,
+    inline_background,
     inline_class_rulings,
     inline_create,
     inline_ruling,
@@ -29,7 +31,6 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_spawn,
     inline_tab,
     inline_worker,
-    Scan,
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
@@ -583,6 +584,37 @@ class TestStopTool:
     ) -> None:
         denied = decide_input(stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
         assert denied == STOP_DENIED.replace("wcn64vfub", task_id)
+        assert spends("sessions.task-stop") == []
+
+    @pytest.mark.parametrize("tool", ["Monitor", "Bash"])
+    def test_a_background_task_this_agent_started_stops_and_records_its_spend(
+        self, general_pack: None, tmp_path: Path, tool: str
+    ) -> None:
+        own = stop({"task_id": "bsqr5l4ex"}, transcript=inline_background("bsqr5l4ex", tool=tool))
+        assert decide_input(own, tmp_path) is None
+        assert decide_input(own, tmp_path, event=Event.PermissionRequest) is None
+        assert spends("sessions.task-stop") == [("committed", "stop task bsqr5l4ex", ["background:bsqr5l4ex"])]
+
+    @pytest.mark.parametrize(
+        ("task_id", "fields"),
+        [
+            pytest.param("bsqr5l4ex", {}, id="never-started"),
+            pytest.param(
+                "bsqr5l4ex", {"transcript": inline_background("bstn6sjw7", tool="Monitor")}, id="another-task"
+            ),
+            pytest.param("bsqr5l4e", {"transcript": inline_background("bsqr5l4ex")}, id="id-prefix"),
+            pytest.param(
+                "bsqr5l4ex",
+                {"agent_id": "sibling", "root_transcript": inline_background("bsqr5l4ex", tool="Monitor")},
+                id="root-started-it",
+            ),
+            pytest.param("bsqr5l4ex", {"transcript": inline_spawn("bsqr5l4ex", tool="Bash")}, id="no-background-id"),
+        ],
+    )
+    def test_a_background_task_this_agent_did_not_start_stays_protected(
+        self, general_pack: None, tmp_path: Path, task_id: str, fields: dict[str, Any]
+    ) -> None:
+        assert decide_input(stop({"task_id": task_id}, **fields), tmp_path) == STOP_DENIED.replace("wcn64vfub", task_id)
         assert spends("sessions.task-stop") == []
 
 

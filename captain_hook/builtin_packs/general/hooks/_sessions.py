@@ -30,7 +30,7 @@ from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
     from cc_transcript.command import Word
 
@@ -156,6 +156,7 @@ SETTLED_CLOSE_RULES = (
 )
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
+BACKGROUND_IDS = {"Bash": "backgroundTaskId", "Monitor": "taskId"}
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_TABLE = (
     "    1     0     1    0 Thu Jan  1 00:00:00 2026 /sbin/launchd\n"
@@ -236,6 +237,39 @@ def inline_spawn(task: str, *, tool: str = "Agent", status: str = "teammate_spaw
                 "content": [{"type": "tool_result", "tool_use_id": "toolu_spawn", "content": f"agent_id: {task}"}],
             },
             "toolUseResult": {"status": status, "teammate_id": task, "agent_id": task, "name": name, "team_name": team},
+        },
+    ]
+
+
+def inline_background(task: str, *, tool: str = "Bash") -> list[dict[str, Any]]:
+    call, content, result = {
+        "Bash": (
+            {"command": "./watch.sh", "run_in_background": True},
+            f"Command running in background with ID: {task}. Output is being written to: /tmp/{task}.output",
+            {"stdout": "", "stderr": "", "interrupted": False, "isImage": False, "backgroundTaskId": task},
+        ),
+        "Monitor": (
+            {"command": "./watch.sh", "description": "watch"},
+            f"Monitor started (task {task}, expires in 15m unless the source ends first).",
+            {"taskId": task, "timeoutMs": 900000, "persistent": False},
+        ),
+    }[tool]
+    return [
+        *INLINE_TRANSCRIPT,
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_background", "name": tool, "input": call}],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_background", "content": content}],
+            },
+            "toolUseResult": result,
         },
     ]
 
@@ -1017,29 +1051,38 @@ def still_settled(action: Proposal) -> bool:
 
 
 def spawned(use: Any, task: str) -> bool:
-    if use.call.name not in SPAWN_TOOLS or use.result is None:
+    if use.call.name not in SPAWN_TOOLS or use.result is None or TEAMMATE_TASK.fullmatch(task) is None:
         return False
     result = use.result.tool_use_result
     return isinstance(result, dict) and result.get("status") == "teammate_spawned" and result.get("teammate_id") == task
 
 
+def backgrounded(use: Any, task: str) -> bool:
+    if (key := BACKGROUND_IDS.get(use.call.name)) is None or use.result is None:
+        return False
+    result = use.result.tool_use_result
+    return isinstance(result, dict) and result.get(key) == task
+
+
 @dataclass(frozen=True, slots=True)
-class OwnTeammate:
+class OwnLaunch:
+    source: str
+    launched: Callable[[Any, str], bool]
+    records: str
+
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
         task = action.scope["task"]
-        if TEAMMATE_TASK.fullmatch(task) is None:
-            return []
-        found = next((use for turn in evt.ctx.t.turns for use in turn.tool_uses if spawned(use, task)), None)
+        found = next((use for turn in evt.ctx.t.turns for use in turn.tool_uses if self.launched(use, task)), None)
         if found is None:
             return []
         return [
             Evidence(
-                id=f"teammate:{task}",
-                source="teammate",
+                id=f"{self.source}:{task}",
+                source=self.source,
                 quote=task,
                 said_at=found.result_ts or found.ts,
-                detail=f"this agent's own transcript records spawning {task} as its teammate",
-                key=f"teammate:{evt.session_id}/{evt.agent_id or 'main'}/{task}",
+                detail=f"this agent's own transcript records {self.records.format(task)}",
+                key=f"{self.source}:{evt.session_id}/{evt.agent_id or 'main'}/{task}",
                 live=True,
             )
         ]
@@ -1069,10 +1112,15 @@ LAUNCHD_STOP = Grants(
 TASK_STOP = Grants(
     "sessions.task-stop",
     ("task",),
-    evidence=(OwnTeammate(), rulings_naming("task")),
+    evidence=(
+        OwnLaunch("teammate", spawned, "spawning {} as its teammate"),
+        OwnLaunch("background", backgrounded, "starting {} as its own background shell or Monitor"),
+        rulings_naming("task"),
+    ),
     replay=RETRY_WINDOW,
-    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or have the owner "
-    "name the task id in a cc-notes answer before the stopping session starts.",
+    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background "
+    "shell or Monitor this agent started, by its task id, or have the owner name the task id in a cc-notes answer "
+    "before the stopping session starts.",
     hook="sessions",
 )
 SETTLED_CLOSE = Grants(

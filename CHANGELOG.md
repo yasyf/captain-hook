@@ -85,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An agent can stop a background shell or `Monitor` it started.**
+  The mandatory `TaskStop` guard accepts `OwnLaunch` evidence when this agent's own
+  transcript records a `Bash` result with `toolUseResult.backgroundTaskId` or a `Monitor`
+  result with `toolUseResult.taskId` equal to the requested id. Previously, only a teammate
+  this agent spawned or an owner ruling could lift the block, so a session could not stop
+  its own broken watch script. Each match grants one deterministic use, recorded as a spend.
+  A lane cannot use its root's or sibling's launch record; other ids, prefixes, and `Bash`
+  results without `backgroundTaskId` receive no background lift. Both `task_id` and the
+  retired `shell_id` work.
 - **The Graphite queue refusal names `--tip-only` when only queued parents block a ship.**
   A plain `ccx vcs ship` pushes its downstack too, so a queued parent's local ref can block
   a child ship if it differs from the admitted head. The refusal now recommends
