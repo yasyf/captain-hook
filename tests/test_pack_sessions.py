@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,8 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_OWNER_TERMINAL,
     INLINE_STARTED,
     INLINE_TRANSCRIPT,
+    RECORDED_SINCE,
+    Scan,
     inline_class_rulings,
     inline_create,
     inline_ruling,
@@ -29,7 +31,6 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_spawn,
     inline_tab,
     inline_worker,
-    Scan,
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
@@ -45,7 +46,7 @@ from captain_hook.testing.types import Input
 from captain_hook.transcripts import lazy_transcript
 from captain_hook.types import CustomCondition, Event
 from captain_hook.util import proc, reqenv
-from captain_hook.util.proc import ProcessTable
+from captain_hook.util.proc import ProcessRow, ProcessTable
 from tests.test_dispatch_snapshot_leases import LeasedFixture
 from tests.test_proc import row, table
 
@@ -476,6 +477,141 @@ class TestFailClosed:
         assert "no recorded per-task creation identity" in (
             decide("kill 31337", tmp_path, event=Event.PermissionRequest) or ""
         )
+
+
+LAUNCH = "nohup /w/_scratch-watch/watch.sh >/dev/null 2>&1 & echo $! > /w/watch.pid"
+WATCH = "/bin/zsh /w/_scratch-watch/watch.sh"
+
+
+def orphan(pid: int, command: str = WATCH, *, pgid: int | None = None, started: datetime | None = None) -> ProcessRow:
+    begun = started or datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    return ProcessRow(pid, 1, pgid or pid - 1, 501, begun, command)
+
+
+def in_session(inp: Input, tmp_path: Path, session: Path, event: Event = Event.PreToolUse) -> dict[str, Any] | None:
+    evt = input_to_event(event, inp)
+    evt.ctx.session = SessionStore(session)
+    evt._raw["tool_use_id"] = "toolu_launch"
+    with reqenv.use_request(overrides()):
+        return dispatch(event, evt, session_dir=tmp_path)
+
+
+def launch(
+    command: str,
+    tmp_path: Path,
+    fake_table: dict[str, ProcessTable | None],
+    *spawned: ProcessRow,
+    agent: str | None = None,
+) -> Path:
+    session = tmp_path / "session"
+    session.mkdir()
+    assert in_session(bash(command, agent_id=agent), tmp_path, session) is None
+    fake_table["table"] = table(*MAC.rows.values(), *spawned)
+    assert in_session(bash(command, agent_id=agent), tmp_path, session, Event.PostToolUse) is None
+    return session
+
+
+def killing(pid: int, tmp_path: Path, session: Path, *, agent: str | None = None) -> str | None:
+    return reason(in_session(bash(f"kill {pid}", agent_id=agent), tmp_path, session))
+
+
+class TestSpawnRecords:
+    def test_an_orphaned_lane_child_may_be_killed_by_any_lane(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        session = launch(LAUNCH, tmp_path, fake_table, orphan(51159), agent="tooling-lane")
+        assert killing(51159, tmp_path, session) is None
+        assert killing(51159, tmp_path, session, agent="other-lane") is None
+
+    def test_another_session_cannot_kill_the_recorded_orphan(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        launch(LAUNCH, tmp_path, fake_table, orphan(51159))
+        other = tmp_path / "other-session"
+        other.mkdir()
+        assert "no agent ancestor to vouch for it" in (killing(51159, tmp_path, other) or "")
+
+    def test_the_same_command_from_another_session_is_not_recorded(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        earlier = orphan(50001, started=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=5))
+        session = launch(LAUNCH, tmp_path, fake_table, orphan(51159), earlier)
+        assert killing(51159, tmp_path, session) is None
+        assert "no agent ancestor to vouch for it" in (killing(50001, tmp_path, session) or "")
+
+    def test_two_orphan_groups_in_one_window_record_neither(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        session = launch(LAUNCH, tmp_path, fake_table, orphan(51159), orphan(51170))
+        assert "no agent ancestor to vouch for it" in (killing(51159, tmp_path, session) or "")
+        assert "no agent ancestor to vouch for it" in (killing(51170, tmp_path, session) or "")
+
+    def test_a_reused_pid_is_not_the_recorded_process(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        session = launch(LAUNCH, tmp_path, fake_table, recorded := orphan(51159))
+        fake_table["table"] = table(*MAC.rows.values(), orphan(51159, started=recorded.started + timedelta(hours=1)))
+        assert "no agent ancestor to vouch for it" in (killing(51159, tmp_path, session) or "")
+        fake_table["table"] = table(*MAC.rows.values(), orphan(51159, "sleep 300", started=recorded.started))
+        assert "no agent ancestor to vouch for it" in (killing(51159, tmp_path, session) or "")
+
+    def test_an_unrelated_program_in_the_window_is_not_recorded(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        session = launch(LAUNCH, tmp_path, fake_table, orphan(51159), orphan(51170, "node server.js", pgid=51158))
+        assert killing(51159, tmp_path, session) is None
+        assert "no agent ancestor to vouch for it" in (killing(51170, tmp_path, session) or "")
+
+    def test_a_recorded_child_still_under_this_sessions_agent_may_be_killed(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        session = launch("sleep 300 &", tmp_path, fake_table, ProcessRow(4400, 27200, 27200, 501, now, "sleep 300"))
+        assert killing(4400, tmp_path, session) is None
+        assert "runs under claude 14575" in (killing(31337, tmp_path, session) or "")
+
+    def test_a_child_under_another_sessions_agent_is_not_recorded(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        session = launch("sleep 5 &", tmp_path, fake_table, ProcessRow(4300, 115, 4300, 501, now, "sleep 5"))
+        assert "runs under claude 14462" in (killing(4300, tmp_path, session) or "")
+
+
+class TestScratchOrphans:
+    def scratch(self, started: datetime, ppid: int = 1) -> ProcessRow:
+        script = Path.home() / ".claude" / "worktrees" / "cc-context" / "_scratch-cleanup-pause" / "watch.sh"
+        return ProcessRow(51159, ppid, 51158, 501, started, f"/bin/zsh {script}")
+
+    def test_a_scratch_orphan_from_before_spawn_records_may_be_killed(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = table(*MAC.rows.values(), self.scratch(RECORDED_SINCE - timedelta(hours=8)))
+        assert decide("kill 51159", tmp_path) is None
+
+    @pytest.mark.parametrize(
+        ("started", "ppid", "holder"),
+        [
+            pytest.param(RECORDED_SINCE, 1, "with no agent ancestor", id="started_after_records"),
+            pytest.param(RECORDED_SINCE - timedelta(hours=8), 115, "under claude 14462", id="another_sessions_child"),
+        ],
+    )
+    def test_any_other_scratch_process_still_refuses(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        tmp_path: Path,
+        started: datetime,
+        ppid: int,
+        holder: str,
+    ) -> None:
+        fake_table["table"] = table(*MAC.rows.values(), self.scratch(started, ppid))
+        assert holder in (decide("kill 51159", tmp_path) or "")
+
+    def test_a_detached_process_outside_scratch_still_refuses(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        assert "no agent ancestor to vouch for it" in (decide("kill 7777", tmp_path) or "")
 
 
 OBSERVED_LANE = "aig-no-delete-plan@session-67c0e5da"

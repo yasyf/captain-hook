@@ -18,8 +18,9 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from cc_transcript.tools import BashCall
 from loguru import logger
+from pydantic import BaseModel
 
-from captain_hook import Event, Input, LambdaCondition, on
+from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, workflow_state
 from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
@@ -141,6 +142,9 @@ LANE_NAME = re.compile(r"[\w.-]+")
 LAUNCH_RECEIPTS = ".claude/scratch/orca-launch"
 RECEIPT_SLACK = timedelta(seconds=1)
 RETRY_WINDOW = timedelta(minutes=2)
+BACKGROUNDED = re.compile(r"(?<![&>|])&(?![&>])|\b(?:nohup|setsid|disown)\b")
+SCRATCH_PREFIX = "_scratch-"
+RECORDED_SINCE = datetime(2026, 10, 4, 2)
 LATER_SESSION = "name it in a cc-notes answer for a later session"
 SETTLED = frozenset({"completed", "failed"})
 CLASS_RULINGS = ("c9b27c1", "6190a4a")
@@ -444,9 +448,87 @@ def terminal_pid(handle: str) -> int | Unreadable:
         return Unreadable("Orca reports no process for the terminal")
 
 
+class SpawnRecord(BaseModel):
+    pid: int
+    pgid: int
+    started: datetime
+    command: str
+    agent: str
+
+    @classmethod
+    def of(cls, row: ProcessRow, agent: str) -> SpawnRecord:
+        return cls(pid=row.pid, pgid=row.pgid, started=row.started, command=row.command, agent=agent)
+
+    @property
+    def key(self) -> str:
+        return f"{self.pid}@{self.started.isoformat()}"
+
+    def matches(self, row: ProcessRow) -> bool:
+        return (self.pid, self.started, self.command) == (row.pid, row.started, row.command)
+
+
+@workflow_state("spawned_processes")
+class Spawns(WorkflowState):
+    pending: dict[str, datetime] = {}
+    records: dict[str, SpawnRecord] = {}
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def backgrounds(evt: BaseHookEvent) -> bool:
+    return isinstance(call := evt.input, BashCall) and (
+        bool(call.run_in_background) or BACKGROUNDED.search(call.command) is not None
+    )
+
+
+def launched(row: ProcessRow, names: frozenset[str]) -> bool:
+    return any(PurePath(word).name in names for word in row.command.split()[:2])
+
+
+def foreign(row: ProcessRow, session: str) -> bool:
+    if isinstance(timeout := probe_timeout("read a process environment"), Unreadable):
+        return False
+    ids = set(SESSION_ENV.findall(proc.environment(row, timeout=timeout) or ""))
+    return bool(ids) and ids != {session}
+
+
+def spawned_rows(ownership: Ownership, since: datetime, names: frozenset[str], session: str) -> list[ProcessRow]:
+    table = ownership.table
+    agents = {
+        row.pid: table.nearest(row.ppid, is_agent)
+        for row in table.rows.values()
+        if row.started >= since - RECEIPT_SLACK
+    }
+    rows = [
+        row
+        for row in table.rows.values()
+        if row.pid in agents
+        and row.pid not in ownership.protected
+        and not hosts_agent(row)
+        and agents[row.pid] in (None, ownership.owner)
+        and launched(row, names)
+        and not foreign(row, session)
+    ]
+    orphans = {row.pgid for row in rows if agents[row.pid] is None}
+    return rows if len(orphans) <= 1 else [row for row in rows if agents[row.pid] is not None]
+
+
+def scratch_orphan(row: ProcessRow) -> bool:
+    worktrees = Path.home() / ".claude" / "worktrees"
+    return row.started < RECORDED_SINCE and any(
+        PurePath(word).is_relative_to(worktrees)
+        and len(parts := PurePath(word).relative_to(worktrees).parts) > 2
+        and parts[1].startswith(SCRATCH_PREFIX)
+        for word in row.command.split()[:2]
+    )
+
+
 class Facts:
-    def __init__(self, session: str | None = None) -> None:
+    def __init__(self, session: str | None = None, spawns: Iterable[SpawnRecord] = ()) -> None:
         self.session = session
+        self.spawns = tuple(spawns)
         self._guard = threading.Lock()
         self._ownership: Ownership | Unreadable | None = None
 
@@ -455,6 +537,9 @@ class Facts:
             return False
         shown = proc.environment(row, timeout=timeout)
         return shown is not None and set(SESSION_ENV.findall(shown)) == {self.session}
+
+    def spawned_here(self, row: ProcessRow) -> bool:
+        return any(record.matches(row) for record in self.spawns)
 
     @property
     def ownership(self) -> Ownership | Unreadable:
@@ -528,12 +613,19 @@ def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str | None:
         )
     if facts.started_here(row):
         return None
+    agent = ownership.table.nearest(row.ppid, is_agent)
+    if facts.spawned_here(row) and agent in (None, ownership.owner):
+        return None
+    if agent is None and scratch_orphan(row):
+        logger.bind(pid=pid, command=row.command, started=row.started).warning(
+            "allowing a scratch orphan that predates spawn records"
+        )
+        return None
     if ownership.owner is None:
         return (
             f"BLOCKED: ownership of {describe(row)} is unproven because the guard cannot resolve this session's own "
             f"agent process. {fix}"
         )
-    agent = ownership.table.nearest(row.ppid, is_agent)
     holder = f"under {agent.argv0} {agent.pid}" if agent is not None else "with no agent ancestor to vouch for it"
     return (
         f"BLOCKED: {describe(row)} runs {holder}, and no recorded per-task creation identity ties it to this task. "
@@ -766,7 +858,8 @@ class Scan:
         with cls.LOCK:
             scan = cls.CACHE.get(id(evt._raw))
             if scan is None or scan.raw is not evt._raw:
-                scan = cls.CACHE[id(evt._raw)] = cls(evt._raw, Facts(evt._raw.get("session_id")))
+                facts = Facts(evt._raw.get("session_id"), Spawns.load(evt).records.values())
+                scan = cls.CACHE[id(evt._raw)] = cls(evt._raw, facts)
             cls.CACHE.move_to_end(id(evt._raw))
             while len(cls.CACHE) > SCAN_CACHE_LIMIT:
                 cls.CACHE.popitem(last=False)
