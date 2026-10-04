@@ -469,7 +469,7 @@ def test_a_failing_grant_check_keeps_the_block(tmp_path: Path) -> None:
     broken = Grants("test.write", ("channel", "thread"), lambda evt: Proposal(scope={}))
     result = execute_hook(entry(broken), event(tmp_path))
     assert result is not None and result.action is Action.block
-    assert (result.message or "").startswith("The grant check failed (ValueError")
+    assert result.message == "Needs the owner's permission."
     assert "The grant check failed (ValueError" in (result.system_message or "")
 
 

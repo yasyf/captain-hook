@@ -216,12 +216,12 @@ class Grants:
         return [rule for rule in self.rules if rule.always or rule.name in grant.rules]
 
     def decide(self, evt: BaseHookEvent, action: Proposal | None = None) -> Allowed | Denied:
-        """:meth:`check`, failing closed: a store, evidence, or judge error is a denial naming the error."""
+        """:meth:`check`, failing closed: a store, evidence, or judge error is a denial whose detail names it."""
         try:
             return self.check(evt, action)
         except Exception as exc:
             logger.bind(hook=self.hook, kind=self.kind).opt(exception=True).warning("grant check failed")
-            return Denied(f"The grant check failed ({type(exc).__name__}: {exc}).", self.would_allow)
+            return Denied("", self.would_allow, detail=f"The grant check failed ({type(exc).__name__}: {exc}).")
 
     def check(self, evt: BaseHookEvent, action: Proposal | None = None) -> Allowed | Denied:
         """Spend a grant that covers *action*, minting one from the owner's words when none is stored.

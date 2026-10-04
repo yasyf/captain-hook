@@ -782,7 +782,7 @@ class TestTerminalClose:
         with stubbed_commands(orca):
             envelope = envelope_of(bash(AGENT_CLOSE), tmp_path)
         assert envelope is not None
-        assert "The grant check failed (FileNotFoundError" in (reason(envelope) or "")
+        assert CLOSE_FIX in (reason(envelope) or "")
         assert "sessions: The grant check failed (FileNotFoundError" in envelope["systemMessage"]
 
     def test_a_batch_of_closes_stays_blocked_when_a_ruling_names_both(
