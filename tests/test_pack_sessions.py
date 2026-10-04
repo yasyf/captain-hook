@@ -1248,6 +1248,23 @@ class TestRecordedChildren:
         assert decide_input(stop({"task_id": "blmtrzuxz"}, agent_id="lane-1"), tmp_path) is not None
         assert spends("sessions.task-stop") == [("committed", "stop task blmtrzuxz", ["shell:blmtrzuxz"])]
 
+    def test_a_monitor_this_agent_armed_stops(self, general_pack: None, tmp_path: Path) -> None:
+        monitor = Input(
+            tool="Monitor",
+            tool_input={"command": "tail -f run.log", "description": "run log"},
+            session_id="s1",
+            cwd="/w",
+        )
+        finished(monitor, {"taskId": "b166f8m04", "timeoutMs": 1800000, "persistent": False}, tmp_path)
+        assert decide_input(stop({"task_id": "b166f8m04"}), tmp_path) is None
+        assert decide_input(stop({"task_id": "b166f8m04"}, agent_id="lane-1"), tmp_path) is not None
+        assert spends("sessions.task-stop") == [("committed", "stop task b166f8m04", ["shell:b166f8m04"])]
+
+    def test_an_agent_payload_naming_a_task_id_records_no_shell(self, general_pack: None, tmp_path: Path) -> None:
+        spawn = Input(tool="Agent", tool_input={"name": "lane", "prompt": "plan"}, session_id="s1", cwd="/w")
+        finished(spawn, {"status": "async_launched", "taskId": "b166f8m04"}, tmp_path)
+        assert decide_input(stop({"task_id": "b166f8m04"}), tmp_path) is not None
+
 
 class TestRecordedOwnerWords:
     def test_a_message_the_owner_queued_is_recorded_when_the_turn_ends(

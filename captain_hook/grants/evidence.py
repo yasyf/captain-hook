@@ -210,6 +210,9 @@ class Asked:
         return sorted(merged.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
 
+SHELL_TASK_IDS = {"Bash": "backgroundTaskId", "Monitor": "taskId"}
+
+
 def spawn_evidence(payload: dict[str, Any], agent: str) -> Evidence | None:
     """The teammate a finished ``Agent`` or ``Task`` call reports spawning, as evidence the spawning *agent* owns it."""
     if payload.get("status") != "teammate_spawned" or not isinstance(task := payload.get("teammate_id"), str):
@@ -224,15 +227,15 @@ def spawn_evidence(payload: dict[str, Any], agent: str) -> Evidence | None:
     )
 
 
-def shell_evidence(payload: dict[str, Any], agent: str) -> Evidence | None:
-    """The background shell a finished ``Bash`` call started, as evidence the calling *agent* owns it."""
-    if not isinstance(task := payload.get("backgroundTaskId"), str) or not task:
+def shell_evidence(payload: dict[str, Any], agent: str, tool: str) -> Evidence | None:
+    """The background shell a finished ``Bash`` or ``Monitor`` call started, as evidence the calling *agent* owns it."""
+    if (field := SHELL_TASK_IDS.get(tool)) is None or not isinstance(task := payload.get(field), str) or not task:
         return None
     return Evidence(
         id=f"shell:{task}",
         source="shell",
         quote=task,
-        detail=f"this agent's own Bash call started background shell {task}",
+        detail=f"this agent's own {tool} call started background shell {task}",
         key=f"shell:{agent}/{task}",
         live=True,
     )
