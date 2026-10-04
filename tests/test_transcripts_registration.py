@@ -1118,15 +1118,24 @@ def test_first_prompt_keeps_a_written_root_transcripts_history(
             "origin": {"kind": "human"},
         },
     }
+    history: list[int] = []
+
+    @on(Event.UserPromptSubmit)
+    def written_history(evt):
+        history.append(len(evt.ctx.t))
+
     start_session(tmp_path, source)
     write_transcript(first_root(tmp_path), T.user("compare the caching strategies"), T.assistant(OPTION_DUMP), queued)
 
-    assert submit_prompt(tmp_path, FIRST_PROMPT) == (TASKS_WARNING, [])
+    assert submit_prompt(tmp_path, "which one?") == (None, [])
 
+    assert history == [3]
     assert model_calls
     assert all("Option 1 — refactor now" in call for call in model_calls)
     assert [item.quote for grant in store.grants("words", FIRST_SESSION) for item in grant.evidence] == [QUEUED_WORDS]
     assert unborn_allowance() == allowance
+    assert submit_prompt(tmp_path, FIRST_PROMPT) == (TASKS_WARNING, [])
+    assert history == [3, 3]
 
 
 @pytest.mark.parametrize("transcript_events", [None, 30], ids=["full", "tail"])
