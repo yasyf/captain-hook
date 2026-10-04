@@ -198,7 +198,7 @@ def test_local_query_view_cannot_contain_registry_paths():
     assert client.prepare_count == 0
 
 
-def test_sync_and_background_share_one_preparation_across_clients(tmp_path, monkeypatch):
+def test_sync_and_background_each_prepare_under_their_own_client(tmp_path, monkeypatch):
     from captain_hook.cli import dispatch_event
     from captain_hook.events import Event
     from captain_hook.snapshots.client import CURRENT_CLIENT
@@ -230,9 +230,10 @@ def test_sync_and_background_share_one_preparation_across_clients(tmp_path, monk
     )
 
     def loader(_):
+        client = CURRENT_CLIENT.get()
         return RemoteSession(
-            foreground,
-            Lease(foreground, source),
+            client,
+            Lease(client, source),
             Path(source["canonical_path"]),
             source["classifier"],
         )
@@ -264,12 +265,16 @@ def test_sync_and_background_share_one_preparation_across_clients(tmp_path, monk
     finally:
         CURRENT_CLIENT.reset(token)
 
-    assert sum(operation == "prepare_graph" for _, operation, _ in calls) == 1
-    assert [(phase, operation) for phase, operation, _ in calls if operation == "query_graph"] == [
+    assert [(phase, operation) for phase, operation, _ in calls if operation.endswith("_graph")] == [
+        ("foreground", "prepare_graph"),
         ("foreground", "query_graph"),
+        ("background", "prepare_graph"),
         ("background", "query_graph"),
     ]
-    assert sum(operation == "release" and args.get("kind") == "graph" for _, operation, args in calls) == 1
+    assert [phase for phase, operation, args in calls if operation == "release" and args.get("kind") == "graph"] == [
+        "foreground",
+        "background",
+    ]
 
 
 def test_classifier_change_preserves_prepared_graph_sources(monkeypatch):

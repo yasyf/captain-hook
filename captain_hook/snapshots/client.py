@@ -1203,7 +1203,18 @@ class RemoteSession:
 
     @property
     def events(self) -> tuple[Any, ...]:
-        return tuple(self.query({"kind": "events", "order": "forward"}))
+        return self._events(0, None)
+
+    def _events(self, start: int, stop: int | None) -> tuple[Any, ...]:
+        window = self if stop is None else self.selected(kind="event_range", start=start, stop=stop)
+        try:
+            return tuple(window.query({"kind": "events", "order": "forward"}))
+        except EvidenceIncomplete as exc:
+            stop = len(self) if stop is None else stop
+            if exc.status != "output_limit" or stop - start < 2:
+                raise
+            middle = (start + stop) // 2
+            return self._events(start, middle) + self._events(middle, stop)
 
     @property
     def turns(self) -> tuple[Any, ...]:

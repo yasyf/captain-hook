@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 
     from captain_hook.dispatch import Envelope
     from captain_hook.events import BaseHookEvent
+    from captain_hook.transcripts import LazyTranscript
     from captain_hook.types import RegisteredHook
 
 # capt-hook plugin/marketplace identity, rehomed from the deleted packs.contract module.
@@ -297,12 +298,11 @@ def dispatch_event(
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
         else raw.get("transcript_path")
     )
-    transcript = lazy_transcript(
-        resolved_path,
-        loader=transcript_loader,
-        attach=lambda: registered_sources(session_dir),
-    )
-    background_transcript = transcript.fork()
+
+    def evidence() -> LazyTranscript:
+        return lazy_transcript(resolved_path, loader=transcript_loader, attach=lambda: registered_sources(session_dir))
+
+    transcript = evidence()
     parent = raw.get("transcript_path")
     in_lane = bool(parent) and resolved_path != parent
     ctx = HookContext(
@@ -319,10 +319,10 @@ def dispatch_event(
         envelope = dispatch(event, evt, session_dir=session_dir, advisory=not within_margin)
     except BaseException:
         transcript.release()
-        background_transcript.release()
         raise
 
     def background() -> None:
+        background_transcript = evidence()
         fresh = event.event_class(_raw=raw, ctx=ctx.fork(background_transcript))
         try:
             after_reply(event, fresh, raw, session_dir)

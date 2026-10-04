@@ -106,6 +106,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Async hooks no longer drop as a group when post-reply evidence goes stale.**
+  The post-reply phase reused the foreground's transcript lease, and a retained lease
+  keeps its parent's absolute deadline, so every async hook that read the transcript
+  after the foreground budget ran out got `stale_handle` ("lease does not belong to
+  this claimant or generation"). That error was not fail-open, so it dropped every
+  async hook of the event, including ones that never read the transcript. The
+  post-reply phase now loads its own transcript and prepared graph under the
+  background client. An evidence error in one async hook skips only that hook and is
+  logged as an evidence gap.
+- **`RemoteSession.events` reads selections larger than the projection bound.** A
+  selection whose events exceed one page is read in halving `event_range` windows, so
+  `record_queued_words` records queued owner words from a turn over the 1 MiB record
+  bound instead of skipping with `output_limit`. A single event over the bound still
+  skips the hook.
 - **Counted approvals for several uses no longer pin the first action's text.**
   `Grants.from_evidence` used to record the first payload as `approved`, so later
   writes could be refused as changed content and need a second judgement.

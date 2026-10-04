@@ -49,7 +49,7 @@ def test_legacy_frame_decoder_preserves_exact_snapshot_numbers(lexeme, accepted)
             decode_snapshot_reply(decoded)
 
 
-def test_after_reply_reuses_transcript_in_background_client_scope(tmp_path, monkeypatch):
+def test_after_reply_loads_its_own_transcript_in_background_client_scope(tmp_path, monkeypatch):
     foreground, background = object(), object()
     clients = []
     events = []
@@ -86,7 +86,7 @@ def test_after_reply_reuses_transcript_in_background_client_scope(tmp_path, monk
         run_background()
     finally:
         CURRENT_CLIENT.reset(token)
-    assert clients == [foreground]
+    assert clients == [foreground, background]
     assert events[0] is not events[1]
     assert events[0].ctx is not events[1].ctx
 

@@ -14,10 +14,16 @@ from captain_hook.app import _state, on
 from captain_hook.cli import dispatch_event
 from captain_hook.events import BaseHookEvent
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, HOOK_TAIL_BYTES, SnapshotClient, foreground_seconds
+from captain_hook.snapshots.client import (
+    CURRENT_CLIENT,
+    HOOK_TAIL_BYTES,
+    EvidenceIncomplete,
+    SnapshotClient,
+    foreground_seconds,
+)
 from captain_hook.testing.helpers import fixture_line
 from captain_hook.testing.snapshots import FixtureOwner
-from captain_hook.types import Event, HookResult, RanCommand
+from captain_hook.types import Event, HookResult, LambdaCondition, RanCommand
 from captain_hook.util import reqenv
 from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_result, raw_tool_use
 
@@ -254,6 +260,81 @@ def test_a_late_lease_skips_only_the_hook_that_read_it(
     assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
     assert denied == ["policy"]
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_async_hooks_read_the_transcript_after_the_foreground_deadline(
+    tmp_path: Path, owner: FixtureOwner, transcript: Transcript
+) -> None:
+    transcript.write("alpha")
+    denied = register(Event.PostToolUse, transcript, "has_command")
+    read: list[bool] = []
+
+    @on(Event.PostToolUse, async_=True)
+    def late(evt: BaseHookEvent) -> None:
+        read.append(evt.ctx.t.has_command("git", "push", subagents=False))
+
+    foreground = SnapshotClient(owner.exchange, foreground_seconds=TOOL_SECONDS)
+    background = SnapshotClient(owner.exchange)
+    payload = {
+        "session_id": SESSION,
+        "transcript_path": str(transcript.path),
+        "cwd": str(tmp_path),
+        "tool_name": "Bash",
+        "tool_input": {"command": "git push origin HEAD"},
+    }
+    request = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id=SESSION)
+    token = CURRENT_CLIENT.set(foreground)
+    try:
+        with reqenv.use_request(request):
+            _, after = dispatch_event(
+                tmp_path, Event.PostToolUse, payload, session_dir=ensure_session(SessionId(SESSION))
+            )
+            assert foreground.foreground_deadline_unix_ms is not None
+            while time.time() * 1000 <= foreground.foreground_deadline_unix_ms + 1:
+                time.sleep(0.01)
+            CURRENT_CLIENT.set(background)
+            after()
+    finally:
+        CURRENT_CLIENT.reset(token)
+        foreground.close()
+        background.close()
+
+    assert denied == ["has_command"]
+    assert read == [True]
+    assert request.evidence_gaps == []
+
+
+def test_an_async_hook_runs_beside_a_sibling_whose_evidence_is_stale(tmp_path: Path) -> None:
+    ran: list[str] = []
+
+    @on(Event.PostToolUse, async_=True)
+    def stale(evt: BaseHookEvent) -> None:
+        raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+
+    @on(Event.PostToolUse, async_=True, only_if=[LambdaCondition(lambda evt: stale_condition())])
+    def stale_gate(evt: BaseHookEvent) -> None:
+        ran.append("stale_gate")
+
+    @on(Event.PostToolUse, async_=True)
+    def answers(evt: BaseHookEvent) -> None:
+        ran.append("answers")
+
+    request = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id=SESSION)
+    with reqenv.use_request(request):
+        _, after = dispatch_event(
+            tmp_path, Event.PostToolUse, {"session_id": SESSION, "tool_name": "AskUserQuestion"}, session_dir=None
+        )
+        after()
+
+    assert ran == ["answers"]
+    assert sorted(request.evidence_gaps) == [
+        "stale: stale_handle: lease does not belong to this claimant or generation",
+        "stale_gate: stale_handle: condition lease expired",
+    ]
+
+
+def stale_condition() -> bool:
+    raise EvidenceIncomplete("stale_handle", "condition lease expired")
 
 
 class Operations:
