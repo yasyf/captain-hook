@@ -440,12 +440,51 @@ class TestProtectedHosts:
         assert "negative process group" in message
 
 
+class TestAppQuit:
+    def test_quitting_slack_is_allowed(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = table(
+            *MAC.rows.values(),
+            row(19000, 1, "/Applications/Slack.app/Contents/MacOS/Slack", started="2026-09-30T07:00:00"),
+        )
+        assert decide("osascript -e 'tell application \"Slack\" to quit'", tmp_path) is None
+
+    def test_quitting_orca_is_blocked(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        message = decide("osascript -e 'tell application \"Orca\" to quit'", tmp_path)
+        assert message is not None
+        assert "quits Orca" in message
+
+    def test_quitting_an_app_whose_tree_hosts_claude_is_blocked(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = table(
+            *MAC.rows.values(),
+            row(19100, 1, "/Applications/Zed.app/Contents/MacOS/zed", started="2026-09-30T07:00:00"),
+            row(19101, 19100, "/bin/zsh -l", started="2026-09-30T07:00:01"),
+            row(19102, 19101, "claude --dangerously-skip-permissions", started="2026-09-30T07:00:02"),
+        )
+        message = decide("osascript -e 'tell application \"Zed\" to quit'", tmp_path)
+        assert message is not None
+        assert "pid 19102" in message
+
+
 class TestFailClosed:
     def test_an_unreadable_process_table_denies(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
         fake_table["table"] = None
         message = decide("kill 31337", tmp_path)
+        assert message is not None
+        assert "the process table could not be read" in message
+
+    def test_an_unreadable_process_table_denies_an_app_quit(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = None
+        message = decide("osascript -e 'tell application \"Slack\" to quit'", tmp_path)
         assert message is not None
         assert "the process table could not be read" in message
 
