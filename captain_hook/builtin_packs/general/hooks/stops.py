@@ -13,6 +13,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     TASK_STOP,
     block_first,
     clip,
+    inline_background,
     inline_ruling,
     inline_spawn,
     lift,
@@ -102,6 +103,23 @@ def describe_target(target: tuple[str, str] | None) -> str:
         ),
         stopping(tool_input={"task_id": "lane-2"}, transcript=inline_spawn("lane-2")): Block(
             pattern="on task `lane-2` cannot be verified"
+        ),
+        stopping(
+            tool_input={"task_id": "bsqr5l4ex"}, transcript=inline_background("bsqr5l4ex", tool="Monitor")
+        ): Allow(),
+        stopping(tool_input={"task_id": "bsqr5l4ex"}, transcript=inline_background("bsqr5l4ex")): Allow(),
+        stopping(tool_input={"shell_id": "bsqr5l4ex"}, transcript=inline_background("bsqr5l4ex")): Allow(),
+        stopping(
+            tool_input={"task_id": "bsqr5l4ex"}, agent_id="lane-1", transcript=inline_background("bsqr5l4ex")
+        ): Allow(),
+        stopping(
+            tool_input={"task_id": "bsqr5l4ex"}, agent_id="lane-1", root_transcript=inline_background("bsqr5l4ex")
+        ): Block(pattern="on task `bsqr5l4ex` cannot be verified"),
+        stopping(tool_input={"task_id": "bsqr5l4ex"}, transcript=inline_background("bstn6sjw7", tool="Monitor")): Block(
+            pattern="on task `bsqr5l4ex` cannot be verified"
+        ),
+        stopping(tool_input={"task_id": "bsqr5l4e"}, transcript=inline_background("bsqr5l4ex")): Block(
+            pattern="on task `bsqr5l4e` cannot be verified"
         ),
         Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(tool="mcp__orca__TaskStop", tool_input={"task_id": "wcn64vfub"}): Allow(),
