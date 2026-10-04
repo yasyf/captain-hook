@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,19 @@ from click.testing import CliRunner
 
 from captain_hook.app import on
 from captain_hook.cli import cli, dispatch_event
-from captain_hook.session import ensure_session
-from captain_hook.transcripts import register_transcript, registered_paths, resolved_transcript_paths
-from captain_hook.types import Event
+from captain_hook.session import SessionSlot, ensure_session
+from captain_hook.snapshots.client import EvidenceIncomplete, SnapshotProtocolError
+from captain_hook.state import ECHO_WINDOW, UnbornTranscript
+from captain_hook.testing.fixtures import T
+from captain_hook.transcripts import (
+    TranscriptLoadError,
+    claim_unborn,
+    record_unborn,
+    register_transcript,
+    registered_paths,
+    resolved_transcript_paths,
+)
+from captain_hook.types import Event, Signal, Signals
 from tests.helpers import raw_assistant, raw_text, raw_text_block, raw_tool_use
 
 APPLY_PATCH_ENVELOPE = (
@@ -687,7 +698,9 @@ class TestUnsafePathsSkipped:
         assert raised.value.status == status
 
 
-@pytest.mark.parametrize("event", [Event.SessionStart, Event.UserPromptSubmit, Event.PreToolUse, Event.PostToolUse, Event.Stop])
+@pytest.mark.parametrize(
+    "event", [Event.SessionStart, Event.UserPromptSubmit, Event.PreToolUse, Event.PostToolUse, Event.Stop]
+)
 def test_codex_hook_dispatch_reads_native_root_transcript(tmp_path, event):
     from captain_hook.snapshots.client import CURRENT_CLIENT
     from captain_hook.testing.snapshots import FixtureOwner
@@ -876,3 +889,546 @@ def test_each_hook_reads_only_the_tail_it_declares(tmp_path, monkeypatch):
     assert seen == {"recent": 0, "other": 0, "history": 0}
     assert tails == [(str(tmp_path / "main.jsonl"), 30)]
     assert loads == [str(tmp_path / "main.jsonl")]
+
+
+FIRST_SESSION = "s-first-prompt"
+FIRST_PROMPT = "1. add foo\n2. fix bar\n3. update baz"
+TASKS_NUDGE = "general.tasks:nudge_7ef627f7"
+TASKS_WARNING = {
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": (
+            "This message has several distinct requests. Run `TaskCreate` for each before starting work."
+        ),
+    }
+}
+OPTION_DUMP = "Option 1 — refactor now\nOption 2 — defer it\nlet me know which you'd prefer"
+QUEUED_WORDS = "ship it once the build is green"
+UNBORN_REASON = "missing: No such file or directory (os error 2)"
+# The signals pinned from yasyf/cc-skills@01c7920f plugins/show/capt-hook/hooks/wall_of_text.py.
+SHOW_SIGNALS = Signals(
+    [
+        Signal(pattern=r"(?im)^\s*(?:\*\*)?(?:option|approach|alternative|path)\s*[A-D1-4]\b", weight=2),
+        Signal(pattern=r"(?im)^\s*\d+[.)]\s.+\n(?:.*\n){0,2}\s*\d+[.)]\s", weight=1),
+        Signal(pattern=r"(?i)\blet me know (?:which|what you think|if (?:this|that) (?:works|looks))\b", weight=2),
+        Signal(pattern=r"(?i)\b(?:approve|sign[- ]?off|pick one|choose (?:one|between))\b", weight=1),
+        Signal(
+            pattern=r"(?i)\b(?:open|view) (?:it|the (?:report|page|file)) (?:at|in)\b"
+            r"|\bsaved (?:the )?(?:report|summary|review) to\b",
+            weight=2,
+        ),
+    ],
+    threshold=3,
+    window="turn",
+    scope="window",
+)
+
+
+class ModelUnavailable(Exception):
+    pass
+
+
+def first_raw(root: Path, event: Event, **fields: Any) -> dict[str, Any]:
+    return {
+        "session_id": FIRST_SESSION,
+        "transcript_path": str(first_root(root)),
+        "cwd": str(root),
+        "hook_event_name": event.name,
+        "permission_mode": "default",
+    } | fields
+
+
+def first_root(root: Path) -> Path:
+    return root / "projects" / f"{FIRST_SESSION}.jsonl"
+
+
+def first_session_dir() -> Path:
+    return ensure_session(SessionId(FIRST_SESSION))
+
+
+def unborn_allowance() -> UnbornTranscript | None:
+    return SessionSlot(first_session_dir(), UnbornTranscript).get()
+
+
+@contextmanager
+def first_request(root: Path, env: dict[str, str] | None = None) -> Iterator[Any]:
+    from captain_hook.util import reqenv
+
+    request = reqenv.RequestOverrides(
+        env={key: os.environ[key] for key in ("CAPTAIN_HOOK_STATE_DIR", "CAPT_HOOK_DECISIONS_DB")} | (env or {}),
+        cwd=str(root),
+        client_ppid=os.getpid(),
+        session_id=FIRST_SESSION,
+    )
+    with reqenv.use_request(request):
+        yield request
+
+
+def start_session(root: Path, source: str, *, env: dict[str, str] | None = None) -> None:
+    with first_request(root, env):
+        dispatch_event(
+            root,
+            Event.SessionStart,
+            first_raw(root, Event.SessionStart, source=source),
+            session_dir=first_session_dir(),
+        )
+
+
+def sync_event(root: Path, event: Event, **fields: Any) -> list[str]:
+    with first_request(root) as request:
+        dispatch_event(root, event, first_raw(root, event, **fields), session_dir=first_session_dir())
+    return request.evidence_gaps
+
+
+def submit_prompt(
+    root: Path,
+    prompt: str,
+    *,
+    env: dict[str, str] | None = None,
+    transcript_loader: Any = None,
+    **fields: Any,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    with first_request(root, env) as request:
+        envelope, background = dispatch_event(
+            root,
+            Event.UserPromptSubmit,
+            first_raw(root, Event.UserPromptSubmit, prompt=prompt, **fields),
+            session_dir=first_session_dir(),
+            transcript_loader=transcript_loader,
+        )
+        background()
+    return envelope, request.evidence_gaps
+
+
+def write_transcript(path: Path, *messages: dict[str, Any]) -> Path:
+    from captain_hook.testing.helpers import fixture_line
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(fixture_line(index, message)) + "\n" for index, message in enumerate(messages)))
+    return path
+
+
+@pytest.fixture
+def snapshot_owner() -> Iterator[Any]:
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.testing.snapshots import FixtureOwner
+
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    try:
+        yield fixture
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
+@pytest.fixture
+def model_calls(monkeypatch) -> list[str]:
+    calls: list[str] = []
+
+    def unavailable(self, template, *args, **kwargs):
+        calls.append(template.system_text)
+        raise ModelUnavailable("tests keep the model boundary closed")
+
+    monkeypatch.setattr("captain_hook.context.HookContext.call_llm", unavailable)
+    return calls
+
+
+@pytest.fixture
+def first_prompt_hooks(isolate_modules, model_calls) -> None:
+    import captain_hook
+    from captain_hook import FromSubagent, llm_nudge
+    from captain_hook.app import _state
+    from captain_hook.loader import discover_pack
+
+    discover_pack("general", Path(captain_hook.__file__).parent / "builtin_packs" / "general" / "hooks")
+    _state.hooks[:] = [hook for hook in _state.hooks if hook.name in {TASKS_NUDGE, "record_queued_words"}]
+    llm_nudge(
+        "Decide whether the deliverable wanted a surface.",
+        message="This deliverable wanted a surface, not a wall of text.",
+        events=Event.UserPromptSubmit | Event.PostToolUse,
+        skip_if=[FromSubagent()],
+        max_fires=2,
+        signals=SHOW_SIGNALS,
+    )
+
+
+@pytest.fixture
+def probe() -> list[int]:
+    seen: list[int] = []
+
+    @on(Event.UserPromptSubmit | Event.Stop | Event.PostToolUse)
+    def probe(evt):
+        seen.append(len(evt.ctx.t))
+
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("prompt", "envelope", "fired"),
+    [
+        pytest.param(FIRST_PROMPT, TASKS_WARNING, (0, 0, ECHO_WINDOW, 0, [TASKS_NUDGE], True), id="matching"),
+        pytest.param("just fix the typo", None, None, id="nonmatching"),
+    ],
+)
+def test_first_prompt_reads_unborn_root_transcript_as_empty_history(
+    tmp_path, first_prompt_hooks, model_calls, snapshot_owner, prompt, envelope, fired
+):
+    from captain_hook.grants import store
+    from captain_hook.state import PrimitiveState
+
+    start_session(tmp_path, "startup")
+    assert unborn_allowance() == UnbornTranscript(path=str(first_root(tmp_path)))
+
+    assert submit_prompt(tmp_path, prompt) == (envelope, [])
+
+    state = SessionSlot(first_session_dir(), PrimitiveState).get()
+    assert (
+        state
+        and (
+            state.last_fired_at,
+            state.last_fired_window,
+            state.echo_window_end,
+            state.echo_window_base,
+            sorted(state.consumed),
+            bool(state.echo_lemmas),
+        )
+    ) == fired
+    assert not first_root(tmp_path).exists()
+    assert unborn_allowance() == UnbornTranscript()
+    assert model_calls == []
+    assert store.grants("words", FIRST_SESSION) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "allowance"),
+    [pytest.param("startup", UnbornTranscript(), id="startup"), pytest.param("resume", None, id="resume")],
+)
+def test_first_prompt_keeps_a_written_root_transcripts_history(
+    tmp_path, first_prompt_hooks, model_calls, snapshot_owner, source, allowance
+):
+    from captain_hook.grants import store
+
+    queued = {
+        "type": "attachment",
+        "attachment": {
+            "type": "queued_command",
+            "prompt": QUEUED_WORDS,
+            "commandMode": "prompt",
+            "origin": {"kind": "human"},
+        },
+    }
+    start_session(tmp_path, source)
+    write_transcript(first_root(tmp_path), T.user("compare the caching strategies"), T.assistant(OPTION_DUMP), queued)
+
+    assert submit_prompt(tmp_path, FIRST_PROMPT) == (TASKS_WARNING, [])
+
+    assert model_calls
+    assert all("Option 1 — refactor now" in call for call in model_calls)
+    assert [item.quote for grant in store.grants("words", FIRST_SESSION) for item in grant.evidence] == [QUEUED_WORDS]
+    assert unborn_allowance() == allowance
+
+
+@pytest.mark.parametrize("transcript_events", [None, 30], ids=["full", "tail"])
+@pytest.mark.parametrize(
+    ("messages", "first", "second", "second_gaps"),
+    [
+        pytest.param(
+            (),
+            [0, 0],
+            [],
+            [f"probe: {UNBORN_REASON}", f"background_probe: {UNBORN_REASON}"],
+            id="unborn-through-both-phases",
+        ),
+        pytest.param((T.user("first ask"), T.assistant("on it")), [0, 2], [2, 2], [], id="written-between-phases"),
+    ],
+)
+def test_unborn_root_spans_only_its_own_event_phases(
+    tmp_path, snapshot_owner, transcript_events, messages, first, second, second_gaps
+):
+    seen: list[int] = []
+
+    @on(Event.UserPromptSubmit, transcript_events=transcript_events)
+    def probe(evt):
+        seen.append(len(evt.ctx.t))
+
+    @on(Event.UserPromptSubmit, async_=True, transcript_events=transcript_events)
+    def background_probe(evt):
+        seen.append(len(evt.ctx.t))
+
+    start_session(tmp_path, "startup")
+    with first_request(tmp_path) as request:
+        _, background = dispatch_event(
+            tmp_path,
+            Event.UserPromptSubmit,
+            first_raw(tmp_path, Event.UserPromptSubmit, prompt="first ask"),
+            session_dir=first_session_dir(),
+        )
+        if messages:
+            write_transcript(first_root(tmp_path), *messages)
+        background()
+    assert (seen, request.evidence_gaps) == (first, [])
+
+    seen.clear()
+    assert submit_prompt(tmp_path, "second ask") == (None, second_gaps)
+    assert seen == second
+
+
+@pytest.mark.parametrize(
+    ("source", "born_at_start", "env"),
+    [
+        pytest.param(None, False, {}, id="no-session-start"),
+        pytest.param("resume", False, {}, id="resume"),
+        pytest.param("compact", False, {}, id="compact"),
+        pytest.param("startup", True, {}, id="written-at-startup"),
+        pytest.param("startup", False, {"CAPT_HOOK_PROVIDER": "codex"}, id="codex"),
+    ],
+)
+def test_missing_root_without_an_unborn_allowance_still_fails_open(
+    tmp_path, probe, snapshot_owner, source, born_at_start, env
+):
+    if born_at_start:
+        write_transcript(first_root(tmp_path), T.user("earlier"))
+    if source:
+        start_session(tmp_path, source, env=env)
+    first_root(tmp_path).unlink(missing_ok=True)
+
+    assert submit_prompt(tmp_path, "first ask", env=env) == (None, [f"probe: {UNBORN_REASON}"])
+    assert probe == []
+    assert unborn_allowance() is None
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param(lambda root: {"agent_id": "agent-1"}, id="lane"),
+        pytest.param(lambda root: {"transcript_path": str(root / "elsewhere.jsonl")}, id="other-path"),
+    ],
+)
+def test_unborn_allowance_binds_the_root_prompt_of_its_session(tmp_path, probe, snapshot_owner, fields):
+    start_session(tmp_path, "startup")
+
+    assert submit_prompt(tmp_path, "teammate ask", **fields(tmp_path)) == (None, [f"probe: {UNBORN_REASON}"])
+    assert unborn_allowance() == UnbornTranscript(path=str(first_root(tmp_path)))
+    assert submit_prompt(tmp_path, "first ask") == (None, [])
+    assert probe == [0]
+
+
+def test_unborn_allowance_is_spent_by_the_first_prompt_alone(tmp_path, probe, snapshot_owner):
+    start_session(tmp_path, "startup")
+
+    assert sync_event(tmp_path, Event.Stop) == [f"probe: {UNBORN_REASON}"]
+    assert sync_event(tmp_path, Event.PostToolUse, tool_name="Bash", tool_input={"command": "ls"}) == [
+        f"probe: {UNBORN_REASON}"
+    ]
+    assert submit_prompt(tmp_path, "first ask") == (None, [])
+    assert submit_prompt(tmp_path, "second ask") == (None, [f"probe: {UNBORN_REASON}"])
+    assert probe == [0]
+    assert unborn_allowance() == UnbornTranscript()
+
+
+def test_unborn_root_keeps_failing_for_a_session_with_registered_transcripts(tmp_path, probe, snapshot_owner):
+    start_session(tmp_path, "startup")
+    register_transcript(
+        FIRST_SESSION, provider="codex", path=str(write_apply_patch_rollout(tmp_path / "r.jsonl", "thread-first"))
+    )
+
+    assert submit_prompt(tmp_path, "first ask") == (None, [f"probe: {UNBORN_REASON}"])
+    assert probe == []
+    assert unborn_allowance() == UnbornTranscript()
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        pytest.param("deadline", "foreground transcript deadline exhausted", id="deadline"),
+        pytest.param("changed", "Not a directory (os error 20)", id="changed"),
+    ],
+)
+def test_unborn_root_keeps_other_fail_open_statuses(tmp_path, probe, status, reason):
+    def incomplete(path):
+        raise EvidenceIncomplete(status, reason)
+
+    start_session(tmp_path, "startup")
+
+    assert submit_prompt(tmp_path, "first ask", transcript_loader=incomplete) == (None, [f"probe: {status}: {reason}"])
+    assert probe == []
+    assert unborn_allowance() == UnbornTranscript()
+
+
+@pytest.mark.parametrize(
+    ("error", "raised"),
+    [
+        pytest.param(
+            EvidenceIncomplete("permission_denied", "Permission denied (os error 13)"),
+            EvidenceIncomplete,
+            id="permission",
+        ),
+        pytest.param(EvidenceIncomplete("parse_error", 'Key("timestamp")'), EvidenceIncomplete, id="parse-error"),
+        pytest.param(
+            SnapshotProtocolError("snapshot frame exceeds encoded byte bound"), SnapshotProtocolError, id="protocol"
+        ),
+        pytest.param(
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), TranscriptLoadError, id="decode"
+        ),
+    ],
+)
+def test_unborn_root_still_raises_visible_evidence_errors(tmp_path, probe, error, raised):
+    def failing(path):
+        raise error
+
+    start_session(tmp_path, "startup")
+
+    with pytest.raises(raised) as caught:
+        submit_prompt(tmp_path, "first ask", transcript_loader=failing)
+    assert type(caught.value) is raised
+    assert probe == []
+    assert unborn_allowance() == UnbornTranscript()
+
+
+def test_unborn_root_reads_a_malformed_written_file_as_an_error(tmp_path, probe, snapshot_owner):
+    start_session(tmp_path, "startup")
+    first_root(tmp_path).parent.mkdir(parents=True)
+    first_root(tmp_path).write_text(json.dumps({"type": "user", "message": {"content": "no timestamp"}}) + "\n")
+
+    with pytest.raises(EvidenceIncomplete) as caught:
+        submit_prompt(tmp_path, "first ask")
+    assert caught.value.status == "parse_error"
+    assert probe == []
+
+
+def test_unborn_allowance_is_claimed_once_across_threads_and_processes(tmp_path):
+    session_dir = ensure_session(SessionId("s-claim"))
+    path = str(tmp_path / "absent.jsonl")
+    record_unborn(session_dir, path)
+    script = (
+        "import sys; from pathlib import Path; from captain_hook.transcripts import claim_unborn; "
+        "print(claim_unborn(Path(sys.argv[1]), sys.argv[2]))"
+    )
+    processes = [
+        subprocess.Popen([sys.executable, "-c", script, str(session_dir), path], stdout=subprocess.PIPE, text=True)
+        for _ in range(4)
+    ]
+    with ThreadPoolExecutor(4) as pool:
+        threads = list(pool.map(lambda _: claim_unborn(session_dir, path), range(4)))
+    children = [process.communicate(timeout=60)[0].strip() for process in processes]
+
+    assert set(children) <= {"True", "False"}
+    assert sorted([*threads, *(child == "True" for child in children)]) == [False] * 7 + [True]
+    assert SessionSlot(session_dir, UnbornTranscript).get() == UnbornTranscript()
+
+
+@pytest.mark.parametrize("transcript_events", [None, 30], ids=["full", "tail"])
+def test_a_root_seen_written_never_reads_as_unborn_again(tmp_path, snapshot_owner, transcript_events):
+    seen: list[int] = []
+
+    @on(Event.UserPromptSubmit, transcript_events=transcript_events)
+    def probe(evt):
+        seen.append(len(evt.ctx.t))
+
+    @on(Event.UserPromptSubmit, async_=True, transcript_events=transcript_events)
+    def background_probe(evt):
+        seen.append(len(evt.ctx.t))
+
+    start_session(tmp_path, "startup")
+    write_transcript(first_root(tmp_path), T.user("first ask"), T.assistant("on it"))
+    with first_request(tmp_path) as request:
+        _, background = dispatch_event(
+            tmp_path,
+            Event.UserPromptSubmit,
+            first_raw(tmp_path, Event.UserPromptSubmit, prompt="first ask"),
+            session_dir=first_session_dir(),
+        )
+        first_root(tmp_path).unlink()
+        background()
+
+    assert (seen, request.evidence_gaps) == ([2], [f"background_probe: {UNBORN_REASON}"])
+    assert unborn_allowance() == UnbornTranscript()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [pytest.param("not valid json {{{", id="malformed"), pytest.param('{"path": 3}', id="wrong-type")],
+)
+def test_a_corrupt_unborn_allowance_raises_instead_of_granting(tmp_path, probe, snapshot_owner, content):
+    from pydantic import ValidationError
+
+    start_session(tmp_path, "startup")
+    SessionSlot(first_session_dir(), UnbornTranscript).path.write_text(content)
+
+    with pytest.raises(ValidationError):
+        submit_prompt(tmp_path, "first ask")
+    assert probe == []
+
+
+def test_a_failed_allowance_write_fails_the_startup(tmp_path, monkeypatch):
+    def unwritable(path, text):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("captain_hook.session.atomic_write", unwritable)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        start_session(tmp_path, "startup")
+    assert unborn_allowance() is None
+
+
+STEERING_GATE = "steering.steering:llm_gate_ff3aaa43"
+
+
+@pytest.fixture
+def steering_gate(isolate_modules, model_calls) -> None:
+    import captain_hook
+    from captain_hook.app import _state
+    from captain_hook.loader import discover_pack
+
+    discover_pack("steering", Path(captain_hook.__file__).parent / "builtin_packs" / "steering" / "hooks")
+    _state.hooks[:] = [hook for hook in _state.hooks if hook.name == STEERING_GATE]
+
+
+@pytest.mark.parametrize(
+    ("event", "fields", "skipped"),
+    [
+        pytest.param(Event.SubagentStop, {"agent_type": ""}, True, id="subagent-stop-explicit-empty"),
+        pytest.param(Event.SubagentStop, {}, False, id="subagent-stop-absent"),
+        pytest.param(Event.SubagentStop, {"agent_type": "general-purpose"}, False, id="subagent-stop-typed"),
+        pytest.param(Event.Stop, {"agent_type": ""}, False, id="stop-explicit-empty"),
+        pytest.param(
+            Event.PostToolUse,
+            {"agent_type": "", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+            False,
+            id="post-tool-use-explicit-empty",
+        ),
+    ],
+)
+def test_steering_gate_skips_an_untyped_subagent_stop_before_any_transcript_read(
+    tmp_path, steering_gate, model_calls, snapshot_owner, event, fields, skipped
+):
+    from captain_hook.app import _state
+    from captain_hook.transcripts import load_transcript
+    from captain_hook.types import InPlanMode, Waiting
+
+    loads: list[str] = []
+
+    def load(path):
+        loads.append(str(path))
+        return load_transcript(path)
+
+    lane = tmp_path / "projects" / FIRST_SESSION / "subagents" / "agent-lane.jsonl"
+    stop = {"agent_id": "agent-lane", "agent_transcript_path": str(lane)} if event is Event.SubagentStop else {}
+    source = lane if event is Event.SubagentStop else first_root(tmp_path)
+    with first_request(tmp_path) as request:
+        envelope, _ = dispatch_event(
+            tmp_path,
+            event,
+            first_raw(tmp_path, event, **stop, **fields),
+            session_dir=first_session_dir(),
+            transcript_loader=load,
+        )
+
+    (gate,) = _state.hooks
+    assert (gate.name, gate.spec.skip_if) == (STEERING_GATE, (Waiting(), InPlanMode()))
+    assert [type(condition.condition).__name__ for condition in gate.spec.only_if] == ["UntypedSubagentStop"]
+    assert (envelope, model_calls) == (None, [])
+    assert (loads, request.evidence_gaps) == (
+        ([], []) if skipped else ([str(source)], [f"{STEERING_GATE}: {UNBORN_REASON}"])
+    )

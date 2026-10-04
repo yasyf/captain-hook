@@ -458,7 +458,16 @@ class RegisteredTranscripts(BaseModel):
     entries: list[RegisteredTranscript] = Field(default_factory=list)
 
 
+class UnbornTranscript(BaseModel):
+    """The root transcript a session's ``startup`` found not yet written, until its first prompt claims it."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str | None = None
+
+
 SessionStore.track(HookState)
 SessionStore.track(PrimitiveState)
 SessionStore.track(SeenKeys)
 SessionStore.track(RegisteredTranscripts)
+SessionStore.track(UnbornTranscript)
