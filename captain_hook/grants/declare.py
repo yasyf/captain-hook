@@ -368,13 +368,16 @@ class Grants:
             )
         else:
             approval = relied[0].key or relied[0].id
+            uses = verdict.uses or self.mint
             grant = self.grant(
                 evt,
                 scope=scope,
                 evidence=relied,
-                uses=verdict.uses or self.mint,
+                uses=uses,
                 ttl=self.ttl,
-                approved=dict(action.payload) if action.payload and scope == self.canonical(action) else None,
+                approved=dict(action.payload)
+                if uses == 1 and action.payload and scope == self.canonical(action)
+                else None,
                 source_key=approval if self.judge is not None else f"{approval}{scope_key(scope)}",
                 across_trees=self.judge is None,
             )
