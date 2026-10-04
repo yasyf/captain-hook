@@ -17,6 +17,7 @@ from captain_hook.dispatch import denies, execute_hook
 from captain_hook.events import PreToolUseEvent
 from captain_hook.grants import (
     Allowed,
+    Asked,
     ContentMatches,
     Denied,
     Evidence,
@@ -967,3 +968,64 @@ def test_queued_words_record_from_a_turn_over_the_record_bound(tmp_path: Path) -
     record_queued_words(evt)
 
     assert [item.quote for item in evidence_module.recorded(evt, "words")] == ["ship it once the build is green"]
+
+
+def oversized_owner_session(bulk: list[dict[str, Any]]) -> Any:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    question = "Post the release summary in #releases?"
+    questions = [{"question": question, "header": "Post", "multiSelect": False, "options": [{"label": "Post it"}]}]
+    ask = T.tool("AskUserQuestion", questions=questions)
+    queued = {
+        "type": "attachment",
+        "attachment": {
+            "type": "queued_command",
+            "prompt": "keep the thread short",
+            "commandMode": "prompt",
+            "origin": {"kind": "human"},
+        },
+    }
+    answer = T.user(
+        T.result(f'The user answered: "{question}"="Post it".', of=ask),
+        toolUseResult={"questions": questions, "answers": {question: "Post it"}, "annotations": {}},
+    )
+    return disk_fixture_session([T.user("draft the release summary"), T.assistant(ask), *bulk, answer, queued])
+
+
+def owner_evidence_of(transcript: Any, tmp_path: Path) -> tuple[list[str], list[str]]:
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    evt = PreToolUseEvent(_raw={"session_id": TREE}, ctx=HookContext(SessionStore(tmp_path), transcript, None))
+    action = Proposal(scope={})
+    return [item.quote for item in OwnerWords().collect(evt, action)], [
+        item.quote for item in Asked().collect(evt, action)
+    ]
+
+
+def test_owner_evidence_reads_a_recent_window_over_the_record_bound(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+
+    transcript = oversized_owner_session([T.assistant("x" * 300_000) for _ in range(5)])
+
+    words, answers = owner_evidence_of(transcript, tmp_path)
+
+    assert words == ["draft the release summary", "keep the thread short"]
+    assert answers == ["Post it"]
+
+
+def test_owner_evidence_skips_one_event_over_the_record_bound_with_a_gap(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.util import reqenv
+
+    transcript = oversized_owner_session([T.assistant("small"), T.assistant("x" * 1_200_000), T.assistant("small")])
+    request = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id=TREE)
+
+    with reqenv.use_request(request):
+        words, answers = owner_evidence_of(transcript, tmp_path)
+
+    assert words == ["draft the release summary", "keep the thread short"]
+    assert answers == ["Post it"]
+    assert request.evidence_gaps
+    assert all(gap.startswith("transcript event: output_limit: ") for gap in request.evidence_gaps)
