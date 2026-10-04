@@ -81,8 +81,10 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   each pushed branch's open PR and read their queue state in one `ccx vcs pr status --json` call.
   A queued PR that receives any head but the commit the queue admitted is refused. The queue
   lands that commit and drops the rest, so the refusal names `ccx vcs stack new <name>` and
-  `ccx vcs ship` to put the change in a stacked PR instead. `# ccx:raw` or `CAPT_HOOK_CCX_RAW=1`
-  pushes anyway, and a lookup that fails or times out allows the push.
+  `ccx vcs ship` to put the change in a stacked PR instead. When the queued PR is only a parent
+  that a `ccx vcs ship` would push along with its downstack, the refusal names
+  `ccx vcs ship --tip-only` instead, which pushes only the shipped branch. `# ccx:raw` or
+  `CAPT_HOOK_CCX_RAW=1` pushes anyway, and a lookup that fails or times out allows the push.
 
 Two more activate by language, detected from the repo's build manifests:
 

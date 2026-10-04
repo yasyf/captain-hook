@@ -69,6 +69,10 @@ def parsed(argv: list[str], cwd: Path) -> object | None:
     return None if (out := run(argv, cwd)) is None else json.loads(out)
 
 
+def flag_names(call: Call) -> set[str]:
+    return {flag.split("=", 1)[0] for flag in call.flags}
+
+
 def option(args: tuple[str, ...], names: tuple[str, ...]) -> str | None:
     for index, arg in enumerate(args):
         name, eq, value = arg.partition("=")
@@ -112,7 +116,7 @@ def refspec_push(call: Call, session_cwd: Path | None, spec: str) -> list[Push]:
 
 
 def git_pushes(call: Call, session_cwd: Path | None) -> list[Push]:
-    flags = {flag.split("=", 1)[0] for flag in call.flags}
+    flags = flag_names(call)
     if flags & PUSH_SKIPS or not call.targets.complete:
         return []
     specs = [target.value for target in call.targets.targets[2:]]
@@ -152,7 +156,7 @@ def tip_only_pushes(call: Call, session_cwd: Path | None, flags: set[str]) -> li
 
 
 def ship_pushes(call: Call, session_cwd: Path | None) -> list[Push] | None:
-    flags = {flag.split("=", 1)[0] for flag in call.flags}
+    flags = flag_names(call)
     if "--no-push" in flags:
         return []
     if "--tip-only" in flags:
@@ -184,6 +188,13 @@ def planner(call: Call) -> Callable[[Call, Path | None], list[Push] | None] | No
             return stack_submit_pushes
         case _:
             return None
+
+
+def tip_only_clears(call: Call, session_cwd: Path | None, found: list[Push]) -> bool:
+    if planner(call) is not ship_pushes or "--tip-only" in (flags := flag_names(call)):
+        return False
+    kept = {push.branch for push in tip_only_pushes(call, session_cwd, flags)}
+    return all(push.branch not in kept for push in found)
 
 
 def moves_heads(call: Call) -> bool:
@@ -257,6 +268,7 @@ def holds(cwd: Path, planned: list[Push]) -> tuple[list[Push], list[str]]:
 def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
     held: list[Push] = []
     unverified: list[str] = []
+    downstack_only = True
     moved = False
     for call in evt.cmd.calls():
         if (
@@ -268,6 +280,7 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
             found, missed = holds(cwd, [Push(push.branch, None) for push in planned] if moved else planned)
             held += found
             unverified += missed
+            downstack_only = downstack_only and (not found or tip_only_clears(call, evt.cwd, found))
         moved = moved or moves_heads(call)
     if not held and unverified:
         return evt.block(
@@ -278,7 +291,10 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
     if not held:
         return None
     branches = ", ".join(dict.fromkeys(f"`{push.branch}`" for push in held))
-    return evt.block(
-        f"The Graphite merge queue holds {branches} and drops anything pushed after admission. "
-        "Ship the change as a stacked PR: run `ccx vcs stack new <name>` from that branch."
+    remedy = (
+        "This ship pushes its downstack too; rerun it as `ccx vcs ship --tip-only`, which pushes only "
+        "the branch it ships and leaves the queued parent at its admitted head."
+        if downstack_only
+        else "Ship the change as a stacked PR: run `ccx vcs stack new <name>` from that branch."
     )
+    return evt.block(f"The Graphite merge queue holds {branches} and drops anything pushed after admission. {remedy}")
