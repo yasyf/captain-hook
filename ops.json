@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"ops":[{"kind":"set_criterion_status","id":"8a1f502ffa8beede8065945001405e59","status":"met","note":"PR317@7e027a80;16 CI jobs plus Guides passed. Root merged9633 with exact composed tree d47b560f. Publication receipt6060281c."}]}
+{"v":1,"lamport":4,"ops":[{"kind":"set_criterion_status","id":"2fe4f377773087004be2043630f910c5","status":"met","note":"Autobump actual12.88.11 tuple b8704c83 and full release verification9e84523f passed; all10 actor/dependency files unchanged, installer13source bound. No Sprite12.88.9 recapture."}]}
