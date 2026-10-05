@@ -173,6 +173,12 @@ def environs(monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable
 
 
 @pytest.fixture(autouse=True)
+def home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    return tmp_path / "home"
+
+
+@pytest.fixture(autouse=True)
 def rulings(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, Any]]]:
     answers: dict[str, list[dict[str, Any]]] = {}
     monkeypatch.setattr(evidence_module, "ccn_answers", lambda evt, term: answers.get(term, []))
@@ -684,6 +690,36 @@ STOP_DENIED = (
 )
 
 
+def minutes_ago(minutes: int) -> datetime:
+    return datetime.now(UTC) - timedelta(minutes=minutes)
+
+
+def mailbox_of(home: Path, task: str, *messages: tuple[str, str, datetime]) -> None:
+    lane, _, team = task.partition("@")
+    mailbox = home / ".claude" / "teams" / team / "inboxes" / f"{lane}.json"
+    mailbox.parent.mkdir(parents=True, exist_ok=True)
+    mailbox.write_text(
+        json.dumps(
+            [
+                {
+                    "from": sender,
+                    "text": text,
+                    "timestamp": at.isoformat().replace("+00:00", "Z"),
+                    "msg_id": f"m{index}",
+                }
+                for index, (sender, text, at) in enumerate(messages)
+            ]
+        )
+    )
+
+
+def with_count(denied: str, count: int) -> str:
+    return (
+        f"{denied} It has {count} STAND-DOWN message(s) from the root; 2, the second at least 5 minutes old, lift "
+        "this block."
+    )
+
+
 class TestStopTool:
     def test_the_observed_bare_task_id_is_denied(self, general_pack: None, tmp_path: Path) -> None:
         assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
@@ -779,8 +815,91 @@ class TestStopTool:
         self, general_pack: None, tmp_path: Path, task_id: str, fields: dict[str, Any]
     ) -> None:
         denied = decide_input(stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
-        assert denied == STOP_DENIED.replace("wcn64vfub", task_id)
+        plain = STOP_DENIED.replace("wcn64vfub", task_id)
+        assert denied == (plain if "@" not in task_id else with_count(plain, 0))
         assert spends("sessions.task-stop") == []
+
+
+OBSERVED_STAND_DOWNS = (
+    ("team-lead", "STAND-DOWN, root 1:0x AM PT: cc-inbox-2 owns the cutover.", minutes_ago(300)),
+    ("cc-inbox-2", "cc-inbox-2 here: I am your successor.", minutes_ago(299)),
+    ("team-lead", "STAND-DOWN, second notice, root 1:4x AM PT: stop pushing.", minutes_ago(260)),
+    ("team-lead", "STAND-DOWN (fourth notice, root 1:5x AM PT): close #10.", minutes_ago(250)),
+)
+
+
+class TestStoodDownLane:
+    def test_a_lane_that_ignored_two_stand_downs_stops_and_records_its_spend(
+        self, general_pack: None, tmp_path: Path, home: Path
+    ) -> None:
+        task = "cc-inbox@session-67c0e5da"
+        mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
+        assert decide_input(stop({"task_id": task}), tmp_path) is None
+        assert decide_input(stop({"task_id": task}), tmp_path, event=Event.PermissionRequest) is None
+        assert spends("sessions.task-stop") == [("committed", f"stop task {task}", ["stand-down:m2"])]
+
+    def test_a_lane_stood_down_once_stays_protected_and_the_block_counts_the_notice(
+        self, general_pack: None, tmp_path: Path, home: Path
+    ) -> None:
+        task = "sweepers-delete@session-67c0e5da"
+        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0])
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 1)
+        assert spends("sessions.task-stop") == []
+
+    def test_a_second_notice_under_five_minutes_old_holds_the_block(
+        self, general_pack: None, tmp_path: Path, home: Path
+    ) -> None:
+        task = "cc-inbox@session-67c0e5da"
+        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0], ("team-lead", "STAND-DOWN again.", minutes_ago(4)))
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 2)
+
+    @pytest.mark.parametrize(
+        "second",
+        [
+            pytest.param(("cc-inbox-2", "STAND-DOWN: stop.", minutes_ago(60)), id="a-peer-sent-it"),
+            pytest.param(("team-lead", "Please do not STAND-DOWN yet.", minutes_ago(60)), id="not-a-stand-down"),
+        ],
+    )
+    def test_only_the_roots_stand_down_messages_count(
+        self, general_pack: None, tmp_path: Path, home: Path, second: tuple[str, str, datetime]
+    ) -> None:
+        task = "cc-inbox@session-67c0e5da"
+        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0], second)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 1)
+
+    def test_one_notice_copied_twice_counts_once(self, general_pack: None, tmp_path: Path, home: Path) -> None:
+        task = "cc-inbox@session-67c0e5da"
+        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0])
+        mailbox = home / ".claude" / "teams" / "session-67c0e5da" / "inboxes" / "cc-inbox.json"
+        notice = json.loads(mailbox.read_text())[0]
+        mailbox.write_text(json.dumps([notice, notice]))
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 1)
+
+    def test_a_torn_mailbox_counts_no_notices(self, general_pack: None, tmp_path: Path, home: Path) -> None:
+        task = "cc-inbox@session-67c0e5da"
+        mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
+        mailbox = home / ".claude" / "teams" / "session-67c0e5da" / "inboxes" / "cc-inbox.json"
+        mailbox.write_text(mailbox.read_text()[:40])
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 0)
+
+    def test_a_lane_never_takes_the_stand_down_lift(self, general_pack: None, tmp_path: Path, home: Path) -> None:
+        task = "cc-inbox@session-67c0e5da"
+        mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
+        assert decide_input(stop({"task_id": task}, agent_id="lane-1"), tmp_path) is not None
+        assert spends("sessions.task-stop") == []
+
+    def test_a_task_that_is_not_a_teammate_id_reads_no_mailbox(
+        self, general_pack: None, tmp_path: Path, home: Path
+    ) -> None:
+        mailbox_of(home, "cc-inbox@session-67c0e5da", *OBSERVED_STAND_DOWNS)
+        assert decide_input(stop({"task_id": "cc-inbox"}), tmp_path) == STOP_DENIED.replace("wcn64vfub", "cc-inbox")
+
+    def test_stand_downs_in_another_teams_mailbox_lift_nothing(
+        self, general_pack: None, tmp_path: Path, home: Path
+    ) -> None:
+        mailbox_of(home, "cc-inbox@session-756e25cc", *OBSERVED_STAND_DOWNS)
+        task = "cc-inbox@session-67c0e5da"
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 0)
 
 
 class TestTerminalClose:

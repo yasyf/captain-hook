@@ -703,6 +703,15 @@ the calling session and agent. Both child record kinds stay in their own tree
 during coordinator adoption. These lifts share the two-minute identical-retry
 window of `sessions.task-stop`.
 
+`StoodDown` lifts a `TaskStop` on a teammate the root has told to stand down twice.
+The task id must match `<name>@session-<8 hex>`, and only the root session takes
+the lift. The hook reads the teammate's own mailbox at
+`~/.claude/teams/<team>/inboxes/<name>.json` and counts messages from `team-lead`
+whose text begins with `STAND-DOWN`. The second notice must be at least five
+minutes old. Messages from peers and texts that merely mention a stand-down do not
+count. The block message for a teammate id reports how many notices the mailbox
+holds.
+
 `sessions.close` also accepts live `CreatedHere` evidence when all checks pass:
 
 - This session's transcript shows `orca terminal create` as the only command in

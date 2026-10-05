@@ -16,6 +16,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_ruling,
     inline_spawn,
     lift,
+    stand_down_count,
 )
 from captain_hook.grants import Proposal
 
@@ -117,5 +118,6 @@ def stop_unverified_task(evt: ToolRewriteEvent) -> HookResult | None:
     )
     if target is None:
         return evt.block(message)
+    message += stand_down_count(target[1])
     action = Proposal(scope={"task": target[1]}, summary=f"stop {target[0]} {target[1]}")
     return block_first(evt, (lift(evt, TASK_STOP, action, message),))
