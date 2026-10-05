@@ -132,6 +132,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install, the deploy, and the host ping. Brew's output and `package-install`'s stderr
   appear live, and each failure written to the update log is also printed. The final
   error gives the update log's path. The background updater still captures output.
+- **`capt-hookd package-install` converges on a slow link.** Installing the capt-hook
+  tool env shared the command's 3-minute lifecycle budget, so on a slow connection the
+  89 MiB `claude-agent-sdk` wheel download outlasted it, the context SIGKILLed
+  `uv tool install`, and the host stayed on its previous build. The tool env now gets
+  its own 15-minute budget, and the 3-minute budget starts once it is in place, still
+  bounding quiesce, supersede, activation, and the broker ping.
 - **The session guard lets agents quit apps that host no session.** `osascript` that
   quits a named application was blocked for every app, including Slack. The guard now
   blocks only terminals, editors, Orca, Captain Hook, tmux, and any app whose process

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/yasyf/daemonkit"
-	"github.com/yasyf/daemonkit/artifact"
 	"github.com/yasyf/daemonkit/deploy"
 	"github.com/yasyf/daemonkit/launchd"
 )
@@ -141,13 +140,6 @@ func openDeployment(appPath string) (*deploy.Deployment, error) {
 }
 
 func applyPackagedApplication(ctx context.Context) error {
-	store, err := artifact.DefaultStore()
-	if err != nil {
-		return err
-	}
-	if _, err := store.Resolve(ctx, productToolDescriptor()); err != nil {
-		return fmt.Errorf("captain package: install the capt-hook %s tool env: %w", Build, err)
-	}
 	source, err := packagedApplicationPath()
 	if err != nil {
 		return err
