@@ -97,17 +97,23 @@ def run_spec(
     timeout: int,
     attempts: int | None,
     tools: tuple[str, ...] | None,
+    env: dict[str, str] | None = None,
 ) -> str | BaseModel:
-    from spawnllm import ClaudeConfig, RunSpec, run_sync
+    from spawnllm import ClaudeConfig, CodexConfig, RunSpec, run_sync
 
+    configs: dict[str, ClaudeConfig | CodexConfig] = {} if tools is None else {"claude": ClaudeConfig(tools=tools)}
+    if env is not None and backend.provider == "codex":
+        configs["codex"] = CodexConfig(bypass_approvals_and_sandbox=True)
     spec = RunSpec(
         prompt=prompt,
         model=backend.resolve_model(model),
         response_model=response_model,
         agent=agent,
         cwd=cwd,
+        env=env,
+        api_auth=env is not None,
         timeout=timeout,
-        provider_configs={} if tools is None else {"claude": ClaudeConfig(tools=tools)},
+        provider_configs=configs,
         **({} if attempts is None else {"max_attempts": attempts}),
     )
     resp = run_sync(spec, backend=backend)
@@ -497,8 +503,13 @@ class HookContext:
         """
         from spawnllm import BackendCallError, call_sync, extract_sync
 
+        from captain_hook import actor
+
         reqenv.checkpoint()
-        serving = backend or ready_backend(specialty, model)
+        if (judge := actor.ACTOR) is not None:
+            serving, judged, actor_env = judge.route(backend, model)
+        else:
+            serving, judged, actor_env = backend or ready_backend(specialty, model), model, None
         reqenv.checkpoint()
         if reqenv.deadline_within(0):
             raise TimeoutError("the caller deadline passed before the model call")
@@ -516,6 +527,23 @@ class HookContext:
         if evidence:
             self.release_preparation(prompt)
         cwd = resolve_project_dir()
+        if judge is not None:
+            once, limit = actor.single_attempt(attempts), actor.inference_timeout(timeout)
+            return actor.judged(
+                lambda: run_spec(
+                    prompt,
+                    serving,
+                    judged,
+                    response_model,
+                    agent=agent,
+                    cwd=cwd,
+                    timeout=limit,
+                    attempts=once,
+                    tools=tools,
+                    env=actor_env,
+                ),
+                serving,
+            )
         timeout = reqenv.clamp_timeout(timeout)
         try:
             if attempts is not None or tools is not None:

@@ -128,8 +128,54 @@ def evaluate() -> None:
         json.dump(response.message(), reply)
 
 
+def evaluate_actor(provider: str) -> None:
+    """Answer one event for a remote API-key actor, then finish its background hooks before exiting.
+
+    The actor's API keys move from this process's environment into the judge it calls, so no
+    hook command or git child inherits them, and the reply is the same ``EventResponse`` a host
+    worker returns.
+    """
+    from captain_hook import actor
+
+    actor.capture(provider)
+    from captain_hook.worker.protocol import OP_EVENT, PROTOCOL, decode_event
+
+    request = decode_event({"protocol": PROTOCOL, "op": OP_EVENT, "id": 1, "request": json.load(sys.stdin)})
+    if request.deadline_unix_ms <= 0:
+        raise SystemExit("capt-hook: an actor's event request carries no deadline")
+    from captain_hook.log import setup_logging
+
+    setup_logging(json.loads(request.payload_raw).get("session_id"))
+    reply = os.fdopen(os.dup(sys.stdout.fileno()), "w")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    from captain_hook.daemon.context import install_context_io
+    from captain_hook.snapshots.client import client_scope
+    from captain_hook.worker.runtime import ProductRuntime
+    from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
+
+    bound_transcript_parse_pool()
+    skip_bundled_cli_version_probe()
+    install_context_io()
+    runtime = ProductRuntime(install_writer=False, nlp_warmer=lambda: None)
+    try:
+        with client_scope() as client:
+            token = BACKGROUND_SNAPSHOT_CLIENT.set(client)
+            try:
+                response, background = runtime.dispatch(request)
+                with reply:
+                    json.dump(response.message(), reply)
+                if background is not None:
+                    background()
+            finally:
+                BACKGROUND_SNAPSHOT_CLIENT.reset(token)
+    finally:
+        runtime.close()
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["evaluate"]:
         evaluate()
+    elif sys.argv[1:2] == ["evaluate-actor"] and len(sys.argv) == 3:
+        evaluate_actor(sys.argv[2])
     else:
         main()
