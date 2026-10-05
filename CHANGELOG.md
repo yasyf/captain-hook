@@ -144,6 +144,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uv tool install`, and the host stayed on its previous build. The tool env now gets
   its own 15-minute budget, and the 3-minute budget starts once it is in place, still
   bounding quiesce, supersede, activation, and the broker ping.
+- **Self-updates wait until uv can resolve the new version.** PyPI index lag made the
+  12.88.0 update fail with `No solution found` after publishing succeeded.
+  `capt-hookd package-install` now probes uv every 5 seconds for up to 10 minutes before
+  installing, honoring uv's configured indexes and local wheelhouses. A tool env already
+  installed for this build skips the wait, and `capt-hook helper install` names it in its
+  progress line.
 - **The session guard lets agents quit apps that host no session.** `osascript` that
   quits a named application was blocked for every app, including Slack. The guard now
   blocks only terminals, editors, Orca, Captain Hook, tmux, and any app whose process
