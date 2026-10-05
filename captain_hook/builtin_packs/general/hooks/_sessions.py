@@ -35,6 +35,7 @@ from captain_hook.grants import (
     Proposal,
     Rulings,
     StandingRulings,
+    store,
 )
 from captain_hook.grants.evidence import EvidenceSource, children, names
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
@@ -205,6 +206,10 @@ OWNER_NAMED_RULES = (
 )
 OWNER_NAMED_TTL = timedelta(hours=1)
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
+STAND_DOWN = re.compile(r"\s*STAND-DOWN\b", re.IGNORECASE)
+STAND_DOWN_SENDER = "team-lead"
+STAND_DOWN_NOTICES = 2
+STAND_DOWN_AGE = timedelta(minutes=5)
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_ORCA_CLI = (
@@ -1237,6 +1242,70 @@ class OwnTeammate:
 
 
 @dataclass(frozen=True, slots=True)
+class StandDown:
+    id: str
+    at: datetime
+    text: str
+
+
+def stand_downs(task: str) -> list[StandDown]:
+    """The root's distinct STAND-DOWN messages in teammate *task*'s own mailbox, oldest first.
+
+    The mailbox is rewritten by the harness while a lane runs, so a torn read counts as no notices.
+    """
+    lane, _, team = task.partition("@")
+    mailbox = Path.home() / ".claude" / "teams" / team / "inboxes" / f"{lane}.json"
+    if TEAMMATE_TASK.fullmatch(task) is None or not mailbox.is_file():
+        return []
+    try:
+        messages = json.loads(mailbox.read_text())
+    except (OSError, ValueError):
+        return []
+    notices = {
+        message["msg_id"]: StandDown(message["msg_id"], datetime.fromisoformat(message["timestamp"]), message["text"])
+        for message in messages
+        if message["from"] == STAND_DOWN_SENDER and STAND_DOWN.match(message["text"])
+    }
+    return sorted(notices.values(), key=lambda notice: notice.at)
+
+
+def stand_down_remedy(task: str) -> str | None:
+    """What an agent can do about a blocked stop of teammate *task*, or ``None`` for a task id that is no teammate."""
+    if TEAMMATE_TASK.fullmatch(task) is None:
+        return None
+    return (
+        f"Let it finish, ask the owner to end it, or send a second STAND-DOWN and wait "
+        f"{STAND_DOWN_AGE // timedelta(minutes=1)} minutes (it has {len(stand_downs(task))})."
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StoodDown:
+    """A teammate the root told to stand down twice, the second notice at least five minutes ago."""
+
+    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
+        task = action.scope["task"]
+        notices = stand_downs(task) if spawning_root(evt) else []
+        if len(notices) < STAND_DOWN_NOTICES:
+            return []
+        second = notices[STAND_DOWN_NOTICES - 1]
+        if store.now() - second.at < STAND_DOWN_AGE:
+            return []
+        return [
+            Evidence(
+                id=f"stand-down:{second.id}",
+                source="stand-down",
+                quote=clip(second.text, 200),
+                said_at=second.at,
+                detail=f"the root sent {task} {len(notices)} STAND-DOWN messages and the second is at least "
+                f"{STAND_DOWN_AGE // timedelta(minutes=1)} minutes old",
+                key=f"stand-down:{task}/{second.id}",
+                live=True,
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
 class OwnShell:
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
         return children(evt, "shell", action.scope["task"])
@@ -1284,10 +1353,11 @@ LAUNCHD_STOP = Grants(
 TASK_STOP = Grants(
     "sessions.task-stop",
     ("task",),
-    evidence=(OwnTeammate(), OwnShell(), rulings_naming("task")),
+    evidence=(OwnTeammate(), OwnShell(), StoodDown(), rulings_naming("task")),
     replay=RETRY_WINDOW,
-    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
-    "this agent started, or have the owner name the task id in a cc-notes answer before the stopping session starts.",
+    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, a teammate the root "
+    "told to stand down twice, or a background shell this agent started, or have the owner name the task id in a "
+    "cc-notes answer before the stopping session starts.",
     hook="sessions",
 )
 
