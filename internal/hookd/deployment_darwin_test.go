@@ -67,9 +67,9 @@ func TestPackageInstallAbortsBeforeTheAppWhenTheToolEnvFails(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("DAEMONKIT_HOME", home)
 	t.Setenv("PATH", t.TempDir())
-	err = applyPackagedApplication(t.Context())
+	err = installPackage(installProductToolEnv, applyPackagedApplication, packageToolEnvTimeout, packageLifecycleTimeout)
 	if err == nil || !strings.Contains(err.Error(), "install the capt-hook "+Build+" tool env") {
-		t.Fatalf("applyPackagedApplication without uv = %v, want the tool env failure", err)
+		t.Fatalf("installPackage without uv = %v, want the tool env failure", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, "Applications")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("package-install touched ~/Applications after the tool env failed: %v", err)

@@ -27,6 +27,11 @@ const (
 	// them. A budget that cannot hold that drain fails on exactly the machine
 	// the command exists to repair.
 	packageLifecycleTimeout = 3 * time.Minute
+
+	// packageToolEnvTimeout bounds installing this build's capt-hook tool env
+	// ahead of the install lifecycle. Nothing is disrupted yet, and its wheels
+	// outlast packageLifecycleTimeout on a slow link.
+	packageToolEnvTimeout = 15 * time.Minute
 )
 
 // Main executes one capt-hookd client or host command and returns its exit code.
@@ -346,13 +351,23 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), packageLifecycleTimeout)
-	defer cancel()
-	if err := applyPackagedApplication(ctx); err != nil {
+	err := installPackage(installProductToolEnv, applyPackagedApplication, packageToolEnvTimeout, packageLifecycleTimeout)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func installPackage(toolEnv, apply func(context.Context) error, toolEnvTimeout, lifecycleTimeout time.Duration) error {
+	toolEnvCtx, cancel := context.WithTimeout(context.Background(), toolEnvTimeout)
+	defer cancel()
+	if err := toolEnv(toolEnvCtx); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeout)
+	defer cancel()
+	return apply(ctx)
 }
 
 func packageUninstallCommand(args []string, stderr io.Writer) int {

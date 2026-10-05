@@ -36,8 +36,8 @@ def install() -> None:
         brew(["reinstall", "--formula", FORMULA], stream=True)
     cellar = cellar_version()
     click.echo(
-        f"Landing Captain Hook {cellar} and restarting the host. "
-        "This can take up to about 3 minutes while uv installs the tool env...",
+        f"Landing Captain Hook {cellar}: up to 15 minutes while uv installs the tool env, "
+        "then up to 3 minutes to restart the host...",
         err=True,
     )
     if (host := deploy(cellar, stream=True)) is None:

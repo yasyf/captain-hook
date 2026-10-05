@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/yasyf/daemonkit"
-	"github.com/yasyf/daemonkit/artifact"
 	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/supervise"
 )
@@ -61,13 +60,6 @@ func (p installedPaths) lock(ctx context.Context, name string) (*durable.Lock, e
 }
 
 func applyPackagedApplication(ctx context.Context) error {
-	store, err := artifact.DefaultStore()
-	if err != nil {
-		return err
-	}
-	if _, err := store.Resolve(ctx, productToolDescriptor()); err != nil {
-		return fmt.Errorf("captain package: install the capt-hook %s tool env: %w", Build, err)
-	}
 	source, err := canonicalExecutable()
 	if err != nil {
 		return err

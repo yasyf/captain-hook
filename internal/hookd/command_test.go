@@ -349,6 +349,45 @@ func TestVersionReportsExactSchemaAndBuild(t *testing.T) {
 	}
 }
 
+func TestPackageInstallStartsTheLifecycleBudgetAfterASlowToolEnv(t *testing.T) {
+	t.Parallel()
+	const toolEnvTimeout, lifecycleTimeout = 10 * time.Second, 100 * time.Millisecond
+	var lifecycleBudget time.Duration
+	err := installPackage(
+		func(ctx context.Context) error {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("the tool env was cancelled: %v", ctx.Err())
+			case <-time.After(3 * lifecycleTimeout):
+				return nil
+			}
+		},
+		func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return errors.New("the lifecycle ran without a deadline")
+			}
+			lifecycleBudget = time.Until(deadline)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(toolEnvTimeout):
+				return errors.New("the lifecycle outlived its budget")
+			}
+		},
+		toolEnvTimeout, lifecycleTimeout,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("installPackage = %v, want the lifecycle budget to expire", err)
+	}
+	if lifecycleBudget <= 0 || lifecycleBudget > lifecycleTimeout {
+		t.Fatalf(
+			"lifecycle started with %v left, want a fresh %v budget after the tool env",
+			lifecycleBudget, lifecycleTimeout,
+		)
+	}
+}
+
 func TestRunSpellsTheRequestFromThePayload(t *testing.T) {
 	cwd := "/payload/cwd"
 	payload := `{"session_id":"abc","cwd":"` + cwd + `"}`

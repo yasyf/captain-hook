@@ -1021,6 +1021,17 @@ func productToolDescriptor() *artifact.Descriptor {
 	}
 }
 
+func installProductToolEnv(ctx context.Context) error {
+	store, err := artifact.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if _, err := store.Resolve(ctx, productToolDescriptor()); err != nil {
+		return fmt.Errorf("captain package: install the capt-hook %s tool env: %w", Build, err)
+	}
+	return nil
+}
+
 func installedPython() (string, error) {
 	store, err := artifact.DefaultStore()
 	if err != nil {
