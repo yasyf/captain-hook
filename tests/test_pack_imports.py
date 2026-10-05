@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+import captain_hook
 from captain_hook import app
 from captain_hook.loader import discover_pack
 
@@ -12,6 +16,24 @@ RELATIVE_IMPORT_SRC = (
     "from ._common import SHARED\nfrom captain_hook import Event, hook\nhook(Event.PreToolUse, message=str(SHARED))\n"
 )
 ON_HANDLER_SRC = "from captain_hook import Event, on\n\n\n@on(Event.PostToolUse)\ndef check(evt):\n    return None\n"
+PRIMITIVES_SRC = (
+    "from captain_hook import gate, llm_nudge, nudge, rewrite_command, set_tool_input\n"
+    "nudge('Remember the release notes')\n"
+    "gate('Run the suite before stopping')\n"
+    "llm_nudge('Is the agent guessing?', message='Observe first')\n"
+    "set_tool_input('model', 'sonnet', tool='Agent')\n"
+    "rewrite_command('cat $$$ARGS', 'bat $$$ARGS')\n"
+)
+INSTALLED_PROBE = (
+    "import json, sys\n"
+    "from pathlib import Path\n"
+    "import captain_hook\n"
+    "from captain_hook.app import _state\n"
+    "from captain_hook.loader import discover_pack\n"
+    "discover_pack('ccx', Path(sys.argv[1]))\n"
+    "print(json.dumps({'package': captain_hook.__file__,"
+    " 'hooks': [[h.state_key, h._state_identity, h.source_file] for h in _state.hooks]}))\n"
+)
 
 
 @pytest.fixture
@@ -89,6 +111,58 @@ def test_state_key_stable_across_pack_root_moves(tmp_path: Path, isolate_modules
     key_b = app._state.hooks[0].state_key
 
     assert key_a == key_b
+
+
+def installed_state_keys(install: Path, pack: Path) -> list[list[str]]:
+    install.mkdir()
+    (install / "captain_hook").symlink_to(Path(captain_hook.__file__).parent, target_is_directory=True)
+    probe = subprocess.run(
+        [sys.executable, "-c", INSTALLED_PROBE, str(pack)],
+        cwd=install,
+        env={**os.environ, "PYTHONPATH": str(install)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    loaded = json.loads(probe.stdout)
+    assert loaded["package"] == str(install / "captain_hook" / "__init__.py")
+    return loaded["hooks"]
+
+
+def test_primitive_state_keys_stable_across_capt_hook_installs(tmp_path: Path) -> None:
+    pack = _pack_root(tmp_path / "pack", PRIMITIVES_SRC)
+
+    first = installed_state_keys(tmp_path / "v1", pack)
+    second = installed_state_keys(tmp_path / "v2", pack)
+
+    assert len(first) == 5
+    assert first == second
+    assert {(identity, source) for _, identity, source in first} == {("ccx\0guard.py", str(pack / "guard.py"))}
+
+
+def test_framework_hooks_key_on_their_package_relative_path(tmp_path: Path, isolate_modules: None) -> None:
+    from captain_hook.cli import CliState
+
+    (hooks := tmp_path / ".claude" / "hooks").mkdir(parents=True)
+    CliState(root=tmp_path, hooks=str(hooks)).discover(scope="all")
+
+    framework = {"announce_pr_status", "announce_faults"}
+    assert {h._state_identity for h in app._state.hooks if h.name in framework} == {"loader.py"}
+
+
+def test_shared_decorator_keeps_each_handler_file(tmp_path: Path, isolate_modules: None) -> None:
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "_shared.py").write_text(
+        "from captain_hook import Event, on\n\npost = on(Event.PostToolUse, max_fires=1)\n"
+    )
+    for stem in ("alpha", "beta"):
+        (pack / f"{stem}.py").write_text("from ._shared import post\n\n\n@post\ndef check(evt):\n    return None\n")
+
+    app.reset()
+    discover_pack("ccx", pack)
+
+    assert sorted(h._state_identity for h in app._state.hooks) == ["ccx\0alpha.py", "ccx\0beta.py"]
 
 
 def test_state_key_differs_for_two_packs_same_hook_name(tmp_path: Path, isolate_modules: None) -> None:

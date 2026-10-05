@@ -74,11 +74,13 @@ class PackIndex:
             to its :class:`PluginRoute`. Membership marks a kind as a plugin-pack misfire.
         plugin_dirs: The ``hooks/`` dir of each plugin pack mapped to its route — the source arm for a
             hook fired under a bare ``@on`` name (no ``<pack>.`` prefix in its ``kind``).
+        root: The watched repo's root, which a repo-local hook's ``source_file`` relativizes against.
     """
 
     builtins: Mapping[str, Path]
     plugin_prefixes: Mapping[str, PluginRoute] = field(default_factory=dict)
     plugin_dirs: Mapping[str, PluginRoute] = field(default_factory=dict)
+    root: Path | None = None
 
     @classmethod
     def load(cls, root: Path | None) -> PackIndex:
@@ -107,4 +109,4 @@ class PackIndex:
             route = PluginRoute(RepoKey(normalize_origin(repository)) if repository else None, plugin.root)
             prefixes[manager.pack_module_name(plugin.id)] = route
             dirs[str(plugin_discovery.plugin_pack_root(plugin) / manager.HOOKS_DIRNAME)] = route
-        return cls(builtins=builtins, plugin_prefixes=prefixes, plugin_dirs=dirs)
+        return cls(builtins=builtins, plugin_prefixes=prefixes, plugin_dirs=dirs, root=root)

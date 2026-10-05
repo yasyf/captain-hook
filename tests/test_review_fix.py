@@ -454,6 +454,11 @@ class TestResolveTarget:
     def test_resolve_target(self, source_file: str, kind: str, expected: Target | None) -> None:
         assert resolve_target(make_decision(kind=kind, source_file=source_file), INDEX) == expected
 
+    def test_repo_hook_relativizes_against_the_watched_repo(self, tmp_path: Path) -> None:
+        index = PackIndex(builtins=INDEX.builtins, root=tmp_path)
+        decision = make_decision(kind="guard:nudge_deadbeef", source_file=str(tmp_path / ".claude/hooks/guard.py"))
+        assert resolve_target(decision, index) == Target(".claude/hooks/guard.py", "guard:nudge_deadbeef", None, None)
+
     def test_plugin_pack_routes_to_its_repository(self) -> None:
         index = PackIndex(builtins=INDEX.builtins, plugin_prefixes={NOTIFY_PREFIX: NOTIFY_ROUTE})
         target = resolve_target(make_decision(kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE), index)

@@ -48,8 +48,7 @@ naming the file, the hook, and the repo the fix belongs to: a watched-repo hook 
 target verbatim (``repo`` ``None`` — fixed in place), but an installed-wheel or plugin-pack
 ``source_file`` carries no repo path, so the real hook comes from the decision ``kind``'s
 module prefix routed through the scan's :class:`~captain_hook.review.routing.PackIndex`. A
-``nudge()``/``gate()`` fire records the primitive file, and a ``hook()`` bundled in a pack
-records the wheel or plugin file — all of these route through the ``kind``: a
+hook bundled in a pack records the wheel or plugin file, so it routes through the ``kind``: a
 ``<pack>.<module>`` prefix naming a module a builtin pack ships targets the pack source inside
 captain-hook itself (``captain_hook/builtin_packs/<pack>/hooks/<module>.py``, repo captain-hook);
 a prefix naming a pack an enabled Claude Code plugin ships targets that plugin's ``plugin.json``
@@ -394,23 +393,23 @@ async def fire_message_target(
 def user_repo_source(source_file: str) -> bool:
     """A hook file living in the watched repo, not the installed wheel.
 
-    Installed-wheel source (a ``nudge()``/``gate()`` primitive fire, or a ``hook()`` bundled in a
-    builtin pack) carries ``captain_hook/`` in its path, so it resolves through the decision ``kind``'s
-    module prefix instead of being returned verbatim. Plugin-pack source is routed earlier.
+    Installed-wheel source (a hook bundled in a builtin pack) carries ``captain_hook/`` in its path,
+    so it resolves through the decision ``kind``'s module prefix instead of being returned verbatim.
+    Plugin-pack source is routed earlier.
     """
     return f"{CAPTAIN_HOOK_ROOT}/" not in source_file
 
 
-def plugin_rel_path(source_file: str, install_root: str) -> str | None:
-    """A plugin-pack ``source_file``'s path relative to its plugin install root, or ``None``.
+def root_rel_path(source_file: str, root: str) -> str | None:
+    """A ``source_file``'s path relative to a plugin install root or the watched repo root, or ``None``.
 
     Best effort: a plugin rooted below its repo root (a ``plugin/`` subdir) carries that offset in the
     result, which the fix PR resolves against the plugin's repo.
     """
     if not source_file:
         return None
-    source, root = Path(source_file).resolve(), Path(install_root).resolve()
-    return str(source.relative_to(root)) if source.is_relative_to(root) else None
+    source, base = Path(source_file).resolve(), Path(root).resolve()
+    return str(source.relative_to(base)) if source.is_relative_to(base) else None
 
 
 def plugin_route_for(decision: Decision, module: str, sep: str, index: PackIndex) -> PluginRoute | None:
@@ -438,10 +437,11 @@ def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
         if route.repo is None:
             logger.bind(hook=decision.kind).debug("dropped plugin-pack misfire; plugin declares no repository")
             return None
-        rel = plugin_rel_path(decision.source_file, route.root)
+        rel = root_rel_path(decision.source_file, route.root)
         return Target(rel or decision.source_file, decision.kind, route.repo, module.split(".")[0] if sep else None)
     if user_repo_source(decision.source_file):
-        return Target(decision.source_file, decision.kind, repo=None, pack=None)
+        rel = root_rel_path(decision.source_file, str(index.root)) if index.root else None
+        return Target(rel or decision.source_file, decision.kind, repo=None, pack=None)
     if not sep or not module:
         return None
     match module.split("."):

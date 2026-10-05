@@ -131,7 +131,7 @@ def register_resource_provisioning(resources: Sequence[str]) -> None:
     so both event dispatch and settings generation see the async hook.
     """
 
-    @on(Event.SessionStart, async_=True)
+    @on(Event.SessionStart, async_=True, source_file=__file__)
     def provision_pack_resources(evt: BaseHookEvent) -> None:
         from captain_hook.util.model_cache import provision_resources
 
@@ -147,7 +147,7 @@ def register_pr_announcements() -> None:
     start tells the user what happened.
     """
 
-    @on(Event.SessionStart, max_fires=1)
+    @on(Event.SessionStart, max_fires=1, source_file=__file__)
     def announce_pr_status(evt: BaseHookEvent) -> HookResult | None:
         from captain_hook.review.announce import collect_announcements
         from captain_hook.types import Action, HookResult
@@ -166,7 +166,7 @@ def register_fault_announcements() -> None:
     reaches a person rather than only the daemon log.
     """
 
-    @on(Event.SessionStart, max_fires=1)
+    @on(Event.SessionStart, max_fires=1, source_file=__file__)
     def announce_faults(evt: BaseHookEvent) -> HookResult | None:
         from captain_hook.faults import drain
         from captain_hook.types import Action, HookResult
