@@ -14,6 +14,7 @@ on:
         default: false
 permissions:
   contents: write
+  actions: write
 jobs:
   autobump:
     uses: yasyf/cc-skills/.github/workflows/plugin-autobump.yml@plugin-v1
@@ -21,3 +22,9 @@ jobs:
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
       strict: ${{ github.event_name == 'workflow_dispatch' && inputs.strict || false }}
       guard-plugins: "captain-hook"
+  release:
+    needs: autobump
+    uses: yasyf/cc-skills/.github/workflows/plugin-release-tag.yml@plugin-v1
+    with:
+      release-workflow: release-pypi.yml
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
