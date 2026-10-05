@@ -100,6 +100,12 @@ class TestCopyViolations:
         assert copy_violations("Commit with a subject. Run `git commit -m 'fix the thing'` on #12 at 2026-01-01.")
         assert not copy_violations("Commit with a subject. Run `git commit -m 'fix the thing' && gh pr view 1234`.")
 
+    def test_fenced_blocks_are_verbatim_data(self) -> None:
+        data = "## Rules\n\n- 4ffc9a5 Should the owner's rule hold? Yes, \"always and forever\".\n" * 20
+        assert not copy_violations(f"Read the register below verbatim.\n~~~~~~~~\n{data}~~~~~~~~")
+        assert not copy_violations(f"Read the register below verbatim.\n```text\n{data}```")
+        assert copy_violations(f"Read the register below verbatim.\n~~~~~~~~\n{data}~~~")
+
     def test_result_violations_grade_message_and_note(self) -> None:
         assert result_violations(HookResult(action=Action.warn, message="Fine. Run `x`.")) == []
         assert result_violations(HookResult(action=Action.rewrite, note="One. Two. Three.")) == [

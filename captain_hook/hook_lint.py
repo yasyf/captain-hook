@@ -23,6 +23,7 @@ MAX_SENTENCES = 2
 MAX_CHARS = 300
 
 CODE_SPAN = re.compile(r"`[^`]*`")
+FENCED_BLOCK = re.compile(r"^(`{3,}|~{3,})(?![`~])[^\n]*\n.*?^\1[ \t]*$", re.MULTILINE | re.DOTALL)
 PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 ABBREVIATION = re.compile(r"\b(?:e\.g|i\.e|etc|vs)\.", re.IGNORECASE)
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -97,9 +98,9 @@ def copy_violations(text: str) -> list[str]:
     """How a hook message misses the copy bar: the rule, then the remediation, in at most two sentences.
 
     Code spans and ``{placeholders}`` are exempt from the prose rules, so a remediation command may carry
-    quotes, ids, and paths of its own.
+    quotes, ids, and paths of its own. A fenced block is verbatim data and counts toward no rule.
     """
-    prose = ABBREVIATION.sub("eg", PLACEHOLDER.sub("X", CODE_SPAN.sub("X", stripped := text.strip())))
+    prose = ABBREVIATION.sub("eg", PLACEHOLDER.sub("X", CODE_SPAN.sub("X", stripped := FENCED_BLOCK.sub("", text).strip())))
     sentences = [part for part in SENTENCE_BREAK.split(prose) if part.strip()]
     return [
         *([f"{len(sentences)} sentences; state the rule, then the remediation"] * (len(sentences) > MAX_SENTENCES)),
