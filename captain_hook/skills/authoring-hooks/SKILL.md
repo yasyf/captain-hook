@@ -47,6 +47,7 @@ registration you write or touch.
 Copy bar (every message, reason, hint, and rewrite note):
 - [ ] At most two sentences: the rule, then the remediation
 - [ ] At most 300 characters
+- [ ] Verbatim data the hook must deliver goes in a fenced block exempt from the bar; everything outside the fence still meets it
 - [ ] A block names the exact command or action to run instead; a nudge names the one verb to run
 - [ ] Commands, paths, and flags sit in `backticks`
 - [ ] No quoted user or owner messages, and no "User feedback <date>: '...'" citations
