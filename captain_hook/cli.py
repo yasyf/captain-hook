@@ -31,6 +31,7 @@ from captain_hook.loader import (
     register_fault_announcements,
     register_pr_announcements,
     register_resource_provisioning,
+    stamp_identity,
 )
 from captain_hook.log import setup_logging
 from captain_hook.packs import manager, plugins
@@ -122,12 +123,14 @@ class CliState:
         for pack_ in packs:
             discover_pack(pack_.name, pack_.path)
         register_pack_tools(packs)
+        before = len(_state.hooks)
         # Resource provisioning is one shared SessionStart hook; register it once with the union.
         if resources := list(dict.fromkeys(r for pack_ in packs for r in pack_.descriptor.resources)):
             register_resource_provisioning(resources)
         # The PR announcer's gating all lives in collect_announcements, so it registers unconditionally.
         register_pr_announcements()
         register_fault_announcements()
+        stamp_identity(before, root=Path(__file__).parent)
         return packs
 
 

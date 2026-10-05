@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
 from captain_hook.conditions import matches_conditions
-from captain_hook.state import caller_file, hook_name
+from captain_hook.state import caller_file, framework_frame, hook_name
 from captain_hook.types import (
     TOOL_EVENTS,
     CustomCondition,
@@ -300,6 +300,7 @@ def on(
     mandatory: bool = False,
     transcript_events: int | None = None,
     on_incomplete: str | None = None,
+    source_file: str | None = None,
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
@@ -324,12 +325,13 @@ def on(
 
     def decorator(fn: HookHandler) -> HookHandler:
         validate_handler_signature(fn)
+        defined = fn.__code__.co_filename
         _state.hooks.append(
             RegisteredHook(
                 spec=spec,
                 handler=fn,
                 name=fn.__name__,
-                source_file=fn.__code__.co_filename,
+                source_file=source_file or (caller_file() if framework_frame(defined) else defined),
             )
         )
         return fn

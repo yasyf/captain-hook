@@ -125,6 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Primitive hooks keep their fire limits across capt-hook releases.**
+  `nudge()`, `gate()`, and other primitives used the framework's versioned install path
+  as their state identity, resetting `max_fires` on each release. They now key on the
+  declaring pack or repo module. Loader hooks use `loader.py`, and review FIX routing,
+  `capt-hook list`, and hook lint see the correct hook files. Existing counters restart
+  once after upgrading; state stored under the old keys is not migrated.
 - **`capt-hook helper install` reports each step as it runs.** It used to capture every
   step and print nothing until the end, so a multi-minute `package-install` looked like
   a hang. The reason a step failed went only to the update log, and the error said just

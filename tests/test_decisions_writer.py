@@ -161,7 +161,7 @@ class TestDispatchIntegration:
 
         (row,) = rows(db_path)
         assert row.kind.split(":")[-1].startswith("nudge")
-        assert row.source_file.endswith("captain_hook/primitives/nudge.py")
+        assert row.source_file == __file__
         assert (row.event, row.action, row.message) == ("PreToolUse", "warn", "Remember to run tests")
         assert row.tool_name == "Edit"
         assert row.tool_digest == evt.tool_digest
