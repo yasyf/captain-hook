@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The general pack warns when a change contradicts a durable owner decision.**
+  `rules_nudge` checks ship, push, and PR submission calls against cc-notes answers
+  labeled `scope:durable`, asking the small judge to review up to 40 related decisions
+  against the branch diff. Each warning names the decision and explains the conflict
+  so the agent can read it with `ccn show <id>` and fix the change. A
+  `ccx: rules-ack=<id>` line in a branch commit message or a
+  `# ccx:rules-ack=<id>` comment on the command acknowledges a deliberate exception.
+  The hook checks each ship attempt, never blocks or pre-approves the call, and lets
+  the call through if the judge fails.
 - **A grant declaration can fail open when its judge gives no verdict.**
   `Grants(judge_fails_open=True)` spends the covering grant, or mints a one-use grant
   on the evidence collected, when the judge times out, its backend errors, or it
