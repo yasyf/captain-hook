@@ -351,7 +351,10 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
-	err := installPackage(installProductToolEnv, applyPackagedApplication, packageToolEnvTimeout, packageLifecycleTimeout)
+	err := awaitProductRelease()
+	if err == nil {
+		err = installPackage(installProductToolEnv, applyPackagedApplication, packageToolEnvTimeout, packageLifecycleTimeout)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
