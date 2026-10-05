@@ -125,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`capt-hook helper install` reports each step as it runs.** It used to capture every
+  step and print nothing until the end, so a multi-minute `package-install` looked like
+  a hang. The reason a step failed went only to the update log, and the error said just
+  that the deployment did not converge. It now prints a line on stderr before the brew
+  install, the deploy, and the host ping. Brew's output and `package-install`'s stderr
+  appear live, and each failure written to the update log is also printed. The final
+  error gives the update log's path. The background updater still captures output.
 - **The session guard lets agents quit apps that host no session.** `osascript` that
   quits a named application was blocked for every app, including Slack. The guard now
   blocks only terminals, editors, Orca, Captain Hook, tmux, and any app whose process

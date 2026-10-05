@@ -13,7 +13,7 @@ import subprocess
 import click
 
 from captain_hook.desktop import FORMULA, client
-from captain_hook.update.updater import brew, deploy, installed_version
+from captain_hook.update.updater import brew, deploy, installed_version, update_log_path
 
 
 @click.group()
@@ -30,14 +30,22 @@ def cellar_version() -> str:
 @helper.command()
 def install() -> None:
     """Install or repair the exact signed helper deployment via Homebrew."""
-    if not brew(["install", "--formula", FORMULA]):
-        brew(["reinstall", "--formula", FORMULA])
+    click.echo(f"Installing {FORMULA} with Homebrew...", err=True)
+    if not brew(["install", "--formula", FORMULA], stream=True):
+        click.echo(f"Reinstalling {FORMULA} with Homebrew...", err=True)
+        brew(["reinstall", "--formula", FORMULA], stream=True)
     cellar = cellar_version()
-    if (host := deploy(cellar)) is None:
+    click.echo(
+        f"Landing Captain Hook {cellar} and restarting the host. "
+        "This can take up to about 3 minutes while uv installs the tool env...",
+        err=True,
+    )
+    if (host := deploy(cellar, stream=True)) is None:
         raise click.ClickException(
             f"Homebrew holds {cellar} but the running helper reports "
             f"{installed_version() or 'no version (unreachable)'} — the deployment did not converge. "
-            "The Cellar copy is not the deployment; nothing is installed until the host answers."
+            "The Cellar copy is not the deployment; nothing is installed until the host answers. "
+            f"The failing step's output is printed above; {update_log_path()} records each step's exit."
         )
     click.echo(
         f"Captain Hook {host} installed. Grant notification permission under "

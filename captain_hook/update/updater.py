@@ -57,7 +57,9 @@ def update_log_path() -> Path:
     return update_dir() / "update.log"
 
 
-def breadcrumb(reason: str) -> None:
+def breadcrumb(reason: str, *, echo: bool = False) -> None:
+    if echo:
+        print(reason, file=sys.stderr)
     try:
         (path := update_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as log:
@@ -82,14 +84,22 @@ def installed_version() -> str | None:
     return version if isinstance(version := reply.get("version"), str) else None
 
 
-def brew(args: list[str]) -> bool:
+def exit_reason(step: str, completed: subprocess.CompletedProcess[str]) -> str:
+    if completed.stderr is None:
+        return f"{step} exit {completed.returncode}"
+    return f"{step} exit {completed.returncode}: {completed.stderr.strip()[:200]}"
+
+
+def brew(args: list[str], *, stream: bool = False) -> bool:
     try:
-        completed = subprocess.run(["brew", *args], capture_output=True, text=True, timeout=BREW_TIMEOUT, check=False)
+        completed = subprocess.run(
+            ["brew", *args], capture_output=not stream, text=True, timeout=BREW_TIMEOUT, check=False
+        )
     except (OSError, subprocess.SubprocessError) as exc:
-        breadcrumb(f"brew {' '.join(args)} errored: {exc}")
+        breadcrumb(f"brew {' '.join(args)} errored: {exc}", echo=stream)
         return False
     if completed.returncode != 0:
-        breadcrumb(f"brew {' '.join(args)} exit {completed.returncode}: {completed.stderr.strip()[:200]}")
+        breadcrumb(exit_reason(f"brew {' '.join(args)}", completed), echo=stream)
     return completed.returncode == 0
 
 
@@ -107,33 +117,39 @@ def host_at_least(target: str) -> str | None:
         return None
 
 
-def deploy(target: str) -> str | None:
+def deploy(target: str, *, stream: bool = False) -> str | None:
     """Land the Cellar's application over the deployment, and the host's version once it reaches ``target``.
 
     ``package-install`` was the formula's ``post_install`` step until Homebrew's post-install sandbox
     denied the ``~/Library/LaunchAgents`` write it makes, failing every ``brew`` lane on every host.
     Outside that sandbox the same command installs, activates, and pings, so the deployment converges
     here rather than inside brew — which is why ``brew`` alone never proves anything.
+
+    ``stream`` is for a person at a terminal: ``package-install`` writes its output there live, the
+    host ping is announced before it runs, and every failure that lands in the update log is printed
+    to stderr as well.
     """
     try:
         prefix = subprocess.run(
             ["brew", "--prefix", FORMULA], capture_output=True, text=True, timeout=BREW_TIMEOUT, check=False
         )
         if prefix.returncode != 0:
-            breadcrumb(f"brew --prefix exit {prefix.returncode}: {prefix.stderr.strip()[:200]}")
+            breadcrumb(exit_reason("brew --prefix", prefix), echo=stream)
             return None
         landed = subprocess.run(
             [str(Path(prefix.stdout.strip()) / CELLAR_HOST), "package-install"],
-            capture_output=True,
+            capture_output=not stream,
             text=True,
             timeout=BREW_TIMEOUT,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        breadcrumb(f"package-install errored: {exc}")
+        breadcrumb(f"package-install errored: {exc}", echo=stream)
         return None
     if landed.returncode != 0:
-        breadcrumb(f"package-install exit {landed.returncode}: {landed.stderr.strip()[:200]}")
+        breadcrumb(exit_reason("package-install", landed), echo=stream)
+    if stream:
+        print("Waiting for the host to answer a ping...", file=sys.stderr)
     return host_at_least(target)
 
 

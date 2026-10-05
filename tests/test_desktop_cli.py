@@ -6,6 +6,7 @@ Every side effect (brew or the bridge) is stubbed.
 from __future__ import annotations
 
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -97,6 +98,35 @@ def test_install_fails_loudly_when_the_host_is_unreachable(monkeypatch: pytest.M
     result = invoke("install")
     assert result.exit_code != 0
     assert "12.22.4" in result.output and "unreachable" in result.output
+
+
+def test_install_narrates_the_deploy_and_surfaces_why_package_install_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN: ``install`` used to run every step captured and print nothing until it finished.
+
+    ``package-install`` runs for minutes and restarts the host, and its failure reason went only to
+    the update log while the error said "did not converge" — a run the owner read as a hang.
+    """
+    calls = record_brew(monkeypatch, cellar="12.22.4")
+    stub_host(monkeypatch, "12.21.6")
+    reason = "captain package: install the capt-hook tool env: simulated"
+    recorded = subprocess.run
+
+    def failing_package_install(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        if argv != PACKAGE_INSTALL:
+            return recorded(argv, **kwargs)
+        calls.append(argv)
+        if kwargs["capture_output"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr=reason)
+        print(reason, file=sys.stderr)
+        return SimpleNamespace(returncode=1, stdout=None, stderr=None)
+
+    monkeypatch.setattr(subprocess, "run", failing_package_install)
+    result = invoke("install")
+    assert result.exit_code != 0
+    assert PACKAGE_INSTALL in calls
+    assert result.stderr.index("Landing Captain Hook 12.22.4") < result.stderr.index(reason)
+    assert "package-install exit 1" in result.stderr
+    assert str(updater.update_log_path()) in result.stderr
 
 
 def test_status_pings_and_prints_version(monkeypatch: pytest.MonkeyPatch) -> None:
