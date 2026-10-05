@@ -49,14 +49,25 @@ class Confirm:
     """Send a deterministic block through a small model before it lands.
 
     The block stands only when the model confidently confirms the call is what ``rule`` protects against.
-    A timeout, an error, an unsure answer, or a no-match allows the call with a one-line ``additionalContext``
-    note naming the hook and why. The model sees ``rule``, the tool input, the hook's message, and the last
-    few tool results; the framework stops waiting after ``timeout_s`` wall-clock seconds. A verdict is
-    remembered for the session per hook and exact input, so a retried identical call never pays twice.
-    Pair it with ``skip_if=[Annotated(...)]``: an annotation that settles the call skips the hook, and the
-    model with it. The model is Cerebras ``gpt-oss-120b``, the fastest small model measured against the
-    three-second wall (``bench/confirm.py``); it reads ``CEREBRAS_API_KEY``, and without one every confirm
-    allows with a failure note.
+    A no-match or unsure answer allows the call without ``additionalContext``.
+
+    Timeouts and errors allow with one-line notes, once per distinct note per hook per session.
+    A busy note-ledger lock still surfaces the note. Claude Code's permission flow decides as usual.
+
+    The model sees ``rule``, the tool input, the hook's message, and the last few tool results;
+    the framework stops waiting after ``timeout_s`` wall-clock seconds.
+
+    A verdict is remembered for the session per hook and exact input, so a retried identical call
+    never pays twice.
+
+    Pair it with ``skip_if=[Annotated(...)]``: an annotation that settles the call skips the hook,
+    and the model with it.
+
+    The model is Cerebras ``gpt-oss-120b``, the fastest small model measured against the
+    three-second wall (``bench/confirm.py``).
+
+    It reads ``CEREBRAS_API_KEY``. Without the key, every confirm allows; its failure note follows
+    the same once-per-session rule.
 
     Attributes:
         rule: What the block protects against, the one sentence the model judges the call by.
@@ -82,6 +93,10 @@ class ConfirmVerdict(BaseModel):
 
 class ConfirmVerdicts(BaseModel):
     verdicts: dict[str, ConfirmVerdict] = Field(default_factory=dict)
+
+
+class ConfirmNotes(BaseModel):
+    noted: set[str] = Field(default_factory=set)
 
 
 def confirm_backend() -> LlmBackend:
@@ -165,14 +180,22 @@ def judged(evt: BaseHookEvent, hook: str, message: str, confirm: Confirm) -> Con
     return verdict
 
 
-def confirmed(evt: BaseHookEvent, hook: str, result: HookResult, confirm: Confirm) -> HookResult:
-    """Settle a block that asked for confirmation: the block itself on a confident match, else an allow note."""
+def noted_once(evt: BaseHookEvent, note: str) -> HookResult | None:
+    try:
+        with evt.ctx.session[ConfirmNotes].mutate(timeout=0) as notes:
+            fresh = note not in notes.noted
+            notes.noted.add(note)
+    except filelock.Timeout:
+        fresh = True
+    return evt.context(note) if fresh else None
+
+
+def confirmed(evt: BaseHookEvent, hook: str, result: HookResult, confirm: Confirm) -> HookResult | None:
+    """Settle a block that asked for confirmation: the block itself on a confident match, else let the call through."""
     match judged(evt, hook, result.message or "", confirm):
         case ConfirmVerdict(block=True, confident=True):
             return replace(result, confirm=None)
-        case ConfirmVerdict(block=True):
-            return evt.context(f"{hook}: allowed, the model could not confirm the match with confidence")
         case ConfirmVerdict():
-            return evt.context(f"{hook}: allowed, the model found the call outside the rule")
+            return None
         case str() as why:
-            return evt.context(f"{hook}: allowed, {why}")
+            return noted_once(evt, f"{hook}: allowed, {why}")

@@ -614,13 +614,13 @@ def record_lane(evt: BaseHookEvent) -> HookResult | None:
             tool_input={"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"},
             state=[SLACK_REFUSED],
             llm={"block": False, "confident": True},
-        ): Warn(pattern="allowed, the model found the call outside the rule"),
+        ): Allow(),
         Input(
             tool="Agent",
             tool_input={"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"},
             state=[SLACK_REFUSED],
             llm={"block": True, "confident": False},
-        ): Warn(pattern="allowed, the model could not confirm the match with confidence"),
+        ): Allow(),
         Input(
             tool="Agent",
             tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},

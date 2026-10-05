@@ -118,13 +118,14 @@ risky = evt.llm("Does this diff delete a public API?", bool, diff=True)
 Add `Confirm` when a cheap structural match sometimes blocks calls outside the rule's
 intent. The deterministic hook must block first; confirmation can only remove that block.
 Set `CEREBRAS_API_KEY` in the hook process's environment before using it. Without the key,
-every confirm allows with a `the confirm step failed (...)` note.
+every confirm allows. Each hook reports `the confirm step failed (...)` once per session,
+unless the note ledger's lock is busy.
 
 Pass `confirm=Confirm(...)` to a blocking tool-event hook, and describe what the block
 protects against in `rule`:
 
 ```python
-from captain_hook import Allow, Annotated, Block, Confirm, Event, Input, Runs, Warn, hook
+from captain_hook import Allow, Annotated, Block, Confirm, Event, Input, Runs, hook
 
 hook(
     Event.PreToolUse,
@@ -138,9 +139,7 @@ hook(
     ),
     tests={
         Input(command="git push origin feat"): Block(),
-        Input(command="git push origin feat", llm={"block": False}): Warn(
-            pattern="allowed, the model found the call outside the rule"
-        ),
+        Input(command="git push origin feat", llm={"block": False}): Allow(),
         Input(command="git push origin feat # ccx:raw"): Allow(),
     },
 )
@@ -165,10 +164,14 @@ def queued_push(evt: BaseHookEvent) -> HookResult:
 
 The model receives the rule, hook message, tool input, and a bounded window of recent tool
 results. The block stands only when its `ConfirmVerdict` has both `block=True` and
-`confident=True`. A timeout, error, unsure answer, or no match allows the call with one line
-of `additionalContext` naming the hook and reason, such as
-`queued_push: allowed, could not confirm in 3 s`. This note leaves Claude Code's permission
-flow in charge.
+`confident=True`. An unsure answer or no match returns nothing, so the call proceeds without
+`additionalContext`. Claude Code's permission flow decides as usual.
+
+A timeout or error allows the call with one line of `additionalContext` naming the hook and
+reason, such as `queued_push: allowed, could not confirm in 3 s` or
+`queued_push: allowed, the confirm step failed (RuntimeError)`. Each distinct note appears
+at most once per session per hook. If the note ledger's lock is busy, the note appears anyway;
+the lock never blocks the call.
 
 `timeout_s` defaults to three seconds. The framework enforces that wall-clock limit itself,
 stops waiting, and leaves a late answer to a thread of its own, so a stuck backend never delays
@@ -181,7 +184,7 @@ with [bench/confirm.py](https://github.com/yasyf/captain-hook/blob/main/bench/co
 
 Save the first example in `.claude/hooks/queued_push.py` and run `uvx capt-hook test`.
 Inline tests stub the model with a confident block by default; `Input(..., llm={"block": False})`
-exercises the allow note. These tests check conditions and result handling; test the model's
+expects `Allow()` with no context note. These tests check conditions and result handling; test the model's
 judgment separately against real calls.
 
 ## Auto-answer permission dialogs {#llm_approve}
