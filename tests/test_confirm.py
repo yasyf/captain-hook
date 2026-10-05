@@ -11,7 +11,7 @@ from filelock import FileLock
 
 from captain_hook import Annotated, Confirm, ConfirmVerdict, Event, hook
 from captain_hook.app import _state
-from captain_hook.confirm import ConfirmVerdicts
+from captain_hook.confirm import ConfirmNotes, ConfirmVerdicts
 from captain_hook.dispatch import OFFLOAD_THREADS, execute_hook
 from captain_hook.events import BaseHookEvent, PreToolUseEvent
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
@@ -43,18 +43,15 @@ def test_a_confident_match_blocks(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("verdict", "why"),
+    "verdict",
     [
-        ({"block": False, "confident": True}, "the model found the call outside the rule"),
-        ({"block": False, "confident": False}, "the model found the call outside the rule"),
-        ({"block": True, "confident": False}, "the model could not confirm the match with confidence"),
+        {"block": False, "confident": True},
+        {"block": False, "confident": False},
+        {"block": True, "confident": False},
     ],
 )
-def test_anything_short_of_a_confident_match_allows_with_a_note(
-    tmp_path: Path, verdict: dict[str, bool], why: str
-) -> None:
-    result = execute_hook(entry(Confirm(rule=RULE)), push(answering(tmp_path, **verdict)))
-    assert result == HookResult(action=Action.warn, message=f"queued_push: allowed, {why}", approve=False)
+def test_anything_short_of_a_confident_match_allows_silently(tmp_path: Path, verdict: dict[str, bool]) -> None:
+    assert execute_hook(entry(Confirm(rule=RULE)), push(answering(tmp_path, **verdict))) is None
 
 
 def test_the_framework_stops_waiting_at_the_timeout(tmp_path: Path) -> None:
@@ -72,6 +69,33 @@ def test_a_failed_model_call_allows_with_a_note(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
     ctx.call_llm = MagicMock(side_effect=RuntimeError("401"))  # type: ignore[method-assign]
     result = execute_hook(entry(Confirm(rule=RULE)), push(ctx))
+    assert result == HookResult(
+        action=Action.warn, message="queued_push: allowed, the confirm step failed (RuntimeError)", approve=False
+    )
+
+
+def test_a_failure_note_lands_once_per_session_and_hook(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.call_llm = MagicMock(side_effect=RuntimeError("401"))  # type: ignore[method-assign]
+    guard = entry(Confirm(rule=RULE))
+    assert execute_hook(guard, push(ctx, "git push origin feat")) is not None
+    assert execute_hook(guard, push(ctx, "git push origin main")) is None
+    other = RegisteredHook(spec=guard.spec, name="other_push")
+    assert execute_hook(other, push(ctx)) == HookResult(
+        action=Action.warn, message="other_push: allowed, the confirm step failed (RuntimeError)", approve=False
+    )
+    ctx.call_llm.side_effect = TimeoutError()
+    assert execute_hook(guard, push(ctx)) == HookResult(
+        action=Action.warn, message="queued_push: allowed, the confirm step failed (TimeoutError)", approve=False
+    )
+    assert ctx.call_llm.call_count == 4
+
+
+def test_a_busy_note_ledger_still_surfaces_the_note(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.call_llm = MagicMock(side_effect=RuntimeError("401"))  # type: ignore[method-assign]
+    with FileLock(f"{ctx.session[ConfirmNotes].path}.lock"):
+        result = execute_hook(entry(Confirm(rule=RULE)), push(ctx))
     assert result == HookResult(
         action=Action.warn, message="queued_push: allowed, the confirm step failed (RuntimeError)", approve=False
     )
@@ -147,10 +171,7 @@ def test_a_handler_block_asks_for_confirmation(tmp_path: Path) -> None:
         return evt.block(MESSAGE, confirm=Confirm(rule=RULE))
 
     guard = RegisteredHook(spec=HookSpec(events=Event.PreToolUse), handler=handler, name="queued_push")
-    result = execute_hook(guard, push(answering(tmp_path, block=False, confident=True)))
-    assert result == HookResult(
-        action=Action.warn, message="queued_push: allowed, the model found the call outside the rule", approve=False
-    )
+    assert execute_hook(guard, push(answering(tmp_path, block=False, confident=True))) is None
 
 
 @pytest.mark.parametrize(

@@ -361,16 +361,12 @@ def test_the_cc_slack_cli_sync_dispatch_passes_the_stale_quota_refusal_without_t
 @pytest.mark.parametrize(
     ("verdict", "action", "message"),
     [
-        (
-            {"block": False, "confident": True},
-            Action.warn,
-            "repeat: allowed, the model found the call outside the rule",
-        ),
+        ({"block": False, "confident": True}, None, None),
         ({"block": True, "confident": True}, Action.block, "already refused"),
     ],
 )
 def test_the_cc_slack_cli_sync_dispatch_blocks_only_on_a_confident_match(
-    tmp_path: Path, verdict: dict[str, bool], action: Action, message: str
+    tmp_path: Path, verdict: dict[str, bool], action: Action | None, message: str | None
 ) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import SLACK_REFUSED
 
@@ -379,9 +375,8 @@ def test_the_cc_slack_cli_sync_dispatch_blocks_only_on_a_confident_match(
 
     result = execute_hook(repeat_guard(), dispatch(ctx, prompt, "cc-slack-cli-sync"))
 
-    assert result is not None
-    assert result.action is action
-    assert message in (result.message or "")
+    assert (result and result.action) is action
+    assert message is None or message in (result.message or "")
     judged = str(ctx.call_llm.call_args.args[0])
     assert "the same action the first-party tool refused" in judged
     assert "no cc-slack session for this Claude window" in judged

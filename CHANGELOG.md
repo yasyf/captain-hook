@@ -368,6 +368,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Confirm allows no longer add context notes.** A no-match or unsure verdict lets the
+  call proceed without `additionalContext`, leaving Claude Code's permission flow in charge.
+  Timeouts and errors still report one-line notes, once per distinct note per hook per
+  session, unless the note ledger's lock is busy.
 - **Judges can widen only the scope keys a declaration permits.** `Grants.widen` names
   those keys, and `GrantVerdict.scope` supplies the values the owner's words cover.
   The resulting scope must still cover the action; `"*"` excludes an empty value, so
