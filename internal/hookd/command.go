@@ -133,6 +133,9 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	request.Mandatory = wireproto.Mandatory(request.Event, []byte(request.PayloadRaw))
+	if judge, ok := os.LookupEnv(actorJudgeEnv); ok {
+		return runActor(request, judge, timeout, stdout, stderr)
+	}
 	client, err := openEventClient()
 	var response wireproto.EventResponse
 	if err == nil {
@@ -152,6 +155,29 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	return answer(request, response, stdout, stderr)
+}
+
+func runActor(request wireproto.EventRequest, judge string, timeout time.Duration, stdout, stderr io.Writer) int {
+	if err := actorReady(judge); err != nil {
+		fmt.Fprintln(stderr, err)
+		if request.Mandatory {
+			return skipMandatory(stdout, stderr, request.Event, "dependency-unavailable")
+		}
+		return 1
+	}
+	response, err := evaluateActor(request, judge, timeout)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		if request.Mandatory {
+			return skipMandatory(stdout, stderr, request.Event, "worker-error")
+		}
+		return 1
+	}
+	return answer(request, response, stdout, stderr)
+}
+
+func answer(request wireproto.EventRequest, response wireproto.EventResponse, stdout, stderr io.Writer) int {
 	if request.Mandatory {
 		if kind := incompleteKind(response); kind != "" {
 			return skipMandatory(stdout, stderr, request.Event, kind)

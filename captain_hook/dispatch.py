@@ -1020,11 +1020,15 @@ def run_background_group(
     events: Sequence[BaseHookEvent],
     session_dir: Path | None,
 ) -> None:
+    from captain_hook import actor
     from captain_hook.transcripts import release_transcript
 
     try:
         for index in group:
-            with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
+            budget = ASYNC_HOOK_TIMEOUT_SECONDS
+            if actor.ACTOR is not None:
+                budget = min(budget, reqenv.seconds_left())
+            with reqenv.deadline_in(budget):
                 try:
                     execute_hook(entries[index], events[index], session_dir)
                 except EvidenceIncomplete as exc:
