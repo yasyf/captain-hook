@@ -36,14 +36,18 @@ def test_shortlist_caps_the_list() -> None:
     assert len(shortlist([*many, SLACK], "ledger records", size=3)) == 3
 
 
-def test_acks_read_line_and_comment_forms() -> None:
+def test_acks_read_command_comments_and_message_lines() -> None:
     message = "release: read pulumi\n\nccx: rules-ack=ec2881e rules-ack=4ffc9a5\n"
     command = "ccx vcs ship -m 'x'  # ccx:rules-ack=1987d4d"
-    assert acks([message, command]) == {"ec2881e", "4ffc9a5", "1987d4d"}
+    assert acks(command, message) == {"ec2881e", "4ffc9a5", "1987d4d"}
 
 
-def test_acks_ignore_other_keys() -> None:
-    assert acks(["ccx: raw role=fix", "git push  # ccx:raw"]) == set()
+def test_acks_ignore_quoted_annotations_and_other_keys() -> None:
+    assert acks("printf '%s' 'ccx:rules-ack=ec2881e'; git push  # ccx:raw", "ccx: raw role=fix") == set()
+
+
+def test_shortlist_keeps_a_sole_remaining_ruling() -> None:
+    assert shortlist([LEDGER], "+\tapplied := ledger.LastApplied(stack)") == (LEDGER,)
 
 
 def test_named_drops_ids_the_shortlist_never_offered() -> None:

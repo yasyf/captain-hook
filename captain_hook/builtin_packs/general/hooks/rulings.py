@@ -7,25 +7,28 @@ import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from captain_hook import Allow, Event, HookResult, Input, SkillCall, Tool, Warn, on
-from captain_hook.annotations import COMMENT_TOKEN, dispatch_pairs, pair
+from captain_hook.annotations import comment_pairs, dispatch_pairs
 from captain_hook.prompt import Prompt
 from captain_hook.types import Action
 from captain_hook.util import reqenv
 from captain_hook.util.caching import ttl_cache
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Sequence
 
     from captain_hook import BaseHookEvent
+    from captain_hook.cmd import Call
 
 LABEL = "rules_nudge"
 ACK = "rules-ack"
-SHIP_COMMANDS = (("ccx", "vcs", "ship"), ("ccx", "vcs", "stack", "submit"), ("gt", "submit"), ("git", "push"))
+WORKING_TREE_SHIP = ("ccx", "vcs", "ship")
+SHIP_COMMANDS = (WORKING_TREE_SHIP, ("ccx", "vcs", "stack", "submit"), ("gt", "submit"), ("git", "push"))
 SUBMIT_SKILLS = frozenset({"submit-pr", "open-pr", "open-pr:open-pr"})
 RULINGS_LABEL = "scope:durable"
 RULINGS_TTL = 300.0
@@ -160,35 +163,53 @@ def durable_rulings(cwd: str) -> tuple[Ruling, ...]:
 def shortlist(rulings: Sequence[Ruling], diff: str, size: int = SHORTLIST) -> tuple[Ruling, ...]:
     wanted = terms(diff)
     frequency = Counter(term for r in rulings for term in r.terms)
-    weight = {term: math.log(len(rulings) / count) for term, count in frequency.items()}
+    weight = {term: math.log(1 + len(rulings) / count) for term, count in frequency.items()}
     scored = [(sum(weight[t] for t in r.terms & wanted), r) for r in rulings]
     return tuple(r for score, r in sorted(scored, key=lambda s: -s[0])[:size] if score > 0)
 
 
-def acks(texts: Iterable[str]) -> set[str]:
-    text = "\n".join(texts)
-    found = chain(dispatch_pairs(text), (pair(*m.groups("")) for m in COMMENT_TOKEN.finditer(text)))
+def acks(command: str, messages: str) -> set[str]:
+    found = chain(comment_pairs(command), dispatch_pairs(messages))
     return {value for key, value in found if key == ACK and value}
 
 
-def shipping(evt: BaseHookEvent) -> bool:
+@dataclass(frozen=True, slots=True)
+class Ship:
+    cwd: str
+    uncommitted: bool
+
+
+def repo_dir(call: Call, cwd: str) -> str:
+    base = Path(cwd) / call.cwd if call.cwd else Path(cwd)
+    options = call.leading_options
+    return str(base / options[options.index("-C") + 1]) if "-C" in options[:-1] else str(base)
+
+
+def shipping(evt: BaseHookEvent) -> Ship | None:
+    cwd = str(evt.cwd or reqenv.cwd())
     match evt.input:
         case SkillCall(skill=skill):
-            return skill in SUBMIT_SKILLS
-    return any((call.name, *call.args)[: len(verb)] == verb for call in evt.command.calls() for verb in SHIP_COMMANDS)
+            return Ship(cwd, uncommitted=True) if skill in SUBMIT_SKILLS else None
+    for call in evt.command.calls():
+        for verb in SHIP_COMMANDS:
+            if call.verb_argv[: len(verb)] == verb:
+                return Ship(repo_dir(call, cwd), uncommitted=verb == WORKING_TREE_SHIP)
+    return None
 
 
-def review(evt: BaseHookEvent) -> Review | None:
-    cwd = str(evt.cwd or reqenv.cwd())
+def review(evt: BaseHookEvent, ship: Ship) -> Review | None:
+    cwd = ship.cwd
     if not (trunk := run(cwd, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")):
         return None
     if not (base := run(cwd, "git", "merge-base", "HEAD", trunk.strip())):
         return None
-    diff = run(cwd, "git", "diff", "--no-color", "--no-ext-diff", base.strip()) or ""
+    head = () if ship.uncommitted else ("HEAD",)
+    diff = run(cwd, "git", "diff", "--no-color", "--no-ext-diff", base.strip(), *head) or ""
     if not diff.strip() or not (rulings := durable_rulings(cwd)):
         return None
     messages = run(cwd, "git", "log", "--format=%B", f"{base.strip()}..HEAD") or ""
-    acked = acks((messages, evt.command.raw if evt.command else "", getattr(evt.input, "args", None) or ""))
+    skill_args = evt.input.args or "" if isinstance(evt.input, SkillCall) else ""
+    acked = acks(evt.command.raw if evt.command else "", f"{messages}\n{skill_args}")
     live = [r for r in rulings if not any(r.id.startswith(a) for a in acked)]
     clipped = diff if len(diff) <= DIFF_CHARS else diff[:DIFF_CHARS] + f"\n…(+{len(diff) - DIFF_CHARS}ch)"
     return Review(clipped, shortlist(live, diff)) if live else None
@@ -226,6 +247,12 @@ def nudge(found: list[tuple[Ruling, str]]) -> HookResult:
             llm=HIT,
         ): Allow(),
         Input(command="ccx vcs ship -m 'x'  # ccx:rules-ack=ec2881e", commands=BRANCH, llm=HIT): Allow(),
+        Input(command="git -c advice.pushUpdateRejected=false push origin HEAD", commands=BRANCH, llm=HIT): Warn(
+            pattern="ec2881e"
+        ),
+        Input(command="printf '%s' 'ccx:rules-ack=ec2881e'; git push", commands=BRANCH, llm=HIT): Warn(
+            pattern="ec2881e"
+        ),
         Input(command="git status", commands=BRANCH, llm=HIT): Allow(),
         Input(tool="Skill", tool_input={"skill": "pr-loop"}, commands=BRANCH, llm=HIT): Allow(),
     },
@@ -233,7 +260,7 @@ def nudge(found: list[tuple[Ruling, str]]) -> HookResult:
 def rules_nudge(evt: BaseHookEvent) -> HookResult | None:
     from captain_hook.primitives.llm import llm_evaluate
 
-    if not shipping(evt) or (found := review(evt)) is None or not found.rulings:
+    if (ship := shipping(evt)) is None or (found := review(evt, ship)) is None or not found.rulings:
         return None
     with reqenv.deadline_in(JUDGE_DEADLINE):
         verdict = llm_evaluate(
@@ -245,6 +272,7 @@ def rules_nudge(evt: BaseHookEvent) -> HookResult | None:
             max_context=CONTEXT_CHARS,
             once_per_turn=False,
             evidence=False,
+            retries=0,
         )
     named = found.named(verdict) if isinstance(verdict, RulingsVerdict) else []
     return nudge(named) if named else None
