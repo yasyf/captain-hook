@@ -6,7 +6,7 @@ import os
 import sys
 from typing import NoReturn
 
-from capt_hook_client.guard_literal import deny_if_mandatory
+from capt_hook_client.guard_literal import skip_if_mandatory
 
 HOST = (
     os.path.join(os.path.expanduser("~"), "Applications", "Captain Hook.app", "Contents", "Helpers", "capt-hookd")
@@ -16,7 +16,7 @@ HOST = (
 
 
 def main() -> NoReturn:
-    """Exec the signed Go client for ``run EVENT``; without it, deny the events the session guard prefilters."""
+    """Exec the signed Go client for ``run EVENT``; without it, let prefiltered events run with a skip note."""
     match sys.argv[1:]:
         case ["run", event] if event and not event.startswith("-"):
             try:
@@ -36,7 +36,7 @@ def ops_main() -> NoReturn:
 
 
 def _unavailable(event: str, exc: OSError) -> NoReturn:
-    if deny_if_mandatory(event, sys.stdin.buffer) == 0:
+    if skip_if_mandatory(event, sys.stdin.buffer) == 0:
         raise SystemExit(0)
     _die(f"captain-hook client unavailable at {HOST}: {exc}")
 

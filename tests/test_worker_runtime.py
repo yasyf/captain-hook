@@ -240,7 +240,7 @@ def test_a_completion_recorded_twice_does_not_stand_in_for_a_sibling() -> None:
     state.hooks.extend((mandatory_hook("guard_sessions"), mandatory_hook("second_guard")))
     response, _ = runtime_with(state, [completion_key(state.hooks[0], 0)] * 2).dispatch(request(mandatory=True))
     assert response.guard == ""
-    assert '"permissionDecision": "deny"' in response.stdout
+    assert '"permissionDecision"' not in response.stdout
     assert "second_guard did not complete (left unrun)" in response.stdout
 
 
@@ -272,7 +272,7 @@ def test_guard_stays_empty_when_dispatch_fails() -> None:
     assert response.guard == ""
 
 
-def test_a_failed_mandatory_phase_denies_even_when_every_completion_was_noted() -> None:
+def test_a_failed_mandatory_phase_is_skipped_even_when_every_completion_was_noted() -> None:
     state = app.State()
     state.hooks.append(mandatory_hook("guard_sessions"))
 
@@ -290,7 +290,7 @@ def test_a_failed_mandatory_phase_denies_even_when_every_completion_was_noted() 
     response, _ = runtime.dispatch(request())
     assert response.exit == 0
     assert response.guard == ""
-    assert '"permissionDecision": "deny"' in response.stdout
+    assert '"permissionDecision"' not in response.stdout
     assert "guard_sessions did not complete (ValueError: verdict lost at the cutoff)" in response.stdout
     assert "ValueError: verdict lost at the cutoff" in response.stderr
 

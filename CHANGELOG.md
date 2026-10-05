@@ -368,6 +368,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An incomplete session guard adds a visible note instead of denying the call.**
+  Real verdicts still block, including a host or local deny and a block a mandatory
+  hook settled before a sibling failed. The note names the failure kind and points to
+  `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.
+  It sets no permission decision, so Claude Code's own permission prompts still apply.
+  `bin/hook.binrun` accepts app 12.31.0 again, so a plugin update that lands before the host upgrade
+  keeps using the installed host.
 - **Confirm allows no longer add context notes.** A no-match or unsure verdict lets the
   call proceed without `additionalContext`, leaving Claude Code's permission flow in charge.
   Timeouts and errors still report one-line notes, once per distinct note per hook per

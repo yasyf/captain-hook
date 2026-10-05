@@ -156,34 +156,34 @@ func TestGuardInputBoundIsTheWireCeiling(t *testing.T) {
 	}
 }
 
-func TestDenyEnvelopeRendersEachEventShapeWithKindOnlyDiagnostics(t *testing.T) {
+func TestSkipEnvelopeNotesEachEventShapeWithKindOnlyDiagnosticsAndNoDecision(t *testing.T) {
 	t.Parallel()
-	reason := "BLOCKED: the session guard did not complete (host-unavailable), so this call could not be checked for " +
-		"a session-ending program and stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain " +
-		"Hook host answers, or ask the owner to install the host or run the call themselves."
+	note := "capt-hook: the session guard did not complete (host-unavailable), so this call ran without its check " +
+		"for session-ending programs. Run `capt-hook helper status`, then `capt-hook helper install` if the host " +
+		"is missing or outdated."
 	for event, want := range map[string]string{
-		"PreToolUse": `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",` +
-			`"permissionDecisionReason":"` + reason + `"}}`,
-		"PermissionRequest": `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"` + reason + `"},` +
-			`"hookEventName":"PermissionRequest"}}`,
+		"PreToolUse": `{"hookSpecificOutput":{"additionalContext":"` + note + `","hookEventName":"PreToolUse"},` +
+			`"systemMessage":"` + note + `"}`,
+		"PermissionRequest": `{"systemMessage":"` + note + `"}`,
 	} {
-		if got := DenyEnvelope(event, "host-unavailable"); got != want {
-			t.Fatalf("DenyEnvelope(%s) = %s, want %s", event, got, want)
+		if got := SkipEnvelope(event, "host-unavailable"); got != want {
+			t.Fatalf("SkipEnvelope(%s) = %s, want %s", event, got, want)
 		}
 	}
 	for _, kind := range Kinds() {
-		envelope := DenyEnvelope("PreToolUse", kind)
+		envelope := SkipEnvelope("PreToolUse", kind)
 		var decoded struct {
-			Output struct {
-				Decision string `json:"permissionDecision"`
-				Reason   string `json:"permissionDecisionReason"`
-			} `json:"hookSpecificOutput"`
+			SystemMessage string         `json:"systemMessage"`
+			Output        map[string]any `json:"hookSpecificOutput"`
 		}
 		if err := json.Unmarshal([]byte(envelope), &decoded); err != nil {
 			t.Fatalf("%s envelope does not decode: %v", kind, err)
 		}
-		if decoded.Output.Decision != "deny" || !strings.Contains(decoded.Output.Reason, "("+kind+")") {
+		if !strings.Contains(decoded.SystemMessage, "("+kind+")") || decoded.Output["additionalContext"] != decoded.SystemMessage {
 			t.Fatalf("%s envelope = %s", kind, envelope)
+		}
+		if _, decided := decoded.Output["permissionDecision"]; decided {
+			t.Fatalf("%s envelope decides the call: %s", kind, envelope)
 		}
 		if strings.Contains(envelope, "/") || strings.Contains(envelope, "{kind}") {
 			t.Fatalf("%s envelope carries more than the kind: %s", kind, envelope)
@@ -191,12 +191,12 @@ func TestDenyEnvelopeRendersEachEventShapeWithKindOnlyDiagnostics(t *testing.T) 
 	}
 }
 
-func TestDenyEnvelopeRefusesAnUnknownKind(t *testing.T) {
+func TestSkipEnvelopeRefusesAnUnknownKind(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
-			t.Fatal("DenyEnvelope accepted a kind the definition does not name")
+			t.Fatal("SkipEnvelope accepted a kind the definition does not name")
 		}
 	}()
-	DenyEnvelope("PreToolUse", "guessed")
+	SkipEnvelope("PreToolUse", "guessed")
 }

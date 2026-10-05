@@ -41,10 +41,10 @@ KINDS: tuple[str, ...] = (
     "worker-error",
     "dependency-unavailable",
 )
-REASON: str = (
-    "BLOCKED: the session guard did not complete ({kind}), so this call could not be checked for a sessio"
-    "n-ending program and stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain Ho"
-    "ok host answers, or ask the owner to install the host or run the call themselves."
+NOTE: str = (
+    "capt-hook: the session guard did not complete ({kind}), so this call ran without its check for sessi"
+    "on-ending programs. Run `capt-hook helper status`, then `capt-hook helper install` if the host is mi"
+    "ssing or outdated."
 )
 MAX_EVENT_INPUT: int = 33554432
 PASS_EXIT: int = 3
@@ -183,25 +183,23 @@ def mandatory(event: str, payload: bytes) -> bool:
     return names_guarded_value(tool) or names_guarded_value(payload_fields.get("tool_input"))
 
 
-def deny_envelope(event: str, kind: str) -> str:
+def skip_envelope(event: str, kind: str) -> str:
     if kind not in KINDS:
         raise ValueError(f"unknown guard kind {kind!r}")
-    reason = REASON.replace("{kind}", kind)
-    output = (
-        {"hookEventName": event, "decision": {"behavior": "deny", "message": reason}}
-        if event == "PermissionRequest"
-        else {"hookEventName": event, "permissionDecision": "deny", "permissionDecisionReason": reason}
-    )
-    return json.dumps({"hookSpecificOutput": output}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    note = NOTE.replace("{kind}", kind)
+    output: dict[str, object] = {"systemMessage": note}
+    if event != "PermissionRequest":
+        output["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": note}
+    return json.dumps(output, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def deny_if_mandatory(event: str, stdin: BinaryIO, *, prefix: bytes = b"") -> int:
+def skip_if_mandatory(event: str, stdin: BinaryIO, *, prefix: bytes = b"") -> int:
     if event not in EVENTS or not mandatory(event, prefix + stdin.read(MAX_EVENT_INPUT + 1)):
         return PASS_EXIT
-    print(deny_envelope(event, "host-unavailable"))
+    print(skip_envelope(event, "host-unavailable"))
     return 0
 
 
 # bin/hook has read one byte of stdin to tell a refused resolver from a host that spent the payload; argv[2] carries it.
 if __name__ == "__main__":
-    raise SystemExit(deny_if_mandatory(sys.argv[1], sys.stdin.buffer, prefix=os.fsencode(sys.argv[2])))
+    raise SystemExit(skip_if_mandatory(sys.argv[1], sys.stdin.buffer, prefix=os.fsencode(sys.argv[2])))

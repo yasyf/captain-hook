@@ -17,12 +17,12 @@ from captain_hook.cli import EVENT_NAMES, dispatch_event
 from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
-from captain_hook.dispatch import envelope_text, format_output, mandatory_completions
+from captain_hook.dispatch import denies, envelope_text, format_output, mandatory_completions
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
 from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
-from captain_hook.types import Action, Event, HookResult, RegisteredHook
+from captain_hook.types import Event, RegisteredHook
 from captain_hook.util import reqenv
 from captain_hook.worker.fail_open import ALL_HOOKS, fail_open_envelope, tally_fail_open, with_warning
 from captain_hook.worker.protocol import GUARD_COMPLETED, EventRequest, EventResponse, GuardCompletion
@@ -190,17 +190,22 @@ class ProductRuntime:
                     session_dir=session_dir,
                     transcript_loader=self._transcript_loader,
                 )
-            except Exception as exc:
-                if not (unfinished := unfinished_mandatory(required)):
+            except (Exception, SystemExit) as exc:
+                unfinished = unfinished_mandatory(required)
+                blocked = reqenv.mandatory_phase().blocked
+                if not unfinished and blocked is None:
                     raise
                 logger.bind(hooks=[hook.name for hook in unfinished]).opt(exception=True).error(
-                    "mandatory hook did not complete; denying the call"
+                    "dispatch failed; keeping the mandatory verdict and skipping unfinished hooks"
                 )
                 buffers.stderr.write(traceback.format_exc())
-                output, background = mandatory_denial(event, unfinished, f"{type(exc).__name__}: {exc}"), _nothing
+                verdict = format_output(event, blocked) if blocked is not None else None
+                cause = f"{type(exc).__name__}: {exc}"
+                output = mandatory_skip(event, verdict, unfinished, cause) if unfinished else verdict
+                background = _nothing
             else:
                 if unfinished := unfinished_mandatory(required):
-                    output = mandatory_denial(event, unfinished, "left unrun")
+                    output = mandatory_skip(event, output, unfinished, "left unrun")
             context = contextvars.copy_context()
             guard = _guard_completion(event) if request.mandatory and not unfinished else ""
         if session_id and (gaps := reqenv.evidence_gaps()) and (warning := tally_fail_open(event, session_id, gaps)):
@@ -260,13 +265,13 @@ def unfinished_mandatory(required: Mapping[str, RegisteredHook]) -> list[Registe
     return unfinished or (list(required.values()) if reqenv.mandatory_phase().failed else [])
 
 
-def mandatory_denial(event: Event, unfinished: Sequence[RegisteredHook], cause: str) -> Envelope | None:
+def mandatory_skip(event: Event, output: Envelope | None, unfinished: Sequence[RegisteredHook], cause: str) -> Envelope:
     names = ", ".join(hook.name for hook in unfinished)
     message = (
-        f"BLOCKED: the mandatory hook {names} did not complete ({cause}), so this call could not be checked "
-        "and stays denied. Retry once the hook answers, or ask the owner to run the call themselves."
+        f"capt-hook: the mandatory hook {names} did not complete ({cause}) and did not check this call. "
+        "Run `capt-hook logs` to see why."
     )
-    return format_output(event, HookResult(action=Action.block, message=message))
+    return with_warning(event, output, message) if denies(output) else fail_open_envelope(event, message)
 
 
 def guarded_events(state: app.State) -> frozenset[str]:

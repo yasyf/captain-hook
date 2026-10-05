@@ -52,6 +52,10 @@ def reason(envelope: dict[str, Any] | None) -> str:
     return envelope["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def note(envelope: dict[str, Any]) -> str:
+    return envelope["systemMessage"]
+
+
 def replied(response: Any) -> dict[str, Any]:
     return json.loads(response.stdout.splitlines()[-1])
 
@@ -1044,7 +1048,7 @@ class TestGuardCompletion:
         assert response.guard == "completed"
         assert "permissionDecision" not in response.stdout
 
-    def test_a_timed_out_mandatory_hook_is_denied_without_completion(
+    def test_a_timed_out_mandatory_hook_is_skipped_with_a_note_and_no_completion(
         self, general_pack: None, ticking_clock: Callable[[float], None]
     ) -> None:
         @on(Event.PreToolUse, mandatory=True)
@@ -1059,11 +1063,11 @@ class TestGuardCompletion:
         )
         assert response.exit == 0
         assert response.guard == ""
-        assert decision(replied(response)) == "deny"
+        assert decision(replied(response)) is None
         assert "judged did not complete (TimeoutError: claude-sdk timed out after 25s)" in response.stdout
         assert "TimeoutError: claude-sdk timed out after 25s" in response.stderr
 
-    def test_a_crashed_mandatory_hook_is_denied_without_completion(self) -> None:
+    def test_a_crashed_mandatory_hook_is_skipped_with_a_note_and_no_completion(self) -> None:
         @on(Event.PreToolUse, mandatory=True)
         def broken(evt: Any) -> None:
             raise RuntimeError("guard crashed")
@@ -1071,7 +1075,7 @@ class TestGuardCompletion:
         response = self.respond()
         assert response.exit == 0
         assert response.guard == ""
-        assert decision(replied(response)) == "deny"
+        assert decision(replied(response)) is None
         assert "broken did not complete (RuntimeError: guard crashed)" in response.stdout
         assert "RuntimeError: guard crashed" in response.stderr
 
@@ -1084,6 +1088,16 @@ class TestGuardCompletion:
         assert response.exit == 1
         assert response.guard == ""
         assert "permissionDecision" not in response.stdout
+
+    def test_a_settled_block_stands_when_an_advisory_hook_then_fails(self, general_pack: None) -> None:
+        @on(Event.PreToolUse, only_if=[Exhausted("invalid_request")])
+        def advisory(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        response = self.respond()
+        assert response.exit == 0
+        assert response.guard == "completed"
+        assert decision(replied(response)) == "deny"
 
     @pytest.mark.parametrize(
         ("broken", "payload"),
@@ -1174,7 +1188,7 @@ SLACK = '{"cwd":"/w","tool_name":"mcp__slack__send_message","tool_input":{"chann
 
 
 @pytest.mark.usefixtures("frozen_clock")
-class TestMandatoryDenial:
+class TestMandatorySkip:
     def respond(self, *, event: str = "PreToolUse", deadline_unix_ms: int = 0) -> Any:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.current_state()),
@@ -1193,7 +1207,7 @@ class TestMandatoryDenial:
         assert "guard" not in response.message()
         return response
 
-    def test_a_hook_ignoring_its_budget_denies_the_call_at_the_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_hook_ignoring_its_budget_is_skipped_at_the_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
         pool = ThreadPoolExecutor(max_workers=1)
         monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: pool)
 
@@ -1205,10 +1219,10 @@ class TestMandatoryDenial:
         pool.shutdown(wait=True)
         assert response.exit == 0
         envelope = replied(response)
-        assert decision(envelope) == "deny"
-        assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in reason(envelope)
+        assert decision(envelope) is None
+        assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in note(envelope)
 
-    def test_a_verdict_racing_the_closure_is_denied_not_errored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_verdict_racing_the_closure_is_skipped_not_errored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         recorded: list[str] = []
         pool = ThreadPoolExecutor(max_workers=1)
 
@@ -1226,12 +1240,12 @@ class TestMandatoryDenial:
             pool.shutdown(wait=True)
         assert response.exit == 0
         envelope = replied(response)
-        assert decision(envelope) == "deny"
-        assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in reason(envelope)
+        assert decision(envelope) is None
+        assert "slack_policy did not complete (MandatoryDeadlinePassed: slack_policy: still running" in note(envelope)
         assert "permission denied" not in response.stdout
         assert recorded == []
 
-    def test_a_publisher_holding_the_closure_past_the_deadline_is_denied_in_time(
+    def test_a_publisher_holding_the_closure_past_the_deadline_is_skipped_in_time(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         recorded: list[str] = []
@@ -1261,12 +1275,12 @@ class TestMandatoryDenial:
             pool.shutdown(wait=True)
         assert response.exit == 0
         envelope = replied(response)
-        assert decision(envelope) == "deny"
-        assert "did not complete (MandatoryDeadlinePassed: holder: still running" in reason(envelope)
+        assert decision(envelope) is None
+        assert "did not complete (MandatoryDeadlinePassed: holder: still running" in note(envelope)
         assert "permission denied" not in response.stdout
         assert recorded == []
 
-    def test_a_raising_hook_denies_the_call(self) -> None:
+    def test_a_raising_hook_is_skipped_with_a_note(self) -> None:
         @on(Event.PreToolUse, mandatory=True)
         def slack_policy(evt: Any) -> None:
             raise RuntimeError("policy backend down")
@@ -1274,14 +1288,18 @@ class TestMandatoryDenial:
         response = self.respond()
         assert response.exit == 0
         envelope = replied(response)
-        assert decision(envelope) == "deny"
-        assert reason(envelope).startswith(
-            "BLOCKED: the mandatory hook slack_policy did not complete (RuntimeError: policy backend down), "
-            "so this call could not be checked and stays denied."
+        assert decision(envelope) is None
+        assert (
+            note(envelope)
+            == envelope["hookSpecificOutput"]["additionalContext"]
+            == (
+                "capt-hook: the mandatory hook slack_policy did not complete (RuntimeError: policy backend down) "
+                "and did not check this call. Run `capt-hook logs` to see why."
+            )
         )
         assert "RuntimeError: policy backend down" in response.stderr
 
-    def test_a_hook_left_unrun_denies_the_call(self) -> None:
+    def test_a_hook_left_unrun_is_skipped_with_a_note(self) -> None:
         @on(Event.PreToolUse, only_if=[Exhausted()], mandatory=True)
         def slack_policy(evt: Any) -> None:
             raise AssertionError("handler must not run")
@@ -1289,23 +1307,22 @@ class TestMandatoryDenial:
         response = self.respond()
         assert response.exit == 0
         envelope = replied(response)
-        assert decision(envelope) == "deny"
-        assert "slack_policy did not complete (left unrun)" in reason(envelope)
+        assert decision(envelope) is None
+        assert "slack_policy did not complete (left unrun)" in note(envelope)
         assert "Traceback" not in response.stderr
 
-    def test_a_permission_request_is_denied_in_its_own_shape(self) -> None:
+    def test_a_permission_request_is_noted_without_a_decision(self) -> None:
         @on(Event.PermissionRequest, mandatory=True)
         def slack_policy(evt: Any) -> None:
             raise RuntimeError("policy backend down")
 
         response = self.respond(event="PermissionRequest")
         assert response.exit == 0
-        output = replied(response)["hookSpecificOutput"]
-        assert output["hookEventName"] == "PermissionRequest"
-        assert output["decision"]["behavior"] == "deny"
-        assert "slack_policy did not complete (RuntimeError: policy backend down)" in output["decision"]["message"]
+        envelope = replied(response)
+        assert list(envelope) == ["systemMessage"]
+        assert "slack_policy did not complete (RuntimeError: policy backend down)" in note(envelope)
 
-    def test_same_key_registrations_with_one_unrun_deny_the_call(self) -> None:
+    def test_same_key_registrations_with_one_unrun_are_skipped_with_a_note(self) -> None:
         def register(only_if: list[Any]) -> None:
             def slack_policy(evt: Any) -> None:
                 return None
@@ -1317,8 +1334,113 @@ class TestMandatoryDenial:
         response = self.respond()
         assert response.exit == 0
         envelope = replied(response)
+        assert decision(envelope) is None
+        assert "slack_policy did not complete (left unrun)" in note(envelope)
+
+    def test_a_completed_block_stands_beside_a_hook_left_unrun(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            return evt.block("permission denied")
+
+        @on(Event.PreToolUse, only_if=[Exhausted()], mandatory=True)
+        def slack_audit(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
         assert decision(envelope) == "deny"
-        assert "slack_policy did not complete (left unrun)" in reason(envelope)
+        assert "permission denied" in reason(envelope)
+        assert "slack_audit did not complete (left unrun)" in note(envelope)
+
+    def test_a_completed_block_stands_beside_a_raising_hook(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            return evt.block("permission denied")
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_audit(evt: Any) -> None:
+            raise RuntimeError("audit backend down")
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "permission denied" in reason(envelope)
+        assert "slack_audit did not complete (RuntimeError: audit backend down)" in note(envelope)
+
+    def test_an_accepted_block_stands_when_a_sibling_holds_the_closure_past_the_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = ThreadPoolExecutor(max_workers=2)
+        early_noted = threading.Event()
+
+        with monkeypatch.context() as racing:
+            racing.setattr(dispatch_module, "mandatory_pool", lambda: pool)
+            reached, release = held_under_the_closure(racing, "holder")
+            noting = reqenv.note_mandatory_completed
+
+            def note_early(key: str) -> None:
+                noting(key)
+                if key.startswith("early_policy."):
+                    early_noted.set()
+
+            racing.setattr(reqenv, "note_mandatory_completed", note_early)
+            closing_once(
+                racing,
+                reached,
+                then=lambda: racing.setattr(reqenv, "time", SimpleNamespace(time=lambda: FROZEN_NOW + 60.0)),
+            )
+
+            @on(Event.PreToolUse, mandatory=True)
+            def early_policy(evt: Any) -> Any:
+                return evt.block("permission denied")
+
+            @on(Event.PreToolUse, mandatory=True)
+            def holder(evt: Any) -> None:
+                assert early_noted.wait(timeout=5.0)
+
+            response = self.respond(deadline_unix_ms=int((FROZEN_NOW + 30.0) * 1000))
+            release.set()
+            pool.shutdown(wait=True)
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "permission denied" in reason(envelope)
+        assert "did not complete (MandatoryDeadlinePassed: holder: still running" in note(envelope)
+
+    def test_a_completed_block_stands_beside_a_hook_that_exits(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            return evt.block("permission denied")
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_audit(evt: Any) -> None:
+            raise SystemExit(0)
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert decision(envelope) == "deny"
+        assert "permission denied" in reason(envelope)
+        assert "slack_audit did not complete (SystemExit: 0)" in note(envelope)
+
+    @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
+    def test_a_skip_never_carries_another_hooks_allow(self, event: str) -> None:
+        @on(Event.PreToolUse | Event.PermissionRequest, only_if=[Exhausted()], mandatory=True)
+        def slack_policy(evt: Any) -> None:
+            raise AssertionError("handler must not run")
+
+        @on(Event.PreToolUse | Event.PermissionRequest)
+        def approver(evt: Any) -> Any:
+            return evt.allow()
+
+        response = self.respond(event=event)
+        assert response.exit == 0
+        envelope = replied(response)
+        assert "slack_policy did not complete (left unrun)" in note(envelope)
+        assert "permissionDecision" not in response.stdout
+        assert '"decision"' not in response.stdout
 
     def test_a_completed_policy_lets_the_call_through(self) -> None:
         @on(Event.PreToolUse, mandatory=True)

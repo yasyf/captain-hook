@@ -69,9 +69,9 @@ Session not fresh. Claude Code loads plugin hooks at session start. A hook on a 
 
 Every event runs the plugin's `bin/hook`, which binrun resolves to the `capt-hookd` inside
 `~/Applications/Captain Hook.app`. If the app is missing or older than the plugin needs, dispatch exits non-zero
-instead of falling back to an unfenced wheel, and a `PreToolUse` or `PermissionRequest` that names a
-session-ending program is denied outright until the app is back. Install or repair
-the application:
+instead of falling back to an unfenced wheel. A `PreToolUse` or `PermissionRequest` that names a
+session-ending program instead runs under your permissions with a skip note and exit 0.
+Install or repair the application:
 
 ```bash
 uvx capt-hook helper install

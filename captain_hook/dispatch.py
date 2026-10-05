@@ -813,9 +813,17 @@ def collect_mandatory(
         if not closed:
             raise MandatoryDeadlinePassed("a verdict was still publishing at the caller's deadline")
     except BaseException:
-        phase.conclude("failed")
+        phase.conclude("failed", blocked=settled_block(futures))
         raise
-    phase.conclude("settled")
+    phase.conclude("settled", blocked=settled_block(futures))
+
+
+def settled_block(futures: Sequence[Future[HookResult | None]]) -> HookResult | None:
+    for future in futures:
+        if future.done() and not future.cancelled() and future.exception() is None:
+            if (result := future.result()) is not None and result.action is Action.block:
+                return result
+    return None
 
 
 def dispatch_mandatory(
@@ -838,9 +846,9 @@ def dispatch_mandatory(
     contract, so a fail-open skip leaves it unrun — and any other exception, a handler's included,
     is the whole event's: a crashed mandatory hook must read as no completion, never as a verdict.
     The settled futures fold into :func:`combine` at the hooks' own registration positions.
-    The worker turns a failed phase into the event's deny only when it recognizes the failure
-    and its reply reaches the client; a transport that goes silent is the client's call, which
-    retries a timed-out guard once and then warns.
+    The worker turns a failed phase into a skip note beside any verdict already reached; a
+    transport that goes silent is the client's call, which retries a timed-out guard once,
+    evaluates locally, and then lets the call run with the same note.
     """
     from captain_hook.transcripts import fork_transcript, release_transcript
 

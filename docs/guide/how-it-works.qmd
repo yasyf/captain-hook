@@ -243,16 +243,17 @@ The plugin registers one command for every event:
 [binrun](https://github.com/yasyf/binrun) with the descriptor beside it, bootstrapping the one
 pinned, sha256-verified runner on a machine without it. The descriptor names the installed app's
 `Contents/Helpers/capt-hookd` and sets `copy_exec`, so binrun runs a cached copy outside the
-bundle a deploy replaces. It requires app 12.66.0.
+bundle a deploy replaces. It requires app 12.31.0, the original binrun floor; the plugin sends
+no command that host lacks.
 
 A missing or older app gets binrun's `brew upgrade` error and exit 1, except for a `PreToolUse`
 or `PermissionRequest`. binrun refuses before reading stdin, so `bin/hook` runs the plugin's
 bundled guard literal under the `python3` on `PATH`. A call that names a session-ending program
-is denied with exit 0 and the host-unavailable envelope, and any other call keeps the exit 1.
-When no `python3` can run the literal, nothing can classify the payload, so `bin/hook` denies
-every `PreToolUse` and `PermissionRequest` with the rendered `dependency-unavailable` envelope
-and exit 0 until the host or a working `python3` is installed. A host that ran and then failed
-has already read stdin, so its own exit code passes through untouched.
+runs under your permissions with a `host-unavailable` skip note and exit 0, and any other
+call keeps the non-blocking exit 1. When no `python3` can run the literal, nothing can classify
+the payload, so every `PreToolUse` and `PermissionRequest` gets the static
+`dependency-unavailable` skip note and exit 0. A host that ran and then failed has already read
+stdin, so its own exit code passes through untouched.
 
 The client reads the event from stdin, takes the project root from the first of
 `CLAUDE_PROJECT_DIR`, `FACTORY_PROJECT_DIR`, and the payload's `cwd`, and sends one request over daemonkit's
@@ -291,18 +292,34 @@ codes separate. The worker refuses an event whose deadline has already passed.
 
 ### Failure is terminal for that dispatch
 
-There is no fail-open mode, replay, or compatibility protocol. The host never runs an event
-twice. When the host never answers a mandatory `PreToolUse` or `PermissionRequest` flagged by
-the session guard prefilter, the client tries one local evaluation after a `host-unavailable`,
-`transport-refused`, `transport-timeout`, or `transport-error` failure. It runs this build's
-installed Python runtime in a child process with `python -P -m captain_hook.worker evaluate`,
-passing the same request prepared for the host. Non-mandatory events never evaluate locally.
+There is no replay or compatibility protocol. The host never runs an event twice. The client
+retries a mandatory `PreToolUse` or `PermissionRequest` flagged by the session guard prefilter
+once after `transport-timeout`. When the host never answers, the client runs one local
+evaluation after a `host-unavailable`, `transport-refused`, `transport-timeout`, or
+`transport-error` failure. It runs this build's installed Python runtime in a child process
+with `python -P -m captain_hook.worker evaluate`, passing the same request prepared for the
+host. Non-mandatory events never evaluate locally.
 
-The child returns the same `EventResponse` as a host worker, and the client checks guard
-completion the same way. A completed guard's allow or deny passes through unchanged; no
-completion still denies with `no-verdict`. If this build's tool environment is missing or the
-child crashes or times out, the client denies with the original transport kind and exit 0,
-as before. An answered event never gets a local evaluation, even if its guard did not complete.
+The child returns the same `EventResponse` as a host worker, and the client checks guard completion
+the same way. A completed guard's allow or deny passes through unchanged, as does a worker's deny or
+blocking exit 2 without guard completion. Other incomplete replies return a skip note with the
+matching failure kind and exit 0. If this build's tool environment is missing or the child crashes
+or times out, the skip note keeps the original transport kind. An answered event never gets a local
+evaluation, even if its guard did not complete.
+
+The skip note leaves the call under your permissions. `PreToolUse` stdout puts it in
+top-level `systemMessage` and `hookSpecificOutput.additionalContext`, with no
+`permissionDecision`; `PermissionRequest` returns only `systemMessage`, with no decision.
+The note says the session guard did not complete, names the failure kind, and says the call
+ran without its check for session-ending programs. It points to `capt-hook helper status`,
+then `capt-hook helper install` if the host is missing or outdated.
+
+A mandatory hook that raises, misses its deadline, or is left unrun adds a note beside a deny the
+other hooks reached. Any other output, including an allow, a rewrite, or advisory context, gives way
+to the bare note, so a skipped guard never carries another hook's allow and Claude Code's own
+permission prompt still applies. The note names the unfinished hooks and cause, says they did not
+check the call, and points to `capt-hook logs`. A block any mandatory hook settled survives a
+sibling's failure and a later advisory hook's failure.
 
 Local evaluation drops background work, including async hooks and reviewer dispatch.
 Transcript evidence still comes through the host's transcript-client, so hooks that need it
@@ -387,8 +404,9 @@ runtime owner; it does not make untrusted hook code safe.
 
 **The signed host is missing.** Install or repair it with
 `uvx capt-hook helper install`. Dispatch fails non-zero and never runs the Python CLI instead; a
-`PreToolUse` or `PermissionRequest` naming a session-ending program is denied until the host is
-back. [Troubleshooting](troubleshooting.qmd#the-signed-host-is-missing-or-dispatch-fails) walks both.
+`PreToolUse` or `PermissionRequest` naming a session-ending program instead runs under your
+permissions with a skip note and exit 0.
+[Troubleshooting](troubleshooting.qmd#the-signed-host-is-missing-or-dispatch-fails) walks both.
 
 **A worker is stuck or stale.** Run `"$host" status`, inspect `capt-hookd.log`, then use
 `"$host" restart-workers`. Restart kills and reaps the current worker generations; it is not a
