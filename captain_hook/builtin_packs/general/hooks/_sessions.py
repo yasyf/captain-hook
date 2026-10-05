@@ -1269,12 +1269,13 @@ def stand_downs(task: str) -> list[StandDown]:
     return sorted(notices.values(), key=lambda notice: notice.at)
 
 
-def stand_down_count(task: str) -> str:
+def stand_down_remedy(task: str) -> str | None:
+    """What an agent can do about a blocked stop of teammate *task*, or ``None`` for a task id that is no teammate."""
     if TEAMMATE_TASK.fullmatch(task) is None:
-        return ""
+        return None
     return (
-        f" It has {len(stand_downs(task))} STAND-DOWN message(s) from the root; {STAND_DOWN_NOTICES}, the second at "
-        f"least {STAND_DOWN_AGE // timedelta(minutes=1)} minutes old, lift this block."
+        f"Let it finish, ask the owner to end it, or send a second STAND-DOWN and wait "
+        f"{STAND_DOWN_AGE // timedelta(minutes=1)} minutes (it has {len(stand_downs(task))})."
     )
 
 

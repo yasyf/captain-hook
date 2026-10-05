@@ -16,7 +16,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_ruling,
     inline_spawn,
     lift,
-    stand_down_count,
+    stand_down_remedy,
 )
 from captain_hook.grants import Proposal
 
@@ -111,13 +111,15 @@ def describe_target(target: tuple[str, str] | None) -> str:
 )
 def stop_unverified_task(evt: ToolRewriteEvent) -> HookResult | None:
     target = stop_target(evt.input.raw)
+    remedy = (
+        target and stand_down_remedy(target[1])
+    ) or f"Let it finish, or ask the owner to end it or {LATER_SESSION}."
     message = (
         f"BLOCKED: `{evt.tool_name}` on {describe_target(target)} "
         "cannot be verified as a disposable shell task rather than a workflow, agent, or teammate session, its own "
-        f"children included. Let it finish, or ask the owner to end it or {LATER_SESSION}."
+        f"children included. {remedy}"
     )
     if target is None:
         return evt.block(message)
-    message += stand_down_count(target[1])
     action = Proposal(scope={"task": target[1]}, summary=f"stop {target[0]} {target[1]}")
     return block_first(evt, (lift(evt, TASK_STOP, action, message),))

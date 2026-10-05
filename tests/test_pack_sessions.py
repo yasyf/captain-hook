@@ -713,11 +713,10 @@ def mailbox_of(home: Path, task: str, *messages: tuple[str, str, datetime]) -> N
     )
 
 
-def with_count(denied: str, count: int) -> str:
-    return (
-        f"{denied} It has {count} STAND-DOWN message(s) from the root; 2, the second at least 5 minutes old, lift "
-        "this block."
-    )
+def with_count(task: str, count: int) -> str:
+    cause = STOP_DENIED.split(" Let it finish")[0].replace("wcn64vfub", task)
+    remedy = "Let it finish, ask the owner to end it, or send a second STAND-DOWN and wait 5 minutes"
+    return f"{cause} {remedy} (it has {count})."
 
 
 class TestStopTool:
@@ -815,8 +814,7 @@ class TestStopTool:
         self, general_pack: None, tmp_path: Path, task_id: str, fields: dict[str, Any]
     ) -> None:
         denied = decide_input(stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
-        plain = STOP_DENIED.replace("wcn64vfub", task_id)
-        assert denied == (plain if "@" not in task_id else with_count(plain, 0))
+        assert denied == (STOP_DENIED.replace("wcn64vfub", task_id) if "@" not in task_id else with_count(task_id, 0))
         assert spends("sessions.task-stop") == []
 
 
@@ -843,7 +841,7 @@ class TestStoodDownLane:
     ) -> None:
         task = "sweepers-delete@session-67c0e5da"
         mailbox_of(home, task, OBSERVED_STAND_DOWNS[0])
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 1)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 1)
         assert spends("sessions.task-stop") == []
 
     def test_a_second_notice_under_five_minutes_old_holds_the_block(
@@ -851,7 +849,7 @@ class TestStoodDownLane:
     ) -> None:
         task = "cc-inbox@session-67c0e5da"
         mailbox_of(home, task, OBSERVED_STAND_DOWNS[0], ("team-lead", "STAND-DOWN again.", minutes_ago(4)))
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 2)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 2)
 
     @pytest.mark.parametrize(
         "second",
@@ -865,7 +863,7 @@ class TestStoodDownLane:
     ) -> None:
         task = "cc-inbox@session-67c0e5da"
         mailbox_of(home, task, OBSERVED_STAND_DOWNS[0], second)
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 1)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 1)
 
     def test_one_notice_copied_twice_counts_once(self, general_pack: None, tmp_path: Path, home: Path) -> None:
         task = "cc-inbox@session-67c0e5da"
@@ -873,14 +871,14 @@ class TestStoodDownLane:
         mailbox = home / ".claude" / "teams" / "session-67c0e5da" / "inboxes" / "cc-inbox.json"
         notice = json.loads(mailbox.read_text())[0]
         mailbox.write_text(json.dumps([notice, notice]))
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 1)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 1)
 
     def test_a_torn_mailbox_counts_no_notices(self, general_pack: None, tmp_path: Path, home: Path) -> None:
         task = "cc-inbox@session-67c0e5da"
         mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
         mailbox = home / ".claude" / "teams" / "session-67c0e5da" / "inboxes" / "cc-inbox.json"
         mailbox.write_text(mailbox.read_text()[:40])
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 0)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 0)
 
     def test_a_lane_never_takes_the_stand_down_lift(self, general_pack: None, tmp_path: Path, home: Path) -> None:
         task = "cc-inbox@session-67c0e5da"
@@ -899,7 +897,7 @@ class TestStoodDownLane:
     ) -> None:
         mailbox_of(home, "cc-inbox@session-756e25cc", *OBSERVED_STAND_DOWNS)
         task = "cc-inbox@session-67c0e5da"
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(STOP_DENIED.replace("wcn64vfub", task), 0)
+        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 0)
 
 
 class TestTerminalClose:
