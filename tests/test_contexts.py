@@ -362,7 +362,7 @@ class TestProseDeliverableSentences:
     def test_path_tokens_and_mere_mentions_do_not_match(self) -> None:
         assert not prose_deliverable_sentences("Update the retry backoff config per the spec in docs/plan.md")
         assert not prose_deliverable_sentences("Audit docs/architecture.md for stale claims")
-        assert not prose_deliverable_sentences("all prose stays with the main agent on fable")
+        assert not prose_deliverable_sentences("all prose stays with the main agent on opus")
         assert not prose_deliverable_sentences("review the README for factual errors")
 
 

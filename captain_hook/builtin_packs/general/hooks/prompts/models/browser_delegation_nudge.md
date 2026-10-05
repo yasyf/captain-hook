@@ -1,7 +1,7 @@
 Decide whether the main agent should delegate this sustained browser automation
 instead of driving it inline.
 
-The main loop runs on fable-5; this session has been driving the browser directly —
+The main loop is the opus root orchestrator; this session has been driving the browser directly —
 a run of `agent-browser` / `playwright` calls (click, fill, snapshot, scrape, QA
 step) through the recent tool calls shown below.
 
@@ -9,7 +9,7 @@ The Model Routing rubric: sustained tool-driving — browser automation, QA swee
 and bulk extract/fill/snapshot — belongs on opus at xhigh. Delegate it to a
 model='opus' subagent at effort='xhigh' to drive agent-browser and return findings.
 When the site needs the user's own login, use an agent-browser-with-cookies
-teammate on opus at xhigh. The session's fable model does not change that route.
+teammate on opus at xhigh. The root's own model does not change that route.
 Keep browser work inline only for a single gated, stateful, or authenticated
 interaction the main agent just decided to run: a go/no-go verification, one
 confirming screenshot, or a login+2FA flow it must hold open.
