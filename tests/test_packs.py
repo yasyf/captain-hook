@@ -40,6 +40,7 @@ GENERAL_HOOKS = {
     "prompts",
     "questions",
     "review",
+    "rulings",
     "sessions",
     "spawns",
     "stops",
