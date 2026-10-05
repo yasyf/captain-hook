@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"set_criterion_status","id":"dd0b7433bd3e25935ecdec07810619a5","status":"met","note":"Exact final three-file source binding74321de2 and review2c6abfea; all other tracked blobs and original checkouts preserved."}]}
+{"v":1,"lamport":3,"ops":[{"kind":"set_criterion_status","id":"8a1f502ffa8beede8065945001405e59","status":"met","note":"PR317@7e027a80;16 CI jobs plus Guides passed. Root merged9633 with exact composed tree d47b560f. Publication receipt6060281c."}]}
