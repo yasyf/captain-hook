@@ -140,7 +140,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil && request.Mandatory {
 		kind := failureKind(err, client != nil)
 		if response, err = evaluateLocally(request, timeout); err != nil {
-			return denyMandatory(stdout, stderr, request.Event, kind)
+			return skipMandatory(stdout, stderr, request.Event, kind)
 		}
 	}
 	if err != nil {
@@ -149,7 +149,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if request.Mandatory {
 		if kind := incompleteKind(response); kind != "" {
-			return denyMandatory(stdout, stderr, request.Event, kind)
+			return skipMandatory(stdout, stderr, request.Event, kind)
 		}
 	}
 	_, stdoutErr := io.WriteString(stdout, response.Stdout)
@@ -210,15 +210,14 @@ var evaluateLocally = func(request wireproto.EventRequest, timeout time.Duration
 	return response, response.Validate()
 }
 
-// denyMandatory answers a mandatory event whose guard did not complete: the
-// deny envelope on stdout, the kind alone on stderr, and exit 0 so Claude Code
-// reads the verdict rather than a hook error it would let the call through on.
-func denyMandatory(stdout, stderr io.Writer, event, kind string) int {
-	if _, err := io.WriteString(stdout, wireproto.DenyEnvelope(event, kind)+"\n"); err != nil {
+// skipMandatory lets a mandatory event whose guard did not complete run with
+// the skip note on stdout and the kind alone on stderr.
+func skipMandatory(stdout, stderr io.Writer, event, kind string) int {
+	if _, err := io.WriteString(stdout, wireproto.SkipEnvelope(event, kind)+"\n"); err != nil {
 		fmt.Fprintf(stderr, "capt-hookd: write result: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stderr, "capt-hookd: the session guard did not complete (%s); denied\n", kind)
+	fmt.Fprintf(stderr, "capt-hookd: the session guard did not complete (%s); skipped\n", kind)
 	return 0
 }
 
@@ -244,6 +243,8 @@ func failureKind(err error, opened bool) string {
 
 func incompleteKind(response wireproto.EventResponse) string {
 	switch {
+	case response.Exit == 2 || deniesCall(response.Stdout):
+		return ""
 	case response.Exit != 0:
 		return "worker-error"
 	case response.Guard == wireproto.GuardCompleted:
@@ -253,6 +254,24 @@ func incompleteKind(response wireproto.EventResponse) string {
 	default:
 		return "no-verdict"
 	}
+}
+
+// deniesCall reports whether a worker's stdout already denies the call, a
+// verdict that stands even when another mandatory hook did not complete.
+func deniesCall(stdout string) bool {
+	var envelope struct {
+		HookSpecificOutput struct {
+			PermissionDecision string `json:"permissionDecision"`
+			Decision           struct {
+				Behavior string `json:"behavior"`
+			} `json:"decision"`
+		} `json:"hookSpecificOutput"`
+	}
+	if json.Unmarshal([]byte(stdout), &envelope) != nil {
+		return false
+	}
+	output := envelope.HookSpecificOutput
+	return output.PermissionDecision == "deny" || output.Decision.Behavior == "deny"
 }
 
 func eventRequest(event string, stdin io.Reader) (wireproto.EventRequest, error) {

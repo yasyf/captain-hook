@@ -9,10 +9,8 @@ import (
 	"strings"
 )
 
-// guardDefinition is the one definition of the session guard's prefilter,
-// shared with the Python guard and the stdlib shim, which render it at build
-// time. It decides only whether an event is mandatory — one the client must
-// see the guard complete before the call may proceed — never a verdict.
+// guardDefinition is the session guard's prefilter, rendered at build time into
+// the Python guard and the stdlib shim; it picks mandatory events, never a verdict.
 //
 //go:embed guard.json
 var guardDefinition []byte
@@ -25,7 +23,7 @@ type guardSpec struct {
 	ExemptHeads   []string          `json:"exempt_heads"`
 	Folds         map[string]string `json:"folds"`
 	Kinds         []string          `json:"kinds"`
-	Reason        string            `json:"reason"`
+	Note          string            `json:"note"`
 	MaxEventInput int               `json:"max_event_input"`
 }
 
@@ -65,7 +63,7 @@ func loadFolds(table map[string]string) map[rune]rune {
 }
 
 // Kinds names every way a mandatory event can end without the guard's
-// completion; DenyEnvelope accepts exactly these.
+// completion; SkipEnvelope accepts exactly these.
 func Kinds() []string {
 	return slices.Clone(guard.Kinds)
 }
@@ -247,30 +245,20 @@ func joinedStrings(items []any) (string, bool) {
 	return strings.Join(words, " "), true
 }
 
-// DenyEnvelope renders the hook stdout that denies a mandatory event whose
-// guard did not complete for kind, in the shape event's hook protocol reads.
-// The reason names the kind and nothing else: no payload, path, or error text.
-func DenyEnvelope(event, kind string) string {
+// SkipEnvelope renders the decision-free note for a mandatory event whose
+// guard did not complete for kind; the call runs under the user's own permissions.
+func SkipEnvelope(event, kind string) string {
 	if !slices.Contains(guard.Kinds, kind) {
 		panic(fmt.Sprintf("captain: unknown guard kind %q", kind))
 	}
-	reason := strings.ReplaceAll(guard.Reason, "{kind}", kind)
-	var output map[string]any
-	if event == "PermissionRequest" {
-		output = map[string]any{
-			"hookEventName": event,
-			"decision":      map[string]any{"behavior": "deny", "message": reason},
-		}
-	} else {
-		output = map[string]any{
-			"hookEventName":            event,
-			"permissionDecision":       "deny",
-			"permissionDecisionReason": reason,
-		}
+	note := strings.ReplaceAll(guard.Note, "{kind}", kind)
+	output := map[string]any{"systemMessage": note}
+	if event != "PermissionRequest" {
+		output["hookSpecificOutput"] = map[string]any{"hookEventName": event, "additionalContext": note}
 	}
-	envelope, err := Marshal(map[string]any{"hookSpecificOutput": output})
+	envelope, err := Marshal(output)
 	if err != nil {
-		panic(fmt.Sprintf("captain: encode deny envelope: %v", err))
+		panic(fmt.Sprintf("captain: encode skip envelope: %v", err))
 	}
 	return string(envelope)
 }

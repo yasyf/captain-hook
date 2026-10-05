@@ -12,23 +12,28 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
 
+    from captain_hook.types import HookResult
+
 
 @dataclass(slots=True)
 class MandatoryPhase:
     """How the bound request's mandatory phase ended: ``settled`` with every verdict in hand, or ``failed``.
 
     Concluded exactly once, after the phase's cutoff closed, so the worker reads the phase's own
-    verdict rather than inferring one from the completions a racing hook may still publish.
+    verdict rather than inferring one from the completions a racing hook may still publish. It
+    keeps the first block a hook settled, so a failure after the verdict cannot drop it.
     """
 
     outcome: Literal["", "settled", "failed"] = ""
+    blocked: HookResult | None = None
 
     @property
     def failed(self) -> bool:
         return self.outcome == "failed"
 
-    def conclude(self, outcome: Literal["settled", "failed"]) -> None:
+    def conclude(self, outcome: Literal["settled", "failed"], *, blocked: HookResult | None = None) -> None:
         self.outcome = outcome
+        self.blocked = blocked
 
 
 @dataclass(slots=True)

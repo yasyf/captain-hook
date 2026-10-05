@@ -71,7 +71,7 @@ func runEvent(t *testing.T, event, payload string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-func TestRunDeniesAMandatoryEventTheGuardDidNotComplete(t *testing.T) {
+func TestRunSkipsAMandatoryEventTheGuardDidNotCompleteWithANote(t *testing.T) {
 	refused := errors.Join(fmt.Errorf("captain: %w", daemonkit.ErrAbsent), context.DeadlineExceeded)
 	for _, tc := range []struct {
 		name, event, kind string
@@ -99,7 +99,7 @@ func TestRunDeniesAMandatoryEventTheGuardDidNotComplete(t *testing.T) {
 				local := localEvaluation{err: errors.New("captain: the capt-hook /Users/x tool env is not installed")}
 				scriptLocal(t, &local)
 				code, stdout, stderr := runEvent(t, tc.event, payload)
-				if want := wireproto.DenyEnvelope(tc.event, tc.kind) + "\n"; code != 0 || stdout != want {
+				if want := wireproto.SkipEnvelope(tc.event, tc.kind) + "\n"; code != 0 || stdout != want {
 					t.Fatalf("exit=%d stdout=%q, want exit 0 with %q", code, stdout, want)
 				}
 				if transport := strings.HasPrefix(tc.kind, "transport-") || tc.kind == "host-unavailable"; transport != (len(local.requests) == 1) {
@@ -133,7 +133,7 @@ func (c *flakyClient) Event(_ context.Context, _ wireproto.EventRequest) (wirepr
 
 func (c *flakyClient) Close() error { return nil }
 
-func TestRunRetriesATimedOutGuardOnceThenDenies(t *testing.T) {
+func TestRunRetriesATimedOutGuardOnceThenSkips(t *testing.T) {
 	deny := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}` + "\n"
 	completed := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: deny, Guard: wireproto.GuardCompleted}
 	for _, event := range []string{"PreToolUse", "PermissionRequest"} {
@@ -155,9 +155,9 @@ func TestRunRetriesATimedOutGuardOnceThenDenies(t *testing.T) {
 				t.Cleanup(func() { openEventClient = previous })
 				scriptLocal(t, &localEvaluation{err: context.DeadlineExceeded})
 				code, stdout, stderr := runEvent(t, event, payload)
-				want := wireproto.DenyEnvelope(event, "transport-timeout") + "\n"
+				want := wireproto.SkipEnvelope(event, "transport-timeout") + "\n"
 				if code != 0 || client.requests != 2 || stdout != want ||
-					stderr != "capt-hookd: the session guard did not complete (transport-timeout); denied\n" {
+					stderr != "capt-hookd: the session guard did not complete (transport-timeout); skipped\n" {
 					t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d, want exit 0 with %q after two timeouts",
 						code, stdout, stderr, client.requests, want)
 				}
@@ -193,8 +193,8 @@ func TestRunAnswersAMandatoryEventLocallyWhenTheHostTransportFails(t *testing.T)
 			},
 			"no guard completion": {
 				wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
-				wireproto.DenyEnvelope("PreToolUse", "no-verdict") + "\n",
-				"capt-hookd: the session guard did not complete (no-verdict); denied\n",
+				wireproto.SkipEnvelope("PreToolUse", "no-verdict") + "\n",
+				"capt-hookd: the session guard did not complete (no-verdict); skipped\n",
 			},
 		} {
 			t.Run(kind+" / "+name, func(t *testing.T) {
@@ -239,11 +239,37 @@ func TestRunPassesACompletedGuardThroughUnchanged(t *testing.T) {
 	}
 }
 
+func TestRunKeepsAWorkersDenyWhenTheGuardDidNotComplete(t *testing.T) {
+	for event, deny := range map[string]string{
+		"PreToolUse": `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",` +
+			`"permissionDecisionReason":"BLOCKED: pkill signals every process matching a name"}}` + "\n",
+		"PermissionRequest": `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"BLOCKED: pkill"},` +
+			`"hookEventName":"PermissionRequest"}}` + "\n",
+	} {
+		t.Run(event, func(t *testing.T) {
+			client := scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: deny}}
+			scriptClient(t, &client, nil)
+			code, stdout, stderr := runEvent(t, event, destructivePayload)
+			if code != 0 || stdout != deny || stderr != "" {
+				t.Fatalf("exit=%d stdout=%q stderr=%q, want the worker's deny unchanged", code, stdout, stderr)
+			}
+		})
+	}
+	t.Run("blocking exit", func(t *testing.T) {
+		client := scriptedClient{response: wireproto.EventResponse{
+			Schema: wireproto.Schema, Status: "ok", Stderr: "BLOCKED: pkill\n", Exit: 2,
+		}}
+		scriptClient(t, &client, nil)
+		code, stdout, stderr := runEvent(t, "PreToolUse", destructivePayload)
+		if code != 2 || stdout != "" || stderr != "BLOCKED: pkill\n" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want the worker's blocking exit unchanged", code, stdout, stderr)
+		}
+	})
+}
+
 func TestRunEmitsTheWorkersDenyForARequestThePrefilterDidNotFlag(t *testing.T) {
 	deny := `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", ` +
-		`"permissionDecisionReason": "BLOCKED: the mandatory hook slack_policy did not complete ` +
-		`(MandatoryDeadlinePassed: slack_policy: still running at the caller's deadline), so this call could not ` +
-		`be checked and stays denied. Retry once the hook answers, or ask the owner to run the call themselves."}}` + "\n"
+		`"permissionDecisionReason": "BLOCKED: slack_policy forbids posting to #general"}}` + "\n"
 	client := scriptedClient{response: wireproto.EventResponse{
 		Schema: wireproto.Schema, Status: "ok", Stdout: deny, Stderr: "Traceback (most recent call last):\n",
 	}}

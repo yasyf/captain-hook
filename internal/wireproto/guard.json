@@ -20,7 +20,7 @@
     "worker-error",
     "dependency-unavailable"
   ],
-  "reason": "BLOCKED: the session guard did not complete ({kind}), so this call could not be checked for a session-ending program and stays denied (AGENTS.md § Protect Existing Sessions). Retry once the Captain Hook host answers, or ask the owner to install the host or run the call themselves.",
+  "note": "capt-hook: the session guard did not complete ({kind}), so this call ran without its check for session-ending programs. Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
   "max_event_input": 33554432,
   "pass_exit": 3
 }

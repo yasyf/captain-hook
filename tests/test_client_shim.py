@@ -33,13 +33,13 @@ def run(monkeypatch: pytest.MonkeyPatch, event: str, stdin: object) -> int:
 
 
 @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
-def test_missing_host_denies_a_destructive_event(
+def test_missing_host_lets_a_destructive_event_run_with_a_skip_note(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], event: str
 ) -> None:
     monkeypatch.setattr(os, "execv", missing_execv)
     assert run(monkeypatch, event, io.TextIOWrapper(io.BytesIO(DESTRUCTIVE_PAYLOAD))) == 0
     captured = capsys.readouterr()
-    assert captured.out == guard_literal.deny_envelope(event, "host-unavailable") + "\n"
+    assert captured.out == guard_literal.skip_envelope(event, "host-unavailable") + "\n"
     assert captured.err == ""
 
 

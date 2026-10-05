@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.guard_literal import PASS_EXIT, deny_envelope
+from captain_hook.guard_literal import PASS_EXIT, skip_envelope
 from tests.helpers import BENIGN_PAYLOAD, DESTRUCTIVE_PAYLOAD
 
 ROOT = Path(__file__).parents[1]
@@ -20,11 +20,11 @@ FORMULA = ROOT / ".github/formula/captain-hook.rb.tmpl"
 SYSTEM_APPLICATION_GREP = r"(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app"
 FAKE_HOST = '#!/bin/sh\necho "host $*"\ncat\n'
 HOST_ECHO = "host run PreToolUse\n" + DESTRUCTIVE_PAYLOAD.decode()
-ENVELOPES = {event: deny_envelope(event, "host-unavailable") + "\n" for event in ("PreToolUse", "PermissionRequest")}
+ENVELOPES = {event: skip_envelope(event, "host-unavailable") + "\n" for event in ("PreToolUse", "PermissionRequest")}
 STATIC_ENVELOPES = {
-    event: deny_envelope(event, "dependency-unavailable") + "\n" for event in ("PreToolUse", "PermissionRequest")
+    event: skip_envelope(event, "dependency-unavailable") + "\n" for event in ("PreToolUse", "PermissionRequest")
 }
-BELOW_MINIMUM = "is version 12.65.1, want at least 12.66.0; run: brew upgrade yasyf/tap/captain-hook"
+BELOW_MINIMUM = "is version 12.30.9, want at least 12.31.0; run: brew upgrade yasyf/tap/captain-hook"
 NOT_INSTALLED = "hook: Captain Hook is not installed; run: brew install yasyf/tap/captain-hook"
 FAKE_BINRUN_REFUSING = f"#!/bin/sh\necho {shlex.quote(NOT_INSTALLED)} >&2\nexit 1\n"
 FAKE_BINRUN_HEALTHY = "#!/bin/sh\nexit 0\n"
@@ -35,7 +35,7 @@ CHATTY_BROKEN_PYTHON = (
     '#!/bin/sh\necho "launcher: no interpreter found"\necho "Traceback (most recent call last):" >&2\nexit 1\n'
 )
 CHATTY_PASSING_PYTHON = f'#!/bin/sh\necho "launcher: resolved an interpreter"\nexit {PASS_EXIT}\n'
-DENYING_PYTHON = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(deny_envelope('PreToolUse', 'host-unavailable'))}\nexit 0\n"
+NOTING_PYTHON = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(skip_envelope('PreToolUse', 'host-unavailable'))}\nexit 0\n"
 STOCK_MACOS_PATH = "/usr/bin:/bin"
 STOCK_MACOS_PYTHON = Path("/usr/bin/python3")
 
@@ -137,7 +137,7 @@ def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
         "exec": "Contents/Helpers/capt-hookd",
         "copy_exec": True,
         "formula": "yasyf/tap/captain-hook",
-        "min_version": "12.66.0",
+        "min_version": "12.31.0",
     }
     cli = json.loads((ROOT / "captain_hook/bin/capt-hook.binrun").read_text().split("\n", 1)[1])
     assert cli["kind"] == "python-tool"
@@ -159,25 +159,27 @@ def test_linux_cli_reads_the_installed_host_version() -> None:
     ("installed", "event", "payload", "code", "stdout"),
     [
         pytest.param(True, "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, id="installed-host-reads-stdin"),
-        pytest.param(False, "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="missing-host-denies"),
+        pytest.param(
+            False, "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="missing-host-skips-with-a-note"
+        ),
         pytest.param(
             False,
             "PermissionRequest",
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PermissionRequest"],
-            id="missing-host-denies-permission-request",
+            id="missing-host-skips-with-a-note-permission-request",
         ),
         pytest.param(False, "PreToolUse", BENIGN_PAYLOAD, 1, "", id="missing-host-fails-open-benign"),
         pytest.param(False, "Stop", DESTRUCTIVE_PAYLOAD, 1, "", id="missing-host-fails-open-unguarded-event"),
     ],
 )
-def test_linux_hook_dispatch_execs_the_installed_host_and_denies_without_it(
+def test_linux_hook_dispatch_execs_the_installed_host_and_notes_the_skip_without_it(
     installed: bool, event: str, payload: bytes, code: int, stdout: str, tmp_path: Path
 ) -> None:
     """PIN: a Linux hook event execs the host ``package-install`` placed with stdin untouched.
 
-    Without one, a guarded call naming a session-ending program is denied; everything else
+    Without one, a guarded call naming a session-ending program runs with the skip note; everything else
     fails open with bash's own error naming the missing host.
     """
     host = tmp_path / ".local/share/captain-hook/host/capt-hookd"
@@ -204,25 +206,25 @@ def test_linux_hook_dispatch_execs_the_installed_host_and_denies_without_it(
     ("installed", "event", "payload", "code", "stdout", "hint"),
     [
         pytest.param(
-            "12.65.1",
+            "12.30.9",
             "PreToolUse",
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PreToolUse"],
             BELOW_MINIMUM,
-            id="below-minimum-denies",
+            id="below-minimum-skips-with-a-note",
         ),
         pytest.param(
-            "12.65.1",
+            "12.30.9",
             "PermissionRequest",
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PermissionRequest"],
             BELOW_MINIMUM,
-            id="below-minimum-denies-permission-request",
+            id="below-minimum-skips-with-a-note-permission-request",
         ),
         pytest.param(
-            "12.65.1", "PreToolUse", BENIGN_PAYLOAD, 1, "", BELOW_MINIMUM, id="below-minimum-fails-open-benign"
+            "12.30.9", "PreToolUse", BENIGN_PAYLOAD, 1, "", BELOW_MINIMUM, id="below-minimum-fails-open-benign"
         ),
         pytest.param(
             None,
@@ -231,19 +233,22 @@ def test_linux_hook_dispatch_execs_the_installed_host_and_denies_without_it(
             0,
             ENVELOPES["PreToolUse"],
             "Contents/Info.plist: no such file or directory",
-            id="no-app-denies",
+            id="no-app-skips-with-a-note",
         ),
-        pytest.param("12.66.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="minimum-app-reads-stdin"),
+        pytest.param("12.31.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="minimum-app-reads-stdin"),
+        pytest.param(
+            "12.60.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="host-behind-the-plugin-reads-stdin"
+        ),
         pytest.param("13.0.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="newer-app-reads-stdin"),
     ],
 )
-def test_hook_dispatch_denies_a_guarded_call_binrun_refuses(
+def test_hook_dispatch_notes_a_guarded_call_binrun_refuses(
     installed: str | None, event: str, payload: bytes, code: int, stdout: str, hint: str | None, tmp_path: Path
 ) -> None:
-    """PIN: binrun's refusal of a missing or too-old app denies a guarded call with its upgrade hint.
+    """PIN: binrun's refusal of a missing or too-old app lets a guarded call run with the skip note.
 
     binrun refuses before anything reads stdin, so the guard literal reads the payload intact and
-    denies a session-ending call; a benign call keeps the non-blocking exit 1. An app at or past
+    notes the skip on a session-ending call; a benign call keeps the non-blocking exit 1. An app at or past
     the minimum execs the host from the subshell with stdin untouched.
     """
     if installed is not None:
@@ -332,10 +337,10 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             DESTRUCTIVE_PAYLOAD,
             0,
             STATIC_ENVELOPES["PreToolUse"],
-            id="no-python3-denies-destructive",
+            id="no-python3-skips-destructive",
         ),
         pytest.param(
-            None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC_ENVELOPES["PreToolUse"], id="no-python3-denies-benign"
+            None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC_ENVELOPES["PreToolUse"], id="no-python3-skips-benign"
         ),
         pytest.param(
             None,
@@ -343,7 +348,7 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             DESTRUCTIVE_PAYLOAD,
             0,
             STATIC_ENVELOPES["PermissionRequest"],
-            id="no-python3-denies-permission-request",
+            id="no-python3-skips-permission-request",
         ),
         pytest.param(None, "Stop", DESTRUCTIVE_PAYLOAD, 1, "", id="no-python3-fails-open-unguarded-event"),
         pytest.param(
@@ -352,7 +357,7 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             DESTRUCTIVE_PAYLOAD,
             0,
             STATIC_ENVELOPES["PreToolUse"],
-            id="python3-cannot-run-the-literal-denies",
+            id="python3-cannot-run-the-literal-skips",
         ),
         pytest.param(PASSING_PYTHON, "PreToolUse", DESTRUCTIVE_PAYLOAD, 1, "", id="python3-pass-exit-fails-open"),
         pytest.param(
@@ -361,7 +366,7 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PreToolUse"],
-            id="real-python3-classifier-denies",
+            id="real-python3-classifier-skips",
         ),
         pytest.param(REAL_PYTHON, "PreToolUse", BENIGN_PAYLOAD, 1, "", id="real-python3-fails-open-benign"),
         pytest.param(
@@ -381,16 +386,16 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             id="python3-stdout-before-pass-exit-is-dropped",
         ),
         pytest.param(
-            DENYING_PYTHON,
+            NOTING_PYTHON,
             "PreToolUse",
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PreToolUse"],
-            id="python3-verdict-is-published-verbatim",
+            id="python3-note-is-published-verbatim",
         ),
     ],
 )
-def test_hook_dispatch_denies_statically_when_nothing_can_classify(
+def test_hook_dispatch_notes_statically_when_nothing_can_classify(
     branch: Callable[[Path, Path], dict[str, str]],
     python3: str | None,
     event: str,
@@ -428,7 +433,7 @@ def test_hook_dispatch_denies_statically_when_nothing_can_classify(
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PreToolUse"],
-            id="real-python3-denies-destructive",
+            id="real-python3-skips-destructive",
         ),
         pytest.param(
             REAL_PYTHON,
@@ -436,7 +441,7 @@ def test_hook_dispatch_denies_statically_when_nothing_can_classify(
             DESTRUCTIVE_PAYLOAD,
             0,
             ENVELOPES["PermissionRequest"],
-            id="real-python3-denies-permission-request",
+            id="real-python3-skips-permission-request",
         ),
         pytest.param(REAL_PYTHON, "PreToolUse", BENIGN_PAYLOAD, 1, "", id="real-python3-fails-open-benign"),
         pytest.param(
@@ -445,10 +450,10 @@ def test_hook_dispatch_denies_statically_when_nothing_can_classify(
             DESTRUCTIVE_PAYLOAD,
             0,
             STATIC_ENVELOPES["PreToolUse"],
-            id="no-python3-denies-destructive",
+            id="no-python3-skips-destructive",
         ),
         pytest.param(
-            None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC_ENVELOPES["PreToolUse"], id="no-python3-denies-benign"
+            None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC_ENVELOPES["PreToolUse"], id="no-python3-skips-benign"
         ),
         pytest.param(
             None,
@@ -456,11 +461,11 @@ def test_hook_dispatch_denies_statically_when_nothing_can_classify(
             DESTRUCTIVE_PAYLOAD,
             0,
             STATIC_ENVELOPES["PermissionRequest"],
-            id="no-python3-denies-permission-request",
+            id="no-python3-skips-permission-request",
         ),
     ],
 )
-def test_hook_dispatch_denies_when_the_chosen_runner_cannot_exec(
+def test_hook_dispatch_notes_when_the_chosen_runner_cannot_exec(
     runner: Callable[[Path], dict[str, str]],
     python3: str | None,
     event: str,
@@ -491,7 +496,7 @@ def test_hook_dispatch_denies_when_the_chosen_runner_cannot_exec(
 def test_hook_dispatch_keeps_the_failed_exec_status_for_an_unguarded_event(
     runner: Callable[[Path], dict[str, str]], tmp_path: Path
 ) -> None:
-    """PIN: an unguarded event never reaches the deny path, so bash's own status for the failed exec is the whole
+    """PIN: an unguarded event never reaches the skip path, so bash's own status for the failed exec is the whole
     result: what /bin/bash reports for a failed exec under the installer's errexit, 1 on bash 3.2 and 126 or 127
     on every later bash.
     """
@@ -511,9 +516,9 @@ def test_hook_dispatch_keeps_the_failed_exec_status_for_an_unguarded_event(
 
 
 @pytest.mark.parametrize("python3", [pytest.param(REAL_PYTHON, id="python3"), pytest.param(None, id="no-python3")])
-def test_hook_dispatch_keeps_a_healthy_zero_off_the_deny_path(python3: str | None, tmp_path: Path) -> None:
+def test_hook_dispatch_keeps_a_healthy_zero_off_the_skip_path(python3: str | None, tmp_path: Path) -> None:
     """PIN: a runner that exits 0 without reading stdin is a healthy dispatch, so the guarded subshell's 0 is the
-    whole result: the deny path never probes the payload it left unread and no classifier publishes an envelope,
+    whole result: the skip path never probes the payload it left unread and no classifier publishes an envelope,
     python3 present or not.
     """
     env = macos_arm(python3_path(tmp_path, python3)) | fake_binrun(tmp_path, FAKE_BINRUN_HEALTHY)
@@ -531,7 +536,7 @@ def test_hook_dispatch_keeps_a_healthy_zero_off_the_deny_path(python3: str | Non
 
 @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
 def test_linux_hook_dispatch_keeps_the_failed_exec_status_on_an_empty_stdin(event: str, tmp_path: Path) -> None:
-    """PIN: with nothing on stdin the deny path's one-byte probe reads EOF, so the failed exec's own 126 or 127 is
+    """PIN: with nothing on stdin the skip path's one-byte probe reads EOF, so the failed exec's own 126 or 127 is
     the result and no classifier runs.
     """
     host = tmp_path / ".local/share/captain-hook/host/capt-hookd"
@@ -561,7 +566,7 @@ def test_hook_dispatch_passes_the_host_verdict_through_the_guarded_subshell(
 ) -> None:
     """PIN: a guarded event's subshell returns the host's own exit code, including the blocking 2.
 
-    Every nonzero status reaches the deny path, whose one-byte probe finds the stdin a host that
+    Every nonzero status reaches the skip path, whose one-byte probe finds the stdin a host that
     ran has spent and hands that host's status back untouched: no envelope follows and no python3
     runs, present or not.
     """
@@ -585,19 +590,52 @@ def test_hook_dispatch_passes_the_host_verdict_through_the_guarded_subshell(
     assert (result.returncode, result.stdout, result.stderr) == (code, HOST_ECHO, "")
 
 
+@pytest.mark.parametrize("python3", [pytest.param(REAL_PYTHON, id="python3"), pytest.param(None, id="no-python3")])
+def test_hook_dispatch_keeps_the_host_deny_for_a_session_ending_call(python3: str | None, tmp_path: Path) -> None:
+    """PIN: a host that answers with a deny for a guarded call keeps that deny; the skip note is only for no answer."""
+    deny = json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "pkill",
+            }
+        }
+    )
+    host = tmp_path / ".local/share/captain-hook/host/capt-hookd"
+    host.parent.mkdir(parents=True)
+    host.write_text(f"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' {shlex.quote(deny)}\n")
+    host.chmod(0o755)
+    exec_host = f'#!/bin/sh\nshift\nexec {shlex.quote(str(host))} "$@"\n'
+    path = python3_path(tmp_path, python3)
+    for tool in ("/usr/bin/id", "/bin/cat"):
+        (path / Path(tool).name).symlink_to(tool)
+    env = {"PATH": str(path)} | fake_binrun(tmp_path, exec_host)
+    result = subprocess.run(
+        [ROOT / "captain_hook/bin/hook", "run", "PreToolUse"],
+        env=env,
+        input=DESTRUCTIVE_PAYLOAD.decode(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, deny + "\n", "")
+
+
 @pytest.mark.skipif(sys.platform != "darwin" or not STOCK_MACOS_PYTHON.is_file(), reason="the stock macOS python3")
 @pytest.mark.parametrize(
     ("event", "payload", "code", "stdout"),
     [
-        pytest.param("PreToolUse", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="denies"),
-        pytest.param("PermissionRequest", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PermissionRequest"], id="denies-pr"),
+        pytest.param("PreToolUse", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PreToolUse"], id="skips"),
+        pytest.param("PermissionRequest", DESTRUCTIVE_PAYLOAD, 0, ENVELOPES["PermissionRequest"], id="skips-pr"),
         pytest.param("PreToolUse", BENIGN_PAYLOAD, 1, "", id="fails-open-benign"),
     ],
 )
-def test_hook_dispatch_denies_under_the_stock_macos_python(
+def test_hook_dispatch_notes_under_the_stock_macos_python(
     event: str, payload: bytes, code: int, stdout: str, tmp_path: Path
 ) -> None:
-    """PIN: with only the stock /usr/bin/python3 on PATH, binrun's refusal still ends in the deny envelope."""
+    """PIN: with only the stock /usr/bin/python3 on PATH, binrun's refusal still ends in the skip note."""
     env = {"PATH": STOCK_MACOS_PATH} | fake_binrun(tmp_path, FAKE_BINRUN_REFUSING)
     result = subprocess.run(
         [ROOT / "captain_hook/bin/hook", "run", event],
