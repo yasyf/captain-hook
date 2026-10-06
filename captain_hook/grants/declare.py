@@ -455,7 +455,10 @@ class Grants:
             source_key=f"unchecked:{call}",
         )
         logger.bind(hook=self.hook, kind=self.kind, grant=grant.id, cause=cause).warning("unchecked call fails open")
-        note = f"{self.hook} did not check this call ({cause}), so it goes ahead unchecked on grant {grant.id}."
+        note = (
+            f"{self.hook} did not check this call ({cause}), so it goes ahead on a one-use {self.kind} grant"
+            " that records why."
+        )
         return self.attach(evt, grant, note)
 
     def settled(

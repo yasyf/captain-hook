@@ -1427,7 +1427,10 @@ class TestMandatorySkip:
         assert [(item.source, item.quote) for item in grant.evidence] == [
             ("unchecked", "MandatoryDeadlinePassed: slack_policy: still running at the caller's deadline")
         ]
-        assert f"so it goes ahead unchecked on grant {grant.id}" in envelope["hookSpecificOutput"]["additionalContext"]
+        assert (
+            "so it goes ahead on a one-use test.slack grant that records why"
+            in envelope["hookSpecificOutput"]["additionalContext"]
+        )
         assert "slack_policy did not complete (MandatoryDeadlinePassed" in note(envelope)
 
     def test_a_raising_grant_hook_goes_ahead_on_an_unchecked_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
