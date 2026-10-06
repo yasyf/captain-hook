@@ -344,6 +344,11 @@ def inline_run(coordinator: str) -> dict[str, str]:
     return {"orca orchestration run-show --id run_inline": json.dumps(shown)}
 
 
+def inline_dispatch(dispatch: str, run: str = "run_inline") -> dict[str, str]:
+    shown = {"ok": True, "result": {"dispatch": {"id": dispatch, "runId": run}}}
+    return {f"orca orchestration worker-show --dispatch {dispatch}": json.dumps(shown)}
+
+
 def inline_screen(*tail: str) -> str:
     return json.dumps({"ok": True, "result": {"terminal": {"source": "screen", "tail": list(tail)}}})
 
@@ -1203,6 +1208,12 @@ def settled_close(evt: BaseHookEvent, handle: str, tab: bool) -> Proposal | None
         summary=f"the coordinator of run {run} closes terminal {handle}, whose dispatch {dispatch} is {status} "
         f"({stage}) and whose agent idles at a prompt",
     )
+
+
+def own_dispatch(evt: BaseHookEvent, dispatch: str) -> bool:
+    shown = ("orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json")
+    run = orca_json(shown, "result", "dispatch", "runId")
+    return isinstance(run, str) and coordinates(evt, run)
 
 
 def still_settled(action: Proposal) -> bool:
