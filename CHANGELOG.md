@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A grant declaration can let a call its hook never decided go ahead.**
+  `Grants(attach=...)` names how a grant reaches its `spent_by` system: the hook result
+  that carries the grant on the pending call. When a mandatory hook with such a
+  declaration times out, crashes, or is left unrun for incomplete evidence, and no other
+  mandatory hook blocked the call, the skip mints a one-use grant on the action and lets
+  the call through with it, so the downstream system spends a grant instead of refusing
+  a call with none. The grant's evidence records why the hook did not decide, which
+  `capt-hook grant show` prints. A hook can call `Grants.unchecked(evt, cause)` from its
+  own error path for the same result. A grant store write never waits on a lock past the
+  caller's deadline.
+
 - **The general pack warns when a change contradicts a durable owner decision.**
   `rules_nudge` checks ship, push, and PR submission calls against cc-notes answers
   labeled `scope:durable`, asking the small judge to review up to 40 related decisions
@@ -124,6 +135,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ccn answer show` reports not-found with exit 3.
 
 ### Fixed
+
+- **A grant judge never outlasts its hook.** `Judge` took its full `deadline` from the
+  moment it started, so a judge that began a few seconds into a mandatory hook ran past
+  the hook's own budget. A judge timeout that should have failed open landed after
+  capt-hook had already given up on the hook, and the call went ahead without the grant
+  the hook would have named. The judge now stops at whichever comes first: its own
+  deadline or the time the hook has left.
 
 - **The drive root can interrupt its own Orca lane.** `orca_send_ends_session` blocked every
   `orca terminal send --interrupt`, so a root could not stop a lane mid-turn and redirect it;

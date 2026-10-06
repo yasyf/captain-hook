@@ -122,6 +122,9 @@ class Grants:
             on a one-use grant resting on the evidence collected that asserts ``standing_rules``, and
             ``Allowed.unjudged`` names the failure. Sources that collect nothing, a judge that refused a
             stored grant earlier in the same check, and :meth:`request` still deny.
+        attach: The hook result that names *grant* on the pending call for the ``spent_by`` system and
+            lets it through with *note*. Declaring it makes a check that never decides fail open:
+            :meth:`unchecked`.
     """
 
     kind: str
@@ -139,6 +142,7 @@ class Grants:
     spent_by: str | None = None
     would_allow: str = "Ask the user for permission for exactly this action."
     judge_fails_open: bool = False
+    attach: Callable[[BaseHookEvent, Grant, str | None], HookResult | None] | None = None
     hook: str = field(default="grants")
 
     def __post_init__(self) -> None:
@@ -432,6 +436,31 @@ class Grants:
         settled = self.settled(evt, grant, action, verdict, denied)
         return replace(settled, unjudged=failed.cause) if isinstance(settled, Allowed) else settled
 
+    def unchecked(self, evt: BaseHookEvent, cause: str) -> HookResult | None:
+        """Let a call the hook never decided go ahead on a one-use grant whose record names *cause*.
+
+        A hook that times out, crashes, or is left unrun never refuses anything, so the call fails open
+        through :attr:`attach` like any allowed one, and ``capt-hook grant show`` says why it was unchecked.
+        """
+        if self.action is None or self.attach is None:
+            raise TypeError(f"{self.kind} declares no action or attach, so an unchecked call has no grant to carry")
+        action = self.action(evt)
+        call = call_id(evt)
+        grant = self.grant(
+            evt,
+            scope=self.canonical(action),
+            evidence=[Evidence(id=f"unchecked:{call}", source="unchecked", quote=cause, said_at=store.now())],
+            ttl=self.ttl,
+            approved=dict(action.payload) or None,
+            source_key=f"unchecked:{call}",
+        )
+        logger.bind(hook=self.hook, kind=self.kind, grant=grant.id, cause=cause).warning("unchecked call fails open")
+        note = (
+            f"{self.hook} did not check this call ({cause}), so it goes ahead on a one-use {self.kind} grant"
+            " that records why."
+        )
+        return self.attach(evt, grant, note)
+
     def settled(
         self, evt: BaseHookEvent, grant: Grant, action: Proposal, verdict: GrantVerdict, denied: Callable[..., Denied]
     ) -> Allowed | Denied:
@@ -532,6 +561,22 @@ class Grants:
             reserved.append(tool_use_id)
         logger.bind(hook=self.hook, grant=grant.id, remaining=left, reason=reason).info("grant spent")
         return Allowed(grant, left, reason)
+
+
+def fail_open(evt: BaseHookEvent, hooks: Sequence[str], cause: str) -> HookResult | None:
+    """The result letting *evt* through unchecked under the attaching declaration of one of *hooks*, if any.
+
+    Runs on the skip path, so a grant it cannot mint is logged and the call goes ahead without one.
+    """
+    for grants in list(DECLARED.values()):
+        if grants.hook in hooks and grants.attach is not None:
+            try:
+                return grants.unchecked(evt, cause)
+            except Exception:
+                logger.bind(hook=grants.hook, kind=grants.kind).opt(exception=True).warning(
+                    "unchecked grant not minted"
+                )
+    return None
 
 
 def lifted(evt: BaseHookEvent, hook: str, result: HookResult, grants: Grants) -> HookResult:

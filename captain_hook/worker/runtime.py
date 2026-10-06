@@ -266,12 +266,17 @@ def unfinished_mandatory(required: Mapping[str, RegisteredHook]) -> list[Registe
 
 
 def mandatory_skip(event: Event, output: Envelope | None, unfinished: Sequence[RegisteredHook], cause: str) -> Envelope:
-    names = ", ".join(hook.name for hook in unfinished)
+    names = [hook.name for hook in unfinished]
     message = (
-        f"capt-hook: the mandatory hook {names} did not complete ({cause}) and did not check this call. "
+        f"capt-hook: the mandatory hook {', '.join(names)} did not complete ({cause}) and did not check this call. "
         "Run `capt-hook logs` to see why."
     )
-    return with_warning(event, output, message) if denies(output) else fail_open_envelope(event, message)
+    if denies(output):
+        return with_warning(event, output, message)
+    unchecked = reqenv.mandatory_phase().unchecked
+    if unchecked is not None and (result := unchecked(names, cause)) is not None:
+        return with_warning(event, format_output(event, result), message)
+    return fail_open_envelope(event, message)
 
 
 def guarded_events(state: app.State) -> frozenset[str]:

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Mapping
+    from collections.abc import Callable, Generator, Mapping, Sequence
 
     from captain_hook.types import HookResult
 
@@ -21,11 +21,14 @@ class MandatoryPhase:
 
     Concluded exactly once, after the phase's cutoff closed, so the worker reads the phase's own
     verdict rather than inferring one from the completions a racing hook may still publish. It
-    keeps the first block a hook settled, so a failure after the verdict cannot drop it.
+    keeps the first block a hook settled, so a failure after the verdict cannot drop it, and
+    ``unchecked``, which maps the hooks that never decided and why to the result letting the call
+    through without them.
     """
 
     outcome: Literal["", "settled", "failed"] = ""
     blocked: HookResult | None = None
+    unchecked: Callable[[Sequence[str], str], HookResult | None] | None = None
 
     @property
     def failed(self) -> bool:
