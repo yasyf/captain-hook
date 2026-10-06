@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the call through with it, so the downstream system spends a grant instead of refusing
   a call with none. The grant's evidence records why the hook did not decide, which
   `capt-hook grant show` prints. A hook can call `Grants.unchecked(evt, cause)` from its
-  own error path for the same result.
+  own error path for the same result. A grant store write never waits on a lock past the
+  caller's deadline.
 
 - **The general pack warns when a change contradicts a durable owner decision.**
   `rules_nudge` checks ship, push, and PR submission calls against cc-notes answers

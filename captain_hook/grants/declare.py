@@ -568,7 +568,7 @@ def fail_open(evt: BaseHookEvent, hooks: Sequence[str], cause: str) -> HookResul
 
     Runs on the skip path, so a grant it cannot mint is logged and the call goes ahead without one.
     """
-    for grants in DECLARED.values():
+    for grants in list(DECLARED.values()):
         if grants.hook in hooks and grants.attach is not None:
             try:
                 return grants.unchecked(evt, cause)

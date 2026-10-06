@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from captain_hook.grants.records import Adoption, Grant, Spend, SpendState, covers, render_scope
+from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_state_dir
 
 RESERVATION_TTL = timedelta(minutes=2)
+LOCK_SECONDS = 10.0
 EVIDENCE_KINDS = ("ask", "words")
 RECORD_KINDS = (*EVIDENCE_KINDS, "spawn", "shell")
 SCHEMA = """
@@ -99,7 +101,9 @@ def new_id() -> str:
 def connect() -> Generator[sqlite3.Connection]:
     path = grants_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(path, timeout=10, isolation_level=None)) as db:
+    left = reqenv.seconds_left()
+    wait = LOCK_SECONDS if left is None else max(0.0, min(LOCK_SECONDS, left))
+    with closing(sqlite3.connect(path, timeout=wait, isolation_level=None)) as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
         yield db
