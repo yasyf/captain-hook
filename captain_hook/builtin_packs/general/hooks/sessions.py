@@ -46,6 +46,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     hosts_agent,
     inline_class_rulings,
     inline_create,
+    inline_dispatch,
     inline_ruling,
     inline_run,
     inline_screen,
@@ -57,6 +58,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     literal_pid,
     lone_pane,
     nested,
+    own_dispatch,
     owner_lift,
     pid_verdict,
     process_class,
@@ -167,6 +169,9 @@ ORCA_PAYLOADS = {
 }
 HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
+ORCA_STOP_FIX = (
+    "Only the root coordinating its Run stops a done lane: one literal worker-stop, or `orca-gc --done <ctx>`."
+)
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
 CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
 KEY_ALIASES = {
@@ -210,6 +215,7 @@ SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings(), **inline_run("t
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
 settling = partial(guarded, env={"ORCA_TERMINAL_HANDLE": "term_root"})
 ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
+STOPPED = "ctx_a0f447e7e42c"
 
 
 @guard(
@@ -774,7 +780,8 @@ def orca_ending(spelling: str, group: str, verb: str, arguments: Arguments) -> s
             action = f"removes worktree {worktree} and every terminal in it"
         case _:
             action = f"{verb} ends the worker or run {orca_bound(arguments, 'dispatch') or 'named by its arguments'}"
-    return f"BLOCKED: `{spelling}` {action}, which ends the agent session living there. {ORCA_READ}"
+    fix = ORCA_STOP_FIX if (group, verb) == ("orchestration", "worker-stop") else ORCA_READ
+    return f"BLOCKED: `{spelling}` {action}, which ends the agent session living there. {fix}"
 
 
 def help_only(call: Call, values: dict[str, tuple[Scalar | None, ...]]) -> bool:
@@ -784,31 +791,43 @@ def help_only(call: Call, values: dict[str, tuple[Scalar | None, ...]]) -> bool:
     return len(path) == len(call.args) - 1 and len(path) <= 2 and (not path or path[0] in ORCA_GROUPS)
 
 
-def closed_terminal(call: Call, arguments: Arguments) -> str | None:
-    values = arguments.values
+def lone_target(call: Call, arguments: Arguments, command: tuple[str, str], key: str) -> str | None:
     if (
         call.substituted
         or call.wrappers
         or not arguments.complete
         or not arguments.operands_complete
-        or orca_command(arguments) != ("terminal", "close")
-        or values.get("rest")
-        or not ORCA_CLOSE_SCOPES.isdisjoint(values)
+        or orca_command(arguments) != command
+        or arguments.values.get("rest")
     ):
         return None
-    words = arguments.words.get("terminal", ())
-    handles = values.get("terminal", ())
-    if len(words) != 1 or words[0].value is None or words[0].expandable or not isinstance(handles[0], str):
+    words = arguments.words.get(key, ())
+    targets = arguments.values.get(key, ())
+    if len(words) != 1 or words[0].value is None or words[0].expandable or not isinstance(targets[0], str):
         return None
-    return None if handles[0].startswith("-") else handles[0]
+    return None if targets[0].startswith("-") else targets[0]
+
+
+def closed_terminal(call: Call, arguments: Arguments) -> str | None:
+    if not ORCA_CLOSE_SCOPES.isdisjoint(arguments.values):
+        return None
+    return lone_target(call, arguments, ("terminal", "close"), "terminal")
+
+
+def stopped_dispatch(call: Call, arguments: Arguments) -> str | None:
+    return lone_target(call, arguments, ("orchestration", "worker-stop"), "dispatch")
 
 
 def closes_one_terminal(call: Call) -> bool:
     return call.name == "orca" and closed_terminal(call, ORCA.bind(call)) is not None
 
 
+def spelled(call: Call, scan: Scan) -> bool:
+    return all(other is not call for other in scan.respelled)
+
+
 def verifiable_close(call: Call, scan: Scan) -> bool:
-    return all(other is not call for other in scan.respelled) and sum(map(closes_one_terminal, scan.literal_calls)) == 1
+    return spelled(call, scan) and sum(map(closes_one_terminal, scan.literal_calls)) == 1
 
 
 def terminal_close_denied(spelling: str, handle: str, detail: str) -> str:
@@ -867,6 +886,13 @@ def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | 
         return None
     if (handle := closed_terminal(call, arguments)) is not None and verifiable_close(call, scan):
         return terminal_close_verdict(call, handle, scan, evt)
+    if (
+        (dispatch := stopped_dispatch(call, arguments)) is not None
+        and spelled(call, scan)
+        and runs_once(call, scan)
+        and own_dispatch(evt, dispatch)
+    ):
+        return None
     found = next(
         (
             (group, verb)
@@ -1096,7 +1122,53 @@ def orca_vm_run_flag(call: Call) -> str | None:
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
             llm=CLASS_ALLOW,
         ): Block(pattern="where pid 16002"),
+        settling(
+            command=f"orca orchestration worker-stop --dispatch {STOPPED} --json",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Allow(),
+        settling(
+            command=f"orca orchestration worker-stop --dispatch {STOPPED} 2>&1 | tail -5",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Allow(),
+        guarded(
+            command=f"orca orchestration worker-stop --dispatch {STOPPED}",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Block(pattern=f"worker-stop ends the worker or run `{STOPPED}`"),
+        settling(
+            command=f"orca orchestration worker-stop --dispatch {STOPPED}",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+            env={"ORCA_TERMINAL_HANDLE": "term_lane"},
+        ): Block(pattern="Only the root coordinating its Run"),
+        settling(
+            command=f"orca orchestration worker-stop --dispatch {STOPPED}",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+            agent_id="sibling-lane",
+        ): Block(pattern="worker-stop ends the worker"),
+        settling(
+            command=f"orca orchestration worker-stop --dispatch {STOPPED}",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED, "run_other")},
+        ): Block(pattern="worker-stop ends the worker"),
+        settling(command=f"orca orchestration worker-stop --dispatch {STOPPED}", commands=SETTLED_COMMANDS): Block(
+            pattern="worker-stop ends the worker"
+        ),
+        settling(
+            command=f"for d in {STOPPED}; do orca orchestration worker-stop --dispatch $d; done",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Block(pattern="worker-stop ends the worker"),
+        settling(
+            command=f"true && orca orchestration worker-stop --dispatch {STOPPED}",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Block(pattern="worker-stop ends the worker"),
+        settling(
+            command="orca orchestration run-stop --run run_inline",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Block(pattern="run-stop ends the worker"),
+        settling(
+            command=f"orca orchestration worker-release --dispatch {STOPPED}",
+            commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
+        ): Block(pattern="leave ending them to the owner"),
         guarded(command=f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_d83bbb927995"): Allow(),
+        guarded(command=f"{ORCA_GC} --run run_7715a23a5657 --done ctx_a0f447e7e42c"): Allow(),
         guarded(command=f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_1 --dispatch ctx_2"): Allow(),
         guarded(command=f"cd /Users/dev/monorepo && {ORCA_GC} --run run_1 --dispatch ctx_1 2>&1 | tail -20"): Allow(),
         guarded(command=f"{ORCA_GC} --run run_1 --dry-run"): Allow(),

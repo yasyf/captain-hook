@@ -125,6 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The drive root can stop a done Orca lane in its own Run.** `orca_ends_session`
+  blocked every `orca orchestration worker-stop`, so a root that had decided a lane was
+  done had to message the lane to call `worker_done`. One literal `worker-stop --dispatch <ctx>`
+  now passes when the caller is the main session whose `ORCA_TERMINAL_HANDLE` coordinates the
+  dispatch's Run. Lanes, subagents, other Runs, loops, `run-stop`, and `worker-release` stay blocked.
+
 - **Primitive hooks keep their fire limits across capt-hook releases.**
   `nudge()`, `gate()`, and other primitives used the framework's versioned install path
   as their state identity, resetting `max_fires` on each release. They now key on the
