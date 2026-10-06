@@ -158,7 +158,7 @@ def evaluate_actor(provider: str) -> None:
     install_context_io()
     runtime = ProductRuntime(install_writer=False, nlp_warmer=lambda: None)
     try:
-        with client_scope() as client:
+        with client_scope(defer_cleanup=True) as client:
             token = BACKGROUND_SNAPSHOT_CLIENT.set(client)
             try:
                 response, background = runtime.dispatch(request)

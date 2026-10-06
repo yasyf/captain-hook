@@ -1379,12 +1379,12 @@ def foreground_evidence(seconds: float) -> Iterator[None]:
 
 
 @contextmanager
-def client_scope() -> Iterator[SnapshotClient]:
+def client_scope(*, defer_cleanup: bool = False) -> Iterator[SnapshotClient]:
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
     bridge = Bridge()
-    client = SnapshotClient(bridge)
+    client = SnapshotClient(bridge, defer_cleanup=defer_cleanup)
     token = CURRENT_CLIENT.set(client)
     try:
         yield client
