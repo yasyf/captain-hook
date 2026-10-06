@@ -154,8 +154,9 @@ class Judge:
             .context("rules_evaluated", "\n".join(ruling.line() for ruling in rulings) or None)
             .context("widenable_scope", ", ".join(widen) or None)
         )
+        left = reqenv.seconds_left()
         try:
-            with reqenv.deadline_in(self.deadline):
+            with reqenv.deadline_in(self.deadline if left is None else min(self.deadline, left)):
                 verdict = llm_evaluate(
                     evt,
                     prompt,

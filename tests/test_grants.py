@@ -41,6 +41,7 @@ from captain_hook.grants.cli import grant as grant_cli
 from captain_hook.hook_lint import result_violations
 from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
+from captain_hook.util import reqenv
 from tests.helpers import make_ctx
 
 TREE = "root-session"
@@ -348,6 +349,21 @@ def test_a_judge_that_fails_open_lets_the_action_through_on_one_use(
     assert isinstance(allowed, Allowed) and allowed.unjudged == cause
     assert allowed.grant.uses == 1 and allowed.grant.approved == {"text": "unjudged"}
     assert [item.id for item in allowed.grant.evidence] == [said.id] and "fails open" in allowed.reason
+
+
+def test_a_judge_never_outlasts_the_hook_budget(tmp_path: Path) -> None:
+    evt = event(tmp_path)
+    budgets: list[float | None] = []
+
+    def timed_out(*_: Any, **__: Any) -> None:
+        budgets.append(reqenv.seconds_left())
+        raise TimeoutError
+
+    evt.ctx.call_llm = MagicMock(side_effect=timed_out)  # type: ignore[method-assign]
+    scope = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id=TREE)
+    with reqenv.use_request(scope), reqenv.deadline_in(3):
+        declared(judge=Judge("rules", deadline=20), evidence=(Fixed((owner("x"),)),), judge_fails_open=True).check(evt)
+    assert budgets and all(left is not None and left <= 3 for left in budgets)
 
 
 def test_a_judge_that_fails_open_still_denies_with_no_evidence(tmp_path: Path) -> None:

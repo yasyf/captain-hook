@@ -918,6 +918,7 @@ def dispatch(
     through and is released when any hook denies it, so a chained command whose second half is
     refused never spends the grant its first half matched.
     """
+    reqenv.mandatory_phase().unchecked = partial(grant_declare.fail_open, evt)
     with grant_declare.reservations() as reserved:
         envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
         if not reserved or denies(envelope):
