@@ -314,10 +314,10 @@ def inline_workers(*handles: str) -> str:
     return json.dumps({"ok": True, "result": {"workers": rows, "page": {}, "scope": {"source": "all"}}})
 
 
-def inline_worker(handle: str, status: str, stage: str = "settled") -> str:
+def inline_worker(handle: str, status: str, stage: str = "settled", run: str = "run_inline") -> str:
     row = {
         "dispatchId": "ctx_settled",
-        "runId": "run_inline",
+        "runId": run,
         "dispatchStatus": status,
         "agentTerminalHandle": handle,
         "projection": {"stage": {"detail": stage}},
@@ -1214,6 +1214,11 @@ def own_dispatch(evt: BaseHookEvent, dispatch: str) -> bool:
     shown = ("orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json")
     run = orca_json(shown, "result", "dispatch", "runId")
     return isinstance(run, str) and coordinates(evt, run)
+
+
+def own_lane(evt: BaseHookEvent, handle: str) -> bool:
+    worker = worker_of(handle)
+    return isinstance(worker, dict) and coordinates(evt, worker.get("runId"))
 
 
 def still_settled(action: Proposal) -> bool:

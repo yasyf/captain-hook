@@ -125,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The drive root can interrupt its own Orca lane.** `orca_send_ends_session` blocked every
+  `orca terminal send --interrupt`, so a root could not stop a lane mid-turn and redirect it;
+  ordinary text only queued until the lane's turn ended. A send with `--interrupt` and one literal
+  `--terminal` now passes when the caller is the main session whose `ORCA_TERMINAL_HANDLE`
+  coordinates the Run of that terminal's dispatch. Lanes, subagents, other Runs, handles named at
+  run time, and exit text such as `exit` or `/quit` stay blocked.
+
 - **The drive root can stop a done Orca lane in its own Run.** `orca_ends_session`
   blocked every `orca orchestration worker-stop`, so a root that had decided a lane was
   done had to message the lane to call `worker_done`. One literal `worker-stop --dispatch <ctx>`
