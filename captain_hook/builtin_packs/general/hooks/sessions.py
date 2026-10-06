@@ -59,6 +59,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     lone_pane,
     nested,
     own_dispatch,
+    own_lane,
     owner_lift,
     pid_verdict,
     process_class,
@@ -216,6 +217,15 @@ CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
 settling = partial(guarded, env={"ORCA_TERMINAL_HANDLE": "term_root"})
 ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
 STOPPED = "ctx_a0f447e7e42c"
+INTERRUPTED = "term_4137f7d4-c749-445f-bb84-7dbd162da898"
+OWN_LANE = {**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker(INTERRUPTED, "running", "working")}
+ROLLBACK_STOP = (
+    f"orca terminal send --terminal {INTERRUPTED} --text 'STOP THE ROLLBACK. OWNER 8:25 AM: do not roll back "
+    "executor, fix forward only. Evidence #28631: not executor; one team queue at its concurrency cap 55/55 with "
+    "executors idle. Re-read the OWNER OVERRIDE at the end of your brief.' --interrupt 2>&1 | tail -2; "
+    "~/.local/bin/cci post --drive release-v3 --lane root --kind hold --to merge-walker-r2,incident-run-backlog-0711 "
+    "--text 'OWNER 8:25 AM: NO executor rollback.' 2>&1 | tail -1"
+)
 
 
 @guard(
@@ -1263,18 +1273,26 @@ def orca_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
     return block_first(evt, (orca_ending_verdict(call, scan, evt) for call in scan.literal_calls))
 
 
-def orca_send_verdict(call: Call) -> str | None:
+def interrupts_own_lane(call: Call, scan: Scan, evt: ToolRewriteEvent, arguments: Arguments) -> bool:
+    handle = lone_target(call, arguments, ("terminal", "send"), "terminal")
+    return handle is not None and spelled(call, scan) and own_lane(evt, handle)
+
+
+def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | None:
     if call.name != "orca" or orca_command(arguments := ORCA.bind(call)) != ("terminal", "send"):
         return None
     spelling = spell(call)
     values, words = arguments.values, arguments.words
     text = values.get("text", ())
-    if "interrupt" in values or any(
-        str(payload).strip().casefold() in END_OF_SESSION for payload in text if payload is not None
-    ):
+    if any(str(payload).strip().casefold() in END_OF_SESSION for payload in text if payload is not None):
         return (
             f"BLOCKED: `{spelling}` interrupts or exits the agent in another terminal, which ends that session. Send "
             "only ordinary text, and leave interrupts and exits to the owner."
+        )
+    if "interrupt" in values and not interrupts_own_lane(call, scan, evt, arguments):
+        return (
+            f"BLOCKED: `{spelling}` interrupts or exits the agent in another terminal, which ends that session. Send "
+            "only ordinary text; only the root coordinating that lane's Orca Run may `--interrupt` it."
         )
     if None in text:
         return (
@@ -1362,10 +1380,40 @@ def orca_send_verdict(call: Call) -> str | None:
         guarded(command='orca terminal send --terminal "$ORCA_TERMINAL_HANDLE" --text "note to self" --enter'): Allow(),
         guarded(command='orca terminal send --worktree "$w" --text hi --enter'): Allow(),
         guarded(command='orca terminal send --terminal t --text "ship it" --enter'): Allow(),
+        settling(command=ROLLBACK_STOP, commands=OWN_LANE): Allow(),
+        settling(command=f"orca terminal send --terminal {INTERRUPTED} --interrupt", commands=OWN_LANE): Allow(),
+        guarded(command=ROLLBACK_STOP, commands=OWN_LANE): Block(pattern="only the root coordinating"),
+        settling(command=ROLLBACK_STOP, commands=OWN_LANE, env={"ORCA_TERMINAL_HANDLE": "term_lane"}): Block(
+            pattern="only the root coordinating"
+        ),
+        settling(command=ROLLBACK_STOP, commands=OWN_LANE, agent_id="sibling-lane"): Block(
+            pattern="only the root coordinating"
+        ),
+        settling(
+            command=ROLLBACK_STOP,
+            commands={
+                **SETTLED_COMMANDS,
+                "orca orchestration worker-list": inline_worker(INTERRUPTED, "running", "working", "run_other"),
+            },
+        ): Block(pattern="only the root coordinating"),
+        settling(command=ROLLBACK_STOP, commands=SETTLED_COMMANDS): Block(pattern="only the root coordinating"),
+        settling(command=f"orca terminal send --terminal {INTERRUPTED} --text exit --interrupt", commands=OWN_LANE): (
+            Block(pattern="leave interrupts and exits to the owner")
+        ),
+        settling(command=f"orca terminal send --terminal {INTERRUPTED} --text /quit --enter", commands=OWN_LANE): (
+            Block(pattern="leave interrupts and exits to the owner")
+        ),
+        settling(command='orca terminal send --terminal "$T" --text hi --interrupt', commands=OWN_LANE): Block(
+            pattern="only the root coordinating"
+        ),
+        settling(
+            command=f'orca terminal send --terminal {INTERRUPTED} --text "$MSG" --interrupt', commands=OWN_LANE
+        ): Block(pattern="interrupts or exits"),
     }
 )
 def orca_send_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(orca_send_verdict, Scan.of(evt).literal_calls))
+    scan = Scan.of(evt)
+    return block_first(evt, (orca_send_verdict(call, scan, evt) for call in scan.literal_calls))
 
 
 def ends_session_key(key: str) -> bool:
