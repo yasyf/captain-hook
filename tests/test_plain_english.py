@@ -32,13 +32,34 @@ PROSE = (
     "file without a lock, so a read can observe a half-written document and fail to parse it. "
     "You can reproduce it by running the suite with forty workers."
 )
+REWRITTEN = (
+    "I traced the flaky test to a race between the writer and the reader. Both open the same session file "
+    "without a lock. So a read can see a half-written document and fail to parse it. You can reproduce it by "
+    "running the suite with forty workers."
+)
+INSTALLATIONS = "https://github.com/organizations/Forge-AI/settings/installations"
+WEBHOOKS = "https://github.com/organizations/Forge-AI/settings/hooks"
+STEPS = (
+    "The GitHub app needs two settings changed before the webhook can reach the receiver, and both live on pages "
+    "only an organization owner can open, so I could not change them myself from this session.\n\n"
+    f"1. Open {INSTALLATIONS} and grant the app access to the `monorepo` repository.\n"
+    f"2. Open {WEBHOOKS} and set the webhook secret to the value in `GH_WEBHOOK_SECRET`.\n\n"
+    "Once both are saved, the next push should deliver an event within a minute."
+)
+STEPS_REWRITTEN = (
+    "The GitHub app needs two settings changed. Only then can the webhook reach the receiver. Both live on pages "
+    "only an organization owner can open. So I could not change them myself from this session.\n\n"
+    f"1. Open {INSTALLATIONS} and grant the app access to the `monorepo` repository.\n"
+    f"2. Open {WEBHOOKS} and set the webhook secret to the value in `GH_WEBHOOK_SECRET`.\n\n"
+    "Once both are saved, the next push should deliver an event within a minute."
+)
 BRACED = "\n\n```python\nconfig = {'workers': 40}\nprint(f'{config}')\n```\n"
 QUESTION = "why does test_state_race flake under xdist?"
 
 
 @dataclass
 class CerebrasStub(HookContext):
-    answer: str | Exception = "Plain rewrite."
+    answer: str | Exception = REWRITTEN
     delay: float = 0.0
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
@@ -109,7 +130,7 @@ def test_non_final_chunk_is_blanked_and_buffered(ctx: CerebrasStub) -> None:
 
 
 def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
-    assert stream(ctx, PROSE + BRACED) == shown("Plain rewrite.")
+    assert stream(ctx, PROSE + BRACED) == shown(REWRITTEN)
 
     ((prompt, kwargs),) = ctx.calls
     assert prompt == "\n\n".join(
@@ -156,7 +177,7 @@ def test_final_chunk_waits_for_a_late_chunk(ctx: CerebrasStub) -> None:
     late = threading.Timer(0.2, chunk, args=(ctx, 0, PROSE[:40]))
     late.start()
 
-    assert chunk(ctx, 2, "!", final=True) == shown("Plain rewrite.")
+    assert chunk(ctx, 2, "!", final=True) == shown(REWRITTEN)
     late.join()
 
     ((prompt, _),) = ctx.calls
@@ -295,15 +316,13 @@ def test_llm_failure_shows_the_original_and_records_a_fault(ctx: CerebrasStub) -
 @pytest.mark.parametrize(
     ("answer", "display"),
     [
+        pytest.param(f"<think>Split the sentences.</think>\n\n{REWRITTEN}", REWRITTEN, id="think"),
+        pytest.param(f"Split them.</think>{REWRITTEN}", REWRITTEN, id="unopened-think"),
+        pytest.param(f"\n\n{REWRITTEN}\n", REWRITTEN, id="surrounding-whitespace"),
+        pytest.param(f"```markdown\n{REWRITTEN}\n\nDone.\n```", f"{REWRITTEN}\n\nDone.", id="wrapping-fence"),
         pytest.param(
-            "<think>Split the sentences.</think>\n\nShort one. Short two.", "Short one. Short two.", id="think"
-        ),
-        pytest.param("Split them.</think>Short one.", "Short one.", id="unopened-think"),
-        pytest.param("\n\nShort one. Short two.\n", "Short one. Short two.", id="surrounding-whitespace"),
-        pytest.param("```markdown\nShort one.\n\nShort two.\n```", "Short one.\n\nShort two.", id="wrapping-fence"),
-        pytest.param(
-            "```sh\nls\n```\nShort one.\n```sh\npwd\n```",
-            "```sh\nls\n```\nShort one.\n```sh\npwd\n```",
+            f"```sh\nls\n```\n{REWRITTEN}\n```sh\npwd\n```",
+            f"```sh\nls\n```\n{REWRITTEN}\n```sh\npwd\n```",
             id="inner-fences-kept",
         ),
         pytest.param("<think>nothing to say</think>\n", PROSE, id="empty-falls-back"),
@@ -320,3 +339,52 @@ def test_literal_think_tag_in_the_message_is_kept(ctx: CerebrasStub) -> None:
     ctx.answer = text
 
     assert stream(ctx, text) == shown(text.strip())
+
+
+def test_faithful_rewrite_of_steps_and_links_is_shown(ctx: CerebrasStub) -> None:
+    ctx.answer = STEPS_REWRITTEN
+
+    assert stream(ctx, STEPS) == shown(STEPS_REWRITTEN)
+    assert faults.drain() == []
+
+
+@pytest.mark.parametrize(
+    ("text", "answer", "reason"),
+    [
+        pytest.param(
+            STEPS,
+            "The GitHub app needs two settings changed. Only an organization owner can change them. "
+            "Once both are saved, the next push should deliver an event within a minute.",
+            "rewrite dropped 2 of 2 URLs",
+            id="steps-and-urls-dropped",
+        ),
+        pytest.param(
+            STEPS,
+            STEPS_REWRITTEN.replace(WEBHOOKS, "the webhooks page"),
+            "rewrite dropped 1 of 2 URLs",
+            id="url-dropped",
+        ),
+        pytest.param(
+            STEPS,
+            STEPS_REWRITTEN.replace(".\n2. Open", ", then open"),
+            "rewrite cut list items from 2 to 1",
+            id="list-item-merged",
+        ),
+        pytest.param(
+            STEPS,
+            STEPS_REWRITTEN.replace("`GH_WEBHOOK_SECRET`", "the secret variable"),
+            "rewrite dropped 1 of 2 code spans",
+            id="code-span-dropped",
+        ),
+        pytest.param(PROSE, "Plain rewrite.", "rewrite kept under 60% of the text", id="summarized"),
+    ],
+)
+def test_lossy_rewrite_shows_the_original_and_records_a_fault(
+    ctx: CerebrasStub, text: str, answer: str, reason: str
+) -> None:
+    ctx.answer = answer
+
+    assert stream(ctx, text) == shown(text)
+    (line,) = faults.drain()
+    assert "plain_english rewrite" in line
+    assert f"ValueError: {reason}" in line
