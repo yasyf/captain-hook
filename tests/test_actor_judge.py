@@ -520,9 +520,12 @@ def test_an_actor_completes_the_guard_only_when_every_mandatory_hook_finished(
     assert leaks(response) == []
 
 
-def test_an_actor_confirm_failure_notes_only_its_type_once_per_session(
+def test_an_actor_confirm_failure_notes_once_and_keeps_provider_text_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap: Any
 ) -> None:
+    import spawnllm
+    from spawnllm import DecideError
+
     from captain_hook import Confirm
     from captain_hook.dispatch import execute_hook
     from captain_hook.events import PreToolUseEvent
@@ -530,21 +533,27 @@ def test_an_actor_confirm_failure_notes_only_its_type_once_per_session(
     from captain_hook.util import reqenv
     from tests.helpers import build_ctx
 
-    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL)
+    monkeypatch.setenv("OPENAI_API_KEY", OTHER)
+    monkeypatch.setenv("TYPESAFE_API_KEY", SENTINEL)
     actor.capture("codex")
+    keys: list[str | None] = []
+
+    def rejected(*_: Any, api_key: str | None = None, **__: Any) -> Any:
+        keys.append(api_key)
+        raise DecideError(503, PROVIDER_TEXT)
+
+    monkeypatch.setattr(spawnllm, "decide_sync", rejected)
     spec = HookSpec(events=Event.PreToolUse, message="m", block=True, confirm=Confirm(rule="r"))
     guard = RegisteredHook(spec=spec, name="queued_push")
     ctx = build_ctx(session_dir=tmp_path)
-    scope = reqenv.RequestOverrides(env={"CEREBRAS_API_KEY": OTHER}, cwd=str(tmp_path), client_ppid=1, session_id="s")
-    with unavailable_endpoint() as (url, requests):
-        monkeypatch.setattr("captain_hook.confirm.CONFIRM_ENDPOINT", url)
-        with reqenv.use_request(scope), reqenv.deadline_in(60):
-            results = [
-                execute_hook(guard, PreToolUseEvent(_raw={"tool_name": "Bash", "tool_input": {"command": c}}, ctx=ctx))
-                for c in ("git push origin feat", "git push origin main")
-            ]
-    message = "queued_push: allowed, the confirm step failed (JudgeFailure)"
+    scope = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+    with reqenv.use_request(scope), reqenv.deadline_in(60):
+        results = [
+            execute_hook(guard, PreToolUseEvent(_raw={"tool_name": "Bash", "tool_input": {"command": c}}, ctx=ctx))
+            for c in ("git push origin feat", "git push origin main")
+        ]
+    message = "queued_push: allowed, the confirm step got no answer from Jev"
     assert results == [HookResult(action=Action.warn, message=message, approve=False), None]
-    assert requests == ["/v1/chat/completions"] * 2
-    assert "confirm step failed" in logcap.text
+    assert keys == [SENTINEL, SENTINEL]
+    assert "decide (jev) failed" in logcap.text
     assert not [secret for secret in (PROVIDER_TEXT, OTHER, SENTINEL) if secret in logcap.text]

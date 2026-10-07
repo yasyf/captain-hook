@@ -7,6 +7,7 @@ from signal import SIGKILL, SIGTERM, Signals
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
+from spawnllm import BinaryAnswer
 
 from captain_hook import (
     Allow,
@@ -219,21 +220,21 @@ STAGES = {"warn": warn_stage, "judge": judge_stage, "escalate": escalate_stage}
             commands=LIVE,
             env=NO_LIVE,
             state=FRESH,
-            llm={"disposable": False},
+            decide={"disposable": BinaryAnswer(p_yes=0.03, confidence=0.94)},
         ): Block(pattern="did not rate it disposable"),
         Input(
             tool_input=pressure_payload("judge", 601),
             commands=LIVE,
             env=NO_LIVE,
             state=[ProcwatchState(judging=[f"601:{CHILD_START}"], judge_calls=1)],
-            llm={"disposable": True},
+            decide={"disposable": BinaryAnswer(p_yes=0.97, confidence=0.94)},
         ): Block(pattern="already in flight"),
         Input(
             tool_input=pressure_payload("judge", 601),
             commands=LIVE,
             env=NO_LIVE,
             state=FRESH,
-            llm={"disposable": True},
+            decide={"disposable": BinaryAnswer(p_yes=0.97, confidence=0.94)},
         ): Block(pattern="disabled under test"),
         Input(tool_input=pressure_payload("escalate", 601), commands=LIVE, env=NO_LIVE, state=FRESH): Block(
             pattern="never sent SIGTERM"

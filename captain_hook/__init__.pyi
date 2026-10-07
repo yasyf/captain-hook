@@ -56,8 +56,9 @@ from captain_hook.conditions import UserSaid as UserSaid
 from captain_hook.conditions import workflow_opt_matches as workflow_opt_matches
 from captain_hook.conditions import workflow_opt_values as workflow_opt_values
 from captain_hook.conditions import workflow_script_source as workflow_script_source
+from captain_hook.confirm import CONFIRMED as CONFIRMED
+from captain_hook.confirm import UNCONFIRMED as UNCONFIRMED
 from captain_hook.confirm import Confirm as Confirm
-from captain_hook.confirm import ConfirmVerdict as ConfirmVerdict
 from captain_hook.context import HookContext as HookContext
 from captain_hook.contexts import AfterEdit as AfterEdit
 from captain_hook.contexts import BeforeEdit as BeforeEdit

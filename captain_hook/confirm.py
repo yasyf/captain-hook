@@ -1,10 +1,9 @@
-"""The confirm step: a deterministic block lands only once a small model confirms the match."""
+"""The confirm step: a deterministic block lands only once a fast classifier confirms the match."""
 
 from __future__ import annotations
 
 import contextvars
 import json
-import math
 import threading
 import time
 from concurrent.futures import Future, wait
@@ -16,28 +15,27 @@ from typing import TYPE_CHECKING
 import filelock
 from loguru import logger
 from pydantic import BaseModel, Field
-
-from captain_hook.prompt import Prompt
-from captain_hook.util import reqenv
+from spawnllm import Binary, BinaryAnswer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from spawnllm import LlmBackend
-
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookResult
 
-CONFIRM_RULES = """\
-A deterministic hook matched the pending tool call and wants to block it. Its pattern match is cheap and
-sometimes fires on calls the rule was never meant to stop. Judge whether this call really is what the rule
-protects against, from the rule, the hook's message, the tool input, and the recent tool results.
-
-Set block=true only when the call is what the rule protects against, and confident=true only when the
-evidence leaves no reasonable doubt either way. Keep reasoning to one sentence.
-"""
-CONFIRM_ENDPOINT = "https://api.cerebras.ai/v1"
-CONFIRM_MODEL = "gpt-oss-120b"
+CONFIRM_QUESTIONS = {
+    "protected": Binary(
+        "A deterministic hook matched this pending tool call and wants to block it. Is the call really what the rule "
+        "protects against?",
+        yes="The call is exactly the case the rule exists to stop.",
+        no="The pattern matched a call the rule was never meant to stop, or an exception the rule names covers it.",
+    ),
+}
+PROTECTED = 0.35
+CONFIRMED = {"protected": BinaryAnswer(p_yes=0.9, confidence=0.8)}
+"""Inline-test answers that confirm a ``Confirm`` block, as in ``Input(..., decide=CONFIRMED): Block()``."""
+UNCONFIRMED = {"protected": BinaryAnswer(p_yes=0.05, confidence=0.9)}
+"""Inline-test answers that clear a ``Confirm`` block, as in ``Input(..., decide=UNCONFIRMED): Allow()``."""
 EVIDENCE_WINDOW = 8
 EVIDENCE_CHARS = 3000
 INPUT_CHARS = 4000
@@ -46,31 +44,29 @@ REMEMBERED_VERDICTS = 256
 
 @dataclass(frozen=True, slots=True)
 class Confirm:
-    """Send a deterministic block through a small model before it lands.
+    """Send a deterministic block through TypeSafe Jev before it lands.
 
-    The block stands only when the model confidently confirms the call is what ``rule`` protects against.
-    A no-match or unsure answer allows the call without ``additionalContext``.
+    The block stands only when Jev's probability that the call is what ``rule`` protects against
+    reaches :data:`PROTECTED`, the threshold measured against reference labels. A lower answer, or a
+    question Jev declines, allows the call without ``additionalContext``.
 
     Timeouts and errors allow with one-line notes, once per distinct note per hook per session.
     A busy note-ledger lock still surfaces the note. Claude Code's permission flow decides as usual.
 
-    The model sees ``rule``, the tool input, the hook's message, and the last few tool results;
+    Jev sees ``rule``, the tool input, the hook's message, and the last few tool results;
     the framework stops waiting after ``timeout_s`` wall-clock seconds.
 
     A verdict is remembered for the session per hook and exact input, so a retried identical call
     never pays twice.
 
     Pair it with ``skip_if=[Annotated(...)]``: an annotation that settles the call skips the hook,
-    and the model with it.
+    and the classifier with it.
 
-    The model is Cerebras ``gpt-oss-120b``, the fastest small model measured against the
-    three-second wall (``bench/confirm.py``).
-
-    It reads ``CEREBRAS_API_KEY``. Without the key, every confirm allows; its failure note follows
-    the same once-per-session rule.
+    The key comes from ``TYPESAFE_API_KEY`` or the Keychain item ``spawnllm key set jev`` writes.
+    Without it, every confirm allows; its failure note follows the same once-per-session rule.
 
     Attributes:
-        rule: What the block protects against, the one sentence the model judges the call by.
+        rule: What the block protects against, the one sentence the classifier judges the call by.
         timeout_s: Seconds the framework waits for the verdict before it allows the call.
 
     Example:
@@ -83,39 +79,12 @@ class Confirm:
     timeout_s: float = 3.0
 
 
-class ConfirmVerdict(BaseModel):
-    """The confirm step's model answer: whether the call matches the rule, and whether the model is sure."""
-
-    block: bool
-    confident: bool
-    reasoning: str
-
-
-class ConfirmVerdicts(BaseModel):
-    verdicts: dict[str, ConfirmVerdict] = Field(default_factory=dict)
+class ConfirmDecisions(BaseModel):
+    blocks: dict[str, bool] = Field(default_factory=dict)
 
 
 class ConfirmNotes(BaseModel):
     noted: set[str] = Field(default_factory=set)
-
-
-def confirm_backend() -> LlmBackend:
-    from spawnllm import OpenAiEndpointBackend
-
-    return OpenAiEndpointBackend(
-        CONFIRM_ENDPOINT, CONFIRM_MODEL, api_key=reqenv.getenv("CEREBRAS_API_KEY") or "", reasoning_effort="low"
-    )
-
-
-def confirm_prompt(rule: str, message: str, tool_input: str, evidence: str) -> Prompt:
-    return (
-        Prompt()
-        .system(CONFIRM_RULES)
-        .context("rule", rule)
-        .context("hook_message", message)
-        .context("tool_input", tool_input)
-        .context("recent_tool_results", evidence)
-    )
 
 
 def verdict_key(hook: str, evt: BaseHookEvent, message: str) -> str:
@@ -137,38 +106,39 @@ def detached[T](work: Callable[[], T], *, name: str) -> Future[T]:
     return future
 
 
-def ask(evt: BaseHookEvent, message: str, confirm: Confirm) -> ConfirmVerdict:
+def ask(evt: BaseHookEvent, message: str, confirm: Confirm) -> bool | None:
     from cc_transcript.render import Budget, clip
 
     evidence = evt.ctx.transcript_text(
         window=EVIDENCE_WINDOW, tool_results=True, budget=Budget(turn_chars=300, tool_chars=600)
     )
-    return evt.ctx.call_llm(
-        confirm_prompt(
-            confirm.rule,
-            message,
-            clip(json.dumps(dict(evt.input.raw), default=str), INPUT_CHARS),
-            clip(evidence, EVIDENCE_CHARS),
-        ),
-        backend=confirm_backend(),
-        model="small",
-        timeout=math.ceil(confirm.timeout_s),
-        response_model=ConfirmVerdict,
-    )
+    state = {
+        "rule": confirm.rule,
+        "hook_message": message,
+        "tool_input": clip(json.dumps(dict(evt.input.raw), default=str), INPUT_CHARS),
+        "recent_tool_results": clip(evidence, EVIDENCE_CHARS),
+    }
+    if (decision := evt.decide(state, CONFIRM_QUESTIONS, timeout=confirm.timeout_s)) is None:
+        return None
+    match decision.answers["protected"]:
+        case BinaryAnswer(p_yes=p_yes):
+            return p_yes >= PROTECTED
+        case _:
+            return False
 
 
-def remember(evt: BaseHookEvent, key: str, verdict: ConfirmVerdict, *, deadline: float) -> None:
+def remember(evt: BaseHookEvent, key: str, blocks: bool, *, deadline: float) -> None:
     try:
-        with evt.ctx.session[ConfirmVerdicts].mutate(timeout=max(0.0, deadline - time.monotonic())) as remembered:
-            remembered.verdicts = dict(list({**remembered.verdicts, key: verdict}.items())[-REMEMBERED_VERDICTS:])
+        with evt.ctx.session[ConfirmDecisions].mutate(timeout=max(0.0, deadline - time.monotonic())) as remembered:
+            remembered.blocks = dict(list({**remembered.blocks, key: blocks}.items())[-REMEMBERED_VERDICTS:])
     except filelock.Timeout:
         logger.bind(key=key).info("confirm verdict cache busy past the deadline; verdict not remembered")
 
 
-def judged(evt: BaseHookEvent, hook: str, message: str, confirm: Confirm) -> ConfirmVerdict | str:
+def judged(evt: BaseHookEvent, hook: str, message: str, confirm: Confirm) -> bool | str:
     deadline = time.monotonic() + confirm.timeout_s
     key = verdict_key(hook, evt, message)
-    if (known := evt.ctx.session[ConfirmVerdicts].get(ConfirmVerdicts()).verdicts.get(key)) is not None:
+    if (known := evt.ctx.session[ConfirmDecisions].get(ConfirmDecisions()).blocks.get(key)) is not None:
         return known
     future = detached(partial(ask, evt, message, confirm), name=f"capt-hook-confirm-{hook}")
     if not wait([future], timeout=confirm.timeout_s).done:
@@ -176,8 +146,10 @@ def judged(evt: BaseHookEvent, hook: str, message: str, confirm: Confirm) -> Con
     if (failure := future.exception()) is not None:
         logger.bind(hook=hook).opt(exception=failure).warning("confirm step failed; allowing")
         return f"the confirm step failed ({type(failure).__name__})"
-    remember(evt, key, verdict := future.result(), deadline=deadline)
-    return verdict
+    if (blocks := future.result()) is None:
+        return "the confirm step got no answer from Jev"
+    remember(evt, key, blocks, deadline=deadline)
+    return blocks
 
 
 def noted_once(evt: BaseHookEvent, note: str) -> HookResult | None:
@@ -193,9 +165,9 @@ def noted_once(evt: BaseHookEvent, note: str) -> HookResult | None:
 def confirmed(evt: BaseHookEvent, hook: str, result: HookResult, confirm: Confirm) -> HookResult | None:
     """Settle a block that asked for confirmation: the block itself on a confident match, else let the call through."""
     match judged(evt, hook, result.message or "", confirm):
-        case ConfirmVerdict(block=True, confident=True):
+        case True:
             return replace(result, confirm=None)
-        case ConfirmVerdict():
+        case False:
             return None
         case str() as why:
             return noted_once(evt, f"{hook}: allowed, {why}")

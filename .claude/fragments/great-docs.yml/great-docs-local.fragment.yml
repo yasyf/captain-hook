@@ -120,7 +120,6 @@ reference:
       - GateVerdict
       - NudgeVerdict
       - PromptCheckVerdict
-      - ConfirmVerdict
       - SafetyVerdict
 
   - title: Conditions
@@ -296,6 +295,8 @@ reference:
       - Ask
       - FileFixture
       - TranscriptFixture
+      - CONFIRMED
+      - UNCONFIRMED
 
   - title: Configuration & Prompts
     desc: Settings, scaffolding, and LLM prompt helpers.

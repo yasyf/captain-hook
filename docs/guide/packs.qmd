@@ -42,12 +42,12 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   subprocess resource monitor. One host ticker in `capt-hookd` samples the children of each registered
   session. When a child runs past `min_runtime_seconds` at sustained CPU or disk pressure, the monitor warns
   the session through its next hook event and a desktop notification, then waits out the grace period.
-  It then asks the small-tier judge whether the child is disposable. If the judge says yes, the monitor sends
-  one targeted `SIGTERM` after it revalidates the pid, parent, process group, start time, command, working
-  directory, and session ownership. Deploys, releases, publishes, database clients and migrators, and
-  anything protected are never signaled, and neither are their ancestors. Protected means agent sessions,
-  terminal hosts, PTY daemons, Orca, launchd, and the Captain Hook host. The judge cannot override those
-  exclusions. See [Tune the subprocess resource monitor](#tune-the-subprocess-resource-monitor) to
+  It then asks TypeSafe Jev whether the child is disposable. When Jev says yes with at least 0.9
+  probability, the monitor sends one targeted `SIGTERM` after it revalidates the pid, parent, process
+  group, start time, command, working directory, and session ownership. Deploys, releases, publishes,
+  database clients and migrators, and anything protected are never signaled, and neither are their
+  ancestors. Protected means agent sessions, terminal hosts, PTY daemons, Orca, launchd, and the Captain
+  Hook host. Jev cannot override those exclusions. See [Tune the subprocess resource monitor](#tune-the-subprocess-resource-monitor) to
   change the thresholds or turn the monitor off.
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo.
   Every hook checks for `.git/.graphite_repo_config` across worktrees and honors `ccx.nogt`.
@@ -452,8 +452,7 @@ differs by key:
 | `HOOKS_PERFORMANCE_MAX_TRACKED_PER_SESSION` | `32` | 1 or more | host | Children tracked at once per session |
 | `HOOKS_PERFORMANCE_REGISTRY_CAP` | `512` | 1 or more | host, daemon | Sessions the host monitors at once |
 | `HOOKS_PERFORMANCE_TERMINATE` | `true` | `true` or `false` | worker | Whether a disposable verdict ends in a signal |
-| `HOOKS_PERFORMANCE_JUDGE_TIER` | `small` | a model tier | worker | Model tier that rates whether a child is disposable |
-| `HOOKS_PERFORMANCE_JUDGE_TIMEOUT_SECONDS` | `20` | 1 to 300 | worker | Time limit for one judge call |
+| `HOOKS_PERFORMANCE_JUDGE_TIMEOUT_SECONDS` | `3` | 1 to 300 | worker | Time limit for one Jev call |
 | `HOOKS_PERFORMANCE_MAX_JUDGE_CALLS_PER_SESSION` | `10` | 1 or more | worker | Judge calls allowed per session |
 
 An invalid value does not stop the session. If the daemon's own environment holds one, the daemon logs the
@@ -480,8 +479,8 @@ running instead:
 - A sample that cannot be read empties the window for that metric. Pressure must then be proven again with
   fresh readable samples before the child advances.
 - The command line, or an ancestor's, matches an exclusion, or the child or one of its ancestors is protected.
-- The judge times out, returns invalid output, has no backend, runs out of its per-session calls, or does not
-  rate the child disposable.
+- Jev times out, rejects the request, has no key, declines the question, or rates the child disposable below
+  0.9, or the session runs out of judge calls.
 - The event payload is malformed, or the session state on disk is corrupt.
 - The host cannot dispatch the stage: it is shed, it expired or was abandoned past its deadline, or the host is closing.
 - The registry is full, or the session's settings are invalid, so the session is never monitored.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
-from spawnllm import TModel
 
 from captain_hook.resource_defaults import DEFAULTS, ENV_PREFIX
 from captain_hook.settings import HooksSettings
@@ -15,7 +14,7 @@ class PerformanceSettings(HooksSettings):
 
     The sampling, threshold, grace, and escalation knobs default from ``internal/wireproto/resource.json``,
     the contract capt-hookd reads too. ``terminate`` turns the stop after a disposable verdict on or off,
-    and the ``judge_*`` knobs bound the small-model disposability verdict. ``escalate_after_seconds=0`` turns
+    and the ``judge_*`` knobs bound the Jev disposability verdict. ``escalate_after_seconds=0`` turns
     the ``SIGKILL`` escalation off; every other duration is positive and at most a day.
     """
 
@@ -32,6 +31,5 @@ class PerformanceSettings(HooksSettings):
     max_tracked_per_session: int = Field(default=DEFAULTS["max_tracked_per_session"], ge=1)
     registry_cap: int = Field(default=DEFAULTS["registry_cap"], ge=1)
     terminate: bool = True
-    judge_tier: TModel = "small"
-    judge_timeout_seconds: int = Field(default=20, ge=1, le=300)
+    judge_timeout_seconds: int = Field(default=3, ge=1, le=300)
     max_judge_calls_per_session: int = Field(default=10, ge=1)

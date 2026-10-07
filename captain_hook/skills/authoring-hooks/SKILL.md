@@ -89,9 +89,10 @@ are retired; a hook neither honors nor offers them.
 
 - Skip on an annotation with `skip_if=[Annotated("raw")]`. `Annotated("role", "evidence",
   scope="session")` reads only the session's dispatch prompt, so a command can never claim a role.
-- Route a block that tends to misfire through a small model with `confirm=Confirm(rule="<the one
-  sentence the block protects>")` on `hook(...)` or `evt.block(...)`. The block lands only when the
-  model confidently confirms the match; otherwise the call runs with a one-line note.
+- Route a block that tends to misfire through TypeSafe Jev with `confirm=Confirm(rule="<the one
+  sentence the block protects>")` on `hook(...)` or `evt.block(...)`. The block lands only when Jev
+  confirms the match; otherwise the call runs, with a one-line note when the check failed. Stub the
+  answer in inline tests with `decide=CONFIRMED` or `decide=UNCONFIRMED`.
 - `capt-hook lint` flags hand-parsed escapes, a message that offers a retired escape or a
   `CAPT_HOOK_CCX_RAW` value other than `1`, `true`, or `yes`, and a blocking hook on Agent, Task,
   Skill, Read, Grep, or Glob that carries neither an `Annotated` escape nor `confirm=`.
