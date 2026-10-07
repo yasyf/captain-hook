@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 REWRITE_TIMEOUT_SECONDS = 6
 ASSEMBLY_DEADLINE_SECONDS = 2.0
 WRAPPING_FENCE = re.compile(r"```[^\n]*\n((?:(?!```).)*)\n```", re.DOTALL)
+URL = re.compile(r"https?://\S+")
+CODE_SPAN = re.compile(r"`[^`\n]+`")
+LIST_ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s", re.MULTILINE)
+MIN_KEPT_RATIO = 0.6
 REWRITE_RULES = str(Prompt.load("plain_english_rules"))
 
 
@@ -39,8 +43,27 @@ def assembled(evt: MessageDisplayEvent) -> str:
         time.sleep(0.05)
 
 
+def visible_length(text: str) -> int:
+    return len(re.sub(r"\s", "", text))
+
+
+def loss(text: str, rewritten: str) -> str | None:
+    urls = [url.rstrip(".,;:!?") for url in URL.findall(text)]
+    spans = CODE_SPAN.findall(text)
+    items, kept_items = len(LIST_ITEM.findall(text)), len(LIST_ITEM.findall(rewritten))
+    if dropped := [url for url in urls if url not in rewritten]:
+        return f"rewrite dropped {len(dropped)} of {len(urls)} URLs"
+    if dropped := [span for span in spans if span not in rewritten]:
+        return f"rewrite dropped {len(dropped)} of {len(spans)} code spans"
+    if kept_items < items:
+        return f"rewrite cut list items from {items} to {kept_items}"
+    if visible_length(rewritten) < MIN_KEPT_RATIO * visible_length(text):
+        return f"rewrite kept under {MIN_KEPT_RATIO:.0%} of the text"
+    return None
+
+
 def is_prose(text: str) -> bool:
-    return len(re.sub(r"\s", "", re.sub(r"```.*?(?:```|\Z)", "", text, flags=re.DOTALL))) >= 200
+    return visible_length(re.sub(r"```.*?(?:```|\Z)", "", text, flags=re.DOTALL)) >= 200
 
 
 def rewrite_prompt(evt: MessageDisplayEvent, text: str) -> Prompt:
@@ -89,10 +112,15 @@ def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
     future = offload_pool().submit(contextvars.copy_context().run, rewrite, evt, text, api_key, max(1, int(budget)))
     finished = bool(wait([future], timeout=max(0.0, budget)).done)
     future.cancel()
+    root = str(evt.cwd) if evt.cwd else None
     if (failure := future.exception() if finished else TimeoutError()) is not None:
-        faults.record("plain_english rewrite", failure, str(evt.cwd) if evt.cwd else None)
+        faults.record("plain_english rewrite", failure, root)
         return text
-    return unwrapped(future.result(), text) or text
+    rewritten = unwrapped(future.result(), text)
+    if rewritten and (reason := loss(text, rewritten)):
+        faults.record("plain_english rewrite", ValueError(reason), root)
+        return text
+    return rewritten or text
 
 
 @on(Event.MessageDisplay)
