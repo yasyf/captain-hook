@@ -124,7 +124,7 @@ from captain_hook import Event, on
 
 @on(Event.UserPromptSubmit)
 def rollback_route(evt):
-    decision = evt.decide(evt.prompt or "", {
+    decision = evt.decide(evt.user_prompt or "", {
         "rollback": Binary("Does the user ask to roll back a release?"),
         "target": Label("Which release does the user name?", {"none": None, "nightly": None, "weekly": None}),
     })

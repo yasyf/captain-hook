@@ -532,7 +532,7 @@ class BaseHookEvent:
         Example:
             >>> from spawnllm import Binary, BinaryAnswer
             >>> asked = {"rollback": Binary("Does the user ask to roll back a release?")}
-            >>> match (decision := evt.decide(evt.prompt or "", asked)) and decision.answers["rollback"]:
+            >>> match (decision := evt.decide(evt.user_prompt or "", asked)) and decision.answers["rollback"]:
             ...     case BinaryAnswer(p_yes=p_yes) if p_yes > 0.9:
             ...         return evt.warn("Roll back with `ci release rollback`.")
         """
