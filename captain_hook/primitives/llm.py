@@ -858,12 +858,11 @@ def prompt_check(
     reasoning = evt.ctx.t.recent(50).assistant_text() if include_reasoning else ""
 
     base = template if isinstance(template, Prompt) else Prompt().system(template.format(**(fmt or {})))
-    built = base.context("agent_reasoning", reasoning or None).context(
-        "diff", evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None
-    )
+    built = base.context("agent_reasoning", reasoning or None)
     prompt_str = str(built)
 
     try:
+        built = built.context("diff", evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None)
         verdict = staged_verdict(
             evt,
             str(Prompt(system_text=built.system_text, ask_text=built.ask_text)),

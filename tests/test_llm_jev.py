@@ -446,3 +446,14 @@ def test_inline_tests_stub_a_jev_verdict_from_the_llm_stub() -> None:
     assert ctx.decide_verdict("Warn?", "state", NudgeVerdict, root=None) == NudgeVerdict(
         fire=False, reasoning="inline test stub"
     )
+
+
+def test_prompt_check_records_a_diff_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    monkeypatch.setattr("captain_hook.primitives.llm.resolve_cache_dir", lambda: tmp_path)
+    ctx = jev_ctx(tmp_path)
+    ctx.diff = MagicMock(side_effect=subprocess.TimeoutExpired(["git", "diff"], 5))  # type: ignore[method-assign]
+
+    assert prompt_check(make_post_tool_event(ctx=ctx), "Is {x} risky?", {"x": "it"}, prefix="RISK", diff=True) is None
+    assert len(list((tmp_path / "failures").rglob("*.json"))) == 1
