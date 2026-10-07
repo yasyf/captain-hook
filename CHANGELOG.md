@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`evt.decide` asks TypeSafe Jev or OpenAI Decisions a typed question set.**
+  A hook passes the state and an ordered map of spawnllm `Binary`, `Label`, and `Score`
+  questions and gets a `Decision` back in about 120 ms, one HTTP call for every
+  question. `provider="openai"` asks `gpt-6-luna` instead. `timeout`, 3 seconds by
+  default, caps the call with retries, and the request deadline cuts it to half a
+  second short of the dispatch cutoff. A timeout, a provider error, or a missing key logs a
+  warning and returns `None`, the same fail-open path the LLM primitives take. A rejected
+  request or a missing key also records a fault that the next session start reports. On a
+  host, spawnllm reads `TYPESAFE_API_KEY` or `OPENAI_API_KEY`, or the macOS Keychain item
+  `spawnllm key set` writes. An API actor now captures `TYPESAFE_API_KEY` beside its judge
+  keys, so no hook command inherits it, and passes it, or its OpenAI key, to the call.
+  `Input(decide={...})` stubs the answers in inline tests, and an unstubbed question raises
+  `KeyError` instead of calling the network. The spawnllm floor moves to 0.17.
+
 - **A grant declaration can let a call its hook never decided go ahead.**
   `Grants(attach=...)` names how a grant reaches its `spent_by` system: the hook result
   that carries the grant on the pending call. When a mandatory hook with such a

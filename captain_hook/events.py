@@ -30,7 +30,8 @@ if TYPE_CHECKING:
     from cc_transcript.render import Budget
     from cc_transcript.tools import FallbackCall, ToolCall
     from pydantic import BaseModel
-    from spawnllm import TModel, TSpecialty
+    from spawnllm import Decision, TModel, TSpecialty
+    from spawnllm.decide import Question, TDecideProvider
 
     from captain_hook.annotations import Annotations
     from captain_hook.ast_grep import Edit
@@ -505,6 +506,53 @@ class BaseHookEvent:
                 return answer
             case _:
                 return result
+
+    def decide(
+        self,
+        state: str | Mapping[str, Any] | Sequence[Any],
+        questions: Mapping[str, Question],
+        *,
+        provider: TDecideProvider = "jev",
+        timeout: float = 3.0,
+    ) -> Decision | None:
+        """Ask a fast typed classifier about this event and return its answers, or ``None`` when it fails.
+
+        For questions that need no tools and no transcript reading of their own: one HTTP call to
+        TypeSafe Jev (``provider="jev"``) or OpenAI Decisions (``provider="openai"``) answers every
+        ``Binary``, ``Label``, and ``Score`` question in ``questions`` about ``state`` in about
+        120 ms. ``timeout`` caps the call, retries included, and the request's own deadline cuts
+        it shorter. A timeout, a provider error, or a missing key logs a warning and returns
+        ``None``, so the hook falls through as it would with no verdict; a rejected request or a
+        missing key also records a fault the next session start reports. A question the provider
+        declines answers ``Refused``. Decide on facts the text states; never let a decision about
+        text the agent wrote authorize anything.
+
+        Inline tests stub the call with ``Input(decide={...})``, so a test never reaches the network.
+
+        Example:
+            >>> from spawnllm import Binary, BinaryAnswer
+            >>> asked = {"rollback": Binary("Does the user ask to roll back a release?")}
+            >>> match (decision := evt.decide(evt.prompt or "", asked)) and decision.answers["rollback"]:
+            ...     case BinaryAnswer(p_yes=p_yes) if p_yes > 0.9:
+            ...         return evt.warn("Roll back with `ci release rollback`.")
+        """
+        from loguru import logger
+        from spawnllm import JEV, OPENAI, DecideError, DecideKeyMissing
+
+        from captain_hook import faults
+
+        try:
+            return self.ctx.decide(state, questions, provider={"jev": JEV, "openai": OPENAI}[provider], timeout=timeout)
+        except DecideError as exc:
+            failure: Exception = DecideError(exc.status, "the provider rejected the request")
+        except DecideKeyMissing as exc:
+            failure = exc
+        except TimeoutError as exc:
+            logger.warning("decide ({}) timed out: {}", provider, exc)
+            return None
+        faults.record(f"decide ({provider})", failure, str(self.cwd) if self.cwd else None)
+        logger.warning("decide ({}) failed: {}", provider, failure)
+        return None
 
     def allow(self, *, system_message: str | None = None) -> HookResult:
         from captain_hook.types import Action

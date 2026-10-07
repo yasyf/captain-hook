@@ -17,12 +17,13 @@ from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from cc_transcript.query import Session
     from cc_transcript.render import Budget
     from pydantic import BaseModel
-    from spawnllm import LlmBackend, TModel, TSpecialty
+    from spawnllm import Decision, LlmBackend, Provider, TModel, TSpecialty
+    from spawnllm.decide import Question
 
     from captain_hook.settings import HooksSettings
     from captain_hook.signals.nlp import Clause
@@ -36,6 +37,7 @@ UNSUPPORTED_MODELS_LOCK = threading.Lock()
 READY_BACKEND_TTL_SECONDS = 300.0
 READY_BACKENDS: dict[tuple[str | None, str], tuple[float, LlmBackend]] = {}
 READY_BACKENDS_LOCK = threading.Lock()
+DECIDE_MARGIN_SECONDS = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,6 +578,32 @@ class HookContext:
             if is_unsupported_model(exc):
                 remember_model_rejection(specialty, model, exc, serving)
             raise
+
+    def decide(
+        self,
+        state: str | Mapping[str, Any] | Sequence[Any],
+        questions: Mapping[str, Question],
+        *,
+        provider: Provider,
+        timeout: float,
+    ) -> Decision:
+        """Ask a decision provider once the request's deadline still has room, clamping ``timeout`` to it.
+
+        The call ends :data:`DECIDE_MARGIN_SECONDS` before the caller deadline, retries included, and
+        raises ``TimeoutError`` without a request once that leaves no time. An API actor passes the
+        key it captured; on a host, spawnllm reads the provider's variable or its macOS Keychain item.
+        """
+        from spawnllm import decide_sync
+
+        from captain_hook import actor
+
+        reqenv.checkpoint()
+        if (left := reqenv.seconds_left()) is not None:
+            timeout = min(timeout, left - DECIDE_MARGIN_SECONDS)
+        if timeout <= 0:
+            raise TimeoutError("the caller deadline leaves no time for the decision call")
+        key = actor.ACTOR.decide_key(provider) if actor.ACTOR is not None else None
+        return decide_sync(state, questions, provider=provider, timeout=timeout, api_key=key)
 
     def assemble_prompt(
         self,
