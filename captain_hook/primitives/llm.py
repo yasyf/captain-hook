@@ -124,9 +124,7 @@ def llm_evaluate[M: BaseModel](
         return None
 
     if sig := resolve_signals(signals):
-        ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
-        texts = ps.unechoed_candidates(transcript_texts(evt, sig.window, sig.origin, sig.thinking))
-        if not (contributing_texts := ps.match_signals(sig, texts, hook)):
+        if not (contributing_texts := matched_signals(evt, sig, hook)):
             return None
     elif contexts and when is None:
         contributing_texts = []
@@ -192,6 +190,13 @@ def llm_evaluate[M: BaseModel](
 
 def retry_affordable() -> bool:
     return not reqenv.deadline_within(LLM_RETRY_FLOOR_SECONDS)
+
+
+def matched_signals(evt: BaseHookEvent, sig: Signals, hook: str) -> list[str] | None:
+    """The texts that would fire ``sig`` for ``hook`` right now, without consuming them."""
+    ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
+    texts = transcript_texts(evt, sig.window, sig.origin, sig.thinking)
+    return ps.match_signals(sig, ps.unechoed_candidates(texts), hook)
 
 
 def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> list[str] | None:

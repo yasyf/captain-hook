@@ -18,7 +18,7 @@ from captain_hook import (
     Warn,
     on,
 )
-from captain_hook.primitives.llm import consume_signals
+from captain_hook.primitives.llm import consume_signals, matched_signals
 from captain_hook.state import fired_this_turn, record_fire
 
 DETOUR_QUESTIONS = {
@@ -183,13 +183,18 @@ def detour_state(evt: BaseHookEvent, asked: str) -> dict[str, str]:
     },
 )
 def detours(evt: BaseHookEvent) -> HookResult | None:
-    if fired_this_turn(evt) or consume_signals(evt, DETOUR_SIGNALS, "detours") is None:
+    if fired_this_turn(evt) or not matched_signals(evt, DETOUR_SIGNALS, "detours"):
         return None
     if (asked := UserMessages().content(evt)) is None:
         return None
-    match (decision := evt.decide(detour_state(evt, asked), DETOUR_QUESTIONS)) and decision.answers:
-        case {"side_work": BinaryAnswer(p_yes=side_work), **exemptions} if side_work >= SIDE_WORK and all(
-            isinstance(answer, BinaryAnswer) and answer.p_yes < EXEMPT for answer in exemptions.values()
+    if (decision := evt.decide(detour_state(evt, asked), DETOUR_QUESTIONS)) is None:
+        return None
+    claimed = consume_signals(evt, DETOUR_SIGNALS, "detours") is not None
+    match decision.answers:
+        case {"side_work": BinaryAnswer(p_yes=side_work), **exemptions} if (
+            claimed
+            and side_work >= SIDE_WORK
+            and all(isinstance(answer, BinaryAnswer) and answer.p_yes < EXEMPT for answer in exemptions.values())
         ):
             record_fire(evt)
             return evt.warn(DETOUR_MESSAGE)

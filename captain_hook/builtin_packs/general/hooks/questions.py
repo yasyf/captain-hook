@@ -23,7 +23,7 @@ from captain_hook import (
     UsedSkill,
     on,
 )
-from captain_hook.primitives.llm import consume_signals
+from captain_hook.primitives.llm import consume_signals, matched_signals
 from captain_hook.signals import matching_signals
 from captain_hook.state import PrimitiveState, record_fire
 
@@ -525,14 +525,17 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
     },
 )
 def narrate_then_wait(evt: BaseHookEvent) -> HookResult | None:
-    if consume_signals(evt, NARRATE_SIGNALS, "narrate_then_wait") is None:
+    if not matched_signals(evt, NARRATE_SIGNALS, "narrate_then_wait"):
         return None
-    match (decision := evt.decide(narration(evt), NARRATE_QUESTIONS)) and decision.answers:
+    if (decision := evt.decide(narration(evt), NARRATE_QUESTIONS)) is None:
+        return None
+    claimed = consume_signals(evt, NARRATE_SIGNALS, "narrate_then_wait") is not None
+    match decision.answers:
         case {
             "leaves_on_user": BinaryAnswer(p_yes=leaves),
             "still_produced": BinaryAnswer(p_yes=produced),
             "asked_covered": BinaryAnswer(p_yes=covered),
-        } if leaves >= LEAVES_ON_USER and max(produced, covered) < EXEMPT:
+        } if claimed and leaves >= LEAVES_ON_USER and max(produced, covered) < EXEMPT:
             record_fire(evt)
             return evt.block(NARRATE_MESSAGE)
         case _:
