@@ -18,6 +18,7 @@ from cc_transcript.ids import EventRef
 from cc_transcript.mining.candidates import FeedbackCandidate
 from cc_transcript.mining.confidence import from_payload, to_payload
 from cc_transcript.mining.signals import MiningSignal
+from loguru import logger
 
 from captain_hook.snapshots.client import MAX_RESULT_BYTES, EvidenceIncomplete
 from captain_hook.snapshots.client import client_scope as review_client
@@ -26,6 +27,11 @@ if TYPE_CHECKING:
     from captain_hook.review.scan import CorrectionLedger
 
 REVIEW_POLICY = {"id": "captain-review", "version": "1"}
+UNFAULTED = "none"
+CORRECTION_PICK = (
+    "Which numbered candidate edit does the developer's feedback fault? Pick none when the feedback is not about any "
+    "of them."
+)
 
 
 class ReviewPolicy:
@@ -385,6 +391,26 @@ async def prepare_corrections(snapshot: Any, request: Mapping[str, Any]) -> dict
     return {"kind": "corrections", "corrections": drafts}
 
 
+async def jev_pick(prompt: str, count: int) -> str | None:
+    """Jev's pick of the candidate a correction prompt's feedback faults, as its number or ``none``.
+
+    ``None`` when Jev timed out, failed, or refused, so the LLM picks instead.
+    """
+    from spawnllm import JEV, DecideError, DecideKeyMissing, Label, LabelAnswer, decide
+
+    options = dict.fromkeys([UNFAULTED, *map(str, range(1, count + 1))])
+    try:
+        decision = await decide(prompt, {"candidate": Label(CORRECTION_PICK, options)}, provider=JEV)
+    except (DecideError, DecideKeyMissing, TimeoutError, ValueError):
+        logger.opt(exception=True).warning("jev gave no correction pick; asking the llm")
+        return None
+    match decision.answers["candidate"]:
+        case LabelAnswer(choice=choice):
+            return choice
+        case _:
+            return None
+
+
 async def record_correction_drafts(drafts: Sequence[Mapping[str, Any]], *, ledger: CorrectionLedger) -> None:
     from cc_transcript.extract.correct import CorrectionPick, usable_backend
     from spawnllm import extract
@@ -400,7 +426,11 @@ async def record_correction_drafts(drafts: Sequence[Mapping[str, Any]], *, ledge
         choices = draft["choices"]
         if not choices:
             continue
-        if backend is None:
+        if (picked := await jev_pick(draft["prompt"], len(choices))) == UNFAULTED:
+            continue
+        if picked is not None:
+            chosen = choices[int(picked) - 1]
+        elif backend is None:
             chosen = max(choices, key=lambda choice: choice["overlap"])
         else:
             pick = await extract(draft["prompt"], CorrectionPick, backend=backend, model="medium")

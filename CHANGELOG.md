@@ -150,6 +150,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The grant judge asks TypeSafe Jev first.** `Judge` asks Jev which one evidence item
+  permits exactly the pending action, and whether any item's words reach past it. When Jev
+  puts at least 0.8 on one item that no grant in the tree rests on yet, and under 0.2 on
+  broader words, the action goes ahead on a one-use grant citing that item, with no LLM
+  call. Any other answer, a refused question, a timeout, or a missing key asks the LLM
+  judge as before, with no Jev answer in its prompt. The LLM writes the citations, standing
+  words, scope, and refusal, and can still allow, so standing words, counted approvals, and
+  widened scope always come from it. The session reviewer also asks Jev which harvested
+  candidate a correction faults, and asks the LLM only when Jev gives no pick.
+
 - **LLM judges ask TypeSafe Jev first and the LLM only when the verdict needs it.**
   `llm_evaluate`, `llm_gate`, `llm_nudge`, and `evt.llm` take `escalate`, a predicate over
   Jev's verdict. Jev decides every categorical field of the verdict model, and any other
@@ -162,8 +172,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the verdicts that fire instead of always asking the LLM. `prompt_check` asks the LLM only
   for a warning or a block, `llm_approve` only to confirm a call Jev judged safe, and
   `rules_nudge` only when Jev finds a contradiction; its verdict gains a `contradicts`
-  field. The grant judge stays on the LLM, because every allow needs the evidence ids it
-  rests on.
+  field.
 
 - **`llm_gate`, `llm_nudge`, and `evt.llm` ask TypeSafe Jev by default.** A verdict
   model whose fields are all `bool`, a `Literal` of strings, an `int` bounded to 2 to 10
