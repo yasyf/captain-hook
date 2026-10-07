@@ -963,20 +963,22 @@ def timing_out(command: str) -> Generator[list[float]]:
 
 
 @pytest.mark.parametrize(
-    ("commands", "slow", "named"),
+    ("commands", "slow"),
     [
-        pytest.param({PR_LOOKUP: pr_lookup(26315)}, QUEUE_STATUS, "`#26315`", id="status"),
-        pytest.param({}, PR_LOOKUP, "`feat`", id="lookup"),
+        pytest.param({PR_LOOKUP: pr_lookup(26315)}, QUEUE_STATUS, id="status"),
+        pytest.param({}, PR_LOOKUP, id="lookup"),
     ],
 )
-def test_a_timed_out_queue_check_holds_the_push_naming_what_it_could_not_verify(
-    isolate_modules: None, ccx_installed: None, tmp_path: Path, commands: dict[str, str], slow: str, named: str
+@pytest.mark.parametrize("command", ["git push", "ccx vcs stack submit"])
+def test_a_timed_out_queue_check_allows_the_push(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, commands: dict[str, str], slow: str, command: str
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo, _ = queued_repo(tmp_path, "feat")
-    with stubbed_commands(commands), timing_out(slow):
-        result = dispatch_command("git push", repo, tmp_path)
-    assert_fires(result, "deny", f"timed out for {named},")
+    with stubbed_commands({STACK_LIST: stack_list("feat", current="feat"), **commands}), timing_out(slow) as budgets:
+        result = dispatch_command(command, repo, tmp_path)
+    assert budgets
+    assert_not_denied(result)
 
 
 @pytest.mark.parametrize("command", ['ccx vcs ship -m "fix"', "ccx vcs stack submit", "gt submit"])
@@ -1010,7 +1012,7 @@ def test_the_queue_check_times_out_inside_the_hook_deadline(
         timing_out(QUEUE_STATUS) as budgets,
     ):
         result = dispatch_command("git push", repo, tmp_path)
-    assert_fires(result, "deny", "`#26315`")
+    assert_not_denied(result)
     assert 0 < budgets[0] <= 30 - SYNC_DEADLINE_MARGIN_SECONDS - 1
 
 
