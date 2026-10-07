@@ -136,6 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pending decision written as a named wait still meets the narrate gate.** The
+  `narrate_then_wait` skip accepted "Waiting on your pick, which only you can make." because
+  the item carried a producer clause. An item that names a decision (a pick, choice, answer,
+  approval, sign-off, or call) or a clause whose verb decides (choose, decide, approve,
+  confirm, rule on, answer) no longer qualifies, so the gate asks for `AskUserQuestion`.
+  Work product such as a review verdict the owner is producing still passes.
+
 - **A closing message that names each wait and its producer passes the narrate gate.**
   The `narrate_then_wait` Stop gate sent every closing message to its LLM judge, which
   blocked "Waiting on: the owner's review verdict, which the owner is producing." on some

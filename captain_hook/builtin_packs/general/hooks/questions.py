@@ -36,6 +36,11 @@ PRODUCER = (
 )
 PRODUCED_ITEM = rf"(?:(?!\s(?:and|or)\s)[^,;])+?(?:{PRODUCER})"
 PRODUCED_ITEMS = re.compile(rf"(?i){PRODUCED_ITEM}(?:(?:,?\s+and\s+|;\s+|,\s+){PRODUCED_ITEM})*\.?")
+DECISION = re.compile(
+    r"(?i)\b(?:picks?|picking|choices?|choos(?:e|es|ing)|decid(?:e|es|ing)|decisions?|approv(?:e|es|ing|als?)"
+    r"|confirm(?:s|ing|ations?)?|rulings?|rul(?:e|es|ing)\s+on|answers?|answering|sign(?:s|ing)?[- ]?offs?"
+    r"|mak(?:e|es|ing)\s+(?:a\s+|the\s+)?call|your\s+call)\b"
+)
 BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
@@ -178,12 +183,16 @@ NARRATE_SIGNALS = Signals(
 )
 
 
+def produced(waits: str) -> bool:
+    return PRODUCED_ITEMS.fullmatch(waits) is not None and DECISION.search(waits) is None
+
+
 def undeclared_prose(closing: str) -> str | None:
     rest: list[str] = []
     declared = awaiting = listing = False
     for line in closing.splitlines():
         if (awaiting or listing) and (bullet := BULLET.match(line)):
-            if not PRODUCED_ITEMS.fullmatch(line[bullet.end() :].strip()):
+            if not produced(line[bullet.end() :].strip()):
                 return None
             awaiting, listing = False, True
             continue
@@ -196,7 +205,7 @@ def undeclared_prose(closing: str) -> str | None:
             if (lead := WAIT_LEAD.match(sentence)) is None:
                 rest.append(sentence)
             elif waits := sentence[lead.end() :].strip():
-                if not PRODUCED_ITEMS.fullmatch(waits):
+                if not produced(waits):
                     return None
                 declared = True
             else:
@@ -447,6 +456,15 @@ in `reasoning`.""",
         Input(transcript=[T.user(DESK_WAKE), T.assistant(NAMED_WAIT)]): Allow(),
         Input(transcript=[T.assistant("Holding for your pick on the pool PRs."), T.assistant(NAMED_WAITS)]): Allow(),
         Input(transcript=[T.assistant("Let me know which.")]): Block(pattern="AskUserQuestion"),
+        Input(transcript=[T.assistant("Waiting on your pick, which only you can make.")]): Block(
+            pattern="AskUserQuestion"
+        ),
+        Input(
+            transcript=[
+                T.assistant("Waiting on your release plan, which only you can approve.\nThe watch is re-armed.")
+            ]
+        ): Block(pattern="AskUserQuestion"),
+        Input(transcript=[T.assistant(f"{NAMED_WAIT}\nThe watch is re-armed.")]): Allow(),
         Input(transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[
