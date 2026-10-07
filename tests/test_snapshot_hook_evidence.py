@@ -74,7 +74,7 @@ def test_model_retries_and_bookkeeping_use_prepared_generation(snapshot_event, m
 
     monkeypatch.setattr("spawnllm.extract_sync", model)
     sig = Signals(patterns=[Signal(pattern="trigger")], threshold=1)
-    verdict = llm_evaluate(evt, "judge", GateVerdict, hook="fixture", signals=sig, transcript="full")
+    verdict = llm_evaluate(evt, "judge", GateVerdict, hook="fixture", signals=sig, transcript="full", backend="llm")
     assert verdict.block
     assert prompts[0] == prompts[1]
     assert 'frozen {"key": "value"}' in prompts[0]
@@ -110,7 +110,7 @@ def test_postmodel_consumption_rechecks_mutable_state(snapshot_event, monkeypatc
         return GateVerdict(block=True, reasoning="confirmed")
 
     monkeypatch.setattr("spawnllm.extract_sync", model)
-    assert llm_evaluate(evt, "judge", GateVerdict, hook="fixture", signals=sig).block
+    assert llm_evaluate(evt, "judge", GateVerdict, hook="fixture", signals=sig, backend="llm").block
     assert consume_signals(evt, sig, "fixture") is None
     assert snapshot.signal_reads == 1
 
@@ -127,7 +127,7 @@ def test_evidence_incomplete_is_not_retried_or_swallowed(snapshot_event, monkeyp
 
     monkeypatch.setattr("spawnllm.extract_sync", model)
     with pytest.raises(EvidenceIncomplete, match="projection incomplete"):
-        llm_evaluate(evt, "judge", GateVerdict, hook="fixture")
+        llm_evaluate(evt, "judge", GateVerdict, hook="fixture", backend="llm")
     assert calls == [True]
 
 
@@ -209,7 +209,7 @@ def test_unprepared_postmodel_signal_window_fails_without_reopening(snapshot_eve
 
     evt, snapshot = snapshot_event
     monkeypatch.setattr("spawnllm.extract_sync", lambda *args, **kwargs: GateVerdict(block=False, reasoning="ok"))
-    llm_evaluate(evt, "judge", GateVerdict, hook="fixture")
+    llm_evaluate(evt, "judge", GateVerdict, hook="fixture", backend="llm")
     assert evt.ctx.prepared_evidence.source_ref == "owner:snapshot:generation"
     with pytest.raises(EvidenceIncomplete, match="not prepared"):
         signals.transcript_texts(evt, window)

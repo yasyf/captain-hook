@@ -68,8 +68,8 @@ FIXTURE_FILE_COUNTER = count()
 
 @dataclass
 class StubbedContext(HookContext):
-    """HookContext for inline tests: ``call_llm`` fabricates a deterministic verdict from
-    ``STUB_FIELD_VALUES`` merged with the per-test ``Input.llm`` overrides."""
+    """HookContext for inline tests: ``call_llm`` and ``decide_verdict`` fabricate a deterministic verdict
+    from ``STUB_FIELD_VALUES`` merged with the per-test ``Input.llm`` overrides, whichever backend judges."""
 
     llm: dict[str, Any] = field(default_factory=dict)
     decisions: dict[str, Any] = field(default_factory=dict)
@@ -87,6 +87,14 @@ class StubbedContext(HookContext):
             raise error
         if response_model is None:
             return "stubbed"
+        return self.stub_verdict(response_model)
+
+    def decide_verdict[M: BaseModel](self, instructions: str, state: str, response_model: type[M], **kwargs: Any) -> M:
+        if isinstance(error := self.llm.get("error"), BaseException):
+            raise error
+        return self.stub_verdict(response_model)
+
+    def stub_verdict[M: BaseModel](self, response_model: type[M]) -> M:
         values = STUB_FIELD_VALUES | self.llm
         return response_model(
             **{

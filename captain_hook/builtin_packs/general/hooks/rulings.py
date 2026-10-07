@@ -273,6 +273,7 @@ def rules_nudge(evt: BaseHookEvent) -> HookResult | None:
             once_per_turn=False,
             evidence=False,
             retries=0,
+            backend="llm",
         )
     named = found.named(verdict) if isinstance(verdict, RulingsVerdict) else []
     return nudge(named) if named else None

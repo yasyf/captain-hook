@@ -192,8 +192,9 @@ class Input:
             session :class:`~captain_hook.types.Waiting`.
         llm: Per-test LLM stub overrides merged over the default stub verdict
             (``fire``/``block``/``action``/``reasoning``), e.g. ``llm={"fire": False}``
-            to exercise an LLM hook's judge-declines path; an ``error`` key holding an
-            exception raises it from the model call, e.g. ``llm={"error": TimeoutError()}``.
+            to exercise an LLM hook's judge-declines path, whether Jev or the LLM judges; an
+            ``error`` key holding an exception raises it from the model call, e.g.
+            ``llm={"error": TimeoutError()}``.
         decide: The answers ``evt.decide`` returns, keyed by question id
             (``decide={"rollback": BinaryAnswer(p_yes=0.97, confidence=0.94)}``); an ``error`` key
             holding an exception raises it from the call, e.g. ``decide={"error": TimeoutError()}``.

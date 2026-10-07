@@ -128,12 +128,12 @@ message is replaced with the joined results. `lint` fires on `.py` edits and wri
 llm_gate(prompt: str | Prompt, *, message: str | Callable[[GateVerdict], str], verdict=lambda r: r.block,
          response_model=GateVerdict, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(),
          events=None, max_fires=None, tests=None, max_context=2000, specialty="review",
-         model="small", agent=True, transcript=True, diff=False) -> None
+         model="small", agent=True, transcript=True, diff=False, backend="jev") -> None
 
 llm_nudge(prompt: str | Prompt, *, message: str | Callable[[NudgeVerdict], str], verdict=lambda r: r.fire,
           response_model=NudgeVerdict, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(),
           events=None, max_fires=None, tests=None, async_=False, max_context=2000, specialty="review",
-          model="small", agent=True, transcript=True, diff=False) -> None
+          model="small", agent=True, transcript=True, diff=False, backend="jev") -> None
 
 prompt_check(evt, template: str | Prompt, fmt=None, *, prefix: str, suffix="", timeout=45,
              include_reasoning=True, diff=False, response_model=PromptCheckVerdict) -> HookResult | None
@@ -142,7 +142,9 @@ prompt_check(evt, template: str | Prompt, fmt=None, *, prefix: str, suffix="", t
 `llm_gate` defaults to `max_fires=1`, `llm_nudge` to `max_fires=3`; budgets count per agent
 context, so the main agent and each subagent get the full allowance. `prompt_check` is called
 from a handler and returns a `HookResult` (or `None`). `max_fires`, a narrow `only_if`, and
-`model="small"` bound the cost.
+`model="small"` bound the cost. `llm_gate` and `llm_nudge` send their verdict to TypeSafe Jev
+unless `backend="llm"`; [Choose who judges](../guide/llm-hooks.qmd#backend) covers when the LLM
+answers instead. `prompt_check` always asks the LLM, because its message is the judge's reason.
 
 `message` is a fixed string stating the rule and its remediation. A callable `message` receives the verdict
 model and should read structured fields only, never the free-text `reasoning`. `label`

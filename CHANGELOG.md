@@ -150,6 +150,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`llm_gate`, `llm_nudge`, and `evt.llm` ask TypeSafe Jev by default.** A verdict
+  model whose fields are all `bool`, a `Literal` of strings, an `int` bounded to 2 to 10
+  levels, or `str` becomes one Jev question per categorical field. The prompt becomes each
+  question's instructions, and the transcript window, contexts, and diff become its state,
+  so the verdict comes back in about a tenth of a second instead of after a Claude CLI
+  spawn. Every built-in gate and nudge moves with no call-site change. A `str` field such as
+  `reasoning` holds a one-line summary of Jev's answer. `backend="llm"` keeps a hook on the
+  LLM, and a `message` template that names a `str` field asks the LLM on its own. Verdict
+  models with any other field type, and `evt.llm` with a bare prompt or `int`, still ask the
+  LLM. The grant judge and `rules_nudge` stay on the LLM explicitly, because they need
+  citations and sentences. A Jev timeout, rejection, or missing key skips the hook as a
+  failed LLM call does, `evt.llm` raises, and a rejection or a missing key records a fault.
+  `Input(llm=...)` stubs the verdict in inline tests whichever backend judges.
+
 - **The reviewer's junk triage asks TypeSafe Jev instead of spawning a Claude CLI.**
   Each surviving create message now gets one `Label` question, feedback first, over
   HTTP; a message whose feedback probability falls below one half is junk, and a refused
