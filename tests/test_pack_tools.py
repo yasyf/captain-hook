@@ -271,7 +271,29 @@ def test_tooling_refusal_reads_structured_tool_responses(tmp_path: Path) -> None
     assert found is not None
     key, record = found
     assert key == "cc-slack-session"
+    assert record.tool == "cc-slack reply"
     assert record.evidence == "cc-slack: no cc-slack session for this Claude window"
+
+
+def test_tooling_refusal_names_the_command_github_refused(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import refusal
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    evt = PostToolUseEvent(
+        _raw={
+            "tool_name": "Bash",
+            "tool_input": {"command": "gh pr view 12 --json state"},
+            "tool_response": {"stdout": "", "stderr": "GraphQL: API rate limit already exceeded for user ID 709645.\n"},
+        },
+        ctx=HookContext(SessionStore(tmp_path), None, None),
+    )
+    found = refusal(evt)
+    assert found is not None
+    key, record = found
+    assert key == "github-quota"
+    assert record.tool == "gh pr"
+    assert record.evidence == "GraphQL: API rate limit already exceeded for user ID 709645."
 
 
 def test_tooling_refusal_drops_a_pre_expiry_record_and_spares_unrelated_dispatches(tmp_path: Path) -> None:

@@ -133,15 +133,14 @@ class Verb:
 @dataclass(frozen=True, slots=True)
 class Signature:
     key: str
-    tool: str
     text: re.Pattern[str]
     verbs: tuple[Verb, ...]
     lane_name: re.Pattern[str]
     window: timedelta | None = None
     failures_only: bool = False
 
-    def sourced(self, evt: BaseHookEvent) -> bool:
-        return any(verb.ran(evt) for verb in self.verbs)
+    def source(self, evt: BaseHookEvent) -> Verb | None:
+        return next((verb for verb in self.verbs if verb.ran(evt)), None)
 
     def refused_text(self, evt: BaseHookEvent) -> str:
         if not self.failures_only:
@@ -177,21 +176,18 @@ GITHUB_VERBS = (
 SIGNATURES = (
     Signature(
         "cc-slack-session",
-        "cc-slack",
         re.compile(r"no cc-slack session for this Claude window"),
         CC_SLACK_VERBS,
         re.compile(r"cc-slack-session"),
     ),
     Signature(
         "cc-slack-no-watch",
-        "cc-slack",
         re.compile(r"\bpass `?no_watch\b"),
         CC_SLACK_VERBS,
         re.compile(r"cc-slack-no-watch"),
     ),
     Signature(
         "github-quota",
-        "ccx",
         re.compile(
             r"(?i)rate-limited until|api rate limit exceeded|secondary rate limit"
             r"|graphql\b[^\n]{0,60}\b(?:quota|rate limit)"
@@ -269,9 +265,9 @@ def excerpt(text: str, match: re.Match[str]) -> str:
 
 def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
     for signature in SIGNATURES:
-        if signature.sourced(evt) and (found := signature.text.search(text := signature.refused_text(evt))):
+        if (ran := signature.source(evt)) and (found := signature.text.search(text := signature.refused_text(evt))):
             return signature.key, Refusal(
-                tool=signature.tool,
+                tool=ran.text,
                 verbs=tuple(verb.text for verb in signature.verbs),
                 evidence=excerpt(text, found),
                 expires=signature.expires(text),
@@ -459,7 +455,7 @@ tooling_nudge(
 LIVE = datetime(2099, 1, 1, tzinfo=UTC)
 RESET_PASSED = datetime(2026, 1, 1, tzinfo=UTC)
 QUOTA = Refusal(
-    tool="ccx",
+    tool="ccx vcs pr",
     verbs=tuple(verb.text for verb in GITHUB_VERBS),
     evidence="ccx: GitHub GraphQL quota exhausted",
     expires=LIVE,
@@ -496,7 +492,7 @@ CC_SLACK_CLI_SYNC = (
             tool="mcp__plugin_cc-slack_cc-slack__slack_reply",
             tool_input={"channel_id": "C1", "thread_ts": "1.2", "text": "hi"},
             output="no cc-slack session for this Claude window; run cc-slack login",
-        ): Warn(pattern="^`cc-slack` refused.*`ccx: tooling-lane=cc-slack-session`"),
+        ): Warn(pattern="^`slack_reply` refused.*`ccx: tooling-lane=cc-slack-session`"),
         Input(
             tool="Agent",
             tool_input={"prompt": "reply in the thread", "subagent_type": "lane"},
@@ -534,7 +530,7 @@ CC_SLACK_CLI_SYNC = (
         Input(
             command="cc-slack reply --url C1/p12 --text hi",
             output="posting\ncc-slack: no cc-slack session for this Claude window\n",
-        ): Warn(pattern="^`cc-slack` refused this action"),
+        ): Warn(pattern="^`cc-slack reply` refused this action"),
         Input(
             command="git grep -n 'no cc-slack session' go/cc-slack",
             output="go/cc-slack/ops.go:651: no cc-slack session for this Claude window",
