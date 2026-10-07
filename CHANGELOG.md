@@ -142,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the owner's later words for it, so it cannot refuse the write or revoke the grant over
   unrelated instructions. `capt-hook grant revoke` withdraws it. Class grants with a `*` or
   set scope, and counted grants, still go to the judge as before.
-||||||| parent of 1f4356b6 (grants: 🐛 Keep a settled grant rewrite when a sibling hook fails after it)
+
 - **A mandatory hook's allow survives a sibling hook that fails after it.** When a
   non-mandatory hook raised after every mandatory hook had settled, for example on a stale
   transcript lease, the worker kept a settled block but dropped a settled allow or rewrite,
