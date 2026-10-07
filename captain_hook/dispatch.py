@@ -922,11 +922,19 @@ def dispatch(
 
     Every grant use a hook reserves during the event commits when the envelope lets the call
     through and is released when any hook denies it, so a chained command whose second half is
-    refused never spends the grant its first half matched.
+    refused never spends the grant its first half matched. When dispatch fails after every mandatory
+    hook settled, the uses commit if their verdict lets the call through, since the worker replies
+    with that verdict.
     """
     reqenv.mandatory_phase().unchecked = partial(grant_declare.fail_open, evt)
     with grant_declare.reservations() as reserved:
-        envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
+        try:
+            envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
+        except BaseException:
+            phase = reqenv.mandatory_phase()
+            verdict = phase.verdict if phase.outcome == "settled" else None
+            grant_declare.settle(reserved, allowed=verdict is not None and verdict.action is not Action.block)
+            raise
         if not reserved or denies(envelope):
             grant_declare.settle(reserved, allowed=False)
             return envelope
