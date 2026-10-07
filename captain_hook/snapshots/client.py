@@ -442,6 +442,16 @@ class SnapshotClient:
     def acquire(
         self, path: str | Path, *, classifier: Mapping[str, str] = NATIVE_CLASSIFIER, tail_bytes: int | None = None
     ) -> RemoteSession:
+        description = self.acquired(path, classifier=classifier, tail_bytes=tail_bytes)
+        return RemoteSession(
+            self,
+            Lease(self, description, tail_bytes=tail_bytes),
+            Path(description["canonical_path"]),
+            description["classifier"],
+            tail_bytes=tail_bytes,
+        )
+
+    def acquired(self, path: str | Path, *, classifier: Mapping[str, str], tail_bytes: int | None) -> dict[str, Any]:
         description = None
         for data in self.pages(
             "acquire", path=str(Path(path).absolute()), classifier=dict(classifier), tail_bytes=tail_bytes
@@ -450,13 +460,7 @@ class SnapshotClient:
                 description = data["description"]
         if not isinstance(description, dict):
             raise SnapshotProtocolError("acquire completed without a snapshot description")
-        return RemoteSession(
-            self,
-            Lease(self, description),
-            Path(description["canonical_path"]),
-            description["classifier"],
-            tail_bytes=tail_bytes,
-        )
+        return description
 
     def classify(
         self, session: RemoteSession, predicate: Callable[[Any], bool], policy: Mapping[str, str]
@@ -498,7 +502,11 @@ class SnapshotClient:
             raise SnapshotProtocolError("classifier completed without a leased description")
         description = data["description"]
         classified = RemoteSession(
-            self, Lease(self, description), session.path, description["classifier"], tail_bytes=session.tail_bytes
+            self,
+            Lease(self, description, tail_bytes=session.tail_bytes),
+            session.path,
+            description["classifier"],
+            tail_bytes=session.tail_bytes,
         )
         session.release()
         return classified
@@ -545,12 +553,15 @@ class SnapshotClient:
 
 
 class Lease:
-    def __init__(self, client: SnapshotClient, description: Mapping[str, Any]) -> None:
+    def __init__(
+        self, client: SnapshotClient, description: Mapping[str, Any], *, tail_bytes: int | None = None
+    ) -> None:
         self.client = client
         client._leases.add(self)
         self.description = dict(description)
         self.handle = dict(description["handle"])
         self.expires_unix_ms = description["lease_expires_unix_ms"]
+        self.tail_bytes = tail_bytes
         self.released = False
         self.closed = False
         self.cleanup_pending = False
@@ -570,10 +581,37 @@ class Lease:
                 raise EvidenceIncomplete("stale_handle", "preparation lease was already released")
             if self.renewable_by(client) and self.expires_unix_ms <= time.time() * 1000 + 1000:
                 result = client.call("renew", handle=self.handle)
-                if result["status"] != "ok":
+                if result["status"] == "stale_handle":
+                    self._reacquire(client)
+                elif result["status"] != "ok":
                     raise EvidenceIncomplete(result["status"], result["reason"])
-                self.expires_unix_ms = result["data"]["expires_unix_ms"]
+                else:
+                    self.expires_unix_ms = result["data"]["expires_unix_ms"]
             return self.handle.copy()
+
+    def _reacquire(self, client: SnapshotClient) -> None:
+        """Replace a lease the owner no longer holds with a fresh one on the same transcript, under *client*'s window.
+
+        A lease is capped at the foreground deadline it was acquired under, so once a hook widens that window
+        (:func:`foreground_evidence`) and retries, the owner has already dropped the lease and answers its renewal
+        with ``stale_handle``.
+        """
+        description = client.acquired(
+            self.description["canonical_path"], classifier=self.description["classifier"], tail_bytes=self.tail_bytes
+        )
+        if (
+            description["source_id"] != self.description["source_id"]
+            or description["committed_bytes"] < self.description["committed_bytes"]
+        ):
+            Lease(client, description).release()
+            raise EvidenceIncomplete("changed", "transcript was rewritten while its lease was expired")
+        self.client._leases.discard(self)
+        client._leases.add(self)
+        self.client = client
+        self.description = dict(description)
+        self.handle = dict(description["handle"])
+        self.expires_unix_ms = description["lease_expires_unix_ms"]
+        self.scalar_results.clear()
 
     def release(self) -> None:
         with self.subagent_guard:
@@ -950,7 +988,7 @@ class RemoteSession:
         data = list(client.pages("retain", handle=self.lease.require(client)))
         if len(data) != 1 or data[0].get("kind") != "acquired":
             raise SnapshotProtocolError("retain completed without one leased description")
-        lease = Lease(client, data[0]["description"])
+        lease = Lease(client, data[0]["description"], tail_bytes=self.tail_bytes)
         try:
             graph = self.graph.retain()
         except BaseException:
