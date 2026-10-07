@@ -543,11 +543,15 @@ class BaseHookEvent:
 
         try:
             return self.ctx.decide(state, questions, provider={"jev": JEV, "openai": OPENAI}[provider], timeout=timeout)
-        except (DecideError, DecideKeyMissing) as exc:
-            faults.record(f"decide ({provider})", exc, str(self.cwd) if self.cwd else None)
-            logger.opt(exception=True).warning("decide failed")
-        except TimeoutError:
-            logger.opt(exception=True).warning("decide timed out")
+        except DecideError as exc:
+            failure: Exception = DecideError(exc.status, "the provider rejected the request")
+        except DecideKeyMissing as exc:
+            failure = exc
+        except TimeoutError as exc:
+            logger.warning("decide ({}) timed out: {}", provider, exc)
+            return None
+        faults.record(f"decide ({provider})", failure, str(self.cwd) if self.cwd else None)
+        logger.warning("decide ({}) failed: {}", provider, failure)
         return None
 
     def allow(self, *, system_message: str | None = None) -> HookResult:

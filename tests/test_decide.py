@@ -144,7 +144,8 @@ def test_evt_decide_fails_open(
     evt.ctx = context()
 
     assert evt.decide("roll it back", QUESTIONS) is None
-    assert bool(faults.drain("/w")) is recorded
+    assert bool(drained := faults.drain("/w")) is recorded
+    assert not any("Incorrect API key" in line for line in drained)
 
 
 def test_inline_tests_answer_from_the_stub_and_never_reach_the_network(monkeypatch: pytest.MonkeyPatch) -> None:
