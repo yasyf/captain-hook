@@ -136,6 +136,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A verbatim approval binds the destination and the option the owner picked.** Since
+  12.88.26, a write whose `text` appeared anywhere in an answer went ahead with no judge:
+  text from an option the owner refused ("1 is wrong; do not post anything"), the same
+  text sent to another thread or as a top-level post, a reply carrying a file the
+  preview never named, and `hi` matched inside a link's `archives`. Now an answer
+  approves word for word only the option the owner picked by its label with no notes,
+  the write's text and every file it lists must sit in those words, and every scope
+  value must be named there or in the question. A write that misses any of those goes
+  to the judge, which still fails open where the declaration says so. `Evidence` gains
+  `approves` and `asked`, and every verbatim check matches whole words.
+
 - **Grants are deterministic; the judge decides only uncovered writes.** A recorded grant
   now settles every action it covers once its rules pass, with no judge, and only
   `capt-hook grant revoke` withdraws it: the judge's `withdrawn` flag, which revoked a

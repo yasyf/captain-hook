@@ -317,8 +317,17 @@ stop an already minted permission; revoke the grant of the declaration's kind.
 2. If the grant has live evidence, collect the configured sources again and skip
    the grant if any live key is missing. Otherwise spend it; no judge runs.
 3. If no stored candidate covers the call, use the configured evidence to decide
-   whether to mint. Owner words or an answer that hold the payload's `text`
-   verbatim approve it. Otherwise a judge decides when present, and a judge
+   whether to mint. Owner words or an answer approve it with no judge only when
+   they bind the whole write: the payload's `text` and every file it lists sit in
+   the words the owner approved, and every scope value is named in those words or
+   the question they answer. An answer approves its chosen option's label,
+   description, and preview only when the owner picked that option by its label
+   with no notes; a typed answer such as "1 is wrong; do not post anything"
+   approves only its own words, and options the owner did not pick approve
+   nothing. An empty scope value, such as no thread for a top-level post, and a
+   payload flag set to `true` are never named, so those writes go to the judge.
+   Words match whole, after folding whitespace: `hi` is not in `archives`.
+   Otherwise a judge decides when present, and a judge
    error fails open when the declaration sets `judge_fails_open`; without a judge,
    the first collected item supplies approval. With no evidence, deny without
    calling the judge.
@@ -404,8 +413,8 @@ it does not make a message send or other write idempotent.
 `Grants.request(evt, scope=..., quote=..., uses=None, payload=None)` records a
 grant an agent requests on the owner's behalf. Supply the declaration's scope keys
 with exact values, lists, or `"*"`, and the owner's quote. The quote must occur
-verbatim in collected `ask` or `words` evidence, or a ruling, after folding
-whitespace; a paraphrase is refused. No judge runs: the owner's verbatim words are
+verbatim in collected `ask` or `words` evidence, or a ruling, as whole words after
+folding whitespace; a paraphrase is refused. No judge runs: the owner's verbatim words are
 the permission. The grant rests on the quoted words, uses `standing_ttl` and
 `standing_rules`, and has no approved payload. `uses=None` requests an unlimited
 budget.

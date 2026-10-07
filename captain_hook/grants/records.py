@@ -68,6 +68,9 @@ class Evidence(BaseModel):
         quote: The owner's words, verbatim.
         said_at: When the owner said them, when the source records it.
         detail: Context the judge reads beside the quote, such as the question and the options shown.
+        approves: The words the owner approved word for word: their own words, or the label, description,
+            and preview of the option an answer picked by its label with no notes.
+        asked: The question an answer replies to, which can name where the approved words go.
         key: The approval's identity; every grant minted from it shares one budget.
         live: Whether its source collects it again before a stored grant spends; a grant whose live
             evidence the source no longer collects covers nothing.
@@ -78,6 +81,8 @@ class Evidence(BaseModel):
     quote: str
     said_at: datetime | None = None
     detail: str = ""
+    approves: str = ""
+    asked: str = ""
     key: str = ""
     live: bool = False
 
