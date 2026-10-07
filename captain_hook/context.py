@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from cc_transcript.query import Session
     from cc_transcript.render import Budget
     from pydantic import BaseModel
-    from spawnllm import Decision, LlmBackend, Provider, TModel, TSpecialty
-    from spawnllm.decide import Question
+    from spawnllm import DecideError, DecideKeyMissing, Decision, LlmBackend, Provider, TModel, TSpecialty
+    from spawnllm.decide import Question, TDecideProvider
 
     from captain_hook.settings import HooksSettings
     from captain_hook.signals.nlp import Clause
@@ -38,6 +38,23 @@ READY_BACKEND_TTL_SECONDS = 300.0
 READY_BACKENDS: dict[tuple[str | None, str], tuple[float, LlmBackend]] = {}
 READY_BACKENDS_LOCK = threading.Lock()
 DECIDE_MARGIN_SECONDS = 0.5
+VERDICT_TIMEOUT_SECONDS = 5.0
+
+
+def record_decide_failure(
+    provider: TDecideProvider, exc: DecideError | DecideKeyMissing, root: str | None
+) -> DecideError | DecideKeyMissing:
+    from spawnllm import DecideError
+
+    from captain_hook import faults
+
+    match exc:
+        case DecideError(status=status):
+            failure: DecideError | DecideKeyMissing = DecideError(status, "the provider rejected the request")
+        case _:
+            failure = exc
+    faults.record(f"decide ({provider})", failure, root)
+    return failure
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,20 +622,44 @@ class HookContext:
         key = actor.ACTOR.decide_key(provider) if actor.ACTOR is not None else None
         return decide_sync(state, questions, provider=provider, timeout=timeout, api_key=key)
 
-    def assemble_prompt(
+    def decide_verdict[M: BaseModel](
+        self, instructions: str, state: str, response_model: type[M], *, root: str | None, evidence: bool = True
+    ) -> M | None:
+        """Ask TypeSafe Jev for the categorical fields of ``response_model``, or ``None`` when it refuses one.
+
+        :func:`~captain_hook.primitives.llm.verdict_questions` turns each field into one question
+        under ``instructions``, and :func:`~captain_hook.primitives.llm.verdict_from` maps the answers
+        back. A rejected request or a missing key records a fault under ``root`` and raises, as a
+        timeout does. ``evidence=False`` keeps the transcript open after the call, as in :meth:`call_llm`.
+
+        Raises:
+            TypeError: When a field of ``response_model`` needs free text Jev cannot give.
+        """
+        from spawnllm import JEV, DecideError, DecideKeyMissing
+
+        from captain_hook.primitives.llm import verdict_from, verdict_questions
+
+        if (questions := verdict_questions(instructions, response_model)) is None:
+            raise TypeError(f"{response_model.__name__} has a field Jev cannot answer; ask the LLM instead")
+        if evidence:
+            self.release_preparation(f"{state}\n\n<task>\n{instructions}\n</task>")
+        try:
+            decision = self.decide(state, questions, provider=JEV, timeout=VERDICT_TIMEOUT_SECONDS)
+        except (DecideError, DecideKeyMissing) as exc:
+            record_decide_failure("jev", exc, root)
+            raise
+        return verdict_from(response_model, questions, decision)
+
+    def transcript_evidence(
         self,
-        template: str | Prompt,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
         *,
         transcript: bool | int | Literal["recent", "full"],
         tool_results: bool,
         budget: Budget | None = None,
-        diff_text: str | None,
         root_transcript: bool | int | Literal["recent", "full"] = False,
         root_excerpt: Sequence[str] = (),
     ) -> str:
-        block = "\n\n".join(
+        return "\n\n".join(
             rendered
             for rendered in (
                 self.root_excerpt_block(root_excerpt, tool_results=tool_results, budget=budget) if root_excerpt else "",
@@ -632,6 +673,27 @@ class HookContext:
                 else "",
             )
             if rendered
+        )
+
+    def assemble_prompt(
+        self,
+        template: str | Prompt,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        transcript: bool | int | Literal["recent", "full"],
+        tool_results: bool,
+        budget: Budget | None = None,
+        diff_text: str | None,
+        root_transcript: bool | int | Literal["recent", "full"] = False,
+        root_excerpt: Sequence[str] = (),
+    ) -> str:
+        block = self.transcript_evidence(
+            transcript=transcript,
+            tool_results=tool_results,
+            budget=budget,
+            root_transcript=root_transcript,
+            root_excerpt=root_excerpt,
         )
         match template:
             case Prompt():

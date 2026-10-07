@@ -155,6 +155,7 @@ class Judge:
                     tool_results=self.tool_results,
                     once_per_turn=False,
                     evidence=False,
+                    backend="llm",
                 )
         except EvidenceIncomplete:
             raise

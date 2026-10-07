@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from captain_hook.confirm import Confirm
     from captain_hook.context import HookContext
     from captain_hook.contexts import PromptContext
+    from captain_hook.primitives.llm import TJudge
     from captain_hook.prompt import Prompt
     from captain_hook.signals.nlp import NlpSignal
     from captain_hook.tasks import Tasks
@@ -384,6 +385,7 @@ class BaseHookEvent:
         tool_results: bool = False,
         budget: Budget | None = None,
         diff: bool | str = False,
+        backend: TJudge = "jev",
     ) -> str | None: ...
     @overload
     def llm(
@@ -404,6 +406,7 @@ class BaseHookEvent:
         tool_results: bool = False,
         budget: Budget | None = None,
         diff: bool | str = False,
+        backend: TJudge = "jev",
     ) -> bool | None: ...
     @overload
     def llm(
@@ -424,6 +427,7 @@ class BaseHookEvent:
         tool_results: bool = False,
         budget: Budget | None = None,
         diff: bool | str = False,
+        backend: TJudge = "jev",
     ) -> int | None: ...
     @overload
     def llm[M: BaseModel](
@@ -444,6 +448,7 @@ class BaseHookEvent:
         tool_results: bool = False,
         budget: Budget | None = None,
         diff: bool | str = False,
+        backend: TJudge = "jev",
     ) -> M | None: ...
     def llm(
         self,
@@ -463,6 +468,7 @@ class BaseHookEvent:
         tool_results: bool = False,
         budget: Budget | None = None,
         diff: bool | str = False,
+        backend: TJudge = "jev",
     ) -> BaseModel | str | bool | int | None:
         """Ask an LLM a question about this event and return a typed answer.
 
@@ -473,8 +479,14 @@ class BaseHookEvent:
         ``BaseModel`` subclass returns its validated instance. ``size`` picks the model tier
         (``"small"``/``"medium"``/``"large"``).
 
+        A ``bool`` answer, or a model whose every field is categorical (see
+        :func:`~captain_hook.primitives.llm.verdict_questions`), goes to TypeSafe Jev instead of the
+        LLM unless ``backend="llm"``; a ``str`` reply, an ``int``, or any other model always asks
+        the LLM.
+
         A skipped call — already fired this turn, or a ``required`` context came up empty — returns
-        ``None``; a call that still fails after ``retries`` re-asks raises.
+        ``None``; a call that still fails after ``retries`` re-asks raises, and so does a Jev call
+        that times out or errors. A question Jev refuses returns ``None``.
 
         Example:
             >>> if evt.llm("Is this print() call debug leftovers?", bool):
@@ -500,6 +512,7 @@ class BaseHookEvent:
             budget=budget,
             diff=diff,
             retries=retries,
+            backend=backend,
         )
         match result:
             case BoolAnswer(answer=answer) | IntAnswer(answer=answer):
@@ -539,19 +552,15 @@ class BaseHookEvent:
         from loguru import logger
         from spawnllm import JEV, OPENAI, DecideError, DecideKeyMissing
 
-        from captain_hook import faults
+        from captain_hook.context import record_decide_failure
 
         try:
             return self.ctx.decide(state, questions, provider={"jev": JEV, "openai": OPENAI}[provider], timeout=timeout)
-        except DecideError as exc:
-            failure: Exception = DecideError(exc.status, "the provider rejected the request")
-        except DecideKeyMissing as exc:
-            failure = exc
+        except (DecideError, DecideKeyMissing) as exc:
+            failure = record_decide_failure(provider, exc, str(self.cwd) if self.cwd else None)
+            logger.warning("decide ({}) failed: {}", provider, failure)
         except TimeoutError as exc:
             logger.warning("decide ({}) timed out: {}", provider, exc)
-            return None
-        faults.record(f"decide ({provider})", failure, str(self.cwd) if self.cwd else None)
-        logger.warning("decide ({}) failed: {}", provider, failure)
         return None
 
     def allow(self, *, system_message: str | None = None) -> HookResult:

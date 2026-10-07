@@ -1030,7 +1030,12 @@ def model_calls(monkeypatch) -> list[str]:
         calls.append(template.system_text)
         raise ModelUnavailable("tests keep the model boundary closed")
 
+    def undecided(self, instructions, state, *args, **kwargs):
+        calls.append(f"{state}\n\n<task>\n{instructions}\n</task>")
+        raise ModelUnavailable("tests keep the model boundary closed")
+
     monkeypatch.setattr("captain_hook.context.HookContext.call_llm", unavailable)
+    monkeypatch.setattr("captain_hook.context.HookContext.decide_verdict", undecided)
     return calls
 
 

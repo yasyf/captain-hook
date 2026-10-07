@@ -293,7 +293,7 @@ class TestLlmNudgeAsyncDispatched:
             calls.append(args)
             return NudgeVerdict(fire=True, reasoning="issue")
 
-        ctx.call_llm = verdict
+        ctx.call_llm = ctx.decide_verdict = verdict
         register_llm_nudge(
             "Check this",
             message="WARNING",
@@ -624,7 +624,7 @@ class TestPromptBuilderUsed:
 
         ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
-        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
+        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, backend="llm")
         evt = make_stop_event(ctx=ctx)
         dispatch(Event.Stop, evt, session_dir=tmp_path)
 
@@ -684,7 +684,7 @@ class TestLlmBracesInPrompt:
         verdict = GateVerdict(block=True, reasoning="bad")
         ctx = make_ctx(tmp_path, texts=['{"key": "value"}'], call_llm_return=verdict)
 
-        register_llm_gate("Check this code", message="BLOCKED", when=lambda evt: True)
+        register_llm_gate("Check this code", message="BLOCKED", when=lambda evt: True, backend="llm")
         evt = make_stop_event(ctx=ctx)
         dispatch(Event.Stop, evt, session_dir=tmp_path)
 
@@ -700,7 +700,7 @@ class TestLlmBracesInPrompt:
         verdict = NudgeVerdict(fire=True, reasoning="issue")
         ctx = make_ctx(tmp_path, texts=["def foo(): return {x: 1}"], call_llm_return=verdict)
 
-        register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
+        register_llm_nudge("Check this", message="WARNING", when=lambda evt: True, backend="llm")
         evt = make_post_tool_event(ctx=ctx)
         dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
@@ -797,7 +797,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
                 return GateVerdict(block=True, reasoning="actual problem")
             return GateVerdict(block=False, reasoning="not a real issue")
 
-        ctx.call_llm = mock_llm
+        ctx.call_llm = ctx.decide_verdict = mock_llm
 
         register_llm_gate(
             "First gate check",
@@ -835,7 +835,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
                 return NudgeVerdict(fire=True, reasoning="needs attention")
             return NudgeVerdict(fire=False, reasoning="not relevant")
 
-        ctx.call_llm = mock_llm
+        ctx.call_llm = ctx.decide_verdict = mock_llm
 
         register_llm_nudge(
             "First nudge check",
@@ -868,7 +868,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
             return GateVerdict(block=False, reasoning="ok")
 
         ctx = make_ctx(tmp_path, texts=["critical error found"])
-        ctx.call_llm = judge
+        ctx.call_llm = ctx.decide_verdict = judge
         register_llm_gate(
             "Gate check",
             message="BLOCKED",
@@ -907,7 +907,7 @@ class TestLlmDoubleFireRace:
 
         def worker() -> None:
             ctx = make_ctx(tmp_path, texts=["critical error found"])
-            ctx.call_llm = mock_llm  # type: ignore[method-assign]
+            ctx.call_llm = ctx.decide_verdict = mock_llm  # type: ignore[method-assign]
             r = dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path)
             with guard:
                 results.append(r)
@@ -1054,7 +1054,7 @@ class TestReviewGateDiff:
             ),
             session_dir=session_dir,
         )
-        ctx.call_llm = MagicMock(return_value=GateVerdict(block=block, reasoning="r"))
+        ctx.call_llm = ctx.decide_verdict = MagicMock(return_value=GateVerdict(block=block, reasoning="r"))
         ctx.diff = MagicMock(return_value=diff_text)
         return ctx
 
@@ -1192,10 +1192,10 @@ class TestLlmContexts:
         evt = self._edit(ctx, new="# note\nprint('hi')\nx = 2\n")
         assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is not None
 
-        prompt = str(ctx.call_llm.call_args[0][0])
-        assert "<context>" not in prompt
-        assert "transcript evidence" not in prompt
-        positions = [prompt.index(tag) for tag in ("<prints>", "<introduced>", "<before_edit>", "<after_edit>")]
+        state = ctx.call_llm.call_args[0][1]
+        assert "<context>" not in state
+        assert "transcript evidence" not in state
+        positions = [state.index(tag) for tag in ("<prints>", "<introduced>", "<before_edit>", "<after_edit>")]
         assert positions == sorted(positions)
 
     def test_when_predicate_keeps_transcript_fallback(self, tmp_path: Path) -> None:
@@ -1212,9 +1212,9 @@ class TestLlmContexts:
 
         assert dispatch(Event.PreToolUse, self._edit(ctx, new="# note\nx = 2\n"), session_dir=tmp_path) is not None
 
-        prompt = str(ctx.call_llm.call_args[0][0])
-        assert "<context>" in prompt
-        assert "transcript evidence" in prompt
+        state = ctx.call_llm.call_args[0][1]
+        assert "<context>" in state
+        assert "transcript evidence" in state
 
     def test_signals_and_contexts_compose(self, tmp_path: Path) -> None:
         from captain_hook.contexts import Introduced
@@ -1230,9 +1230,9 @@ class TestLlmContexts:
 
         assert dispatch(Event.PreToolUse, self._edit(ctx, new="# note\nx = 2\n"), session_dir=tmp_path) is not None
 
-        prompt = str(ctx.call_llm.call_args[0][0])
-        assert "critical error found" in prompt
-        assert prompt.index("<context>") < prompt.index("<introduced>")
+        state = ctx.call_llm.call_args[0][1]
+        assert "critical error found" in state
+        assert state.index("<context>") < state.index("<introduced>")
 
     def test_default_contexts_attach_without_suppressing_fallback(self, tmp_path: Path) -> None:
         ctx = self._fire_ctx(tmp_path, texts=["transcript evidence"])
@@ -1240,10 +1240,10 @@ class TestLlmContexts:
 
         assert dispatch(Event.PreToolUse, self._edit(ctx, new="x = 2\n"), session_dir=tmp_path) is not None
 
-        prompt = str(ctx.call_llm.call_args[0][0])
-        assert "<context>" in prompt
-        assert prompt.count("<before_edit>") == 1
-        assert prompt.count("<after_edit>") == 1
+        state = ctx.call_llm.call_args[0][1]
+        assert "<context>" in state
+        assert state.count("<before_edit>") == 1
+        assert state.count("<after_edit>") == 1
 
     def test_user_before_edit_gates_and_replaces_default(self, tmp_path: Path) -> None:
         from captain_hook.contexts import BeforeEdit
@@ -1256,8 +1256,8 @@ class TestLlmContexts:
         ctx.call_llm.assert_not_called()
 
         assert dispatch(Event.PreToolUse, self._edit(ctx, new="x = 2\n"), session_dir=tmp_path) is not None
-        prompt = str(ctx.call_llm.call_args[0][0])
-        assert prompt.count("<before_edit>") == 1
+        state = ctx.call_llm.call_args[0][1]
+        assert state.count("<before_edit>") == 1
 
 
 class TestTombstones:
@@ -1331,9 +1331,9 @@ class TestTombstones:
         self._register()
         evt = self._edit(ctx, old="retry(fetch, attempts=3)\n", new="# removed the retry logic\nfetch()\n")
         assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is not None
-        prompt = str(ctx.call_llm.call_args[0][0])
-        assert "<tombstone_comments>" in prompt
-        assert "# removed the retry logic" in prompt
+        state = ctx.call_llm.call_args[0][1]
+        assert "<tombstone_comments>" in state
+        assert "# removed the retry logic" in state
 
     @pytest.mark.parametrize(
         ("text", "expected"),
@@ -1433,6 +1433,7 @@ class TestEvtLlm:
     def _evt(self, tmp_path: Path, fake: Any, monkeypatch: Any) -> Any:
         evt = make_post_tool_event(ctx=make_ctx(tmp_path))
         monkeypatch.setattr(evt.ctx, "call_llm", fake)
+        monkeypatch.setattr(evt.ctx, "decide_verdict", fake)
         return evt
 
     def test_bool_true(self, tmp_path: Path, monkeypatch: Any) -> None:
@@ -1476,7 +1477,7 @@ class TestEvtLlm:
             return BoolAnswer(answer=True)
 
         evt = self._evt(tmp_path, fake, monkeypatch)
-        assert evt.llm("Is this throwaway?", bool) is True
+        assert evt.llm("Is this throwaway?", bool, backend="llm") is True
         assert len(calls) == 2
         assert "validation_error" in str(calls[1])
 
@@ -1489,7 +1490,7 @@ class TestEvtLlm:
 
         evt = self._evt(tmp_path, fake, monkeypatch)
         with pytest.raises(RuntimeError):
-            evt.llm("Is this throwaway?", bool)
+            evt.llm("Is this throwaway?", bool, backend="llm")
         assert len(calls) == 3
 
     def test_retries_zero_raises_immediately(self, tmp_path: Path, monkeypatch: Any) -> None:
@@ -1501,7 +1502,7 @@ class TestEvtLlm:
 
         evt = self._evt(tmp_path, fake, monkeypatch)
         with pytest.raises(RuntimeError):
-            evt.llm("Is this throwaway?", bool, retries=0)
+            evt.llm("Is this throwaway?", bool, retries=0, backend="llm")
         assert len(calls) == 1
 
     def test_model_rejection_is_not_retried(self, tmp_path: Path, monkeypatch: Any) -> None:
@@ -1515,7 +1516,7 @@ class TestEvtLlm:
 
         evt = self._evt(tmp_path, fake, monkeypatch)
         with pytest.raises(BackendCallError):
-            evt.llm("Is this throwaway?", bool)
+            evt.llm("Is this throwaway?", bool, backend="llm")
         assert len(calls) == 1
 
 

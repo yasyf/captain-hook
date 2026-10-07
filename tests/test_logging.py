@@ -197,6 +197,7 @@ class TestLlmLogging:
                     GateVerdict,
                     hook="test",
                     when=lambda _: True,
+                    backend="llm",
                 )
 
         assert any(r.levelno >= WARNING_NO for r in logcap.records)

@@ -143,6 +143,17 @@ def stub_helper_notify(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureR
 
 
 @pytest.fixture(autouse=True)
+def deny_live_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail any decision call a test did not stub, so a dev Mac's Keychain key never reaches Jev from the suite."""
+    import spawnllm
+
+    def live(*_: Any, **__: Any) -> None:
+        raise AssertionError("tests must not call a live decision provider; stub decide_sync or decide_verdict")
+
+    monkeypatch.setattr(spawnllm, "decide_sync", live)
+
+
+@pytest.fixture(autouse=True)
 def stub_ready_backend(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
     """Answer ``call_llm``'s backend selection without a real auth probe; ``test_context`` drives the real one."""
     from unittest.mock import MagicMock

@@ -120,7 +120,7 @@ def make_ctx(
         settings=settings,
         project_root=project_root,
     )
-    ctx.call_llm = MagicMock(return_value=call_llm_return)  # type: ignore[method-assign]
+    ctx.call_llm = ctx.decide_verdict = MagicMock(return_value=call_llm_return)  # type: ignore[method-assign]
     return ctx
 
 

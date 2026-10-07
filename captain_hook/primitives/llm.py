@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import builtins
 import json
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import count
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
 
+from annotated_types import Ge, Le
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
@@ -34,13 +36,20 @@ from captain_hook.util.paths import resolve_cache_dir
 
 if TYPE_CHECKING:
     from cc_transcript.render import Budget
-    from spawnllm import TModel, TSpecialty
+    from pydantic.fields import FieldInfo
+    from spawnllm import Decision, TModel, TSpecialty
+    from spawnllm.decide import Answer, Question
 
     from captain_hook.contexts import PromptContext
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
 
 LLM_RETRY_FLOOR_SECONDS = 5.0
+VERDICT_STATE_CHARS = 64_000
+MAX_SCORE_LEVELS = 10
+
+TJudge = Literal["jev", "llm"]
+"""Who answers an LLM primitive: TypeSafe Jev (``jev``) for a categorical verdict, or the LLM (``llm``)."""
 
 
 class GateVerdict(BaseModel):
@@ -76,6 +85,87 @@ class IntAnswer(BaseModel):
     answer: int
 
 
+def score_levels(info: FieldInfo) -> range | None:
+    match [m.ge for m in info.metadata if isinstance(m, Ge)], [m.le for m in info.metadata if isinstance(m, Le)]:
+        case [int() as low], [int() as high] if 2 <= high - low + 1 <= MAX_SCORE_LEVELS:
+            return range(low, high + 1)
+        case _:
+            return None
+
+
+def field_question(instructions: str, name: str, info: FieldInfo) -> Question | None:
+    from spawnllm import Binary, Label, Score
+
+    match info.annotation:
+        case builtins.bool:
+            return Binary(instructions, yes=f"{name}=true", no=f"{name}=false")
+        case builtins.int if (levels := score_levels(info)) is not None:
+            return Score(
+                f"{instructions}\n\nRate {name} from {levels[0]} to {levels[-1]}.", dict.fromkeys(map(str, levels))
+            )
+        case annotation if get_origin(annotation) is Literal and all(isinstance(v, str) for v in get_args(annotation)):
+            return Label(f"{instructions}\n\nPick the value of {name}.", dict.fromkeys(get_args(annotation)))
+        case _:
+            return None
+
+
+def verdict_questions(instructions: str, response_model: type[BaseModel] | None) -> dict[str, Question] | None:
+    """One Jev question per categorical field of ``response_model``, or ``None`` when Jev cannot answer it.
+
+    A ``bool`` field becomes a ``Binary``, a ``Literal`` of strings a ``Label`` in declared order, and an
+    ``int`` bounded by ``ge`` and ``le`` to 2 to 10 values a ``Score``. A ``str`` field asks nothing:
+    :func:`verdict_from` fills it with a summary of the answers. A model with no categorical field, or
+    with any other field, needs the LLM.
+    """
+    fields: dict[str, FieldInfo] = response_model.model_fields if response_model is not None else {}
+    asked = {name: question for name, info in fields.items() if (question := field_question(instructions, name, info))}
+    free = fields.keys() - asked.keys()
+    return asked if asked and all(fields[name].annotation is str for name in free) else None
+
+
+def answer_value(question: Question, answer: Answer) -> bool | str | int | None:
+    from spawnllm import BinaryAnswer, LabelAnswer, Refused, Score, ScoreAnswer
+
+    match question, answer:
+        case _, BinaryAnswer(p_yes=p_yes):
+            return p_yes > 0.5
+        case _, LabelAnswer(choice=choice):
+            return choice
+        case Score(levels=levels), ScoreAnswer(score=score):
+            return int(list(levels)[round(score)])
+        case _, Refused():
+            return None
+    raise ValueError(f"{type(answer).__name__} does not answer {type(question).__name__}")
+
+
+def verdict_from[M: BaseModel](
+    response_model: type[M], questions: Mapping[str, Question], decision: Decision
+) -> M | None:
+    """Build ``response_model`` from a Jev ``decision`` on :func:`verdict_questions`, or ``None`` when Jev refused one.
+
+    A ``Binary`` is true above even odds, a ``Label`` takes its choice, and a ``Score`` rounds to the
+    nearest level. Every ``str`` field carries one line naming the model and its answers.
+    """
+    answers = {name: answer_value(question, decision.answers[name]) for name, question in questions.items()}
+    if any(value is None for value in answers.values()):
+        return None
+    summary = f"{decision.model} decided " + ", ".join(f"{name}={value}" for name, value in answers.items())
+    return response_model(**answers, **dict.fromkeys(response_model.model_fields.keys() - answers.keys(), summary))
+
+
+def verdict_state(transcript: str, evidence: Prompt) -> str:
+    state = "\n\n".join(part for part in (transcript, str(Prompt(contexts=evidence.contexts))) if part)
+    if len(state) <= VERDICT_STATE_CHARS:
+        return state
+    return f"…(-{len(state) - VERDICT_STATE_CHARS}ch){state[-VERDICT_STATE_CHARS:]}"
+
+
+def needs_text(message: str | Callable[[Any], str], response_model: type[BaseModel]) -> bool:
+    return isinstance(message, str) and any(
+        f"{{{name}}}" in message for name, info in response_model.model_fields.items() if info.annotation is str
+    )
+
+
 def llm_evaluate[M: BaseModel](
     evt: BaseHookEvent,
     prompt: str | Prompt,
@@ -98,6 +188,7 @@ def llm_evaluate[M: BaseModel](
     retries: int = 2,
     once_per_turn: bool = True,
     evidence: bool = True,
+    backend: TJudge = "jev",
 ) -> M | str | None:
     """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
 
@@ -108,6 +199,12 @@ def llm_evaluate[M: BaseModel](
     ``None`` on a skip; raises when the call still fails after the final retry, at once when the
     backend rejects the model itself, and at once when the caller's deadline is inside
     :data:`LLM_RETRY_FLOOR_SECONDS`, since a retry clamped to the seconds left cannot finish.
+    ``backend="jev"``, the default, sends a categorical ``response_model`` (see
+    :func:`verdict_questions`) to TypeSafe Jev instead: the prompt becomes each question's
+    instructions and the transcript windows, contexts, and diff its state, with no tools, no
+    validation retries, and ``specialty``/``model``/``agent`` unused. Jev's timeout, rejection, or
+    missing key raises like a failed LLM call, and a question Jev refuses returns ``None`` like a
+    skip. ``backend="llm"`` always asks the LLM, as does any ``response_model`` Jev cannot answer.
     ``evidence=False`` keeps the event's transcripts open after the call, for a caller that judges
     again within the same event.
     ``root_transcript`` takes a window like ``transcript`` and, when the event fires inside a subagent
@@ -149,6 +246,25 @@ def llm_evaluate[M: BaseModel](
     diff_text = evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None
     if diff and not (diff_text or "").strip():
         return None
+
+    instructions = str(Prompt(system_text=built.system_text, ask_text=built.ask_text))
+    if backend == "jev" and response_model is not None and verdict_questions(instructions, response_model) is not None:
+        return evt.ctx.decide_verdict(
+            instructions,
+            verdict_state(
+                evt.ctx.transcript_evidence(
+                    transcript=transcript,
+                    tool_results=tool_results,
+                    budget=budget,
+                    root_transcript=root_transcript,
+                    root_excerpt=root_excerpt(evt) if root_excerpt else (),
+                ),
+                built.context("diff", diff_text),
+            ),
+            response_model,
+            root=str(evt.cwd) if evt.cwd else None,
+            evidence=evidence,
+        )
 
     dispatched = evt.ctx.assemble_prompt(
         built.context("diff", diff_text),
@@ -241,10 +357,12 @@ def llm_primitive[M: BaseModel](
     budget: Budget | None = None,
     diff: bool | str = False,
     on_incomplete: str | None = None,
+    backend: TJudge = "jev",
 ) -> None:
     prompt = str(prompt)
     sig = resolve_signals(signals)
     name = hook_name(prefix, label, prompt)
+    judge: TJudge = "llm" if needs_text(message, response_model) else backend
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
         try:
@@ -267,6 +385,7 @@ def llm_primitive[M: BaseModel](
                 tool_results=tool_results,
                 budget=budget,
                 diff=diff,
+                backend=judge,
             )
         except EvidenceIncomplete:
             raise
@@ -333,6 +452,7 @@ def llm_gate(
     budget: Budget | None = None,
     diff: bool | str = False,
     on_incomplete: str | None = None,
+    backend: TJudge = "jev",
 ) -> None:
     """Register an LLM-powered blocking gate.
 
@@ -343,6 +463,13 @@ def llm_gate(
     ``message`` may be a literal string, a ``{field}`` template with the verdict model's fields
     splatted in (same placeholder rules as :meth:`~captain_hook.Prompt.from_template`: only
     ``{identifier}`` substitutes, every other brace stays literal), or a callable taking the verdict.
+
+    TypeSafe Jev answers by default, in about a tenth of a second and without tools: the prompt
+    becomes the instructions of one question per verdict field, and the transcript window,
+    contexts, and diff become its state. ``agent``, ``specialty``, and ``model`` apply only to
+    the LLM. Under Jev, ``reasoning`` holds a one-line summary of the answer, so a ``message``
+    that shows the model's own words needs the LLM: a ``{reasoning}`` template asks it on its
+    own, and a callable that reads ``reasoning`` passes ``backend="llm"``.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the gate has tool access and a recent transcript window (the path lets the agent
@@ -385,6 +512,9 @@ def llm_gate(
             evidence came back incomplete, or the caller's deadline left it unrun — is blocked
             with this remediation instead of skipped. Use it for permission gates, where a
             skipped judge lets the guarded action through.
+        backend: Who judges. ``"jev"``, the default, asks TypeSafe Jev whenever the verdict
+            model is categorical (see :func:`verdict_questions`); ``"llm"`` always asks the LLM.
+            A Jev timeout or error skips the gate exactly as a failed LLM call does.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -424,6 +554,7 @@ def llm_gate(
         budget=budget,
         diff=diff,
         on_incomplete=on_incomplete,
+        backend=backend,
     )
 
 
@@ -452,12 +583,20 @@ def llm_nudge(
     tool_results: bool = False,
     budget: Budget | None = None,
     diff: bool | str = False,
+    backend: TJudge = "jev",
 ) -> None:
     """Register an LLM-powered advisory nudge.
 
     ``message`` may be a literal string, a ``{field}`` template with the verdict model's fields
     splatted in (same placeholder rules as :meth:`~captain_hook.Prompt.from_template`: only
     ``{identifier}`` substitutes, every other brace stays literal), or a callable taking the verdict.
+
+    TypeSafe Jev answers by default, in about a tenth of a second and without tools: the prompt
+    becomes the instructions of one question per verdict field, and the transcript window,
+    contexts, and diff become its state. ``agent``, ``specialty``, and ``model`` apply only to
+    the LLM. Under Jev, ``reasoning`` holds a one-line summary of the answer, so a ``message``
+    that shows the model's own words needs the LLM: a ``{reasoning}`` template asks it on its
+    own, and a callable that reads ``reasoning`` passes ``backend="llm"``.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the nudge has tool access and a recent transcript window (the path lets the agent
@@ -490,6 +629,9 @@ def llm_nudge(
             shifts whenever the prompt text changes).
         advisory_on_deny: Include this nudge after another hook's deny. Leave disabled
             when the message assumes the denied action ran.
+        backend: Who judges. ``"jev"``, the default, asks TypeSafe Jev whenever the verdict
+            model is categorical (see :func:`verdict_questions`); ``"llm"`` always asks the LLM.
+            A Jev timeout or error skips the nudge exactly as a failed LLM call does.
 
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
@@ -528,6 +670,7 @@ def llm_nudge(
         tool_results=tool_results,
         budget=budget,
         diff=diff,
+        backend=backend,
     )
 
 
