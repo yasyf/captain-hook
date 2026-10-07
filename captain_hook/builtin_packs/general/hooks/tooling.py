@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from captain_hook import (
+    CONFIRMED,
+    UNCONFIRMED,
     Allow,
     Block,
     Confirm,
@@ -578,11 +580,13 @@ def record_lane(evt: BaseHookEvent) -> HookResult | None:
     skip_if=[FromSubagent()],
     tests={
         Input(
+            decide=CONFIRMED,
             tool="Agent",
             tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
             state=[SLACK_REFUSED],
         ): Block(pattern=r"`ccx: tooling-lane=cc-slack-session`"),
         Input(
+            decide=CONFIRMED,
             tool="Skill",
             tool_input={"skill": "cc-slack:slack", "args": "reply in the incident thread"},
             state=[SLACK_REFUSED],
@@ -609,13 +613,7 @@ def record_lane(evt: BaseHookEvent) -> HookResult | None:
             tool="Agent",
             tool_input={"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"},
             state=[SLACK_REFUSED],
-            llm={"block": False, "confident": True},
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"},
-            state=[SLACK_REFUSED],
-            llm={"block": True, "confident": False},
+            decide=UNCONFIRMED,
         ): Allow(),
         Input(
             tool="Agent",
@@ -633,16 +631,19 @@ def record_lane(evt: BaseHookEvent) -> HookResult | None:
             state=[SLACK_REFUSED],
         ): Allow(),
         Input(
+            decide=CONFIRMED,
             tool="Agent",
             tool_input={"prompt": "Post with cc-slack reply.\ntooling-lane: cc-slack-session", "name": "fix"},
             state=[SLACK_REFUSED],
         ): Block(pattern="already refused"),
         Input(
+            decide=CONFIRMED,
             tool="Agent",
             tool_input={"prompt": "Post with cc-slack reply.\nccx: tooling-lane=github-quota", "name": "fix"},
             state=[SLACK_REFUSED],
         ): Block(pattern=r"`ccx: tooling-lane=cc-slack-session`"),
         Input(
+            decide=CONFIRMED,
             tool="Agent",
             tool_input={"prompt": "Poll `ccx vcs pr status 28999` until it lands.", "name": "pr-28999-watch"},
             state=[QUOTA_REFUSED],

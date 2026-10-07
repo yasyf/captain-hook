@@ -143,15 +143,16 @@ In inline tests, `Input(decide={"rollback": BinaryAnswer(p_yes=0.97, confidence=
 
 Add `Confirm` when a cheap structural match sometimes blocks calls outside the rule's
 intent. The deterministic hook must block first; confirmation can only remove that block.
-Set `CEREBRAS_API_KEY` in the hook process's environment before using it. Without the key,
-every confirm allows. Each hook reports `the confirm step failed (...)` once per session,
-unless the note ledger's lock is busy.
+The confirm step asks TypeSafe Jev through [`evt.decide`](#decide), so it reads the same key:
+`TYPESAFE_API_KEY` or the Keychain item `uvx spawnllm key set jev` writes. Without the key,
+every confirm allows. Each hook reports `the confirm step got no answer from Jev` once per
+session, unless the note ledger's lock is busy.
 
 Pass `confirm=Confirm(...)` to a blocking tool-event hook, and describe what the block
 protects against in `rule`:
 
 ```python
-from captain_hook import Allow, Annotated, Block, Confirm, Event, Input, Runs, hook
+from captain_hook import CONFIRMED, UNCONFIRMED, Allow, Annotated, Block, Confirm, Event, Input, Runs, hook
 
 hook(
     Event.PreToolUse,
@@ -164,15 +165,15 @@ hook(
         timeout_s=3.0,
     ),
     tests={
-        Input(command="git push origin feat"): Block(),
-        Input(command="git push origin feat", llm={"block": False}): Allow(),
+        Input(command="git push origin feat", decide=CONFIRMED): Block(),
+        Input(command="git push origin feat", decide=UNCONFIRMED): Allow(),
         Input(command="git push origin feat # ccx:raw"): Allow(),
     },
 )
 ```
 
 `hook(..., confirm=...)` requires `block=True` and tool events; registration raises
-`ValueError` otherwise. A matching `skip_if` skips both the hook and its model call.
+`ValueError` otherwise. A matching `skip_if` skips both the hook and its Jev call.
 Use an [annotation](primitives.qmd#annotations) there to honor an explicit escape.
 
 For a handler that already decides when to block, pass `confirm` to `evt.block`:
@@ -188,29 +189,28 @@ def queued_push(evt: BaseHookEvent) -> HookResult:
     )
 ```
 
-The model receives the rule, hook message, tool input, and a bounded window of recent tool
-results. The block stands only when its `ConfirmVerdict` has both `block=True` and
-`confident=True`. An unsure answer or no match returns nothing, so the call proceeds without
-`additionalContext`. Claude Code's permission flow decides as usual.
+Jev receives the rule, hook message, tool input, and a bounded window of recent tool results,
+and answers one yes-or-no question: is this call what the rule protects against? The block
+stands only when the probability of yes reaches `PROTECTED` (0.35, measured against reference
+labels on real confirm calls). A lower probability, or a question Jev declines, returns nothing,
+so the call proceeds without `additionalContext`. Claude Code's permission flow decides as usual.
 
 A timeout or error allows the call with one line of `additionalContext` naming the hook and
 reason, such as `queued_push: allowed, could not confirm in 3 s` or
-`queued_push: allowed, the confirm step failed (RuntimeError)`. Each distinct note appears
+`queued_push: allowed, the confirm step got no answer from Jev`. Each distinct note appears
 at most once per session per hook. If the note ledger's lock is busy, the note appears anyway;
 the lock never blocks the call.
 
 `timeout_s` defaults to three seconds. The framework enforces that wall-clock limit itself,
-stops waiting, and leaves a late answer to a thread of its own, so a stuck backend never delays
+stops waiting, and leaves a late answer to a thread of its own, so a stuck provider never delays
 the next confirm. Verdicts are cached per session by hook, exact tool input, and message, so an
 identical retry reuses the answer.
 Timeouts and errors are not cached.
 
-The measured default is Cerebras `gpt-oss-120b` with low reasoning effort; compare backends
-with [bench/confirm.py](https://github.com/yasyf/captain-hook/blob/main/bench/confirm.py).
-
 Save the first example in `.claude/hooks/queued_push.py` and run `uvx capt-hook test`.
-Inline tests stub the model with a confident block by default; `Input(..., llm={"block": False})`
-expects `Allow()` with no context note. These tests check conditions and result handling; test the model's
+Inline tests stub the answer with `Input(..., decide=CONFIRMED)` for a block that stands and
+`Input(..., decide=UNCONFIRMED)` for one Jev clears; an unstubbed confirm allows with the
+failure note. These tests check conditions and result handling; test Jev's
 judgment separately against real calls.
 
 ## Auto-answer permission dialogs {#llm_approve}

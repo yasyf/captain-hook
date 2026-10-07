@@ -5,7 +5,6 @@ import io
 import itertools
 import json
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -15,19 +14,18 @@ from pathlib import Path
 from signal import SIGKILL, SIGTERM
 from types import ModuleType, SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from cc_transcript.ids import SessionId
 from pydantic import ValidationError
-from spawnllm import BackendCallError, ClaudeConfig
+from spawnllm import JEV, BinaryAnswer, DecideError, DecideKeyMissing, Decision, Refused
 
 from captain_hook import app, context, resource_defaults
 from captain_hook.dispatch import format_output
 from captain_hook.events import ResourcePressureEvent
 from captain_hook.procwatch import judge, screen
 from captain_hook.procwatch.identity import ProcessIdentity, start_unix
-from captain_hook.procwatch.judge import DisposableVerdict, JudgeFacts
+from captain_hook.procwatch.judge import JudgeFacts
 from captain_hook.procwatch.ownership import Owned
 from captain_hook.procwatch.settings import PerformanceSettings
 from captain_hook.procwatch.signal import Outcome, terminate
@@ -43,7 +41,7 @@ from captain_hook.procwatch.state import (
     take_pending,
 )
 from captain_hook.session import ensure_session
-from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT
 from captain_hook.testing.helpers import mock_resource_pressure_event
 from captain_hook.transcripts import LazyTranscript, TranscriptPins
 from captain_hook.types import Action, Event, HookResult
@@ -63,7 +61,6 @@ DEPLOY_CHILD = row(31400, 27400, "node build.js", started="2026-09-30T06:30:01")
 WITH_DEPLOY = table(*MAC.rows.values(), DEPLOY_SHELL, DEPLOY_CHILD)
 GAINED_TMUX = table(*MAC.rows.values(), row(31338, OWN_SLEEP.pid, "tmux new -d", started="2026-09-30T06:31:00"))
 KEY = f"{OWN_SLEEP.pid}:{start_unix(OWN_SLEEP)}"
-BACKEND = MagicMock(provider="claude", resolve_model=lambda model: {"small": "claude-haiku-4-5"}.get(model, model))
 GO_OWNED = {
     "enabled",
     "sample_interval_seconds",
@@ -145,25 +142,21 @@ def signals(resources: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[tupl
     return sent
 
 
-def llm(evt: ResourcePressureEvent, monkeypatch: pytest.MonkeyPatch, outcome: bool | Exception) -> list[Any]:
+def answered(disposable: bool) -> Decision:
+    return Decision({"disposable": BinaryAnswer(p_yes=0.97 if disposable else 0.03, confidence=0.94)}, "jev", 0, 0.0)
+
+
+def decided(evt: ResourcePressureEvent, monkeypatch: pytest.MonkeyPatch, outcome: bool | Exception) -> list[Any]:
     calls: list[Any] = []
 
-    def call_llm(prompt: Any, **kwargs: Any) -> DisposableVerdict:
-        calls.append((prompt, kwargs))
+    def decide(state: Any, questions: Any, **kwargs: Any) -> Decision:
+        calls.append((state, questions, kwargs))
         if isinstance(outcome, Exception):
             raise outcome
-        return DisposableVerdict(disposable=outcome, reasoning="r")
+        return answered(outcome)
 
-    monkeypatch.setattr(evt.ctx, "call_llm", call_llm)
+    monkeypatch.setattr(evt.ctx, "decide", decide)
     return calls
-
-
-def validation_error() -> ValidationError:
-    try:
-        DisposableVerdict.model_validate({})
-    except ValidationError as exc:
-        return exc
-    raise AssertionError("an empty verdict validated")
 
 
 class TestSettings:
@@ -174,7 +167,7 @@ class TestSettings:
 
     def test_python_only_defaults(self) -> None:
         settings = PerformanceSettings()
-        assert (settings.terminate, settings.judge_tier, settings.judge_timeout_seconds) == (True, "small", 20)
+        assert (settings.terminate, settings.judge_timeout_seconds) == (True, 3)
         assert settings.max_judge_calls_per_session == 10
 
     def test_env_overrides_use_the_contract_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -390,32 +383,28 @@ class TestJudge:
 
     def test_disposable_verdict_is_cached(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         evt = event(tmp_path, "judge")
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         identity, facts = self.facts(evt)
         assert judge.disposable(evt, PerformanceSettings(), identity, facts) is True
         assert judge.disposable(evt, PerformanceSettings(), identity, facts) is True
         assert len(calls) == 1
-        assert calls[0][1] == {
-            "model": "small",
-            "timeout": 20,
-            "response_model": DisposableVerdict,
-            "attempts": 1,
-            "evidence": False,
-            "tools": (),
-        }
+        assert (calls[0][0], list(calls[0][1]), calls[0][2]) == (
+            facts.render(),
+            ["disposable"],
+            {"provider": JEV, "timeout": 3},
+        )
         assert (state(evt).verdicts, state(evt).judge_calls, state(evt).judging) == ({identity.key: True}, 1, [])
 
     def test_prompt_carries_redacted_bounded_facts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         evt = mock_resource_pressure_event(
             payload("judge", argv=["deploy-tool", "--token", "s3cret", *["x"] * 400]), session_dir=tmp_path
         )
-        calls = llm(evt, monkeypatch, False)
+        calls = decided(evt, monkeypatch, False)
         identity, facts = self.facts(evt)
         judge.disposable(evt, PerformanceSettings(), identity, facts)
-        rendered = str(calls[0][0])
+        rendered = calls[0][0]
         assert "s3cret" not in rendered
         assert "--token ***" in rendered
-        assert "untrusted data" in rendered
         assert len(facts.render()) == judge.MAX_CONTEXT_CHARS
 
     @pytest.mark.parametrize(
@@ -423,30 +412,24 @@ class TestJudge:
         [
             pytest.param(False, id="reject"),
             pytest.param(TimeoutError("slow"), id="timeout"),
-            pytest.param(BackendCallError("down"), id="backend"),
-            pytest.param(validation_error(), id="invalid"),
-            pytest.param(subprocess.TimeoutExpired("claude", 20), id="subprocess"),
-            pytest.param(OSError("spawn"), id="oserror"),
-            pytest.param(EvidenceIncomplete("partial", "owner lost"), id="evidence"),
-            pytest.param(RuntimeError("preparation group is closed"), id="runtime"),
+            pytest.param(DecideError(503, "down"), id="rejected"),
+            pytest.param(DecideKeyMissing("no jev API key"), id="key-missing"),
         ],
     )
     def test_failures_are_not_disposable(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: bool | Exception, logcap: Any
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: bool | Exception
     ) -> None:
         evt = event(tmp_path, "judge")
-        llm(evt, monkeypatch, failure)
+        decided(evt, monkeypatch, failure)
         identity, facts = self.facts(evt)
         assert judge.disposable(evt, PerformanceSettings(), identity, facts) is False
         assert state(evt).verdicts == {identity.key: False}
-        failed = [record.message for record in logcap.records if "judge call failed" in record.message]
-        if isinstance(failure, Exception):
-            (message,) = failed
-            assert f"error={type(failure).__name__!r}" in message
-            assert f"pid={OWN_SLEEP.pid}" in message
-            assert str(failure) in message
-        else:
-            assert failed == []
+
+    def test_a_declined_question_is_not_disposable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        evt = event(tmp_path, "judge")
+        monkeypatch.setattr(evt.ctx, "decide", lambda *_, **__: Decision({"disposable": Refused()}, "jev", 0, 0.0))
+        identity, facts = self.facts(evt)
+        assert judge.disposable(evt, PerformanceSettings(), identity, facts) is False
 
     def test_judge_resolves_no_transcript_and_records_no_evidence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -457,13 +440,7 @@ class TestJudge:
         )
         prepared: list[str] = []
         monkeypatch.setattr(context.HookContext, "release_preparation", lambda self, prompt: prepared.append(prompt))
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-        monkeypatch.setattr(context, "ready_backend", lambda specialty, model: BACKEND)
-        parsed = DisposableVerdict(disposable=True, reasoning="r")
-        monkeypatch.setattr(
-            "spawnllm.run_sync",
-            lambda spec, *, backend: SimpleNamespace(error=None, result=SimpleNamespace(parsed=parsed)),
-        )
+        monkeypatch.setattr("spawnllm.decide_sync", lambda *_, **__: answered(True))
         identity, facts = self.facts(evt)
         token = CURRENT_CLIENT.set(NoExchange())
         try:
@@ -481,7 +458,7 @@ class TestJudge:
             evt = mock_resource_pressure_event(
                 payload("judge", start_unix=start_unix(OWN_SLEEP) + start), session_dir=tmp_path
             )
-            recorded = llm(evt, monkeypatch, True)
+            recorded = decided(evt, monkeypatch, True)
             identity, facts = self.facts(evt)
             verdicts.append(judge.disposable(evt, PerformanceSettings(), identity, facts))
             calls = [*calls, *recorded]
@@ -494,7 +471,7 @@ class TestJudge:
         evt = event(tmp_path, "judge")
         identity, facts = self.facts(evt)
         evt.ctx.s[ProcwatchState].set(ProcwatchState(judging=[identity.key], judge_calls=1))
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         assert judge.disposable(evt, PerformanceSettings(), identity, facts) == Unreadable(
             "its disposability verdict is already in flight."
         )
@@ -503,7 +480,7 @@ class TestJudge:
     def test_corrupt_state_never_grants_a_fresh_budget(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         evt = event(tmp_path, "judge")
         evt.ctx.s[ProcwatchState].path.write_text("{not json")
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         identity, facts = self.facts(evt)
         with pytest.raises(StateUnavailable, match="corrupt"):
             judge.disposable(evt, PerformanceSettings(), identity, facts)
@@ -519,45 +496,13 @@ class TestJudge:
         assert "delta" not in facts.render()
         assert "--password *** TOKEN=***" in facts.render()
 
-    def test_judge_makes_one_provider_attempt_with_no_tools(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_spent_deadline_makes_no_provider_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         evt = event(tmp_path, "judge")
-        specs: list[Any] = []
-
-        def run_sync(spec: Any, *, backend: Any) -> Any:
-            specs.append((spec, backend))
-            return SimpleNamespace(
-                error=None, result=SimpleNamespace(parsed=DisposableVerdict(disposable=True, reasoning="r"))
-            )
-
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-        monkeypatch.setattr("spawnllm.run_sync", run_sync)
-        monkeypatch.setattr(context, "ready_backend", lambda specialty, model: BACKEND)
-        identity, facts = self.facts(evt)
-        assert judge.disposable(evt, PerformanceSettings(), identity, facts) is True
-        ((spec, backend),) = specs
-        assert backend is BACKEND
-        assert (spec.max_attempts, spec.agent, spec.timeout, spec.model) == (1, False, 20, "claude-haiku-4-5")
-        assert spec.config_for(ClaudeConfig) == ClaudeConfig(tools=())
-
-    def test_selection_that_spends_the_budget_makes_no_provider_call(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        evt = event(tmp_path, "judge")
-        clock = [1_000.0]
-        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock[0]))
-
-        def slow_selection(specialty: object, model: object) -> MagicMock:
-            clock[0] += 30.0
-            return BACKEND
-
-        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-        monkeypatch.setattr(context, "ready_backend", slow_selection)
-        monkeypatch.setattr("spawnllm.run_sync", lambda *args, **kwargs: pytest.fail("the provider was called"))
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: 1_000.0))
+        monkeypatch.setattr("spawnllm.decide_sync", lambda *args, **kwargs: pytest.fail("the provider was called"))
         identity, facts = self.facts(evt)
         overrides = reqenv.RequestOverrides(
-            env={}, cwd=str(tmp_path), client_ppid=1, session_id="s1", deadline_unix_ms=1_035_000
+            env={}, cwd=str(tmp_path), client_ppid=1, session_id="s1", deadline_unix_ms=1_000_300
         )
         with reqenv.use_request(overrides):
             assert judge.disposable(evt, PerformanceSettings(), identity, facts) is False
@@ -569,11 +514,11 @@ class TestJudge:
         evt = event(tmp_path, "judge")
         flag = threading.Event()
 
-        def call_llm(prompt: Any, **kwargs: Any) -> DisposableVerdict:
+        def decide(*_: Any, **__: Any) -> Decision:
             flag.set()
-            return DisposableVerdict(disposable=True, reasoning="r")
+            return answered(True)
 
-        monkeypatch.setattr(evt.ctx, "call_llm", call_llm)
+        monkeypatch.setattr(evt.ctx, "decide", decide)
         identity, facts = self.facts(evt)
         with reqenv.abandonable(flag), pytest.raises(reqenv.Abandoned):
             judge.disposable(evt, PerformanceSettings(), identity, facts)
@@ -587,12 +532,12 @@ class TestJudge:
         flag.set()
         calls: list[Any] = []
 
-        def call_llm(prompt: Any, **kwargs: Any) -> DisposableVerdict:
+        def decide(state: Any, *_: Any, **__: Any) -> Decision:
             reqenv.checkpoint()
-            calls.append(prompt)
-            return DisposableVerdict(disposable=True, reasoning="r")
+            calls.append(state)
+            return answered(True)
 
-        monkeypatch.setattr(evt.ctx, "call_llm", call_llm)
+        monkeypatch.setattr(evt.ctx, "decide", decide)
         identity, facts = self.facts(evt)
         with reqenv.abandonable(flag), pytest.raises(reqenv.Abandoned):
             judge.disposable(evt, PerformanceSettings(), identity, facts)
@@ -630,7 +575,7 @@ class TestPressureHandler:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         evt = event(tmp_path, "judge")
-        llm(evt, monkeypatch, True)
+        decided(evt, monkeypatch, True)
         result = self.run(resources, evt)
         assert [(identity.pid, sig) for identity, sig in signals] == [(OWN_SLEEP.pid, SIGTERM)]
         assert result.action is Action.warn
@@ -648,11 +593,11 @@ class TestPressureHandler:
     ) -> None:
         evt = event(tmp_path, "judge")
 
-        def call_llm(prompt: Any, **kwargs: Any) -> DisposableVerdict:
+        def decide(*_: Any, **__: Any) -> Decision:
             snapshot["table"] = GAINED_TMUX
-            return DisposableVerdict(disposable=True, reasoning="r")
+            return answered(True)
 
-        monkeypatch.setattr(evt.ctx, "call_llm", call_llm)
+        monkeypatch.setattr(evt.ctx, "decide", decide)
         result = self.run(resources, evt)
         assert (result.action, signals, state(evt).signals) == (Action.block, [], [])
         assert "terminal multiplexer" in state(evt).pending[-1].text
@@ -667,7 +612,7 @@ class TestPressureHandler:
     ) -> None:
         evt = event(tmp_path, "judge")
         record_signal(evt, KEY, SIGTERM, "sent")
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         assert self.run(resources, evt).action is Action.block
         assert (calls, signals) == ([], [])
 
@@ -689,7 +634,7 @@ class TestPressureHandler:
     ) -> None:
         evt = event(tmp_path, "judge")
         evt.ctx.s[ProcwatchState].path.write_text("[]")
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         result = self.run(resources, evt)
         assert result.action is Action.block
         assert result.message is not None and "session state is corrupt" in result.message
@@ -711,7 +656,7 @@ class TestPressureHandler:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         evt = event(tmp_path, "judge")
-        llm(evt, monkeypatch, False)
+        decided(evt, monkeypatch, False)
         result = self.run(resources, evt)
         assert signals == []
         assert result.action is Action.block
@@ -729,7 +674,7 @@ class TestPressureHandler:
     ) -> None:
         monkeypatch.setenv("HOOKS_PERFORMANCE_TERMINATE", "false")
         evt = event(tmp_path, "judge")
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         assert self.run(resources, evt).action is Action.block
         assert (calls, signals) == ([], [])
 
@@ -745,7 +690,7 @@ class TestPressureHandler:
     ) -> None:
         snapshot["table"] = WITH_DEPLOY
         evt = event(tmp_path, stage, DEPLOY_CHILD)
-        calls = llm(evt, monkeypatch, True)
+        calls = decided(evt, monkeypatch, True)
         result = self.run(resources, evt)
         assert result.action is Action.block
         assert result.message is not None and "deploy, release, or publish script" in result.message
@@ -813,7 +758,7 @@ class TestPressureHandler:
             resources, "terminate", lambda identity, sig, recheck: Outcome(False, "exited before the signal")
         )
         evt = event(tmp_path, "judge")
-        llm(evt, monkeypatch, True)
+        decided(evt, monkeypatch, True)
         result = self.run(resources, evt)
         assert result.action is Action.block
         assert state(evt).signals == []
@@ -879,15 +824,15 @@ class TestAbandonTransport:
                 stalled()
             return MAC
 
-        def call_llm(self: Any, prompt: Any, **kwargs: Any) -> DisposableVerdict:
+        def decide(self: Any, *_: Any, **__: Any) -> Decision:
             if stall == "judge":
                 stalled()
-            return DisposableVerdict(disposable=True, reasoning="r")
+            return answered(True)
 
         kills: list[tuple[int, int]] = []
         monkeypatch.setattr(sys, "platform", "darwin")
         monkeypatch.setattr(proc, "process_table", process_table)
-        monkeypatch.setattr(context.HookContext, "call_llm", call_llm)
+        monkeypatch.setattr(context.HookContext, "decide", decide)
         monkeypatch.setattr(resources, "announce", lambda title, body: None)
         monkeypatch.setattr(
             resources,

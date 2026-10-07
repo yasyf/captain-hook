@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
+
+from cc_transcript.models import AssistantEvent, UserEvent, tool_uses
+from spawnllm import Binary, BinaryAnswer, Refused
 
 from captain_hook import (
     Allow,
     BaseHookEvent,
     Block,
-    Budget,
     CustomCondition,
     Event,
     FromSubagent,
+    HookResult,
     Input,
     RanCommand,
     Regex,
@@ -17,10 +21,14 @@ from captain_hook import (
     Signals,
     T,
     UsedSkill,
-    llm_gate,
+    on,
 )
+from captain_hook.primitives.llm import consume_signals
 from captain_hook.signals import matching_signals
-from captain_hook.state import PrimitiveState
+from captain_hook.state import PrimitiveState, record_fire
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 ASK_TOOLS = "AskUserQuestion|ExitPlanMode"
 SENTENCE_REST = r"(?:(?!\n\n)[^.])*?"
@@ -245,71 +253,66 @@ class AskToolDisallowed(CustomCondition):
         return "AskUserQuestion" in evt.disallowed_tools
 
 
-llm_gate(
-    """You are a senior engineer watching another engineer ("the agent") end its turn. Your
-one job: decide whether the agent's closing message, its last prose in the transcript, leaves
-something waiting on the user in PROSE instead of asking for it with the AskUserQuestion tool.
-
-The user's standing rule: when work needs something only the user can give (a decision, an
-answer, an approval, a read of a PR, design or delete list, a click or hand step, a "go"),
-the ask IS an AskUserQuestion call (2-4 concrete options, recommended first) in that same
-turn. A turn that ends on it written as text, then sits idle or proceeds on a default, is a
-bug. Background work still running is no excuse to defer an item the user could act on now:
-a background task's result is never the user's answer.
-
-This holds however the turn started. An orchestrator is woken by teammate or other-session
-messages (`<teammate-message>`, "Another Claude session sent a message: <agent-message ...>")
-and task notifications, and the user still reads the message that closes that turn: judge it
-exactly like a reply to the user.
-
-Block (block=true) when the closing message:
-- puts a question or decision to the user in prose: "one decision for you", "holding for your
-  pick", "still yours to decide", "your call", "up to you", "say the word", "let me know
-  which", "if you'd rather", an A-or-B fork laid out as options, a deferral list parked under a
-  heading such as "Still yours to decide:", "the lane recommends X and is proceeding on X" (a
-  decision the user never got a real prompt for), or a "want me to ...?" / "should I ...?"
-  offer closing the message;
-- lists items pending on the user that the user could act on now: a "Waiting on you", "Still
-  with you" or "Needs you" section, PRs or designs "held for your read" or "held for your
-  word", approvals, reads or clicks the user owes ("your two console clicks"), "it comes to you
-  for approval", "I'll bring it to you".
-
-An AskUserQuestion call covers only what it asked. Match each item the closing message leaves
-on the user against the questions the transcript shows were asked this turn: an item no call
-asked about still counts, however many other questions the turn asked.
-
-Do NOT block when:
-- every such item was put to the user with AskUserQuestion or ExitPlanMode this turn and the
-  message only reports the answer or the state it left;
-- an item cannot be put to the user yet because what the user would act on is still being
-  produced (a plan, a diff, a report), and the message names what it waits on and who is
-  producing it: "comes to you once the review lane returns the diff";
-- the message states a standing rule for a future event rather than a pending item: "any
-  create, delete, or replace comes to you";
-- the item is something the agent owes the user, or an approval the agent itself grants to
-  its lanes; "sent to me" and "I approve" are the agent, not the user;
-- the question is rhetorical and answered, quotes or reports someone else's question, or is
-  addressed to a subagent, teammate, or tool rather than the user;
-- the phrase sits only inside a code block or quoted text the agent is reporting (a hook
-  message, a log line, a draft), not in the agent's own words to the user;
-- the message reports finished work with nothing left on the user;
-- the decision is on a live cc-present board (a `present` skill or `cc-present start` in this
-  session) and the prose refers the user to it;
-- the only thing left on the user is an action the agent cannot take for them, such as running
-  a command (a login, an MFA tap), and the message names the exact command, often in the
-  `! <cmd>` form: "Waiting on your SSO login (`! aws sso login`)". That is an action, not a
-  choice, and prose naming the command is the right way to ask for it. A choice in the same
-  message still counts.
-
-When uncertain, return block=false. Put your reasoning (under 40 words, quoting the prose)
-in `reasoning`.""",
-    message=(
-        "Your closing message leaves something waiting on the user in prose. "
-        "Ask it now with `AskUserQuestion` (2-4 options, recommended first), or state what it waits on "
-        "and who is producing it."
+NARRATE_QUESTIONS = {
+    "leaves_on_user": Binary(
+        "Does the closing message leave something pending on the user, the human reading it, that the user could act "
+        "on now: a decision or choice, a question to answer, an approval, a read or review of a PR, design, or list, a "
+        "click or hand step, or a go-ahead?",
+        yes="Something waits on the user's decision, answer, approval, read, click, or go-ahead.",
+        no="Nothing waits on the user; the message only reports work, plans, or what others are doing.",
     ),
-    label="narrate_then_wait",
-    signals=NARRATE_SIGNALS,
+    "still_produced": Binary(
+        "Is everything waiting on the user something that is still being produced by someone else, such as a lane, a "
+        "review, CI, or a report, with the closing message naming what it waits on?",
+        yes="The user cannot act yet; the message names the work still being produced and who produces it.",
+        no="The user could act on at least one item now.",
+    ),
+    "asked_covered": Binary(
+        "Is every item the closing message leaves on the user among the questions listed in asked_with_tool_this_turn?"
+    ),
+}
+LEAVES_ON_USER = 0.65
+EXEMPT = 0.45
+NARRATE_MESSAGE = (
+    "Your closing message leaves something waiting on the user in prose. "
+    "Ask it now with `AskUserQuestion` (2-4 options, recommended first), or state what it waits on "
+    "and who is producing it."
+)
+YES = BinaryAnswer(p_yes=0.97, confidence=0.94)
+NO = BinaryAnswer(p_yes=0.03, confidence=0.94)
+BLOCKING = {"leaves_on_user": YES, "still_produced": NO, "asked_covered": NO}
+CLEAR = {"leaves_on_user": NO, "still_produced": NO, "asked_covered": NO}
+
+
+def asked_this_turn(events: Sequence[object]) -> list[str]:
+    asked: list[str] = []
+    for use in (use for event in events if isinstance(event, AssistantEvent) for use in tool_uses(event)):
+        if use.name == "AskUserQuestion":
+            asked.extend(question.get("question", "") for question in use.input.get("questions") or ())
+        elif use.name == "ExitPlanMode":
+            asked.append("a plan submitted for approval with ExitPlanMode")
+    return asked
+
+
+def narration(evt: BaseHookEvent) -> dict[str, object]:
+    events = evt.ctx.t.current_turn.events
+    opener = next(
+        (
+            event.text
+            for event in reversed(events)
+            if isinstance(event, UserEvent) and event.text and not event.text.startswith("Stop hook feedback:")
+        ),
+        "",
+    )
+    return {
+        "turn_opener": opener[-2000:],
+        "asked_with_tool_this_turn": asked_this_turn(events),
+        "closing_message": evt.ctx.t.assistant_text(1, max_per_msg=20000)[-6000:],
+    }
+
+
+@on(
+    Event.Stop,
     skip_if=[
         FromSubagent(),
         ContinuingStop(),
@@ -319,69 +322,73 @@ in `reasoning`.""",
         UsedSkill("present", scope="session", subagents=False),
         RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=False),
     ],
-    guards_waiting=False,
-    once_per_turn=False,
-    budget=Budget(turn_chars=8000),
-    events=Event.Stop,
     tests={
-        Input(transcript=[T.assistant(PROSE_DECISION)]): Block(pattern="AskUserQuestion"),
-        Input(transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")]): Block(
-            pattern="AskUserQuestion"
-        ),
+        Input(decide=BLOCKING, transcript=[T.assistant(PROSE_DECISION)]): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING, transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")]
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            decide=BLOCKING,
             transcript=[
                 T.assistant(
                     "Both stacks are green and the boot stack is four PRs deep.\n\n"
                     "Still yours to decide at the end: the pool PRs."
                 )
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING,
             transcript=[T.assistant("Still yours to decide: the pool PRs.")],
             background_tasks=[
                 {"id": "t1", "type": "subagent", "status": "running", "description": "pr-watcher on the pool PRs"}
             ],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.assistant("Still yours to decide: the pool PRs."),
                 *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(8)),
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
-            transcript=[T.assistant("The cap is 30 slots today — up to you whether we raise it or shed jobs.")]
+            decide=BLOCKING,
+            transcript=[T.assistant("The cap is 30 slots today — up to you whether we raise it or shed jobs.")],
         ): Block(pattern="AskUserQuestion"),
-        Input(transcript=[T.user("what is waiting on me?"), T.assistant(STILL_WITH_YOU)]): Block(
+        Input(decide=BLOCKING, transcript=[T.user("what is waiting on me?"), T.assistant(STILL_WITH_YOU)]): Block(
             pattern="AskUserQuestion"
         ),
-        Input(transcript=[T.user("where is the drive?"), T.assistant(CONSOLE_CLICKS)]): Block(
+        Input(decide=BLOCKING, transcript=[T.user("where is the drive?"), T.assistant(CONSOLE_CLICKS)]): Block(
             pattern="AskUserQuestion"
         ),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.user("roll back the release now"),
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Roll back the release?"}])),
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Prove the stack apply?"}])),
                 T.assistant(WAITING_ON_YOU),
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Rebase onto dev?"}])),
                 T.assistant("Still yours to decide: the pool PRs."),
                 *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(3)),
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.user("what is the overall status of the deploy cli?"),
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Hold the design PR?"}])),
                 T.assistant("Holding the design PR as you chose."),
                 T.user(DESK_WAKE),
                 T.assistant(STILL_WITH_YOU),
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.user("status?"),
                 T.assistant("Desk relayed the answers."),
@@ -396,9 +403,9 @@ in `reasoning`.""",
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Keep the firewall rule?"}])),
             ]
         ): Allow(),
-        Input(transcript=[T.assistant("The narrow ci plan is ready; it comes to you for approval.")]): Block(
-            pattern="AskUserQuestion"
-        ),
+        Input(
+            decide=BLOCKING, transcript=[T.assistant("The narrow ci plan is ready; it comes to you for approval.")]
+        ): Block(pattern="AskUserQuestion"),
         Input(transcript=[T.assistant("Applied the fix to your go-to helper; CI is green.")]): Allow(),
         Input(
             agent_id="tm1",
@@ -415,7 +422,7 @@ in `reasoning`.""",
                     "cherry-pick the fix?\n```\n\nShipped the fix; CI is green."
                 )
             ],
-            llm={"block": False},
+            decide=CLEAR,
         ): Allow(),
         Input(transcript=[T.user("status?"), T.assistant(GO_GIVEN)]): Allow(),
         Input(transcript=[T.user("what about api and restate?"), T.assistant(OWED_REPORT)]): Allow(),
@@ -442,52 +449,91 @@ in `reasoning`.""",
         Input(transcript=[T.assistant("Shipped the fix; CI is green.")]): Allow(),
         Input(transcript=[T.assistant(SSO_LOGIN)]): Allow(),
         Input(
-            transcript=[T.assistant("Waiting on you to choose staging or production before running `! aws sso login`.")]
+            decide=BLOCKING,
+            transcript=[
+                T.assistant("Waiting on you to choose staging or production before running `! aws sso login`.")
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[T.assistant("The S3 proof is blocked.\n\nWaiting on your SSO login:\n```\n! aws login\n```")]
         ): Allow(),
-        Input(transcript=[T.assistant("Waiting on your SSO login before the S3 proof can run.")]): Block(
-            pattern="AskUserQuestion"
-        ),
         Input(
-            transcript=[T.assistant(f"{SSO_LOGIN}\n\nAlso your call: rebase onto dev or cherry-pick the fix?")]
+            decide=BLOCKING, transcript=[T.assistant("Waiting on your SSO login before the S3 proof can run.")]
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            decide=BLOCKING,
+            transcript=[T.assistant(f"{SSO_LOGIN}\n\nAlso your call: rebase onto dev or cherry-pick the fix?")],
         ): Block(pattern="AskUserQuestion"),
         Input(transcript=[T.user(DESK_WAKE), T.assistant(NAMED_WAIT)]): Allow(),
         Input(transcript=[T.assistant("Holding for your pick on the pool PRs."), T.assistant(NAMED_WAITS)]): Allow(),
-        Input(transcript=[T.assistant("Let me know which.")]): Block(pattern="AskUserQuestion"),
-        Input(transcript=[T.assistant("Waiting on your pick, which only you can make.")]): Block(
+        Input(decide=BLOCKING, transcript=[T.assistant("Let me know which.")]): Block(pattern="AskUserQuestion"),
+        Input(decide=BLOCKING, transcript=[T.assistant("Waiting on your pick, which only you can make.")]): Block(
             pattern="AskUserQuestion"
         ),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.assistant("Waiting on your release plan, which only you can approve.\nThe watch is re-armed.")
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(transcript=[T.assistant(f"{NAMED_WAIT}\nThe watch is re-armed.")]): Allow(),
-        Input(transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Block(pattern="AskUserQuestion"),
+        Input(decide=BLOCKING, transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Block(
+            pattern="AskUserQuestion"
+        ),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.assistant(
                     "Waiting on your review verdict, which the owner is producing.\nCan you approve the deployment?"
                 )
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
-            transcript=[T.assistant("Waiting on your approval and the CI report, which the CI lane is producing.")]
+            decide=BLOCKING,
+            transcript=[T.assistant("Waiting on your approval and the CI report, which the CI lane is producing.")],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING,
             transcript=[
                 T.assistant("Waiting on two things:\n- The diff, which the review lane is producing.\n- Your pick.")
-            ]
+            ],
         ): Block(pattern="AskUserQuestion"),
         Input(
+            decide=BLOCKING | {"still_produced": YES},
+            transcript=[T.assistant("The narrow ci plan comes to you for approval once the plan lane returns it.")],
+        ): Allow(),
+        Input(
+            decide=BLOCKING | {"asked_covered": YES},
+            transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")],
+        ): Allow(),
+        Input(
+            decide=BLOCKING | {"leaves_on_user": Refused()},
+            transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")],
+        ): Allow(),
+        Input(
+            decide={"error": TimeoutError()},
+            transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")],
+        ): Allow(),
+        Input(
             transcript=[T.assistant("Both pool PRs are merged; nothing is left to decide.")],
-            llm={"block": False},
+            decide=CLEAR,
         ): Allow(),
         Input(
             transcript=[T.assistant("Why did the build fail? Let me know which key went stale: the lockfile.")],
-            llm={"block": False},
+            decide=CLEAR,
         ): Allow(),
     },
 )
+def narrate_then_wait(evt: BaseHookEvent) -> HookResult | None:
+    if consume_signals(evt, NARRATE_SIGNALS, "narrate_then_wait") is None:
+        return None
+    match (decision := evt.decide(narration(evt), NARRATE_QUESTIONS)) and decision.answers:
+        case {
+            "leaves_on_user": BinaryAnswer(p_yes=leaves),
+            "still_produced": BinaryAnswer(p_yes=produced),
+            "asked_covered": BinaryAnswer(p_yes=covered),
+        } if leaves >= LEAVES_ON_USER and max(produced, covered) < EXEMPT:
+            record_fire(evt)
+            return evt.block(NARRATE_MESSAGE)
+        case _:
+            return None

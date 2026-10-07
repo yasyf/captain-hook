@@ -6,8 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 from cc_transcript.tools import expand_tool_names, unregister_mcp_tool
+from spawnllm import BinaryAnswer, Decision
 
-from captain_hook import ConfirmVerdict, Event, cli
+from captain_hook import Event, cli
 from captain_hook.builtin_packs.general.hooks.comments import VerboseComment
 from captain_hook.cli import CliState
 from captain_hook.dispatch import execute_hook
@@ -361,11 +362,12 @@ def repeat_guard() -> RegisteredHook:
     return RegisteredHook(spec=HookSpec(events=Event.PreToolUse), handler=block_repeated_dispatch, name="repeat")
 
 
-def judging(tmp_path: Path, refusals: dict[str, object], **verdict: bool) -> HookContext:
+def judging(tmp_path: Path, refusals: dict[str, object], p_yes: float) -> HookContext:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals
 
     ctx = make_ctx(tmp_path)
-    ctx.call_llm = MagicMock(return_value=ConfirmVerdict(reasoning="r", **verdict))  # type: ignore[method-assign]
+    answer = BinaryAnswer(p_yes=p_yes, confidence=abs(2 * p_yes - 1))
+    ctx.decide = MagicMock(return_value=Decision({"protected": answer}, "jev-1.13.0", 0, 0.0))  # type: ignore[method-assign]
     ctx.session[ToolingRefusals].set(ToolingRefusals(refusals=refusals))
     return ctx
 
@@ -373,33 +375,33 @@ def judging(tmp_path: Path, refusals: dict[str, object], **verdict: bool) -> Hoo
 def test_the_cc_slack_cli_sync_dispatch_passes_the_stale_quota_refusal_without_the_model(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import QUOTA
 
-    ctx = judging(tmp_path, {"github-quota": QUOTA}, block=True, confident=True)
+    ctx = judging(tmp_path, {"github-quota": QUOTA}, 0.9)
     prompt = (TOOLING_FIXTURES / "cc_slack_cli_sync.txt").read_text()
 
     assert execute_hook(repeat_guard(), dispatch(ctx, prompt, "cc-slack-cli-sync")) is None
-    ctx.call_llm.assert_not_called()
+    ctx.decide.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    ("verdict", "action", "message"),
+    ("p_yes", "action", "message"),
     [
-        ({"block": False, "confident": True}, None, None),
-        ({"block": True, "confident": True}, Action.block, "already refused"),
+        (0.05, None, None),
+        (0.9, Action.block, "already refused"),
     ],
 )
-def test_the_cc_slack_cli_sync_dispatch_blocks_only_on_a_confident_match(
-    tmp_path: Path, verdict: dict[str, bool], action: Action | None, message: str | None
+def test_the_cc_slack_cli_sync_dispatch_blocks_only_on_a_likely_match(
+    tmp_path: Path, p_yes: float, action: Action | None, message: str | None
 ) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import SLACK_REFUSED
 
-    ctx = judging(tmp_path, dict(SLACK_REFUSED.refusals), **verdict)
+    ctx = judging(tmp_path, dict(SLACK_REFUSED.refusals), p_yes)
     prompt = (TOOLING_FIXTURES / "cc_slack_cli_sync.txt").read_text()
 
     result = execute_hook(repeat_guard(), dispatch(ctx, prompt, "cc-slack-cli-sync"))
 
     assert (result and result.action) is action
     assert message is None or message in (result.message or "")
-    judged = str(ctx.call_llm.call_args.args[0])
+    judged = ctx.decide.call_args.args[0]["rule"]
     assert "the same action the first-party tool refused" in judged
     assert "no cc-slack session for this Claude window" in judged
 
@@ -407,7 +409,7 @@ def test_the_cc_slack_cli_sync_dispatch_blocks_only_on_a_confident_match(
 def test_a_foreign_raw_heredoc_never_blocks_the_recon_dispatch(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
 
-    ctx = judging(tmp_path, {}, block=True, confident=True)
+    ctx = judging(tmp_path, {}, 0.9)
     foreign = PostToolUseEvent(
         _raw={
             "tool_name": "Bash",
@@ -426,7 +428,7 @@ def test_a_foreign_raw_heredoc_never_blocks_the_recon_dispatch(tmp_path: Path) -
     assert record_refusal(foreign) is None
     assert ToolingRefusals.load(foreign).refusals == {}
     assert execute_hook(repeat_guard(), dispatch(ctx, prompt, "aig-bucket-cutover-recon")) is None
-    ctx.call_llm.assert_not_called()
+    ctx.decide.assert_not_called()
 
 
 def test_a_session_wide_raw_env_records_no_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -512,7 +514,7 @@ def test_a_failed_github_call_under_a_live_lane_stays_quiet(tmp_path: Path) -> N
 def test_a_real_raw_comment_records_and_arms_nothing(tmp_path: Path, command: str) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
 
-    ctx = judging(tmp_path, {}, block=True, confident=True)
+    ctx = judging(tmp_path, {}, 0.9)
     raw = PostToolUseEvent(
         _raw={"tool_name": "Bash", "tool_input": {"command": command}, "tool_response": {"stdout": "", "stderr": ""}},
         ctx=ctx,
@@ -523,14 +525,14 @@ def test_a_real_raw_comment_records_and_arms_nothing(tmp_path: Path, command: st
     assert record_refusal(raw) is None
     assert ToolingRefusals.load(raw).refusals == {}
     assert execute_hook(repeat_guard(), dispatch(ctx, prompt, "rebase-and-retarget")) is None
-    ctx.call_llm.assert_not_called()
+    ctx.decide.assert_not_called()
 
 
 def test_a_failed_ccx_refusal_blocks_a_confident_repeat_dispatch(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
     from captain_hook.events import PostToolUseFailureEvent
 
-    ctx = judging(tmp_path, {}, block=True, confident=True)
+    ctx = judging(tmp_path, {}, 0.9)
     refused = PostToolUseFailureEvent(
         _raw={
             "tool_name": "Bash",

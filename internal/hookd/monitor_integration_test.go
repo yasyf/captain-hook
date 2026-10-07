@@ -31,14 +31,22 @@ const (
 	integrationWait = 30 * time.Second
 )
 
-const fakeClaudeScript = `#!/bin/sh
-printf 'start %s\n' "$*" >> "CALL_LOG"
-case "$1" in
-auth) exit 0 ;;
-esac
-sleep DELAY
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok","structured_output":{"disposable":true,"reasoning":"fake"}}'
-printf 'done %s\n' "$*" >> "CALL_LOG"
+const fakeDecideModule = `import time
+
+import spawnllm
+from spawnllm import BinaryAnswer, Decision
+
+
+def decide_sync(state, questions, **kwargs):
+    with open("CALL_LOG", "a") as log:
+        log.write("start decide\n")
+    time.sleep(DELAY)
+    with open("CALL_LOG", "a") as log:
+        log.write("done decide\n")
+    return Decision({"disposable": BinaryAnswer(p_yes=0.97, confidence=0.94)}, "fake", 0, 0.0)
+
+
+spawnllm.decide_sync = decide_sync
 `
 
 const transcriptFixture = `{"type":"user","uuid":"event-1","sessionId":"s1","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"run the tests"}}
@@ -65,6 +73,7 @@ type pythonMonitorHarness struct {
 	root      string
 	signalLog string
 	callLog   string
+	site      string
 	env       map[string]string
 
 	clock   *fakeClock
@@ -112,18 +121,19 @@ func newPythonMonitorHarness(t *testing.T) *pythonMonitorHarness {
 	h := &pythonMonitorHarness{
 		t: t, python: python, build: build, real: newProcSource(),
 		home: filepath.Join(tmp, "home"), root: filepath.Join(tmp, "repo"),
-		signalLog: filepath.Join(tmp, "signals.log"), callLog: filepath.Join(tmp, "claude-calls.log"),
+		signalLog: filepath.Join(tmp, "signals.log"), callLog: filepath.Join(tmp, "decide-calls.log"),
+		site:   filepath.Join(tmp, "site"),
 		source: newFakeProcSource(), usage: procUsage{CPUKnown: true},
 	}
 	bin := filepath.Join(tmp, "bin")
 	cache := filepath.Join(tmp, "cache")
-	for _, dir := range []string{h.home, h.root, bin, filepath.Join(cache, "captain-hook")} {
+	for _, dir := range []string{h.home, h.root, bin, h.site, filepath.Join(cache, "captain-hook")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	script := strings.NewReplacer("DELAY", fmt.Sprintf("%d", int(fakeJudgeDelay.Seconds())), "CALL_LOG", h.callLog).Replace(fakeClaudeScript)
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil {
+	module := strings.NewReplacer("DELAY", fmt.Sprintf("%d", int(fakeJudgeDelay.Seconds())), "CALL_LOG", h.callLog).Replace(fakeDecideModule)
+	if err := os.WriteFile(filepath.Join(h.site, "sitecustomize.py"), []byte(module), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	loginPath, err := json.Marshal(map[string]string{
@@ -298,7 +308,7 @@ func (h *pythonMonitorHarness) startWorker(ctx context.Context, key workerKey) (
 			command.Env = append(command.Env, item)
 		}
 	}
-	command.Env = append(command.Env, "HOME="+h.home)
+	command.Env = append(command.Env, "HOME="+h.home, "PYTHONPATH="+h.site)
 	process := &pythonWorkerProcess{command: command, stderr: &bytes.Buffer{}, done: make(chan error, 1)}
 	command.Stdin, command.Stdout, command.Stderr = child, child, process.stderr
 	if err := command.Start(); err != nil {
@@ -529,8 +539,8 @@ func (h *pythonMonitorHarness) warnThenHoldTheJudge() {
 	h.waitFor(func() bool { return h.childState() == childGrace }, "the warn ack never started the grace period")
 	h.tick()
 	h.tick()
-	h.waitFor(func() bool { return strings.Contains(h.calls(), "start -p") }, "the judge never reached the fake claude")
-	if h.childState() != childJudgePending || strings.Contains(h.calls(), "done -p") {
+	h.waitFor(func() bool { return strings.Contains(h.calls(), "start decide") }, "the judge never reached the fake decide call")
+	if h.childState() != childJudgePending || strings.Contains(h.calls(), "done decide") {
 		h.fail("judge state = %v", h.childState())
 	}
 }
@@ -558,7 +568,7 @@ func TestMonitorRealPythonWorkerAbandonsTheJudgeBeforeItsSignal(t *testing.T) {
 		if judge, _ := h.stage(1); judge.stage != "judge" || !errors.Is(judge.err, context.Canceled) {
 			h.fail("judge stage = %+v", judge)
 		}
-		h.waitFor(func() bool { return strings.Contains(h.calls(), "done -p") }, "the fake claude never finished")
+		h.waitFor(func() bool { return strings.Contains(h.calls(), "done decide") }, "the fake decide call never finished")
 		h.waitFor(func() bool { return h.abandonedIDs() == 0 }, "the worker's reply for the abandoned id never arrived")
 		if content, exists := h.signals(); exists {
 			h.fail("the abandoned judge signalled: %q", content)

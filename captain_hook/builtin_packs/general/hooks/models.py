@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 
 from captain_hook import (
+    CONFIRMED,
+    UNCONFIRMED,
     Agent,
     Allow,
     And,
@@ -202,8 +204,13 @@ hook(
     block=True,
     confirm=Confirm(rule="A haiku-pinned spawn whose task needs judgment beyond one mechanical fact per item."),
     tests={
-        Input(model="haiku", prompt="implement the retry backoff in the client"): Block(pattern="Drop the `model` pin"),
-        Input(model="haiku", prompt="implement the retry backoff"): Block(pattern="single-fact mechanical"),
+        Input(model="haiku", prompt="implement the retry backoff in the client", decide=CONFIRMED): Block(
+            pattern="Drop the `model` pin"
+        ),
+        Input(model="haiku", prompt="implement the retry backoff", decide=CONFIRMED): Block(
+            pattern="single-fact mechanical"
+        ),
+        Input(model="haiku", prompt="review the README for typos", decide=UNCONFIRMED): Allow(),
         Input(model="haiku", prompt="classify each file's language"): Allow(),
         Input(model="haiku", prompt="Probe subagent capacity: spawn and return the word ok"): Allow(),
         Input(model="haiku", prompt="mechanical step: return the repo's default branch name"): Allow(),

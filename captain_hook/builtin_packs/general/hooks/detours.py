@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
+
+from spawnllm import Binary, BinaryAnswer
+
 from captain_hook import (
     Allow,
+    BaseHookEvent,
     Event,
+    HookResult,
     Input,
     Signal,
     Signals,
@@ -10,114 +16,82 @@ from captain_hook import (
     Tool,
     UserMessages,
     Warn,
-    llm_nudge,
+    on,
+)
+from captain_hook.primitives.llm import consume_signals
+from captain_hook.state import fired_this_turn, record_fire
+
+DETOUR_QUESTIONS = {
+    "side_work": Binary(
+        "Is the agent's current call side work that user_messages never asked for and that the requested task does not "
+        "need?",
+        yes="The call works on something adjacent that nobody asked for.",
+        no="The call is the requested task, something it needs, or something user_messages allowed.",
+    ),
+    "authorized": Binary(
+        "Do user_messages allow this kind of extra work, for example with 'also', 'while you're there', or 'fix "
+        "anything you find'?"
+    ),
+    "prerequisite": Binary(
+        "Does the requested task need the current call to land or be verified, for example a failing build or test "
+        "the task trips over?"
+    ),
+    "surfaced": Binary(
+        "Did the agent already put the side work to the user or its orchestrator as options instead of acting on it?"
+    ),
+    "gathering": Binary(
+        "Is the current call only reading or gathering information rather than changing files, state, or anything "
+        "outside?"
+    ),
+}
+SIDE_WORK = 0.8
+EXEMPT = 0.5
+DETOUR_MESSAGE = (
+    "This looks like a detour: side work nobody asked for. Stop and ask via `AskUserQuestion` with 2-4 options "
+    "(file a follow-up, fix it now, or ignore it); a delegated agent returns early with findings plus options."
+)
+YES = BinaryAnswer(p_yes=0.97, confidence=0.94)
+NO = BinaryAnswer(p_yes=0.03, confidence=0.94)
+DETOUR = {"side_work": YES, "authorized": NO, "prerequisite": NO, "surfaced": NO, "gathering": NO}
+ON_TASK = DETOUR | {"side_work": NO}
+DETOUR_SIGNALS = Signals(
+    [
+        Signal(pattern=r"(?i)\bwhile (?:I'm|I am|we're|we are) (?:here|at it|in (?:here|there))\b", weight=2),
+        Signal(pattern=r"(?i)\bmight as well\b", weight=2),
+        Signal(pattern=r"(?i)\b(?:let me|I'll|I will) also\b", weight=2),
+        Signal(pattern=r"(?i)\bas a bonus\b", weight=2),
+        Signal(pattern=r"(?i)\bI (?:also )?noticed\b", weight=1),
+        Signal(pattern=r"(?i)\b(?:unrelated|a side note|tangent)\b", weight=1),
+        Signal(pattern=r"(?i)\bone more thing\b", weight=1),
+        Signal(pattern=r"(?i)\bquick(?:ly)? (?:fix|clean|tidy|refactor)\w*\b", weight=1),
+    ],
+    threshold=2,
+    window=8,
+    scope="window",
 )
 
-llm_nudge(
-    """You are a senior engineer watching another engineer ("the agent") mid-task. You are
-running in agent mode in the project's working directory, with read tools. Your one job:
-decide whether the agent has veered onto an UNREQUESTED DETOUR — side work nobody asked
-for — without checking in first.
 
-Your evidence, in order of authority:
-- `<user_messages>` (rendered above) is the authoritative record of what was ASKED: the
-  user's first prompt plus their most recent messages — the original request, every later
-  redirection, and any standing permissions. Work authorized anywhere in this block is
-  NEVER a detour, even when nothing near the current action mentions the authorization.
-  For a delegated agent (a subagent or teammate lane), `<user_messages>` is its brief
-  (`[first]`) plus the later messages the team sent it; the orchestrator's own conversation
-  is not in evidence, and a peer teammate's message is information, not authorization.
-- `<transcript evidence="...">` shows what the agent is doing RIGHT NOW — the just-run tool
-  call and the last few assistant messages. It is a short recent window, not the full
-  history: in a long session the authorizing message has usually scrolled out of it, so
-  absence of authorization there means nothing.
-- Both blocks clip long content (you'll see `…(+Nch)` markers). Judge only the supplied
-  snapshot evidence. A clipped or absent passage cannot establish lack of authorization.
+def detour_state(evt: BaseHookEvent, asked: str) -> dict[str, str]:
+    raw = dict(evt.input.raw)
+    call = (
+        raw.get("command")
+        if evt.tool_name == "Bash"
+        else json.dumps({key: str(value)[:800] for key, value in raw.items()})
+    )
+    return {
+        "user_messages": asked,
+        "recent_transcript": evt.ctx.transcript_text(window=10)[-3000:],
+        "current_call": f"{evt.tool_name}: {str(call or '')[:1500]}",
+    }
 
-Discriminator: the current work is either (a) the requested task, (b) a necessary
-prerequisite of it (the task cannot land or be verified without it), or (c) authorized —
-somewhere in `<user_messages>` the user said some form of "also…", "while you're there…",
-"fix anything you find", or it is a small stewardship fix inside code the task already
-touches. Any of those -> fire=false. Otherwise — the agent noticed something adjacent and
-started acting on it without surfacing it — fire=true.
 
-Detour tells (lean fire=true): "while I'm here" / "might as well" / "let me also" followed
-by edits to files the task doesn't need; fixing or refactoring code the request never
-mentioned and the task doesn't depend on; a cleanup sweep starting mid-task; chasing a side
-mystery at length while the requested work sits unfinished.
-
-Do NOT fire when: the side work blocks the task (a broken build or failing test the change
-trips over); it's a small stewardship fix in a file already being edited for the task; the
-user authorized it anywhere in `<user_messages>`; the agent is gathering context it needs;
-or the agent already surfaced the discovery and offered options instead of acting.
-
-<examples>
-<example fire="true">
-Asked: "rename the config flag". Agent: "While I'm here, the retry logic in client.py looks
-wrong — let me fix that too", then edits client.py.
-Unrequested fix in a file the rename never touches.
-</example>
-<example fire="true">
-Asked: "add a --json flag". Agent: "I also noticed the error handling is inconsistent
-across commands; I'll clean that up as well", then starts a multi-file sweep.
-Scope expansion nobody asked for, no options offered.
-</example>
-<example fire="false">
-Asked: "fix the failing test". Agent: "The fixture helper it calls has the actual bug —
-fixing that first."
-A prerequisite: the requested fix cannot land without it.
-</example>
-<example fire="false">
-User said "clean up anything you find along the way"; agent fixes a stale docstring in a
-file it was already editing.
-Pre-authorized stewardship.
-</example>
-<example fire="false">
-`<user_messages>` shows the first prompt asked for a changelog audit, and a later user
-message added "also migrate the backends to the new interface and clean up anything
-fleet-outdated". The transcript window shows only backend edits with no visible connection
-to any request.
-Authorized mid-turn: the redirection is part of what was asked, however long ago it
-scrolled out of the recent window.
-</example>
-<example fire="false">
-Agent: "I noticed X while working on Y — options: (1) finish Y and file X as a follow-up,
-(2) fix X now, (3) ignore it. Which?"
-Already surfacing options instead of acting.
-</example>
-</examples>
-
-When uncertain, return fire=false. A missed detour costs one review comment; a false alarm
-on legitimate work teaches the agent to ignore this nudge. Fire only when the current action
-is clearly outside both the request and its prerequisites as `<user_messages>` records them.
-Put your reasoning (under 50 words, naming the detour and the requested task) in
-`reasoning`.""",
-    label="detours",
-    message=(
-        "This looks like a detour: side work nobody asked for. Stop and ask via `AskUserQuestion` with 2-4 options "
-        "(file a follow-up, fix it now, or ignore it); a delegated agent returns early with findings plus options."
-    ),
+@on(
+    Event.PostToolUse,
     only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit|Bash")],
-    events=Event.PostToolUse,
-    contexts=[UserMessages()],
-    max_context=4000,
-    signals=Signals(
-        [
-            Signal(pattern=r"(?i)\bwhile (?:I'm|I am|we're|we are) (?:here|at it|in (?:here|there))\b", weight=2),
-            Signal(pattern=r"(?i)\bmight as well\b", weight=2),
-            Signal(pattern=r"(?i)\b(?:let me|I'll|I will) also\b", weight=2),
-            Signal(pattern=r"(?i)\bas a bonus\b", weight=2),
-            Signal(pattern=r"(?i)\bI (?:also )?noticed\b", weight=1),
-            Signal(pattern=r"(?i)\b(?:unrelated|a side note|tangent)\b", weight=1),
-            Signal(pattern=r"(?i)\bone more thing\b", weight=1),
-            Signal(pattern=r"(?i)\bquick(?:ly)? (?:fix|clean|tidy|refactor)\w*\b", weight=1),
-        ],
-        threshold=2,
-        window=8,
-        scope="window",
-    ),
+    max_fires=3,
     tests={
         Input(
+            decide=DETOUR,
             file="client.py",
             content="retry = 3\n",
             transcript=[
@@ -126,6 +100,7 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
             ],
         ): Warn(pattern="detour"),
         Input(
+            decide=DETOUR,
             command="./scripts/cleanup.sh",
             transcript=[
                 T.user("Add retries to the fetch client."),
@@ -151,7 +126,7 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
         Input(
             file="backends/store.go",
             content="client = ccnotes.New()\n",
-            llm={"fire": False},
+            decide=ON_TASK,
             transcript=[
                 T.user(
                     "Audit the changelog. Also migrate all our backends to the new ccnotes "
@@ -162,6 +137,7 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
             ],
         ): Allow(),
         Input(
+            decide=DETOUR,
             file="client.py",
             content="retry = 3\n",
             transcript=[
@@ -171,9 +147,27 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
             ],
         ): Warn(pattern="detour"),
         Input(
+            file="client.py",
+            content="retry = 3\n",
+            decide=DETOUR | {"prerequisite": YES},
+            transcript=[
+                T.user("Fix the failing test in settings.py."),
+                T.assistant("While I'm here, the retry helper the test calls is broken — fixing it first."),
+            ],
+        ): Allow(),
+        Input(
+            file="client.py",
+            content="retry = 3\n",
+            decide={"error": TimeoutError()},
+            transcript=[
+                T.user("Rename the config flag in settings.py."),
+                T.assistant("While I'm here, the retry logic looks wrong — fixing it too."),
+            ],
+        ): Allow(),
+        Input(
             agent_id="tm1",
             command="./scripts/fix-flaky-tests.sh",
-            llm={"fire": True, "reasoning": "rewriting the flaky test is outside the watch-the-PRs brief"},
+            decide=DETOUR,
             transcript=[
                 T.user(
                     '<teammate-message teammate_id="team-lead">Watch PRs 17371 and 17372 until '
@@ -188,3 +182,16 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
         ): Warn(pattern="detour"),
     },
 )
+def detours(evt: BaseHookEvent) -> HookResult | None:
+    if fired_this_turn(evt) or consume_signals(evt, DETOUR_SIGNALS, "detours") is None:
+        return None
+    if (asked := UserMessages().content(evt)) is None:
+        return None
+    match (decision := evt.decide(detour_state(evt, asked), DETOUR_QUESTIONS)) and decision.answers:
+        case {"side_work": BinaryAnswer(p_yes=side_work), **exemptions} if side_work >= SIDE_WORK and all(
+            isinstance(answer, BinaryAnswer) and answer.p_yes < EXEMPT for answer in exemptions.values()
+        ):
+            record_fire(evt)
+            return evt.warn(DETOUR_MESSAGE)
+        case _:
+            return None

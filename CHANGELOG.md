@@ -159,6 +159,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   $0.00002 a call against $0.013. A failed call still leaves the message for the next
   pass. The `triage_tier` setting is gone.
 
+- **`narrate_then_wait` asks TypeSafe Jev three questions instead of spawning a luna agent.**
+  The Stop check now asks whether the closing message leaves the next move on the user,
+  whether the turn still produced its deliverable, and whether an `AskUserQuestion` already
+  covered the choice. It blocks when the first is at least 0.65 and neither exemption
+  reaches 0.45. On 188 real turns labeled by gpt-6.1-sol, Jev scored 78% accuracy under
+  cross-validation against 74% for the agent, which answered inside its 25 s deadline on
+  4 of 188 turns, so the deployed check scored 60%. Jev answers in 122 ms at the median.
+  The decision-word and producer-clause signals still skip the call.
+
+- **`detours` asks TypeSafe Jev five questions instead of spawning a luna agent.** A
+  write or Bash call warns when the side-work answer is at least 0.8 and the
+  authorized, prerequisite, surfaced, and gathering exemptions all stay below one half.
+  On 162 real calls Jev scored 97.5% accuracy against 98% for the deployed agent, whose
+  calls took 63 s at the median and timed out past the deadline on most of them. Jev
+  answers in 139 ms.
+
+- **`Confirm` asks TypeSafe Jev instead of Cerebras.** The confirm step asks one
+  `protected` question and keeps the block at 0.35 or above. On 103 real hook matches
+  Jev scored 90% accuracy, the same as Cerebras, at 130 ms against 416 ms at the median,
+  and kept fewer blocks wrongly (11% against 14%). A call that gets no answer lets the
+  call through with a note, as a Cerebras failure did. `ConfirmVerdict` is removed; inline tests stub `decide=CONFIRMED` or
+  `decide=UNCONFIRMED`.
+
+- **procwatch's disposable judge asks TypeSafe Jev instead of a luna agent.** One
+  `disposable` question decides a kill at 0.9 or above. On 130 real long-running Bash
+  commands Jev scored 79% accuracy at 2.6% false kills, while the agent timed out at 60 s
+  on 73 of them and scored 70%. Jev answers in 133 ms. The `judge_tier` setting is gone
+  and `judge_timeout_seconds` defaults to 3.
+
 ### Fixed
 
 - **A tooling refusal names the command that refused.** The general pack's refusal
