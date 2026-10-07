@@ -13,8 +13,9 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `general` — language-agnostic guards: git/jj command safety, a session guard that denies
   `pkill`/`killall`, a `kill` or `renice` of a pid unless this session can prove it
   started the process, since ancestry alone does not establish ownership,
-  the harness's `TaskStop` tool, since a bare task id does not tell a disposable shell task
-  from a workflow, agent, or teammate session,
+  the harness's `TaskStop` tool from a subagent or Orca lane, since a bare task id does not tell a
+  disposable shell task from a workflow, agent, or teammate session (the root session stops any
+  of its tasks unchecked),
   `orca terminal close`/`worktree rm`/`worker-stop` (the root coordinating a dispatch's Orca Run may
   stop that dispatch with one literal `worker-stop`), `launchctl` teardown, session-ending
   `osascript`/`softwareupdate`/`pmset`/`tmux`, and `shutdown`/`reboot`, in Bash and in MCP payloads,
@@ -23,7 +24,7 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   check-in nudge, a tooling nudge that asks for a tool-fix lane after a first-party tool refuses, a
   manual workaround next to a tool, or a command repeated by hand, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
   comment that was already over budget only warns), `rm` safety, and a plain-English reply rewrite.
-  An owner ruling lifts a terminal close, launchd service stop, or `TaskStop` through
+  An owner ruling lifts a terminal close, launchd service stop, or a lane's `TaskStop` through
   [grants](grants.qmd#lift-a-session-guard-block), with one use per ruling and scope across
   all session trees and a two-minute window for identical retries. A lifted Bash call must
   run once at top level, first in the payload, with only pipe successors. A session may

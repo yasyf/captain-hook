@@ -653,7 +653,6 @@ The `general` pack declares these session grant kinds:
 | `sessions.close-settled` | Empty | `orca terminal close --terminal <handle>` for an idle, settled dispatch |
 | `sessions.close.owner` | `terminal=<handle>` | A close the owner names in their words or answer |
 | `sessions.launchctl.owner` | `service=<launchd label>` | A service action the owner names in their words or answer |
-| `sessions.task-stop.owner` | `task=<id>` | A task stop the owner names by id or lane name |
 
 The first three have no judge. Their budget is one use per evidence item and
 scope across all session trees, with a one-day expiry. They read
@@ -673,6 +672,9 @@ start with it. Every other command must be a pipe successor, so
 Loops, `&&` or `;` chains such as `cd /tmp && launchctl ...`, background `&`,
 `sh -c`, substitutions, and commands respelled through variables keep the block.
 `TaskStop` is a tool call and runs once by construction.
+
+The root session's `TaskStop` is never guarded, so `sessions.task-stop` only
+lifts a stop from a subagent or an Orca lane.
 
 For `launchctl`, spell the command and target literally, without wrappers,
 substitutions, or variables. Service targets are `system/<label>` or
@@ -699,15 +701,6 @@ on `PostToolUse`. `TaskStop` must name that task id, and the record must belong 
 the calling session and agent. Both child record kinds stay in their own tree
 during coordinator adoption. These lifts share the two-minute identical-retry
 window of `sessions.task-stop`.
-
-`StoodDown` lifts a `TaskStop` on a teammate the root has told to stand down twice.
-The task id must match `<name>@session-<8 hex>`, and only the root session takes
-the lift. The hook reads the teammate's own mailbox at
-`~/.claude/teams/<team>/inboxes/<name>.json` and counts messages from `team-lead`
-whose text begins with `STAND-DOWN`. The second notice must be at least five
-minutes old. Messages from peers and texts that merely mention a stand-down do not
-count. The block message for a teammate id reports how many notices the mailbox
-holds.
 
 `sessions.close` also accepts live `CreatedHere` evidence when all checks pass:
 
@@ -764,13 +757,12 @@ settled, under a standing owner decision recorded in cc-notes before the closing
 session."
 
 The `.owner` kinds try the owner's current words after the existing cc-notes,
-created-here, own-teammate, own-shell, and settled-dispatch lifts. Only the
+created-here and settled-dispatch lifts. Only the
 spawning root qualifies: the event has no `agent_id` and `evt.ctx.root_path` is
 `None`. A teammate or a session with a root transcript gets no owner-named lift.
 
 `OwnerNaming` collects prompts, human-queued messages, and `AskUserQuestion`
-answers that name the exact terminal handle, service label, or task id. For a
-`<name>@session-<id>` task, its lane name also qualifies. Matching includes the
+answers that name the exact terminal handle or service label. Matching includes the
 question and option context, so the owner can select an option that names the
 target. With no naming evidence, the hook makes no judge call.
 
