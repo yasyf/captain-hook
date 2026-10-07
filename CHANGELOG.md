@@ -151,6 +151,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settled mandatory verdict, block first, then rewrite, then allow, and writes the sibling's
   traceback to stderr.
 
+- **A hook that widens its evidence window reads the transcript on retry.** A lease is
+  capped at the foreground deadline it was acquired under. A hook that retried under
+  `foreground_evidence` after running past that deadline renewed a lease the owner had
+  already dropped and got `stale_handle: lease does not belong to this claimant or
+  generation`. The monorepo's Slack permission hook then skipped its judge and let the post
+  through on an unchecked grant. A renewal answered with `stale_handle` now acquires a fresh
+  lease on the same transcript, classifier, and tail under the widened window.
+
 - **A pending decision written as a named wait still meets the narrate gate.** The
   `narrate_then_wait` skip accepted "Waiting on your pick, which only you can make." because
   the item carried a producer clause. An item that names a decision (a pick, choice, answer,
