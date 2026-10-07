@@ -122,7 +122,7 @@ verdict = evt.llm("Rate the risk of this action.", RiskVerdict)
 
 **evt.decide** — yes/no, label, and score probabilities from Jev in about 120 ms; `None` on failure
 ```python
-decision = evt.decide(evt.prompt or "", {"rollback": Binary("Does the user ask to roll back a release?")})
+decision = evt.decide(evt.user_prompt or "", {"rollback": Binary("Does the user ask to roll back a release?")})
 ```
 
 ## 🎯 Decide when (conditions)
