@@ -19,7 +19,7 @@ from captain_hook import (
     UsedSkill,
     llm_gate,
 )
-from captain_hook.signals import score_signals
+from captain_hook.signals import matching_signals
 from captain_hook.state import PrimitiveState
 
 ASK_TOOLS = "AskUserQuestion|ExitPlanMode"
@@ -34,7 +34,7 @@ PRODUCER = (
     r",\s+(?:which|that)\s+(?:only\s+)?[^,;.]+?(?:\s+(?:is|are)|['’](?:s|re))\s+(?:still\s+)?\w+ing\b"
     r"|,\s+(?:which|that)\s+only\s+[^,;.]+?\s+can\s+\w+"
 )
-PRODUCED_ITEM = rf"[^,;]+?(?:{PRODUCER})"
+PRODUCED_ITEM = rf"(?:(?!\s(?:and|or)\s)[^,;])+?(?:{PRODUCER})"
 PRODUCED_ITEMS = re.compile(rf"(?i){PRODUCED_ITEM}(?:(?:,?\s+and\s+|;\s+|,\s+){PRODUCED_ITEM})*\.?")
 BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
@@ -219,7 +219,7 @@ class WaitsNamed(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         rest = undeclared_prose(evt.ctx.t.assistant_text(1, max_per_msg=20000))
-        return rest is not None and score_signals(NARRATE_SIGNALS.patterns, rest) < NARRATE_SIGNALS.threshold
+        return rest is not None and not matching_signals(NARRATE_SIGNALS.patterns, rest)
 
 
 class ContinuingStop(CustomCondition):
@@ -448,6 +448,16 @@ in `reasoning`.""",
         Input(transcript=[T.assistant("Holding for your pick on the pool PRs."), T.assistant(NAMED_WAITS)]): Allow(),
         Input(transcript=[T.assistant("Let me know which.")]): Block(pattern="AskUserQuestion"),
         Input(transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[
+                T.assistant(
+                    "Waiting on your review verdict, which the owner is producing.\nCan you approve the deployment?"
+                )
+            ]
+        ): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[T.assistant("Waiting on your approval and the CI report, which the CI lane is producing.")]
+        ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[
                 T.assistant("Waiting on two things:\n- The diff, which the review lane is producing.\n- Your pick.")

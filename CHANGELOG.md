@@ -142,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turns and passed it on others, though the block message itself offers that remedy. The
   gate now skips, without a model call, when every "Waiting on" item in the closing message
   carries a producer clause (`, which <producer> is building`, `, which only you can give`)
-  and the rest of the message trips none of the gate's signals.
+  and the rest of the message matches none of the gate's signals.
 
 - **A grant judge never outlasts its hook.** `Judge` took its full `deadline` from the
   moment it started, so a judge that began a few seconds into a mandatory hook ran past
