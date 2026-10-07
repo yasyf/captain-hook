@@ -553,7 +553,9 @@ class SnapshotClient:
 
 
 class Lease:
-    def __init__(self, client: SnapshotClient, description: Mapping[str, Any], *, tail_bytes: int | None = None) -> None:
+    def __init__(
+        self, client: SnapshotClient, description: Mapping[str, Any], *, tail_bytes: int | None = None
+    ) -> None:
         self.client = client
         client._leases.add(self)
         self.description = dict(description)
@@ -597,6 +599,12 @@ class Lease:
         description = client.acquired(
             self.description["canonical_path"], classifier=self.description["classifier"], tail_bytes=self.tail_bytes
         )
+        if (
+            description["source_id"] != self.description["source_id"]
+            or description["committed_bytes"] < self.description["committed_bytes"]
+        ):
+            Lease(client, description).release()
+            raise EvidenceIncomplete("changed", "transcript was rewritten while its lease was expired")
         self.client._leases.discard(self)
         client._leases.add(self)
         self.client = client
