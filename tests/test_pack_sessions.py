@@ -685,43 +685,40 @@ OBSERVED_LANE = "aig-no-delete-plan@session-67c0e5da"
 RESUMED_SESSION = "900424b6-7393-480c-a26a-f1bd21da6e57"
 STOP_DENIED = (
     "BLOCKED: `TaskStop` on task `wcn64vfub` cannot be verified as a disposable shell task rather than a workflow, "
-    "agent, or teammate session, its own children included. Let it finish, or ask the owner to end it or name it in "
-    "a cc-notes answer for a later session."
+    "agent, or teammate session, its own children included. Let it finish, ask the root session to stop it, or have "
+    "the owner name it in a cc-notes answer for a later session."
 )
 
 
-def minutes_ago(minutes: int) -> datetime:
-    return datetime.now(UTC) - timedelta(minutes=minutes)
-
-
-def mailbox_of(home: Path, task: str, *messages: tuple[str, str, datetime]) -> None:
-    lane, _, team = task.partition("@")
-    mailbox = home / ".claude" / "teams" / team / "inboxes" / f"{lane}.json"
-    mailbox.parent.mkdir(parents=True, exist_ok=True)
-    mailbox.write_text(
-        json.dumps(
-            [
-                {
-                    "from": sender,
-                    "text": text,
-                    "timestamp": at.isoformat().replace("+00:00", "Z"),
-                    "msg_id": f"m{index}",
-                }
-                for index, (sender, text, at) in enumerate(messages)
-            ]
-        )
-    )
-
-
-def with_count(task: str, count: int) -> str:
-    cause = STOP_DENIED.split(" Let it finish")[0].replace("wcn64vfub", task)
-    remedy = "Let it finish, ask the owner to end it, or send a second STAND-DOWN and wait 5 minutes"
-    return f"{cause} {remedy} (it has {count})."
+def lane_stop(tool_input: dict[str, Any], **fields: Any) -> Input:
+    return stop(tool_input, **{"agent_id": "lane-1", **fields})
 
 
 class TestStopTool:
-    def test_the_observed_bare_task_id_is_denied(self, general_pack: None, tmp_path: Path) -> None:
-        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+    @pytest.mark.parametrize(
+        "tool_input",
+        [
+            pytest.param({"task_id": "wcn64vfub"}, id="bare"),
+            pytest.param({"task_id": "wf_f79d45a5-908"}, id="workflow"),
+            pytest.param({"task_id": "a17c64e0029f60e11"}, id="background_agent"),
+            pytest.param({"task_id": OBSERVED_LANE}, id="teammate"),
+            pytest.param({"shell_id": "bash_3"}, id="shell_alias"),
+            pytest.param({}, id="unnamed"),
+        ],
+    )
+    def test_the_root_stops_any_task_unchecked(
+        self, general_pack: None, tmp_path: Path, tool_input: dict[str, Any]
+    ) -> None:
+        assert decide_input(stop(tool_input), tmp_path) is None
+        assert decide_input(stop(tool_input), tmp_path, event=Event.PermissionRequest) is None
+        assert spends("sessions.task-stop") == []
+
+    def test_an_orca_lane_session_is_no_root(self, general_pack: None, tmp_path: Path) -> None:
+        lane = stop({"task_id": "wcn64vfub"}, root_transcript=INLINE_TRANSCRIPT)
+        assert decide_input(lane, tmp_path) == STOP_DENIED
+
+    def test_the_observed_bare_task_id_is_denied_to_a_lane(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
 
     @pytest.mark.parametrize(
         "task_id",
@@ -733,27 +730,25 @@ class TestStopTool:
         ],
     )
     def test_no_id_shape_proves_a_disposable_shell(self, general_pack: None, tmp_path: Path, task_id: str) -> None:
-        assert decide_input(stop({"task_id": task_id}), tmp_path) == STOP_DENIED.replace("wcn64vfub", task_id)
+        assert decide_input(lane_stop({"task_id": task_id}), tmp_path) == STOP_DENIED.replace("wcn64vfub", task_id)
 
     def test_the_retired_shell_id_alias_is_denied(self, general_pack: None, tmp_path: Path) -> None:
-        assert decide_input(stop({"shell_id": "bash_3"}), tmp_path) == STOP_DENIED.replace(
+        assert decide_input(lane_stop({"shell_id": "bash_3"}), tmp_path) == STOP_DENIED.replace(
             "task `wcn64vfub`", "shell `bash_3`"
         )
 
     def test_a_stop_naming_no_target_is_denied(self, general_pack: None, tmp_path: Path) -> None:
-        assert decide_input(stop({}), tmp_path) == STOP_DENIED.replace("task `wcn64vfub`", "an unnamed target")
-
-    def test_a_subagent_stopping_its_own_child_is_denied(self, general_pack: None, tmp_path: Path) -> None:
-        assert decide_input(stop({"task_id": "wcn64vfub"}, agent_id="sub-1"), tmp_path) == STOP_DENIED
+        assert decide_input(lane_stop({}), tmp_path) == STOP_DENIED.replace("task `wcn64vfub`", "an unnamed target")
 
     def test_permission_request_denies_too(self, general_pack: None, tmp_path: Path) -> None:
-        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path, event=Event.PermissionRequest) == STOP_DENIED
+        denied = decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path, event=Event.PermissionRequest)
+        assert denied == STOP_DENIED
 
     def test_the_verdict_needs_no_process_table(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
         fake_table["table"] = None
-        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+        assert decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
 
     def test_reading_task_output_is_allowed(self, general_pack: None, tmp_path: Path) -> None:
         output = Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}, cwd="/w", session_id="s1")
@@ -764,30 +759,27 @@ class TestStopTool:
         self, general_pack: None, tmp_path: Path, rulings: dict[str, list[dict[str, Any]]]
     ) -> None:
         rulings["wcn64vfub"] = ruling("Stop wcn64vfub; it hung on a dead socket.")
-        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) is None
+        assert decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path) is None
         assert spends("sessions.task-stop") == [("committed", "stop task wcn64vfub", ["ccn:0207568"])]
-        assert decide_input(stop({"task_id": "b1a2c3d4"}), tmp_path) == STOP_DENIED.replace("wcn64vfub", "b1a2c3d4")
+        denied = decide_input(lane_stop({"task_id": "b1a2c3d4"}), tmp_path)
+        assert denied == STOP_DENIED.replace("wcn64vfub", "b1a2c3d4")
 
     def test_a_ruling_written_during_the_session_never_lifts_a_stop(
         self, general_pack: None, tmp_path: Path, rulings: dict[str, list[dict[str, Any]]]
     ) -> None:
         rulings["wcn64vfub"] = ruling("Stop wcn64vfub.", written=INLINE_STARTED + timedelta(seconds=1))
-        assert decide_input(stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
+        assert decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
         assert spends("sessions.task-stop") == []
 
-    def test_a_teammate_this_session_spawned_stops_and_records_its_spend(
+    def test_a_lane_stops_the_teammate_it_spawned_and_records_its_spend(
         self, general_pack: None, tmp_path: Path
     ) -> None:
-        resumed = stop({"task_id": OBSERVED_LANE}, session_id=RESUMED_SESSION, transcript=inline_spawn(OBSERVED_LANE))
-        assert decide_input(resumed, tmp_path) is None
-        assert decide_input(resumed, tmp_path, event=Event.PermissionRequest) is None
+        own = lane_stop({"task_id": OBSERVED_LANE}, session_id=RESUMED_SESSION, transcript=inline_spawn(OBSERVED_LANE))
+        assert decide_input(own, tmp_path) is None
+        assert decide_input(own, tmp_path, event=Event.PermissionRequest) is None
         assert spends("sessions.task-stop") == [
             ("committed", f"stop task {OBSERVED_LANE}", [f"teammate:{OBSERVED_LANE}"])
         ]
-
-    def test_a_lane_stops_the_teammate_it_spawned(self, general_pack: None, tmp_path: Path) -> None:
-        own = stop({"task_id": OBSERVED_LANE}, agent_id="capt-hook-grants", transcript=inline_spawn(OBSERVED_LANE))
-        assert decide_input(own, tmp_path) is None
 
     @pytest.mark.parametrize(
         ("task_id", "fields"),
@@ -810,94 +802,12 @@ class TestStopTool:
             ),
         ],
     )
-    def test_a_task_this_agent_did_not_spawn_as_its_teammate_stays_protected(
+    def test_a_task_this_lane_did_not_spawn_as_its_teammate_stays_protected(
         self, general_pack: None, tmp_path: Path, task_id: str, fields: dict[str, Any]
     ) -> None:
-        denied = decide_input(stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
-        assert denied == (STOP_DENIED.replace("wcn64vfub", task_id) if "@" not in task_id else with_count(task_id, 0))
+        denied = decide_input(lane_stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
+        assert denied == STOP_DENIED.replace("wcn64vfub", task_id)
         assert spends("sessions.task-stop") == []
-
-
-OBSERVED_STAND_DOWNS = (
-    ("team-lead", "STAND-DOWN, root 1:0x AM PT: cc-inbox-2 owns the cutover.", minutes_ago(300)),
-    ("cc-inbox-2", "cc-inbox-2 here: I am your successor.", minutes_ago(299)),
-    ("team-lead", "STAND-DOWN, second notice, root 1:4x AM PT: stop pushing.", minutes_ago(260)),
-    ("team-lead", "STAND-DOWN (fourth notice, root 1:5x AM PT): close #10.", minutes_ago(250)),
-)
-
-
-class TestStoodDownLane:
-    def test_a_lane_that_ignored_two_stand_downs_stops_and_records_its_spend(
-        self, general_pack: None, tmp_path: Path, home: Path
-    ) -> None:
-        task = "cc-inbox@session-67c0e5da"
-        mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
-        assert decide_input(stop({"task_id": task}), tmp_path) is None
-        assert decide_input(stop({"task_id": task}), tmp_path, event=Event.PermissionRequest) is None
-        assert spends("sessions.task-stop") == [("committed", f"stop task {task}", ["stand-down:m2"])]
-
-    def test_a_lane_stood_down_once_stays_protected_and_the_block_counts_the_notice(
-        self, general_pack: None, tmp_path: Path, home: Path
-    ) -> None:
-        task = "sweepers-delete@session-67c0e5da"
-        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0])
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 1)
-        assert spends("sessions.task-stop") == []
-
-    def test_a_second_notice_under_five_minutes_old_holds_the_block(
-        self, general_pack: None, tmp_path: Path, home: Path
-    ) -> None:
-        task = "cc-inbox@session-67c0e5da"
-        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0], ("team-lead", "STAND-DOWN again.", minutes_ago(4)))
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 2)
-
-    @pytest.mark.parametrize(
-        "second",
-        [
-            pytest.param(("cc-inbox-2", "STAND-DOWN: stop.", minutes_ago(60)), id="a-peer-sent-it"),
-            pytest.param(("team-lead", "Please do not STAND-DOWN yet.", minutes_ago(60)), id="not-a-stand-down"),
-        ],
-    )
-    def test_only_the_roots_stand_down_messages_count(
-        self, general_pack: None, tmp_path: Path, home: Path, second: tuple[str, str, datetime]
-    ) -> None:
-        task = "cc-inbox@session-67c0e5da"
-        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0], second)
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 1)
-
-    def test_one_notice_copied_twice_counts_once(self, general_pack: None, tmp_path: Path, home: Path) -> None:
-        task = "cc-inbox@session-67c0e5da"
-        mailbox_of(home, task, OBSERVED_STAND_DOWNS[0])
-        mailbox = home / ".claude" / "teams" / "session-67c0e5da" / "inboxes" / "cc-inbox.json"
-        notice = json.loads(mailbox.read_text())[0]
-        mailbox.write_text(json.dumps([notice, notice]))
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 1)
-
-    def test_a_torn_mailbox_counts_no_notices(self, general_pack: None, tmp_path: Path, home: Path) -> None:
-        task = "cc-inbox@session-67c0e5da"
-        mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
-        mailbox = home / ".claude" / "teams" / "session-67c0e5da" / "inboxes" / "cc-inbox.json"
-        mailbox.write_text(mailbox.read_text()[:40])
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 0)
-
-    def test_a_lane_never_takes_the_stand_down_lift(self, general_pack: None, tmp_path: Path, home: Path) -> None:
-        task = "cc-inbox@session-67c0e5da"
-        mailbox_of(home, task, *OBSERVED_STAND_DOWNS)
-        assert decide_input(stop({"task_id": task}, agent_id="lane-1"), tmp_path) is not None
-        assert spends("sessions.task-stop") == []
-
-    def test_a_task_that_is_not_a_teammate_id_reads_no_mailbox(
-        self, general_pack: None, tmp_path: Path, home: Path
-    ) -> None:
-        mailbox_of(home, "cc-inbox@session-67c0e5da", *OBSERVED_STAND_DOWNS)
-        assert decide_input(stop({"task_id": "cc-inbox"}), tmp_path) == STOP_DENIED.replace("wcn64vfub", "cc-inbox")
-
-    def test_stand_downs_in_another_teams_mailbox_lift_nothing(
-        self, general_pack: None, tmp_path: Path, home: Path
-    ) -> None:
-        mailbox_of(home, "cc-inbox@session-756e25cc", *OBSERVED_STAND_DOWNS)
-        task = "cc-inbox@session-67c0e5da"
-        assert decide_input(stop({"task_id": task}), tmp_path) == with_count(task, 0)
 
 
 class TestTerminalClose:
@@ -1331,7 +1241,6 @@ def test_denies_without_touching_transcript_evidence(
 
 SERVE_KICK = "launchctl kickstart -k system/com.example.orca-serve"
 SERVE_WEDGED = "kickstart com.example.orca-serve, it is wedged"
-LANE_DONE = "stop aig-no-delete-plan, it is done"
 OWNER_AT = INLINE_STARTED + timedelta(minutes=5)
 
 
@@ -1391,13 +1300,6 @@ class TestOwnerNamedLifts:
         )
         assert not copy_violations(message)
 
-    def test_the_root_stops_a_teammate_the_owner_named_by_lane(self, general_pack: None, tmp_path: Path) -> None:
-        named = stop({"task_id": OBSERVED_LANE}, transcript=owner_turn(LANE_DONE), llm=owner_allows(LANE_DONE))
-        assert decide_input(named, tmp_path) is None
-        assert spends("sessions.task-stop.owner") == [
-            ("committed", f"stop task {OBSERVED_LANE}", [words_evidence(LANE_DONE, OWNER_AT).id])
-        ]
-
 
 def finished(inp: Input, response: dict[str, Any], tmp_path: Path) -> None:
     evt = input_to_event(Event.PostToolUse, inp)
@@ -1411,35 +1313,42 @@ class TestRecordedChildren:
         self, general_pack: None, tmp_path: Path
     ) -> None:
         spawn = Input(
-            tool="Agent", tool_input={"name": "aig-no-delete-plan", "prompt": "plan"}, session_id="s1", cwd="/w"
+            tool="Agent",
+            tool_input={"name": "aig-no-delete-plan", "prompt": "plan"},
+            session_id="s1",
+            cwd="/w",
+            agent_id="lane-1",
         )
         finished(spawn, {"status": "teammate_spawned", "teammate_id": OBSERVED_LANE}, tmp_path)
-        assert decide_input(stop({"task_id": OBSERVED_LANE}), tmp_path) is None
-        assert decide_input(stop({"task_id": OBSERVED_LANE}, agent_id="lane-1"), tmp_path) is not None
+        assert decide_input(lane_stop({"task_id": OBSERVED_LANE}), tmp_path) is None
+        assert decide_input(lane_stop({"task_id": OBSERVED_LANE}, agent_id="lane-2"), tmp_path) is not None
 
-    def test_a_background_shell_this_agent_started_stops(self, general_pack: None, tmp_path: Path) -> None:
-        shell = Input(command="sleep 600", session_id="s1", cwd="/w")
+    def test_a_background_shell_this_lane_started_stops(self, general_pack: None, tmp_path: Path) -> None:
+        shell = Input(command="sleep 600", session_id="s1", cwd="/w", agent_id="lane-1")
         finished(shell, {"stdout": "", "backgroundTaskId": "blmtrzuxz"}, tmp_path)
-        assert decide_input(stop({"task_id": "blmtrzuxz"}), tmp_path) is None
-        assert decide_input(stop({"task_id": "blmtrzuxz"}, agent_id="lane-1"), tmp_path) is not None
+        assert decide_input(lane_stop({"task_id": "blmtrzuxz"}), tmp_path) is None
+        assert decide_input(lane_stop({"task_id": "blmtrzuxz"}, agent_id="lane-2"), tmp_path) is not None
         assert spends("sessions.task-stop") == [("committed", "stop task blmtrzuxz", ["shell:blmtrzuxz"])]
 
-    def test_a_monitor_this_agent_armed_stops(self, general_pack: None, tmp_path: Path) -> None:
+    def test_a_monitor_this_lane_armed_stops(self, general_pack: None, tmp_path: Path) -> None:
         monitor = Input(
             tool="Monitor",
             tool_input={"command": "tail -f run.log", "description": "run log"},
             session_id="s1",
             cwd="/w",
+            agent_id="lane-1",
         )
         finished(monitor, {"taskId": "b166f8m04", "timeoutMs": 1800000, "persistent": False}, tmp_path)
-        assert decide_input(stop({"task_id": "b166f8m04"}), tmp_path) is None
-        assert decide_input(stop({"task_id": "b166f8m04"}, agent_id="lane-1"), tmp_path) is not None
+        assert decide_input(lane_stop({"task_id": "b166f8m04"}), tmp_path) is None
+        assert decide_input(lane_stop({"task_id": "b166f8m04"}, agent_id="lane-2"), tmp_path) is not None
         assert spends("sessions.task-stop") == [("committed", "stop task b166f8m04", ["shell:b166f8m04"])]
 
     def test_an_agent_payload_naming_a_task_id_records_no_shell(self, general_pack: None, tmp_path: Path) -> None:
-        spawn = Input(tool="Agent", tool_input={"name": "lane", "prompt": "plan"}, session_id="s1", cwd="/w")
+        spawn = Input(
+            tool="Agent", tool_input={"name": "lane", "prompt": "plan"}, session_id="s1", cwd="/w", agent_id="lane-1"
+        )
         finished(spawn, {"status": "async_launched", "taskId": "b166f8m04"}, tmp_path)
-        assert decide_input(stop({"task_id": "b166f8m04"}), tmp_path) is not None
+        assert decide_input(lane_stop({"task_id": "b166f8m04"}), tmp_path) is not None
 
 
 class TestRecordedOwnerWords:

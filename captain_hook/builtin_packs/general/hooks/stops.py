@@ -16,7 +16,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_ruling,
     inline_spawn,
     lift,
-    stand_down_remedy,
+    spawning_root,
 )
 from captain_hook.grants import Proposal
 
@@ -53,24 +53,34 @@ def describe_target(target: tuple[str, str] | None) -> str:
     skip_planning_agents=False,
     mandatory=True,
     tests={
-        stopping(tool_input={"task_id": "wcn64vfub"}): Block(
+        stopping(tool_input={"task_id": "wcn64vfub"}): Allow(),
+        stopping(tool_input={"task_id": "a17c64e0029f60e11"}): Allow(),
+        stopping(tool_input={"task_id": "wf_f79d45a5-908"}): Allow(),
+        stopping(tool_input={"task_id": OWN_LANE}): Allow(),
+        stopping(tool_input={"shell_id": "bash_3"}): Allow(),
+        stopping(tool_input={}): Allow(),
+        stopping(tool_input={"task_id": "wcn64vfub"}, permission_mode="plan"): Allow(),
+        stopping(tool_input={"task_id": "wcn64vfub"}, agent_id="sub-1"): Block(
             pattern="`TaskStop` on task `wcn64vfub` cannot be verified"
         ),
-        stopping(tool_input={"task_id": "wf_f79d45a5-908"}): Block(pattern="on task `wf_f79d45a5-908`"),
-        stopping(tool_input={"task_id": "a7e6a10ac1f61999f"}): Block(pattern="its own children included"),
-        stopping(tool_input={"task_id": "daemonkit-cache-impl"}): Block(
-            pattern=f"Let it finish, or ask the owner to end it or {LATER_SESSION}"
+        stopping(tool_input={"task_id": "a7e6a10ac1f61999f"}, agent_id="sub-1"): Block(
+            pattern="its own children included"
         ),
-        stopping(tool_input={"shell_id": "bash_3"}): Block(pattern="on shell `bash_3` cannot be verified"),
-        stopping(tool_input={}): Block(pattern="on an unnamed target cannot be verified"),
-        stopping(tool_input={"task_id": "wcn64vfub"}, agent_id="sub-1"): Block(pattern="cannot be verified"),
-        stopping(tool_input={"task_id": "wcn64vfub"}, permission_mode="plan"): Block(pattern="cannot be verified"),
+        stopping(tool_input={"task_id": "daemonkit-cache-impl"}, agent_id="sub-1"): Block(
+            pattern=f"Let it finish, ask the root session to stop it, or have the owner {LATER_SESSION}"
+        ),
+        stopping(tool_input={"shell_id": "bash_3"}, agent_id="sub-1"): Block(
+            pattern="on shell `bash_3` cannot be verified"
+        ),
+        stopping(tool_input={}, agent_id="sub-1"): Block(pattern="on an unnamed target cannot be verified"),
         stopping(
             tool_input={"task_id": "wcn64vfub"},
+            agent_id="sub-1",
             commands={**INLINE_COMMANDS, "ccn answer search wcn64vfub": inline_ruling("Stop wcn64vfub, it hung.")},
         ): Allow(),
         stopping(
             tool_input={"task_id": "wcn64vfub"},
+            agent_id="sub-1",
             commands={
                 **INLINE_COMMANDS,
                 "ccn answer search wcn64vfub": inline_ruling(
@@ -78,31 +88,21 @@ def describe_target(target: tuple[str, str] | None) -> str:
                 ),
             },
         ): Block(pattern="cannot be verified"),
-        stopping(
-            tool_input={"task_id": "wcn64vfub"},
-            commands={**INLINE_COMMANDS, "ccn answer search wcn64vfub": inline_ruling("Stop wcn64vfub2.")},
-        ): Block(pattern="cannot be verified"),
-        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE)): Allow(),
-        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE, tool="Task")): Allow(),
         stopping(tool_input={"task_id": OWN_LANE}, agent_id="lane-1", transcript=inline_spawn(OWN_LANE)): Allow(),
-        stopping(tool_input={"task_id": OWN_LANE}): Block(pattern=f"on task `{OWN_LANE}` cannot be verified"),
-        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn("lane-3@session-67c0e5da")): Block(
-            pattern="cannot be verified"
+        stopping(
+            tool_input={"task_id": OWN_LANE}, agent_id="lane-1", transcript=inline_spawn(OWN_LANE, tool="Task")
+        ): Allow(),
+        stopping(tool_input={"task_id": OWN_LANE}, agent_id="lane-1"): Block(
+            pattern=f"on task `{OWN_LANE}` cannot be verified"
         ),
-        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE, status="async_launched")): Block(
-            pattern="cannot be verified"
-        ),
-        stopping(tool_input={"task_id": OWN_LANE}, transcript=inline_spawn(OWN_LANE, tool="Bash")): Block(
-            pattern="cannot be verified"
-        ),
+        stopping(
+            tool_input={"task_id": OWN_LANE}, agent_id="lane-1", transcript=inline_spawn("lane-3@session-67c0e5da")
+        ): Block(pattern="cannot be verified"),
+        stopping(
+            tool_input={"task_id": OWN_LANE}, agent_id="lane-1", transcript=inline_spawn(OWN_LANE, tool="Bash")
+        ): Block(pattern="cannot be verified"),
         stopping(tool_input={"task_id": OWN_LANE}, agent_id="lane-1", root_transcript=inline_spawn(OWN_LANE)): Block(
             pattern="cannot be verified"
-        ),
-        stopping(tool_input={"task_id": "aig-no-delete-plan@session-756e25cc"}): Block(
-            pattern="on task `aig-no-delete-plan@session-756e25cc` cannot be verified"
-        ),
-        stopping(tool_input={"task_id": "lane-2"}, transcript=inline_spawn("lane-2")): Block(
-            pattern="on task `lane-2` cannot be verified"
         ),
         Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(tool="mcp__orca__TaskStop", tool_input={"task_id": "wcn64vfub"}): Allow(),
@@ -110,14 +110,13 @@ def describe_target(target: tuple[str, str] | None) -> str:
     },
 )
 def stop_unverified_task(evt: ToolRewriteEvent) -> HookResult | None:
+    if spawning_root(evt):
+        return None
     target = stop_target(evt.input.raw)
-    remedy = (
-        target and stand_down_remedy(target[1])
-    ) or f"Let it finish, or ask the owner to end it or {LATER_SESSION}."
     message = (
         f"BLOCKED: `{evt.tool_name}` on {describe_target(target)} "
         "cannot be verified as a disposable shell task rather than a workflow, agent, or teammate session, its own "
-        f"children included. {remedy}"
+        f"children included. Let it finish, ask the root session to stop it, or have the owner {LATER_SESSION}."
     )
     if target is None:
         return evt.block(message)

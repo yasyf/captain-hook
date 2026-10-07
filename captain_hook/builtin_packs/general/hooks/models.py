@@ -531,9 +531,7 @@ llm_nudge(
         Input(script="agent('Rewrite the README quickstart', {model: 'opus'})"): Allow(),
         Input(script="steps:\n  - agent: fix the retry backoff\n    model: 'sonnet'\n"): Allow(),
         Input(script="agent('Audit docs/architecture.md for stale claims', {model: 'opus'})"): Allow(),
-        Input(
-            script="agent('recon the module map', {model: 'sonnet'})\n// every prose stage runs on opus\n"
-        ): Allow(),
+        Input(script="agent('recon the module map', {model: 'sonnet'})\n// every prose stage runs on opus\n"): Allow(),
         Input(
             script="agent('Fix the import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})",
         ): Allow(),

@@ -987,7 +987,7 @@ class TestMandatoryLane:
 
 class TestGuardCompletion:
     PAYLOAD = '{"cwd":"/w","tool_name":"Bash","tool_input":{"command":"pkill -x sleep"}}'
-    STOP_PAYLOAD = '{"cwd":"/w","tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}'
+    STOP_PAYLOAD = '{"cwd":"/w","agent_id":"lane-1","tool_name":"TaskStop","tool_input":{"task_id":"wcn64vfub"}}'
 
     def respond(
         self, *, payload: str = PAYLOAD, mandatory: bool = True, event: str = "PreToolUse", deadline_unix_ms: int = 0
