@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 from cc_transcript import parse_events_from_bytes
@@ -68,6 +69,7 @@ def native_review_owner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iter
     )
     monkeypatch.setattr("cc_transcript.extract.correct.usable_backend", lambda: None)
     monkeypatch.setattr("spawnllm.extract", forbidden_extract)
+    monkeypatch.setattr("spawnllm.decide", AsyncMock(side_effect=TimeoutError("no jev in review tests")))
     monkeypatch.setattr(CorrectionLog, "open", classmethod(isolated_corrections))
     fixture = FixtureOwner()
     token = CURRENT_CLIENT.set(fixture.client)

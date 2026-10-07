@@ -476,6 +476,15 @@ def test_jev_unsure_or_unavailable_leaves_the_verdict_to_the_llm(
     assert bool(faults.drain(None)) is isinstance(answer.get("outcome"), DecideKeyMissing)
 
 
+def test_jev_never_judges_evidence_it_would_read_clipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = jev(monkeypatch)
+    evt = event(tmp_path, allow=False, reason="the rules forbid it")
+    long = owner("x" * 70_000, ident=APPROVAL)
+    denied = declared(judge=Judge("rules"), evidence=(Fixed((long,)),)).check(evt)
+    assert isinstance(denied, Denied) and not calls
+    evt.ctx.call_llm.assert_called_once()
+
+
 def test_a_refused_jev_question_leaves_the_verdict_to_the_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         spawnllm,

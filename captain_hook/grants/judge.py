@@ -215,13 +215,14 @@ class Judge:
 
         from captain_hook.context import VERDICT_TIMEOUT_SECONDS, record_decide_failure
         from captain_hook.contexts import apply_contexts, with_defaults
-        from captain_hook.primitives.llm import verdict_state
+        from captain_hook.primitives.llm import VERDICT_STATE_CHARS, verdict_state
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         cited = {item.id for grant in store.grants(tree=tree_of(evt)) for item in grant.evidence}
         if not (fresh := [item for item in evidence if item.id not in cited]):
             return None
-        if (built := apply_contexts(prompt, evt, with_defaults(self.contexts))) is None:
+        built = apply_contexts(prompt, evt, with_defaults(self.contexts))
+        if built is None or len(str(Prompt(contexts=built.contexts))) >= VERDICT_STATE_CHARS:
             return None
         try:
             state = verdict_state(
