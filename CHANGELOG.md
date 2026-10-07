@@ -136,6 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A merge-queue check that times out lets the push through.** The graphite pack's
+  queued-push guard held every `git push`, `ccx vcs ship`, `ccx vcs stack submit`, and
+  `gt submit` whose `gh` PR lookup or `ccx vcs pr status` call timed out, asking for a
+  rerun once the status answered. A timeout now allows the push, the same as a lookup
+  that fails, and the guard still refuses a push to a PR the queue positively reports
+  as queued.
+
 - **A verbatim approval binds the destination and the option the owner picked.** Since
   12.88.26, a write whose `text` appeared anywhere in an answer went ahead with no judge:
   text from an option the owner refused ("1 is wrong; do not post anything"), the same

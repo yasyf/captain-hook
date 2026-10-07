@@ -48,15 +48,19 @@ def check_budget() -> float:
 
 
 def run(argv: list[str], cwd: Path) -> str | None:
-    done = subprocess.run(
-        argv,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=check_budget(),
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=check_budget(),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.bind(argv=" ".join(argv)).warning("queued-push check skipped: timed out")
+        return None
     if done.returncode != 0:
         logger.bind(argv=" ".join(argv), stderr=done.stderr.strip()).warning(
             f"queued-push check skipped: exit {done.returncode}"
@@ -130,12 +134,7 @@ def git_pushes(call: Call, session_cwd: Path | None) -> list[Push]:
 def stack_pushes(call: Call, session_cwd: Path | None, *, upstack: bool) -> list[Push] | None:
     if (cwd := lookup_dir(call, session_cwd)) is None:
         return None
-    try:
-        listed = parsed(["ccx", "vcs", "stack", "list", "--json"], cwd)
-    except subprocess.TimeoutExpired:
-        logger.bind(cwd=str(cwd)).warning("queued-push check skipped: ccx vcs stack list timed out")
-        return None
-    match listed:
+    match parsed(["ccx", "vcs", "stack", "list", "--json"], cwd):
         case {"branches": list(branches)}:
             current = next((index for index, branch in enumerate(branches) if branch["current"]), -1)
             return [
@@ -232,29 +231,18 @@ def already_enqueued(push: Push, report: dict[str, str]) -> bool:
     return bool(push.head and (enqueued := report.get("enqueued")) and push.head.startswith(enqueued))
 
 
-def holds(cwd: Path, planned: list[Push]) -> tuple[list[Push], list[str]]:
-    branches = sorted({push.branch for push in planned})
-    try:
-        prs = open_prs(branches, cwd)
-    except subprocess.TimeoutExpired:
-        return [], [f"`{branch}`" for branch in branches]
-    if not prs:
-        return [], []
-    numbers = sorted(set(prs.values()))
-    try:
-        reports = queue_reports(numbers, cwd)
-    except subprocess.TimeoutExpired:
-        return [], [f"`#{number}`" for number in numbers]
-    if reports is None:
-        return [], []
-    held = [
+def holds(cwd: Path, planned: list[Push]) -> list[Push]:
+    if not (prs := open_prs(sorted({push.branch for push in planned}), cwd)):
+        return []
+    if (reports := queue_reports(sorted(set(prs.values())), cwd)) is None:
+        return []
+    return [
         push
         for push in planned
         if (number := prs.get(push.branch)) is not None
         and reports[number]["queue"] == "queued"
         and not already_enqueued(push, reports[number])
     ]
-    return held, []
 
 
 @on(
@@ -272,7 +260,6 @@ def holds(cwd: Path, planned: list[Push]) -> tuple[list[Push], list[str]]:
 )
 def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
     held: list[Push] = []
-    unverified: list[str] = []
     downstack_only = True
     moved = False
     for call in evt.cmd.calls():
@@ -282,17 +269,10 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
             and (cwd := lookup_dir(call, evt.cwd)) is not None
             and (planned := plan(call, evt.cwd))
         ):
-            found, missed = holds(cwd, [Push(push.branch, None) for push in planned] if moved else planned)
+            found = holds(cwd, [Push(push.branch, None) for push in planned] if moved else planned)
             held += found
-            unverified += missed
             downstack_only = downstack_only and (not found or tip_only_clears(call, evt.cwd, found))
         moved = moved or moves_heads(call)
-    if not held and unverified:
-        return evt.block(
-            f"The merge-queue check timed out for {', '.join(dict.fromkeys(unverified))}, "
-            "so this push is held until it can rule out a queued PR. "
-            "Rerun the push once `ccx vcs pr status` answers for them."
-        )
     if not held:
         return None
     branches = ", ".join(dict.fromkeys(f"`{push.branch}`" for push in held))
