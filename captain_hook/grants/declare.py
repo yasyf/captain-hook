@@ -10,12 +10,12 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from hashlib import sha256
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
 from captain_hook.grants import store
-from captain_hook.grants.evidence import Asked, OwnerWords, squeezed, tree_of, verbatim
+from captain_hook.grants.evidence import Asked, OwnerWords, holds, tree_of, verbatim
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
 from captain_hook.grants.orca import adopt_coordinator
 from captain_hook.grants.records import (
@@ -79,18 +79,30 @@ class Refusal:
     detail: str
 
 
-def approved_verbatim(action: Proposal, items: Sequence[Evidence]) -> Evidence | None:
-    """The owner evidence whose words or answer detail hold *action*'s message ``text`` verbatim."""
-    if not isinstance(text := action.payload.get("text"), str) or not (folded := squeezed(text)):
-        return None
-    return next(
-        (
-            item
-            for item in items
-            if item.source in OWNER_SOURCES and (folded in squeezed(item.quote) or folded in squeezed(item.detail))
-        ),
-        None,
+def approves_verbatim(item: Evidence, action: Proposal) -> bool:
+    """Whether *item* approves *action* word for word, binding its text, its files, and where it goes.
+
+    The message ``text`` and every file the payload lists must sit in what the owner approved, and every
+    scope value, such as the channel and thread, must be named there or in the question it answers. An
+    empty value, such as no thread for a top-level post, is never named, and a flag set in the payload
+    is never quoted, so either leaves the action to the judge.
+    """
+    named = f"{item.asked}\n{item.approves}"
+    extras = [value for key, value in action.payload.items() if key != "text"]
+    files = [entry for value in extras if isinstance(value, list) for entry in cast("list[object]", value)]
+    return (
+        holds(item.approves, str(action.payload["text"]))
+        and all(holds(named, value) for value in action.scope.values())
+        and all(holds(item.approves, str(entry)) for entry in files)
+        and not any(value is True for value in extras)
     )
+
+
+def approved_verbatim(action: Proposal, items: Sequence[Evidence]) -> Evidence | None:
+    """The owner's words or answer that approve *action* word for word, by :func:`approves_verbatim`."""
+    if not isinstance(text := action.payload.get("text"), str) or not text.strip():
+        return None
+    return next((item for item in items if item.source in OWNER_SOURCES and approves_verbatim(item, action)), None)
 
 
 def unusable_refusal(why: store.Unusable) -> Refusal:
@@ -253,12 +265,12 @@ class Grants:
         session tree whose scope covers the action come first, newest first: a rule that denies skips the
         grant, live evidence the sources no longer collect skips it, and otherwise the grant settles the
         action with no judge, since it is the owner's permission and only the owner revokes it. With no
-        stored grant, owner words or an answer that hold the payload's message ``text`` verbatim approve it;
-        else the judge reads the declared evidence. An allow mints a grant keyed on the approval it relied on and
-        spends it. Standing words and
-        rulings permit a class of actions, so they mint a standing grant per scope the judge reads them as
-        covering, widened on the declaration's ``widen`` keys; a counted approval keeps one budget, and any
-        other approval covers one scope. Every use is reserved and settles with the event's verdict.
+        stored grant, owner words or an answer that approve the action word for word, text, files, and
+        destination alike, approve it; else the judge reads the declared evidence. An allow mints a grant
+        keyed on the approval it relied on and spends it. Standing words and rulings permit a class of
+        actions, so they mint a standing grant per scope the judge reads them as covering, widened on the
+        declaration's ``widen`` keys; a counted approval keeps one budget, and any other approval covers
+        one scope. Every use is reserved and settles with the event's verdict.
         """
         if action is None:
             if self.action is None:

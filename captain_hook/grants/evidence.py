@@ -144,6 +144,16 @@ def answer_words(answer: AskUserQuestionResult, question: str, label: str) -> st
     return "\n".join([label, *([annotation.notes] if annotation is not None and annotation.notes else [])])
 
 
+def answer_approves(payload: dict[str, Any], question: str, label: str, answer: AskUserQuestionResult) -> str:
+    """What the answer approves word for word: the option picked by its label, else only the owner's typed words."""
+    annotation = answer.annotations.get(question)
+    picked = next((option for option in asked_options(payload, question) if option.get("label") == label), None)
+    if picked is None or (annotation is not None and annotation.notes):
+        return answer_words(answer, question, label)
+    previews = [picked.get("preview"), annotation.preview if annotation is not None else None]
+    return "\n".join([label, picked.get("description", ""), *(text for text in previews if isinstance(text, str))])
+
+
 def answer_evidence(ref: str, payload: dict[str, Any], answer: AskUserQuestionResult, at: datetime) -> list[Evidence]:
     """One evidence item per question the owner answered in the AskUserQuestion call *ref*."""
     return [
@@ -153,6 +163,8 @@ def answer_evidence(ref: str, payload: dict[str, Any], answer: AskUserQuestionRe
             quote=answer_words(answer, question, label),
             said_at=at,
             detail=answer_detail(payload, question, label, answer),
+            approves=answer_approves(payload, question, label, answer),
+            asked=question,
             key=f"ask:{ref}#{index}",
         )
         for index, (question, label) in enumerate(answer.answers.items())
@@ -242,7 +254,7 @@ def machine_written(text: str, markers: Sequence[str] = ()) -> bool:
 
 def words_evidence(text: str, at: datetime | None) -> Evidence:
     key = f"words:{sha256(f'{at.isoformat() if at else ""}|{text}'.encode()).hexdigest()[:12]}"
-    return Evidence(id=key, source="words", quote=text, said_at=at, key=key)
+    return Evidence(id=key, source="words", quote=text, said_at=at, approves=text, key=key)
 
 
 def queued_words(events: Iterable[Any]) -> list[tuple[str, Any]]:
@@ -287,10 +299,15 @@ def squeezed(text: str) -> str:
     return " ".join(text.split())
 
 
+def holds(text: str, quote: str) -> bool:
+    """Whether *text* holds *quote* verbatim, whitespace folded, as whole words: ``hi`` is not in ``archives``."""
+    folded = squeezed(quote)
+    return bool(folded) and re.search(rf"(?<!\w){re.escape(folded)}(?!\w)", squeezed(text)) is not None
+
+
 def verbatim(quote: str, items: Sequence[Evidence]) -> Evidence | None:
     """The owner evidence that contains *quote* verbatim, whitespace folded, or ``None``."""
-    folded = squeezed(quote)
-    return next((item for item in items if folded and folded in squeezed(item.quote)), None) if folded else None
+    return next((item for item in items if holds(item.quote, quote)), None)
 
 
 def ccn_answers(evt: BaseHookEvent, term: str) -> list[dict[str, Any]]:

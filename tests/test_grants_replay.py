@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,6 +21,8 @@ from captain_hook.grants import (
     Proposal,
     store,
 )
+from captain_hook.grants import evidence as evidence_module
+from captain_hook.grants.declare import approves_verbatim
 from captain_hook.grants.records import brief
 from captain_hook.hook_lint import copy_violations
 from tests.helpers import make_ctx
@@ -504,16 +506,69 @@ def test_the_959_regrant_records_on_the_owners_answer_without_a_judge(tmp_path: 
     assert store.load(recorded.grant.id).revoked is None
 
 
+SEND_TEXT = "Thanks for flagging this! I'm working on a fix that caps its size."
+SEND_QUESTION = f"Reply to Ben in thread {BEN_THREAD} of #{BEN_CHANNEL}?"
+JUDGE_REFUSES = {
+    "allow": False,
+    "reason": "not the approved write",
+    "refusal": "The owner approved that text for Ben's thread only.",
+}
+
+
+def send_answer(label: str) -> Evidence:
+    options = [
+        {"label": "Send", "description": "Post exactly the previewed text.", "preview": SEND_TEXT},
+        {"label": "Hold", "description": "Don't post yet."},
+    ]
+    payload = {
+        "questions": [{"question": SEND_QUESTION, "header": "Reply", "multiSelect": False, "options": options}],
+        "answers": {SEND_QUESTION: label},
+        "annotations": {SEND_QUESTION: {"preview": SEND_TEXT}} if label == "Send" else {},
+    }
+    answer = evidence_module.parse_answer(payload)
+    assert answer is not None
+    return evidence_module.answer_evidence("toolu_send", payload, answer, store.now())[0]
+
+
 def test_a_write_whose_text_the_owner_approved_verbatim_needs_no_judge(tmp_path: Path) -> None:
-    text = "Thanks for flagging this! I'm working on a fix that caps its size."
-    answer = Evidence(
-        id="ask:toolu_send#0",
-        source="ask",
-        quote="Send",
-        said_at=store.now(),
-        detail=f"question: Reply in the thread?\noption (chosen) Send: {text}",
-        key="ask:toolu_send#0",
-    )
-    post = call(tmp_path, BEN_CHANNEL, thread=BEN_THREAD, text=text, allow=False, reason="unsure")
-    assert allowed(slack(answer).check(post)).grant.approved == {"verb": "post", "text": text, "broadcast": False}
+    post = call(tmp_path, BEN_CHANNEL, thread=BEN_THREAD, text=SEND_TEXT, allow=False, reason="unsure")
+    assert allowed(slack(send_answer("Send")).check(post)).grant.approved == {
+        "verb": "post",
+        "text": SEND_TEXT,
+        "broadcast": False,
+    }
     post.ctx.call_llm.assert_not_called()
+
+
+def test_a_verbatim_approval_never_reaches_another_thread(tmp_path: Path) -> None:
+    post = call(tmp_path, BEN_CHANNEL, thread="1791339999.000300", text=SEND_TEXT, **JUDGE_REFUSES)
+    refused(slack(send_answer("Send")).check(post))
+    post.ctx.call_llm.assert_called_once()
+
+
+def test_a_verbatim_approval_for_a_thread_never_covers_a_top_level_post(tmp_path: Path) -> None:
+    post = call(tmp_path, BEN_CHANNEL, text=SEND_TEXT, **JUDGE_REFUSES)
+    refused(slack(send_answer("Send")).check(post))
+    post.ctx.call_llm.assert_called_once()
+
+
+def test_an_answer_refusing_the_previewed_text_approves_nothing(tmp_path: Path) -> None:
+    post = call(tmp_path, BEN_CHANNEL, thread=BEN_THREAD, text=SEND_TEXT, **JUDGE_REFUSES)
+    refused(slack(send_answer("1 is wrong; do not post anything")).check(post))
+    post.ctx.call_llm.assert_called_once()
+
+
+def test_a_verbatim_approval_names_every_file_and_sets_no_flag() -> None:
+    answer = send_answer("Send")
+    scope = {"channel": BEN_CHANNEL, "thread": BEN_THREAD}
+    plain = Proposal(scope=scope, payload={"verb": "post", "text": SEND_TEXT, "files": [], "broadcast": False})
+    assert approves_verbatim(answer, plain)
+    assert not approves_verbatim(answer, replace(plain, payload={**plain.payload, "files": ["/m.png"]}))
+    assert not approves_verbatim(answer, replace(plain, payload={**plain.payload, "broadcast": True}))
+
+
+def test_verbatim_text_matches_whole_words_only() -> None:
+    link = "https://in-the-forge.slack.com/archives/C09G3N98YM6/p1790210144444179"
+    assert not evidence_module.holds(link, "hi")
+    assert evidence_module.holds(link, "C09G3N98YM6")
+    assert evidence_module.holds("send  it\nnow", "send it now")
