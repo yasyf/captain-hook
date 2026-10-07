@@ -136,6 +136,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closing message that names each wait and its producer passes the narrate gate.**
+  The `narrate_then_wait` Stop gate sent every closing message to its LLM judge, which
+  blocked "Waiting on: the owner's review verdict, which the owner is producing." on some
+  turns and passed it on others, though the block message itself offers that remedy. The
+  gate now skips, without a model call, when every "Waiting on" item in the closing message
+  carries a producer clause (`, which <producer> is building`, `, which only you can give`)
+  and the rest of the message trips none of the gate's signals.
+
 - **A grant judge never outlasts its hook.** `Judge` took its full `deadline` from the
   moment it started, so a judge that began a few seconds into a mandatory hook ran past
   the hook's own budget. A judge timeout that should have failed open landed after

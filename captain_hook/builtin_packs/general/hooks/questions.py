@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from captain_hook import (
     Allow,
     BaseHookEvent,
@@ -17,6 +19,7 @@ from captain_hook import (
     UsedSkill,
     llm_gate,
 )
+from captain_hook.signals import score_signals
 from captain_hook.state import PrimitiveState
 
 ASK_TOOLS = "AskUserQuestion|ExitPlanMode"
@@ -25,6 +28,16 @@ NO_COMMAND_FOR_YOU = (
     rf"(?!(?={SENTENCE_REST}[`\n]!\s)"
     rf"(?!{SENTENCE_REST}\b(?:choose|choice|pick|decide|either|whether|which|or|rather|prefer)\b))"
 )
+
+WAIT_LEAD = re.compile(r"(?i)^(?:also\s+)?(?:still\s+)?waiting on(?:\s+(?:\w+\s+)?things?)?\s*:?\s*")
+PRODUCER = (
+    r",\s+(?:which|that)\s+(?:only\s+)?[^,;.]+?(?:\s+(?:is|are)|['’](?:s|re))\s+(?:still\s+)?\w+ing\b"
+    r"|,\s+(?:which|that)\s+only\s+[^,;.]+?\s+can\s+\w+"
+)
+PRODUCED_ITEM = rf"[^,;]+?(?:{PRODUCER})"
+PRODUCED_ITEMS = re.compile(rf"(?i){PRODUCED_ITEM}(?:(?:,?\s+and\s+|;\s+|,\s+){PRODUCED_ITEM})*\.?")
+BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
 PROSE_DECISION = (
     "One decision for you: the firewall rule is what forces three hand-rolled scripts. Keep it, and an "
@@ -111,10 +124,84 @@ SSO_LOGIN = (
     "and will act on its own once it succeeds."
 )
 
+NAMED_WAIT = "Waiting on: the owner's review verdict for the memory stack, which the owner is producing."
+
+NAMED_WAITS = (
+    "The urgent-message watch ran its full 30 minutes with nothing to report, so I re-armed it.\n"
+    "\n"
+    "Waiting on two things:\n"
+    "- The `/live-dashboard` skill, which workflow `wf_12526d50-6b2` is still building.\n"
+    "- Your review verdict on the memory stack, which only you can give."
+)
+
 DESK_WAKE = (
     'Another Claude session sent a message: <agent-message from="landing-desk"> Two PRs landed '
     "as squashes on dev. </agent-message>"
 )
+
+
+NARRATE_SIGNALS = Signals(
+    [
+        Signal(pattern=r"(?i)\bone decision for you\b", weight=2),
+        Signal(pattern=rf"(?i)\b(?:holding|waiting) (?:for|on) (?:your|you)\b{NO_COMMAND_FOR_YOU}", weight=2),
+        Signal(pattern=r"(?i)\b(?:still|now|back) (?:with|on) you\b", weight=2),
+        Signal(pattern=r"(?i)\bheld (?:for|on|until) (?:your|you)\b", weight=2),
+        Signal(pattern=rf"(?i)\b(?:needs?|awaits?|awaiting|requires?) (?:your|you)\b{NO_COMMAND_FOR_YOU}", weight=2),
+        Signal(
+            pattern=r"(?i)\byour (?:\w+ ){0,2}(?:reads?|reviews?|approvals?|sign-?offs?|clicks?|hand[- ]?steps?)\b",
+            weight=2,
+        ),
+        Signal(pattern=r"(?i)\byour (?:go|go-?ahead|word|nod|ok|okay)\b(?!-to)", weight=2),
+        Signal(pattern=r"(?i)\bbring (?:it|them|this|that|these|those) (?:back )?to you\b", weight=2),
+        Signal(
+            pattern=r"(?i)\b(?:comes?|goes) (?:back )?to you for (?:an? )?(?:approval|review|read|sign-?off)\b",
+            weight=2,
+        ),
+        Signal(pattern=r"(?i)\b(?:comes?|goes) (?:back )?to you\b", weight=1),
+        Signal(pattern=r"(?i)\bowe you\b", weight=1),
+        Signal(pattern=r"(?i)\b(?:let me know|tell me) (?:which|what|if|whether|how)\b", weight=2),
+        Signal(pattern=r"(?i)\byour (?:call|pick|decision|choice|move|shout)\b", weight=2),
+        Signal(pattern=r"(?i)\byours? to (?:decide|call|choose)\b", weight=2),
+        Signal(pattern=r"(?i)\bup to you\b", weight=2),
+        Signal(pattern=r"(?i)\bsay the word\b", weight=2),
+        Signal(pattern=r"(?i)\bif you(?:'|’)?d (?:rather|prefer)\b", weight=2),
+        Signal(pattern=r"(?i)\bleave (?:it|that|this|them) (?:up )?to you\b", weight=2),
+        Signal(pattern=r"(?i)\bwhich (?:one )?(?:do|would) you (?:want|prefer|like)\b", weight=2),
+        Signal(pattern=r"(?i)\b(?:should I|want me to|shall I)\b[^.?!]*[.?!]", weight=2),
+        Signal(pattern=r"(?i)\brecommends?\b[^.]*\b(?:proceeding|going ahead) (?:on|with)\b", weight=2),
+        Signal(pattern=r"\?\s*$", weight=1),
+        Signal(pattern=r"(?im)^\s*(?:[-*]\s*)?(?:option\s+[A-D1-4]\b|\(?[a-d]\)\s)", weight=1),
+    ],
+    threshold=2,
+    window=6,
+    scope="text",
+)
+
+
+def undeclared_prose(closing: str) -> str | None:
+    rest: list[str] = []
+    declared = awaiting = listing = False
+    for line in closing.splitlines():
+        if (awaiting or listing) and (bullet := BULLET.match(line)):
+            if not PRODUCED_ITEMS.fullmatch(line[bullet.end() :].strip()):
+                return None
+            awaiting, listing = False, True
+            continue
+        if not line.strip():
+            continue
+        if awaiting:
+            return None
+        listing = False
+        for sentence in SENTENCE_BREAK.split(line):
+            if (lead := WAIT_LEAD.match(sentence)) is None:
+                rest.append(sentence)
+            elif waits := sentence[lead.end() :].strip():
+                if not PRODUCED_ITEMS.fullmatch(waits):
+                    return None
+                declared = True
+            else:
+                declared = awaiting = True
+    return None if awaiting or not declared else "\n".join(rest)
 
 
 class AskedLast(CustomCondition):
@@ -125,6 +212,14 @@ class AskedLast(CustomCondition):
         return evt.ctx.t.has_tool(ASK_TOOLS, subagents=False) and not (
             (count := len(since)) and since.assistant_text(count, max_per_msg=1)
         )
+
+
+class WaitsNamed(CustomCondition):
+    """True when the closing message's waits each name their producer and nothing else in it trips the gate."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        rest = undeclared_prose(evt.ctx.t.assistant_text(1, max_per_msg=20000))
+        return rest is not None and score_signals(NARRATE_SIGNALS.patterns, rest) < NARRATE_SIGNALS.threshold
 
 
 class ContinuingStop(CustomCondition):
@@ -205,49 +300,13 @@ in `reasoning`.""",
         "and who is producing it."
     ),
     label="narrate_then_wait",
-    signals=Signals(
-        [
-            Signal(pattern=r"(?i)\bone decision for you\b", weight=2),
-            Signal(pattern=rf"(?i)\b(?:holding|waiting) (?:for|on) (?:your|you)\b{NO_COMMAND_FOR_YOU}", weight=2),
-            Signal(pattern=r"(?i)\b(?:still|now|back) (?:with|on) you\b", weight=2),
-            Signal(pattern=r"(?i)\bheld (?:for|on|until) (?:your|you)\b", weight=2),
-            Signal(
-                pattern=rf"(?i)\b(?:needs?|awaits?|awaiting|requires?) (?:your|you)\b{NO_COMMAND_FOR_YOU}", weight=2
-            ),
-            Signal(
-                pattern=r"(?i)\byour (?:\w+ ){0,2}(?:reads?|reviews?|approvals?|sign-?offs?|clicks?|hand[- ]?steps?)\b",
-                weight=2,
-            ),
-            Signal(pattern=r"(?i)\byour (?:go|go-?ahead|word|nod|ok|okay)\b(?!-to)", weight=2),
-            Signal(pattern=r"(?i)\bbring (?:it|them|this|that|these|those) (?:back )?to you\b", weight=2),
-            Signal(
-                pattern=r"(?i)\b(?:comes?|goes) (?:back )?to you for (?:an? )?(?:approval|review|read|sign-?off)\b",
-                weight=2,
-            ),
-            Signal(pattern=r"(?i)\b(?:comes?|goes) (?:back )?to you\b", weight=1),
-            Signal(pattern=r"(?i)\bowe you\b", weight=1),
-            Signal(pattern=r"(?i)\b(?:let me know|tell me) (?:which|what|if|whether|how)\b", weight=2),
-            Signal(pattern=r"(?i)\byour (?:call|pick|decision|choice|move|shout)\b", weight=2),
-            Signal(pattern=r"(?i)\byours? to (?:decide|call|choose)\b", weight=2),
-            Signal(pattern=r"(?i)\bup to you\b", weight=2),
-            Signal(pattern=r"(?i)\bsay the word\b", weight=2),
-            Signal(pattern=r"(?i)\bif you(?:'|’)?d (?:rather|prefer)\b", weight=2),
-            Signal(pattern=r"(?i)\bleave (?:it|that|this|them) (?:up )?to you\b", weight=2),
-            Signal(pattern=r"(?i)\bwhich (?:one )?(?:do|would) you (?:want|prefer|like)\b", weight=2),
-            Signal(pattern=r"(?i)\b(?:should I|want me to|shall I)\b[^.?!]*[.?!]", weight=2),
-            Signal(pattern=r"(?i)\brecommends?\b[^.]*\b(?:proceeding|going ahead) (?:on|with)\b", weight=2),
-            Signal(pattern=r"\?\s*$", weight=1),
-            Signal(pattern=r"(?im)^\s*(?:[-*]\s*)?(?:option\s+[A-D1-4]\b|\(?[a-d]\)\s)", weight=1),
-        ],
-        threshold=2,
-        window=6,
-        scope="text",
-    ),
+    signals=NARRATE_SIGNALS,
     skip_if=[
         FromSubagent(),
         ContinuingStop(),
         AskToolDisallowed(),
         AskedLast(),
+        WaitsNamed(),
         UsedSkill("present", scope="session", subagents=False),
         RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=False),
     ],
@@ -384,6 +443,15 @@ in `reasoning`.""",
         ),
         Input(
             transcript=[T.assistant(f"{SSO_LOGIN}\n\nAlso your call: rebase onto dev or cherry-pick the fix?")]
+        ): Block(pattern="AskUserQuestion"),
+        Input(transcript=[T.user(DESK_WAKE), T.assistant(NAMED_WAIT)]): Allow(),
+        Input(transcript=[T.assistant("Holding for your pick on the pool PRs."), T.assistant(NAMED_WAITS)]): Allow(),
+        Input(transcript=[T.assistant("Let me know which.")]): Block(pattern="AskUserQuestion"),
+        Input(transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Block(pattern="AskUserQuestion"),
+        Input(
+            transcript=[
+                T.assistant("Waiting on two things:\n- The diff, which the review lane is producing.\n- Your pick.")
+            ]
         ): Block(pattern="AskUserQuestion"),
         Input(
             transcript=[T.assistant("Both pool PRs are merged; nothing is left to decide.")],
