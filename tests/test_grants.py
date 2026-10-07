@@ -351,6 +351,30 @@ def test_a_judge_that_fails_open_lets_the_action_through_on_one_use(
     assert [item.id for item in allowed.grant.evidence] == [said.id] and "fails open" in allowed.reason
 
 
+@pytest.mark.parametrize("fails_open", [True, False])
+def test_a_requested_grant_records_on_the_owners_quote_when_the_judge_fails_open(
+    tmp_path: Path, fails_open: bool
+) -> None:
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
+    said = owner("look at the thread, explain to anubhav")
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),), judge_fails_open=fails_open)
+    recorded = grants.request(evt, scope={"channel": "C1", "thread": "1.2"}, quote="explain to anubhav")
+    if fails_open:
+        assert isinstance(recorded, Allowed) and recorded.grant.scope == {"channel": "C1", "thread": "1.2"}
+        assert [item.quote for item in recorded.grant.evidence] == ["explain to anubhav"]
+    else:
+        assert isinstance(recorded, Denied) and recorded.undecided
+
+
+def test_a_requested_grant_never_records_words_the_owner_did_not_say(tmp_path: Path) -> None:
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("hold on"),)),), judge_fails_open=True)
+    denied = grants.request(evt, scope={"channel": "C1", "thread": "1.2"}, quote="post anything")
+    assert isinstance(denied, Denied) and "not verbatim" in denied.explained
+
+
 def test_a_judge_never_outlasts_the_hook_budget(tmp_path: Path) -> None:
     evt = event(tmp_path)
     budgets: list[float | None] = []

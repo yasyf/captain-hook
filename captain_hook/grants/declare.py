@@ -121,7 +121,7 @@ class Grants:
         judge_fails_open: When the judge gives no verdict, the action goes ahead on the covering grant, or
             on a one-use grant resting on the evidence collected that asserts ``standing_rules``, and
             ``Allowed.unjudged`` names the failure. Sources that collect nothing, a judge that refused a
-            stored grant earlier in the same check, and :meth:`request` still deny.
+            stored grant earlier in the same check still deny; :meth:`request` records the grant on the verbatim quote.
         attach: The hook result that names *grant* on the pending call for the ``spent_by`` system and
             lets it through with *note*. Declaring it makes a check that never decides fail open:
             :meth:`unchecked`.
@@ -515,7 +515,9 @@ class Grants:
         try:
             verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
         except JudgeFailed as exc:
-            return Denied(f"{exc}, and a grant it cannot judge is never recorded.", self.would_allow, undecided=True)
+            if not self.judge_fails_open:
+                return Denied(f"{exc}, and a grant it cannot judge is never recorded.", self.would_allow, undecided=True)
+            verdict = self.failed_open(exc, [said.id])
         if not verdict.allow:
             return Denied(verdict.explained, self.would_allow, detail=verdict.reason)
         said = verbatim(quote, cited([*owners, *rulings], verdict.relied_on)) or said
