@@ -61,7 +61,6 @@ class ReviewSettings(HooksSettings):
     judge_timeout: int = 180
     min_judge_confidence: float = 0.6
     max_judge_calls_per_session: int = 40
-    triage_tier: TModel = "small"
     max_triage_calls_per_session: int = 60
     brain_max_turns: int = 80
     brain_max_budget_usd: float = 5.0

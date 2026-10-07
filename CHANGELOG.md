@@ -148,6 +148,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Grants.mint` accepts `None` for unlimited uses, and `ccn_answer` returns `None` when
   `ccn answer show` reports not-found with exit 3.
 
+### Changed
+
+- **The reviewer's junk triage asks TypeSafe Jev instead of spawning a Claude CLI.**
+  Each surviving create message now gets one `Label` question, feedback first, over
+  HTTP; a message whose feedback probability falls below one half is junk, and a refused
+  question keeps it. On 200 held-out historical messages labeled by Opus 5.5, Jev matched
+  the haiku verdicts' 81% accuracy, dropped real feedback less often (12% against 17% of
+  keep messages), and answered in 132 ms at the median against about 10 s, at
+  $0.00002 a call against $0.013. A failed call still leaves the message for the next
+  pass. The `triage_tier` setting is gone.
+
 ### Fixed
 
 - **A tooling refusal names the command that refused.** The general pack's refusal

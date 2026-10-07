@@ -147,3 +147,18 @@ class TestTriagePass:
         assert len(calls) == 1
         assert (await triage_pass(store, settings=settings)).triaged == 1
         assert len(await store.untriaged_create_events(limit=10)) == 1
+
+    async def test_a_refused_question_keeps_the_event(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from spawnllm import Decision, Refused
+
+        await scan_correction(store, settings, tmp_path)
+
+        async def refuse(*_: object, **__: object) -> Decision:
+            return Decision({"kind": Refused()}, "stubbed", 0, 0.0)
+
+        monkeypatch.setattr("captain_hook.review.triage.decide", refuse)
+
+        assert await triage_pass(store, settings=settings) == TriageReport(triaged=1, junk=0, rejected=0)
+        assert set((await statuses(store)).values()) == {CandidateStatus.WATCHING}

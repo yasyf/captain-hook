@@ -20,7 +20,7 @@ from captain_hook.review.judge import DURABLE_CATEGORIES, ReviewVerdict
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping
 
     from cc_transcript.models import TranscriptEvent
 
@@ -243,24 +243,27 @@ def install_triage(
     junk_when: Callable[[str], bool] | None = None,
     fail_on: str | None = None,
 ) -> list[str]:
-    """Stubs the junk-triage LLM boundary so no backend is touched.
+    """Stubs the junk-triage decision boundary so no provider is touched.
 
-    Patches the ``structured_judge`` reference :mod:`captain_hook.review.triage` holds with
-    a fake classifier. ``junk_when`` decides the verdict from the prompt (default: keep
-    everything), and a prompt containing ``fail_on`` raises :class:`JudgeError`, exercising
-    the failed-triage retry path.
+    Patches the ``decide`` reference :mod:`captain_hook.review.triage` holds with a fake
+    provider. ``junk_when`` decides the verdict from the message (default: keep everything)
+    by answering ``feedback`` well below or well above even odds, and a message containing
+    ``fail_on`` raises :class:`~spawnllm.DecideError`, exercising the failed-triage retry path.
     """
-    from captain_hook.review.triage import TriageVerdict
+    from spawnllm import DecideError, Decision, LabelAnswer
 
     calls: list[str] = []
 
-    async def triage(prompt: str) -> TriageVerdict:
-        calls.append(prompt)
-        if fail_on is not None and fail_on in prompt:
-            raise JudgeError("backend down")
-        return TriageVerdict(junk=junk_when(prompt) if junk_when else False, reason="test")
+    async def decide(state: str, questions: Mapping[str, object], **_: object) -> Decision:
+        calls.append(state)
+        if fail_on is not None and fail_on in state:
+            raise DecideError(503, "provider down")
+        junk = bool(junk_when and junk_when(state))
+        feedback = 0.1 if junk else 0.9
+        answer = LabelAnswer("go_ahead" if junk else "feedback", {"feedback": feedback, "go_ahead": 1 - feedback}, 0.8)
+        return Decision({"kind": answer}, "stubbed", 0, 0.0)
 
-    monkeypatch.setattr("captain_hook.review.triage.structured_judge", lambda *_, **__: triage)
+    monkeypatch.setattr("captain_hook.review.triage.decide", decide)
     return calls
 
 
