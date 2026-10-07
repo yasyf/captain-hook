@@ -113,6 +113,32 @@ verdict = evt.llm("Rate the risk of this action.", RiskVerdict)
 risky = evt.llm("Does this diff delete a public API?", bool, diff=True)
 ```
 
+## Ask a fast typed classifier {#decide}
+
+A question that needs no tools and no transcript search of its own can skip the chat model. `evt.decide` sends the state and every `Binary`, `Label`, and `Score` question to TypeSafe Jev in one HTTP call, or to OpenAI Decisions with `provider="openai"`, and returns probabilities in about 120 ms:
+
+```python
+from spawnllm import Binary, BinaryAnswer, Label, LabelAnswer
+
+from captain_hook import Event, on
+
+@on(Event.UserPromptSubmit)
+def rollback_route(evt):
+    decision = evt.decide(evt.prompt or "", {
+        "rollback": Binary("Does the user ask to roll back a release?"),
+        "target": Label("Which release does the user name?", {"none": None, "nightly": None, "weekly": None}),
+    })
+    match decision and (decision.answers["rollback"], decision.answers["target"]):
+        case (BinaryAnswer(p_yes=p_yes), LabelAnswer(choice="nightly")) if p_yes > 0.9:
+            return evt.warn("Roll back the nightly with `ci release rollback nightly`.")
+```
+
+Ask one observable fact per question and combine the answers in code; keep counting, dates, and arithmetic in code too. Put the fail-safe option first in every `Label`, because Jev leans toward the first option. A decision about text the agent wrote may skip work or warn, but it never authorizes a call.
+
+`timeout` (3 seconds by default) caps the call, retries included, and the request's own deadline cuts it shorter. A timeout, a provider error, or a missing key logs a warning and returns `None`, so the hook falls through as if it had no verdict. A rejected request or a missing key also records a fault that the next session start reports. On a Mac, spawnllm reads the key from `TYPESAFE_API_KEY` (or `OPENAI_API_KEY`) or from the Keychain item that `uvx spawnllm key set jev` writes from stdin. An API actor reads the `TYPESAFE_API_KEY` its launcher injected and keeps it out of every hook command's environment.
+
+In inline tests, `Input(decide={"rollback": BinaryAnswer(p_yes=0.97, confidence=0.94)})` stubs the answers by question id, and `Input(decide={"error": TimeoutError()})` exercises the failure path. A question with no stubbed answer raises `KeyError`, so a test never reaches the network.
+
 ## Confirm a deterministic block {#confirm}
 
 Add `Confirm` when a cheap structural match sometimes blocks calls outside the rule's

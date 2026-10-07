@@ -120,6 +120,11 @@ llm_nudge("Does this edit assert behavior, or only that code exists?",
 verdict = evt.llm("Rate the risk of this action.", RiskVerdict)
 ```
 
+**evt.decide** — yes/no, label, and score probabilities from Jev in about 120 ms; `None` on failure
+```python
+decision = evt.decide(evt.prompt or "", {"rollback": Binary("Does the user ask to roll back a release?")})
+```
+
 ## 🎯 Decide when (conditions)
 
 Stack conditions in `only_if` (all must match) or `skip_if` (any match skips).

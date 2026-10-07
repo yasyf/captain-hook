@@ -32,6 +32,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "disallowed_tools": (tuple,),
     "tool_input": (dict,),
     "llm": (dict,),
+    "decide": (dict,),
     "tasks": (list,),
     "background_tasks": (list,),
     "seen": (dict,),
@@ -193,6 +194,10 @@ class Input:
             (``fire``/``block``/``action``/``reasoning``), e.g. ``llm={"fire": False}``
             to exercise an LLM hook's judge-declines path; an ``error`` key holding an
             exception raises it from the model call, e.g. ``llm={"error": TimeoutError()}``.
+        decide: The answers ``evt.decide`` returns, keyed by question id
+            (``decide={"rollback": BinaryAnswer(p_yes=0.97, confidence=0.94)}``); an ``error`` key
+            holding an exception raises it from the call, e.g. ``decide={"error": TimeoutError()}``.
+            A question with no stubbed answer raises ``KeyError``, so no test reaches the network.
         seen: Keys already observed this session, per ``once``/``unseen`` scope
             (``seen={"scope": ["key"]}``; the unscoped call site is ``""``). Backed by a
             real temporary session directory, so ``evt.ctx.s.once`` dedups exactly as it
@@ -238,6 +243,7 @@ class Input:
     tasks: list[dict[str, Any]] | None = None
     background_tasks: list[dict[str, Any]] | None = None
     llm: dict[str, Any] | None = None
+    decide: dict[str, Any] | None = None
     seen: dict[str, list[str]] | None = None
     commands: dict[str, str] | None = None
     state: list[BaseModel] | None = None

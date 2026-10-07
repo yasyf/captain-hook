@@ -46,6 +46,10 @@ from captain_hook.types import Event, HookResult, Tool
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from spawnllm import Decision
+
     from captain_hook.grants import Grant
 
 STUB_FIELD_VALUES: dict[str, Any] = {
@@ -68,6 +72,7 @@ class StubbedContext(HookContext):
     ``STUB_FIELD_VALUES`` merged with the per-test ``Input.llm`` overrides."""
 
     llm: dict[str, Any] = field(default_factory=dict)
+    decisions: dict[str, Any] = field(default_factory=dict)
 
     @overload
     def call_llm[M: BaseModel](
@@ -91,11 +96,20 @@ class StubbedContext(HookContext):
             }
         )
 
+    def decide(self, state: Any, questions: Mapping[str, Any], **kwargs: Any) -> Decision:
+        from spawnllm import Decision
+
+        if isinstance(error := self.decisions.get("error"), BaseException):
+            raise error
+        return Decision({id: self.decisions[id] for id in questions}, "stubbed", 0, 0.0)
+
     def diff(self, source: str = "uncommitted", **kwargs: Any) -> str:
         return "diff --git a/inline-test b/inline-test\n@@ -1 +1 @@\n-before\n+after"
 
     @classmethod
-    def wrapping(cls, ctx: HookContext, llm: dict[str, Any] | None = None) -> StubbedContext:
+    def wrapping(
+        cls, ctx: HookContext, llm: dict[str, Any] | None = None, decisions: dict[str, Any] | None = None
+    ) -> StubbedContext:
         return cls(
             session=ctx.session,
             transcript=ctx.transcript,
@@ -104,6 +118,7 @@ class StubbedContext(HookContext):
             root_transcript=ctx.root_transcript,
             root_path=ctx.root_path,
             llm=llm or {},
+            decisions=decisions or {},
         )
 
 
@@ -617,7 +632,7 @@ def input_to_event(
             evt.ctx.root_transcript = fixture_transcript(p)
             evt.ctx.root_path = p
 
-    evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm)
+    evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm, inp.decide)
 
     return evt
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from spawnllm import LlmBackend
+    from spawnllm import LlmBackend, Provider
 
 CREDENTIAL_ENV = (
     "OPENAI_API_KEY",
@@ -16,8 +16,14 @@ CREDENTIAL_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "TYPESAFE_API_KEY",
 )
-KEY_SOURCES = {"codex": ("OPENAI_API_KEY", "CODEX_API_KEY"), "claude": ("ANTHROPIC_API_KEY",)}
+KEY_SOURCES = {
+    "codex": ("OPENAI_API_KEY", "CODEX_API_KEY"),
+    "claude": ("ANTHROPIC_API_KEY",),
+    "typesafe": ("TYPESAFE_API_KEY",),
+}
+DECIDE_KEYS = {"jev": "typesafe", "openai": "codex"}
 KEY_TARGETS = {"codex": "CODEX_API_KEY", "claude": "ANTHROPIC_API_KEY"}
 DEFAULT_MODELS = {"codex": "gpt-6.1-sol:xhigh", "claude": "claude-sonnet-5-5:xhigh"}
 TIERS = frozenset({"small", "medium", "large"})
@@ -54,6 +60,9 @@ class ActorJudge:
         if provider == "claude" and ":" in resolved:
             raise BackendUnavailable(f"the Claude judge cannot run {resolved!r}: spawnllm passes Claude no effort")
         return backend, resolved, {KEY_TARGETS[provider]: self.keys[provider]}
+
+    def decide_key(self, provider: Provider) -> str | None:
+        return self.keys.get(DECIDE_KEYS[provider.name])
 
     def judged_provider(self, model: str | None) -> str:
         from spawnllm import BackendUnavailable
