@@ -56,6 +56,24 @@ class Triage(BaseModel):
     kind: Literal["none", "bug", "feature"]
 
 
+class Aliased(BaseModel):
+    block: bool = Field(alias="shouldBlock")
+    reasoning: str
+
+
+class ShortReason(BaseModel):
+    block: bool
+    reasoning: str = Field(max_length=10)
+
+
+class OneKind(BaseModel):
+    kind: Literal["ok"]
+
+
+class EvenRisk(BaseModel):
+    risk: int = Field(ge=1, le=5, multiple_of=2)
+
+
 def decided(answers: Mapping[str, Answer]) -> Decision:
     return Decision(dict(answers), "jev-1.13.0", 120, 95.0)
 
@@ -112,6 +130,9 @@ def test_several_categorical_fields_ask_one_question_each() -> None:
         pytest.param(None, id="free-text-reply"),
         pytest.param(IntAnswer, id="unbounded-int"),
         pytest.param(GrantVerdict, id="citations-and-scope"),
+        pytest.param(ShortReason, id="constrained-text"),
+        pytest.param(OneKind, id="single-option-label"),
+        pytest.param(EvenRisk, id="constrained-score"),
     ],
 )
 def test_a_model_jev_cannot_answer_asks_nothing(model: type[BaseModel] | None) -> None:
@@ -141,6 +162,13 @@ def test_a_label_takes_its_choice_and_a_score_rounds_to_a_level() -> None:
     score = verdict_questions("How risky?", Risk) or {}
     rated = ScoreAnswer(2.6, dict.fromkeys(["1", "2", "3", "4", "5"], 0.2), 0.4)
     assert verdict_from(Risk, score, decided({"risk": rated})) == Risk(risk=4, reasoning="jev-1.13.0 decided risk=4")
+
+
+def test_an_aliased_field_takes_its_answer_by_name() -> None:
+    questions = verdict_questions("Block?", Aliased) or {}
+    verdict = verdict_from(Aliased, questions, decided({"block": BinaryAnswer(0.99, 0.98)}))
+    assert verdict is not None
+    assert verdict.block
 
 
 def test_a_refused_question_yields_no_verdict() -> None:

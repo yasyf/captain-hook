@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 LLM_RETRY_FLOOR_SECONDS = 5.0
 VERDICT_STATE_CHARS = 64_000
 MAX_SCORE_LEVELS = 10
+MAX_LABEL_OPTIONS = 255
 
 TJudge = Literal["jev", "llm"]
 """Who answers an LLM primitive: TypeSafe Jev (``jev``) for a categorical verdict, or the LLM (``llm``)."""
@@ -86,8 +87,10 @@ class IntAnswer(BaseModel):
 
 
 def score_levels(info: FieldInfo) -> range | None:
-    match [m.ge for m in info.metadata if isinstance(m, Ge)], [m.le for m in info.metadata if isinstance(m, Le)]:
-        case [int() as low], [int() as high] if 2 <= high - low + 1 <= MAX_SCORE_LEVELS:
+    match info.metadata:
+        case [Ge(ge=int() as low), Le(le=int() as high)] | [Le(le=int() as high), Ge(ge=int() as low)] if (
+            2 <= high - low + 1 <= MAX_SCORE_LEVELS
+        ):
             return range(low, high + 1)
         case _:
             return None
@@ -97,13 +100,18 @@ def field_question(instructions: str, name: str, info: FieldInfo) -> Question | 
     from spawnllm import Binary, Label, Score
 
     match info.annotation:
-        case builtins.bool:
+        case builtins.bool if not info.metadata:
             return Binary(instructions, yes=f"{name}=true", no=f"{name}=false")
         case builtins.int if (levels := score_levels(info)) is not None:
             return Score(
                 f"{instructions}\n\nRate {name} from {levels[0]} to {levels[-1]}.", dict.fromkeys(map(str, levels))
             )
-        case annotation if get_origin(annotation) is Literal and all(isinstance(v, str) for v in get_args(annotation)):
+        case annotation if (
+            get_origin(annotation) is Literal
+            and not info.metadata
+            and 2 <= len(values := get_args(annotation)) <= MAX_LABEL_OPTIONS
+            and all(isinstance(v, str) for v in values)
+        ):
             return Label(f"{instructions}\n\nPick the value of {name}.", dict.fromkeys(get_args(annotation)))
         case _:
             return None
@@ -113,14 +121,16 @@ def verdict_questions(instructions: str, response_model: type[BaseModel] | None)
     """One Jev question per categorical field of ``response_model``, or ``None`` when Jev cannot answer it.
 
     A ``bool`` field becomes a ``Binary``, a ``Literal`` of strings a ``Label`` in declared order, and an
-    ``int`` bounded by ``ge`` and ``le`` to 2 to 10 values a ``Score``. A ``str`` field asks nothing:
-    :func:`verdict_from` fills it with a summary of the answers. A model with no categorical field, or
-    with any other field, needs the LLM.
+    ``int`` bounded by ``ge`` and ``le`` alone to 2 to 10 values a ``Score``. A ``str`` field asks nothing:
+    :func:`verdict_from` fills it with a summary of the answers. A model with no categorical field, with
+    any other field, or with a field constraint Jev's answer could break, such as a ``max_length``, needs the LLM.
     """
     fields: dict[str, FieldInfo] = response_model.model_fields if response_model is not None else {}
     asked = {name: question for name, info in fields.items() if (question := field_question(instructions, name, info))}
     free = fields.keys() - asked.keys()
-    return asked if asked and all(fields[name].annotation is str for name in free) else None
+    return (
+        asked if asked and all(fields[name].annotation is str and not fields[name].metadata for name in free) else None
+    )
 
 
 def answer_value(question: Question, answer: Answer) -> bool | str | int | None:
@@ -150,7 +160,9 @@ def verdict_from[M: BaseModel](
     if any(value is None for value in answers.values()):
         return None
     summary = f"{decision.model} decided " + ", ".join(f"{name}={value}" for name, value in answers.items())
-    return response_model(**answers, **dict.fromkeys(response_model.model_fields.keys() - answers.keys(), summary))
+    return response_model.model_validate(
+        answers | dict.fromkeys(response_model.model_fields.keys() - answers.keys(), summary), by_name=True
+    )
 
 
 def verdict_state(transcript: str, evidence: Prompt) -> str:
