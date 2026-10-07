@@ -15,6 +15,7 @@ from cc_transcript import _native
 from cc_transcript.context import ContextWindow, capture_windows
 from cc_transcript.ids import EventRef, EventUuid, SessionId
 from cc_transcript.mining.candidates import dedup_key
+from spawnllm import Decision, LabelAnswer, Refused
 
 from captain_hook.review.judge import CONTEXT_BUDGET, TRIGGER_BUDGET, prompt_builder
 from captain_hook.review.scan import CorrectionLedger, ScanReport, ingest, prepare_source, scan
@@ -400,7 +401,13 @@ async def test_ingest_failure_rolls_back_source_and_feedback(store, monkeypatch)
     assert await store.db.sql("SELECT dedup_key FROM feedback_events") == []
 
 
-async def test_correction_drafts_keep_full_hunks_without_post_model_snapshot_access(monkeypatch):
+@pytest.mark.parametrize(
+    ("jev", "recorded_rows", "llm_picks"),
+    [("1", 1, False), ("none", 0, False), (TimeoutError("no jev"), 1, True), (Refused(), 1, True)],
+)
+async def test_correction_drafts_keep_full_hunks_without_post_model_snapshot_access(
+    monkeypatch, jev, recorded_rows, llm_picks
+):
     from cc_transcript.activity import SessionActivity
     from cc_transcript.extract.correct import CorrectionPick
 
@@ -448,20 +455,35 @@ async def test_correction_drafts_keep_full_hunks_without_post_model_snapshot_acc
         async def append(self, row):
             recorded.append(row)
 
+    chosen_by_llm = []
+
     async def choose(prompt, schema, **kwargs):
         assert not borrowed[0]
         assert CORRECTION in prompt
+        chosen_by_llm.append(prompt)
         return CorrectionPick(candidate=1, note="fixture")
+
+    async def decide(state, questions, **kwargs):
+        assert not borrowed[0]
+        assert CORRECTION in state
+        assert list(questions["candidate"].options) == ["none", "1"]
+        if isinstance(jev, BaseException):
+            raise jev
+        answer = jev if isinstance(jev, Refused) else LabelAnswer(jev, {jev: 0.9}, 0.8)
+        return Decision({"candidate": answer}, "jev-1.13.0", 120, 95.0)
 
     monkeypatch.setattr("cc_transcript.extract.correct.usable_backend", lambda: object())
     monkeypatch.setattr("spawnllm.extract", choose)
+    monkeypatch.setattr("spawnllm.decide", decide)
     await record_correction_drafts(
         prepared["corrections"], ledger=SimpleNamespace(handle=AsyncMock(return_value=Log()))
     )
-    assert len(recorded) == 1
-    assert recorded[0].incorrect_old == old
-    assert recorded[0].incorrect_new == new
-    assert recorded[0].incorrect_digest
+    assert bool(chosen_by_llm) is llm_picks
+    assert len(recorded) == recorded_rows
+    if recorded_rows:
+        assert recorded[0].incorrect_old == old
+        assert recorded[0].incorrect_new == new
+        assert recorded[0].incorrect_digest
 
 
 async def test_correction_hunks_rejected_before_copying(monkeypatch):

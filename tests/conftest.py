@@ -150,7 +150,11 @@ def deny_live_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
     def live(*_: Any, **__: Any) -> None:
         raise AssertionError("tests must not call a live decision provider; stub decide_sync or decide_verdict")
 
+    async def live_async(*_: Any, **__: Any) -> None:
+        live()
+
     monkeypatch.setattr(spawnllm, "decide_sync", live)
+    monkeypatch.setattr(spawnllm, "decide", live_async)
 
 
 @pytest.fixture(autouse=True)

@@ -234,6 +234,15 @@ For "send these three replies" the judge sets `standing` to that quote and
 `uses=3`, allowing three uses. `GrantVerdict.uses` is a positive integer or
 `None` when the words set no limit.
 
+`Judge` asks TypeSafe Jev before the LLM. Jev picks the one evidence item that
+permits exactly this action, or none, and says whether any item's words reach past
+this one action. Jev settles the check alone when it puts at least 0.8 on an item
+that no grant in the tree rests on yet and under 0.2 on broader words. The
+declaration then mints a one-use grant citing that item, and no LLM runs. Any other answer,
+a refused question, a timeout, or a missing key goes to the LLM, which returns the
+full `GrantVerdict` above. Standing words, counted approvals, widened scope, and
+every refusal therefore come from the LLM.
+
 The defaults are `model="small"`, `specialty="review"`, and `deadline=20` seconds.
 `contexts` accepts the same prompt contexts as other LLM hooks.
 `transcript` and `root_transcript` default to `False`; set either to a message

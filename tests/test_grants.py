@@ -11,9 +11,11 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+import spawnllm
 from click.testing import CliRunner
+from spawnllm import BinaryAnswer, DecideKeyMissing, Decision, LabelAnswer, Refused
 
-from captain_hook import Event
+from captain_hook import Event, faults
 from captain_hook.dispatch import denies, execute_hook
 from captain_hook.events import PreToolUseEvent
 from captain_hook.grants import (
@@ -48,6 +50,35 @@ from tests.helpers import make_ctx
 TREE = "root-session"
 SCOPE = {"channel": "C1", "thread": "1.2"}
 STANDING = "reply in that thread without asking"
+APPROVAL = "ask:toolu_9#0"
+
+
+@pytest.fixture(autouse=True)
+def jev_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(spawnllm, "decide_sync", MagicMock(side_effect=TimeoutError("no jev in this test")))
+
+
+def jev(
+    monkeypatch: pytest.MonkeyPatch,
+    choice: str = APPROVAL,
+    *,
+    sure: float = 0.95,
+    standing: float = 0.05,
+    outcome: BaseException | None = None,
+) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    def decide(state: str, questions: dict[str, Any], **kwargs: Any) -> Decision:
+        calls.append({"state": state, "questions": questions} | kwargs)
+        if outcome is not None:
+            raise outcome
+        options = list(questions["permits"].options)
+        probabilities = {option: sure if option == choice else (1 - sure) / (len(options) - 1) for option in options}
+        permits = LabelAnswer(choice, probabilities, 0.9)
+        return Decision({"permits": permits, "standing": BinaryAnswer(standing, 0.9)}, "jev-1.13.0", 120, 95.0)
+
+    monkeypatch.setattr(spawnllm, "decide_sync", decide)
+    return calls
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +423,78 @@ def test_a_judge_that_fails_open_still_denies_with_no_evidence(tmp_path: Path) -
     denied = declared(judge=Judge("rules"), evidence=(Fixed(()),), judge_fails_open=True).check(evt)
     assert isinstance(denied, Denied) and not denied.undecided
     evt.ctx.call_llm.assert_not_called()
+
+
+def test_jev_sure_of_one_fresh_approval_allows_without_the_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = jev(monkeypatch)
+    evt = event(tmp_path, "first")
+    evt.ctx.call_llm = MagicMock(side_effect=AssertionError("the LLM must not judge a sure Jev allow"))  # type: ignore[method-assign]
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("yes post it", ident=APPROVAL),)),))
+    allowed = grants.check(evt)
+    assert isinstance(allowed, Allowed) and allowed.grant.source_key == APPROVAL and allowed.grant.uses == 1
+    assert allowed.grant.approved == {"text": "first"} and "jev-1.13.0 read" in allowed.reason
+    (call,) = calls
+    assert list(call["questions"]["permits"].options) == ["none", APPROVAL]
+    assert f"[{APPROVAL}] words" in call["state"] and "<proposed_action>" in call["state"]
+    assert "You decide whether" not in call["state"]
+
+
+def test_jev_never_cites_an_approval_a_grant_already_rests_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = jev(monkeypatch)
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner(STANDING, ident=APPROVAL),)),))
+    assert grants.check(event(tmp_path, "first"))
+    second = event(
+        tmp_path, "second", call="c2", allow=True, reason="standing", relied_on=[APPROVAL], standing=STANDING
+    )
+    allowed = grants.check(second)
+    assert isinstance(allowed, Allowed) and allowed.grant.uses is None and allowed.remaining is None
+    assert len(calls) == 1
+    second.ctx.call_llm.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"choice": "none"},
+        {"sure": 0.7},
+        {"standing": 0.3},
+        {"outcome": TimeoutError()},
+        {"outcome": DecideKeyMissing("no jev key")},
+    ],
+)
+def test_jev_unsure_or_unavailable_leaves_the_verdict_to_the_llm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: dict[str, Any]
+) -> None:
+    monkeypatch.setattr(faults, "faults_dir", lambda: tmp_path / "faults")
+    calls = jev(monkeypatch, **answer)
+    evt = event(tmp_path, allow=False, reason="the owner never asked for this", refusal="Ask the owner first.")
+    denied = declared(judge=Judge("rules"), evidence=(Fixed((owner("x", ident=APPROVAL),)),)).check(evt)
+    assert isinstance(denied, Denied) and denied.reason == "Ask the owner first." and "never asked" in denied.explained
+    assert len(calls) == 1
+    evt.ctx.call_llm.assert_called_once()
+    assert "<quick_verdict>" not in str(evt.ctx.call_llm.call_args.args[0])
+    assert bool(faults.drain(None)) is isinstance(answer.get("outcome"), DecideKeyMissing)
+
+
+def test_jev_never_judges_evidence_it_would_read_clipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = jev(monkeypatch)
+    evt = event(tmp_path, allow=False, reason="the rules forbid it")
+    long = owner("x" * 70_000, ident=APPROVAL)
+    denied = declared(judge=Judge("rules"), evidence=(Fixed((long,)),)).check(evt)
+    assert isinstance(denied, Denied) and not calls
+    evt.ctx.call_llm.assert_called_once()
+
+
+def test_a_refused_jev_question_leaves_the_verdict_to_the_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        spawnllm,
+        "decide_sync",
+        lambda *_, **__: Decision({"permits": Refused(), "standing": BinaryAnswer(0.05, 0.9)}, "jev-1.13.0", 1, 1.0),
+    )
+    evt = event(tmp_path, allow=True, reason="approved", relied_on=[APPROVAL])
+    allowed = declared(judge=Judge("rules"), evidence=(Fixed((owner("yes post it", ident=APPROVAL),)),)).check(evt)
+    assert isinstance(allowed, Allowed) and allowed.reason == "approved"
+    evt.ctx.call_llm.assert_called_once()
 
 
 def test_a_judge_that_fails_open_still_denies_on_its_refusal(tmp_path: Path) -> None:

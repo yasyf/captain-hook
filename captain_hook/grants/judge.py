@@ -7,14 +7,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from loguru import logger
 from pydantic import BaseModel, Field
+from spawnllm import Binary, BinaryAnswer, Label, LabelAnswer
 
-from captain_hook.grants.store import stamp
+from captain_hook.grants import store
+from captain_hook.grants.evidence import tree_of
 from captain_hook.prompt import Prompt, dedent_text
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from spawnllm import TModel, TSpecialty
+    from spawnllm import Decision, TModel, TSpecialty
 
     from captain_hook.contexts import PromptContext
     from captain_hook.events import BaseHookEvent
@@ -45,6 +48,15 @@ FRAME = """
     beyond them.
     Reason first, quoting the owner words you relied on, then set allow.
 """
+UNPERMITTED = "none"
+PERMITTED = 0.8
+STANDING = 0.2
+STANDING_QUESTION = Binary(
+    "Do any of the owner's words in <evidence> permit more than the one action in <proposed_action>: further actions "
+    "of its kind, every reply in a thread or channel, a stated number of them, or other places?",
+    yes="Some evidence item permits more than this one action.",
+    no="No evidence item permits anything beyond this one action.",
+)
 
 
 class GrantVerdict(BaseModel):
@@ -79,7 +91,7 @@ class JudgeFailed(Exception):
 def render_evidence(items: Sequence[Evidence]) -> str | None:
     blocks: list[str] = []
     for item in items:
-        said = f" said {stamp(item.said_at)}" if item.said_at else ""
+        said = f" said {store.stamp(item.said_at)}" if item.said_at else ""
         detail = f"\n{item.detail}" if item.detail else ""
         blocks.append(f"[{item.id}] {item.source}{said}{detail}\nowner's words: {item.quote}")
     return "\n\n".join(blocks) or None
@@ -90,9 +102,38 @@ def render_action(action: Proposal) -> str:
     return f"{action.summary}\nscope: {dict(action.scope)}\npayload: {payload}"
 
 
+def permits_question(items: Sequence[Evidence]) -> Label:
+    return Label(
+        "Which one <evidence> item, in the owner's own words and under <grant_rules>, permits exactly the action in "
+        "<proposed_action>? Pick none when no single item does, when the action goes beyond the item's words, or when "
+        "unsure.",
+        {UNPERMITTED: "No single evidence item permits this action.", **dict.fromkeys(item.id for item in items)},
+    )
+
+
+def quick_verdict(decision: Decision) -> GrantVerdict | None:
+    """An allow citing the item Jev picked when it is sure that item permits only this action, else ``None``."""
+    match decision.answers["permits"], decision.answers["standing"]:
+        case LabelAnswer(choice=choice, probabilities=probabilities), BinaryAnswer(p_yes=standing) if (
+            choice != UNPERMITTED and probabilities[choice] >= PERMITTED and standing < STANDING
+        ):
+            return GrantVerdict(
+                reason=f"{decision.model} read {choice} as permitting exactly this action",
+                allow=True,
+                relied_on=[choice],
+            )
+        case _:
+            return None
+
+
 @dataclass(frozen=True, slots=True)
 class Judge:
-    """An LLM check that the owner's words permit the action, shared by every grant declaration.
+    """A check that the owner's words permit the action, shared by every grant declaration.
+
+    TypeSafe Jev judges first, citing the one evidence item that permits exactly this action. When Jev is
+    sure of that item, no grant rests on it yet, and no item's words reach past this one action, the
+    action goes ahead on that citation. Any other answer, a refusal, or a Jev failure asks the LLM, which
+    writes the citations, standing words, scope, and refusal, and may still allow.
 
     Attributes:
         rules: The hook's rules for this kind of action, in prose.
@@ -141,6 +182,8 @@ class Judge:
         left = reqenv.seconds_left()
         try:
             with reqenv.deadline_in(self.deadline if left is None else min(self.deadline, left)):
+                if (quick := self.quick(evt, prompt, evidence)) is not None:
+                    return quick
                 verdict = llm_evaluate(
                     evt,
                     prompt,
@@ -165,3 +208,44 @@ class Judge:
         if not isinstance(verdict, GrantVerdict):
             raise JudgeFailed(f"{type(verdict).__name__} instead of a verdict")
         return verdict
+
+    def quick(self, evt: BaseHookEvent, prompt: Prompt, evidence: Sequence[Evidence]) -> GrantVerdict | None:
+        """Jev's allow on one evidence item no grant rests on yet, or ``None`` when the LLM must judge."""
+        from spawnllm import JEV, DecideError, DecideKeyMissing
+
+        from captain_hook.context import VERDICT_TIMEOUT_SECONDS, record_decide_failure
+        from captain_hook.contexts import apply_contexts, with_defaults
+        from captain_hook.primitives.llm import VERDICT_STATE_CHARS, verdict_state
+        from captain_hook.snapshots.client import EvidenceIncomplete
+
+        cited = {item.id for grant in store.grants(tree=tree_of(evt)) for item in grant.evidence}
+        if not (fresh := [item for item in evidence if item.id not in cited]):
+            return None
+        built = apply_contexts(prompt, evt, with_defaults(self.contexts))
+        if built is None or len(str(Prompt(contexts=built.contexts))) >= VERDICT_STATE_CHARS:
+            return None
+        try:
+            state = verdict_state(
+                evt.ctx.transcript_evidence(
+                    transcript=self.transcript,
+                    tool_results=self.tool_results,
+                    root_transcript=self.root_transcript,
+                    root_excerpt=self.root_excerpt(evt) if self.root_excerpt else (),
+                ),
+                built,
+            )
+            decision = evt.ctx.decide(
+                state,
+                {"permits": permits_question(fresh), "standing": STANDING_QUESTION},
+                provider=JEV,
+                timeout=VERDICT_TIMEOUT_SECONDS,
+            )
+        except EvidenceIncomplete:
+            raise
+        except (DecideError, DecideKeyMissing) as exc:
+            record_decide_failure("jev", exc, str(evt.cwd) if evt.cwd else None)
+            return None
+        except Exception:
+            logger.opt(exception=True).warning("jev gave no grant verdict; asking the llm")
+            return None
+        return quick_verdict(decision)
