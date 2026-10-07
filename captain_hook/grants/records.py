@@ -122,6 +122,11 @@ class Grant(BaseModel):
     def standing(self) -> bool:
         return self.uses is None
 
+    @property
+    def exact(self) -> bool:
+        """Whether the scope names one exact value per key, the way a grant for one thread does."""
+        return all(isinstance(value, str) and value != ANY for value in self.scope.values())
+
 
 SpendState = Literal["reserved", "committed", "released"]
 

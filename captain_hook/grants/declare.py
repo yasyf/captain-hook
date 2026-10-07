@@ -237,10 +237,12 @@ class Grants:
 
         *action* defaults to the declaration's ``action`` of *evt*. Stored grants of this kind in the
         session tree whose scope covers the action come first, newest first: a rule that denies skips the
-        grant, live evidence the sources no longer collect skips it, a rule that allows settles it unless
-        the owner has spoken since it was minted, and anything else goes to the judge with the grant's
-        evidence and the owner's later words. With no stored grant, the judge reads the declared evidence;
-        its allow mints a grant keyed on the approval it relied on and spends it. Standing words and
+        grant, live evidence the sources no longer collect skips it, and a standing grant on one exact
+        scope, such as one thread, settles it: that grant is the owner's permission, withdrawn only by
+        revoking it. Any other grant settles on a rule that allows unless the owner has spoken since it
+        was minted; anything else goes to the judge with
+        the grant's evidence and the owner's later words. With no stored grant, the judge reads the
+        declared evidence; its allow mints a grant keyed on the approval it relied on and spends it. Standing words and
         rulings permit a class of actions, so they mint a standing grant per scope the judge reads them as
         covering, widened on the declaration's ``widen`` keys; a counted approval keeps one budget, and any
         other approval covers one scope. Every use is reserved and settles with the event's verdict.
@@ -282,7 +284,8 @@ class Grants:
                 )
                 continue
             reason, relied = f"covered by grant {grant.id}", [item.id for item in grant.evidence]
-            later = [*session(), *lapsed(evt, grant.created)] if self.judge is not None else []
+            pinned = grant.standing and grant.exact
+            later = [*session(), *lapsed(evt, grant.created)] if self.judge is not None and not pinned else []
             since = sorted(
                 {
                     item.id: item
@@ -293,7 +296,7 @@ class Grants:
             )
             allowed_by_rule = any(ruling.verdict == "allow" for ruling in rulings)
             unjudged = ""
-            if self.judge is not None and (since or not allowed_by_rule):
+            if self.judge is not None and not pinned and (since or not allowed_by_rule):
                 try:
                     verdict = self.judge(
                         evt, hook=self.hook, action=action, evidence=since, rulings=rulings, grant=grant
@@ -516,7 +519,9 @@ class Grants:
             verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
         except JudgeFailed as exc:
             if not self.judge_fails_open:
-                return Denied(f"{exc}, and a grant it cannot judge is never recorded.", self.would_allow, undecided=True)
+                return Denied(
+                    f"{exc}, and a grant it cannot judge is never recorded.", self.would_allow, undecided=True
+                )
             verdict = self.failed_open(exc, [said.id])
         if not verdict.allow:
             return Denied(verdict.explained, self.would_allow, detail=verdict.reason)

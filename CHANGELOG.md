@@ -136,6 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A standing grant on one thread covers its writes without a judge.** A stored standing
+  grant whose scope names exact values, such as one Slack thread, now settles every action
+  it covers once its rules pass and its evidence is current. The judge no longer re-reads
+  the owner's later words for it, so it cannot refuse the write or revoke the grant over
+  unrelated instructions. `capt-hook grant revoke` withdraws it. Class grants with a `*` or
+  set scope, and counted grants, still go to the judge as before.
+
 - **A pending decision written as a named wait still meets the narrate gate.** The
   `narrate_then_wait` skip accepted "Waiting on your pick, which only you can make." because
   the item carried a producer clause. An item that names a decision (a pick, choice, answer,
