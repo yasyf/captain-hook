@@ -434,6 +434,9 @@ jobs:
   sync-plugin-version:
     needs: publish-github
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-plugin-version-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -449,21 +452,20 @@ jobs:
           VERSION="${TAG#v}"
           FILE=captain_hook/.claude-plugin/plugin.json
 
+          current="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$FILE")"
+          if [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | sed -n '$p')" = "$current" ]; then
+            echo "plugin.json already at $current, not older than $VERSION; nothing to sync"
+            exit 0
+          fi
+
           python3 - "$VERSION" "$FILE" <<'PY'
           import json, pathlib, re, sys
           target, path = sys.argv[1], pathlib.Path(sys.argv[2])
           text = path.read_text()
-          if json.loads(text)["version"] == target:
-              sys.exit(0)
           new = re.sub(r'(^\s*"version":\s*")[^"]*(")', rf'\g<1>{target}\g<2>', text, count=1, flags=re.M)
           assert json.loads(new)["version"] == target, "version substitution did not take"
           path.write_text(new)
           PY
-
-          if git diff --quiet -- "$FILE"; then
-            echo "plugin.json already at $VERSION; nothing to sync"
-            exit 0
-          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -485,6 +487,9 @@ jobs:
     needs: [helper-version, helper, publish-github, sync-plugin-version]
     if: ${{ needs.helper-version.outputs.stable == 'true' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-tap-formula-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
@@ -522,6 +527,7 @@ jobs:
 
       - name: Guard formula registry name and version
         env:
+          GH_TOKEN: ${{ github.token }}
           FORMULA_TOKEN: captain-hook
           VERSION: ${{ github.ref_name }}
         run: |
@@ -532,7 +538,8 @@ jobs:
           fetch() {
             url="$1"
             output="$2"
-            if ! code="$(curl --connect-timeout 15 --max-time 45 -sS -o "$output" -w '%{http_code}' "$url")"; then
+            if ! code="$(curl --connect-timeout 15 --max-time 45 -sS -o "$output" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw' "$url")"; then
               echo "::error::registry guard could not reach $url; refusing to release blind"
               exit 1
             fi
@@ -542,7 +549,7 @@ jobs:
             esac
           }
 
-          formula_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Formula/${FORMULA_TOKEN}.rb"
+          formula_url="https://api.github.com/repos/yasyf/homebrew-tap/contents/Formula/${FORMULA_TOKEN}.rb?ref=main"
           formula_code="$(fetch "$formula_url" "$tmp/formula.rb")"
           if [ "$formula_code" = "200" ]; then
             grep -Eq "^class[[:space:]]+CaptainHook[[:space:]]+<[[:space:]]+Formula" "$tmp/formula.rb" \
@@ -557,7 +564,7 @@ jobs:
             fi
           fi
 
-          cask_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Casks/${FORMULA_TOKEN}.rb"
+          cask_url="https://api.github.com/repos/yasyf/homebrew-tap/contents/Casks/${FORMULA_TOKEN}.rb?ref=main"
           cask_code="$(fetch "$cask_url" "$tmp/cask.rb")"
           if [ "$cask_code" != "404" ]; then
             echo "::error::legacy Casks/${FORMULA_TOKEN}.rb must be removed before publishing the hard-cut formula"
