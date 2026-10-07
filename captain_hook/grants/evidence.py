@@ -177,25 +177,6 @@ def recorded(evt: BaseHookEvent, kind: str) -> list[Evidence]:
     ]
 
 
-def lapsed(evt: BaseHookEvent, since: datetime) -> list[Evidence]:
-    """The owner's recorded words and answers in *evt*'s tree said after *since* whose records have expired.
-
-    A grant minted before them still reaches the judge with them, so the owner's later words keep
-    narrowing it after their own record expires.
-    """
-    from captain_hook.grants import store
-
-    at = store.now()
-    return [
-        item
-        for kind in store.EVIDENCE_KINDS
-        for grant in store.grants(kind, tree_of(evt))
-        if grant.revoked is None and grant.expires is not None and grant.expires <= at
-        for item in grant.evidence
-        if item.said_at is not None and item.said_at > since
-    ]
-
-
 @dataclass(frozen=True, slots=True)
 class Asked:
     """The owner's AskUserQuestion answers in the session tree, with every option and preview they saw."""

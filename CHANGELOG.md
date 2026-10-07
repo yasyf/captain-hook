@@ -136,11 +136,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A judge never revokes a grant.** When the owner had spoken since a grant was minted,
-  the judge's `withdrawn` flag revoked the grant for good. At 9:15 PM on October 6 it revoked a
-  standing thread grant over unrelated later instructions. The judge now only refuses an action
-  that the later words no longer permit. The grant stays live until the owner revokes it with
-  `capt-hook grant revoke`. `GrantVerdict.withdrawn` is removed.
+- **Grants are deterministic; the judge decides only uncovered writes.** A recorded grant
+  now settles every action it covers once its rules pass, with no judge, and only
+  `capt-hook grant revoke` withdraws it: the judge's `withdrawn` flag, which revoked a
+  standing thread grant over unrelated later words at 9:15 PM on October 6, is gone.
+  `Grants.request` records a grant when the quote is verbatim in the owner's words, an
+  answer, or a ruling, with no judge, so the 9:59 PM re-grant for Ben's thread is no longer
+  refused as "a different thread". A write whose `text` sits verbatim in the owner's words
+  or an answer needs no judge either. `ContentMatches` now denies a payload that differs from
+  the approved one instead of deferring to the judge.
 
 - **A standing grant on one thread covers its writes without a judge.** A stored standing
   grant whose scope names exact values, such as one Slack thread, now settles every action

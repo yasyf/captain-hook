@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -195,21 +196,21 @@ def test_matching_content_settles_without_the_judge(tmp_path: Path) -> None:
     evt.ctx.call_llm.assert_not_called()
 
 
-def test_different_content_goes_to_the_judge_with_a_diff(tmp_path: Path) -> None:
+def test_different_content_is_refused_with_a_diff(tmp_path: Path) -> None:
     minted(approved={"text": "the approved text"})
-    evt = event(tmp_path, "the changed text", allow=False, reason="the owner approved other words")
+    evt = event(tmp_path, "the changed text", allow=True, reason="ok")
     denied = declared(rules=(ContentMatches(),), judge=Judge("rules")).check(evt)
-    assert isinstance(denied, Denied) and "the owner approved other words" in denied.reason
-    prompt = str(evt.ctx.call_llm.call_args.args[0])
-    assert "- approved" in prompt and "+ changed" in prompt
+    assert isinstance(denied, Denied) and "- approved" in denied.reason and "+ changed" in denied.reason
+    evt.ctx.call_llm.assert_not_called()
 
 
-def test_owner_words_after_a_grant_reach_the_judge_before_any_spend(tmp_path: Path) -> None:
-    minted(approved={"text": "ok"})
+def test_owner_words_after_a_grant_never_stop_it(tmp_path: Path) -> None:
+    grant = minted(approved={"text": "ok"})
     later = owner("actually hold off, let me review each reply first", at=store.now())
     evt = event(tmp_path, "ok", allow=False, reason="the owner withdrew it")
-    denied = declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(Fixed((later,)),)).check(evt)
-    assert isinstance(denied, Denied) and "withdrew" in denied.reason
+    allowed = declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(Fixed((later,)),)).check(evt)
+    assert isinstance(allowed, Allowed) and allowed.grant.id == grant.id
+    evt.ctx.call_llm.assert_not_called()
 
 
 def test_the_judge_mints_one_grant_per_approval(tmp_path: Path) -> None:
@@ -233,8 +234,7 @@ def test_a_counted_approval_binds_its_budget_not_the_first_text(tmp_path: Path) 
     second = event(tmp_path, "two", call="c2", **verdict)
     allowed = grants.check(second)
     assert isinstance(allowed, Allowed) and allowed.grant.id == first.grant.id and allowed.remaining == 1
-    assert second.ctx.call_llm.call_count == 1
-    assert "- one" not in str(second.ctx.call_llm.call_args.args[0])
+    second.ctx.call_llm.assert_not_called()
 
 
 def test_racing_judges_share_one_approval(tmp_path: Path) -> None:
@@ -317,7 +317,7 @@ def test_the_judge_leaves_the_transcript_open_for_a_second_judgement(tmp_path: P
     said = owner("yes post it", ident="ask:toolu_9#0")
     evt = event(tmp_path, "changed", allow=False, reason="not this text")
     declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(Fixed((said,)),)).check(evt)
-    assert evt.ctx.call_llm.call_count == 2
+    assert evt.ctx.call_llm.call_count == 1
     assert all(call.kwargs["evidence"] is False for call in evt.ctx.call_llm.call_args_list)
 
 
@@ -351,20 +351,15 @@ def test_a_judge_that_fails_open_lets_the_action_through_on_one_use(
     assert [item.id for item in allowed.grant.evidence] == [said.id] and "fails open" in allowed.reason
 
 
-@pytest.mark.parametrize("fails_open", [True, False])
-def test_a_requested_grant_records_on_the_owners_quote_when_the_judge_fails_open(
-    tmp_path: Path, fails_open: bool
-) -> None:
+def test_a_requested_grant_records_on_the_owners_verbatim_quote_without_a_judge(tmp_path: Path) -> None:
     evt = event(tmp_path)
     evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
     said = owner("look at the thread, explain to anubhav")
-    grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),), judge_fails_open=fails_open)
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
     recorded = grants.request(evt, scope={"channel": "C1", "thread": "1.2"}, quote="explain to anubhav")
-    if fails_open:
-        assert isinstance(recorded, Allowed) and recorded.grant.scope == {"channel": "C1", "thread": "1.2"}
-        assert [item.quote for item in recorded.grant.evidence] == ["explain to anubhav"]
-    else:
-        assert isinstance(recorded, Denied) and recorded.undecided
+    assert isinstance(recorded, Allowed) and recorded.grant.scope == {"channel": "C1", "thread": "1.2"}
+    assert [item.quote for item in recorded.grant.evidence] == ["explain to anubhav"]
+    evt.ctx.call_llm.assert_not_called()
 
 
 def test_a_requested_grant_never_records_words_the_owner_did_not_say(tmp_path: Path) -> None:
@@ -384,7 +379,8 @@ def test_a_judge_never_outlasts_the_hook_budget(tmp_path: Path) -> None:
         raise TimeoutError
 
     evt.ctx.call_llm = MagicMock(side_effect=timed_out)  # type: ignore[method-assign]
-    scope = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id=TREE)
+    env = {"CAPTAIN_HOOK_STATE_DIR": os.environ["CAPTAIN_HOOK_STATE_DIR"]}
+    scope = reqenv.RequestOverrides(env=env, cwd=str(tmp_path), client_ppid=1, session_id=TREE)
     with reqenv.use_request(scope), reqenv.deadline_in(3):
         declared(judge=Judge("rules", deadline=20), evidence=(Fixed((owner("x"),)),), judge_fails_open=True).check(evt)
     assert budgets and all(left is not None and left <= 3 for left in budgets)
@@ -404,13 +400,14 @@ def test_a_judge_that_fails_open_still_denies_on_its_refusal(tmp_path: Path) -> 
     assert isinstance(denied, Denied) and "never asked" in denied.explained
 
 
-def test_a_judge_that_fails_open_spends_the_covering_grant(tmp_path: Path) -> None:
+def test_a_covering_grant_spends_without_the_judge(tmp_path: Path) -> None:
     grant = minted(evidence=[owner("post it", ident="words:0")])
     evt = event(tmp_path)
     evt.ctx.call_llm = MagicMock(side_effect=TimeoutError())  # type: ignore[method-assign]
     later = owner("actually, hold on")
     allowed = declared(judge=Judge("rules"), evidence=(Fixed((later,)),), judge_fails_open=True).check(evt)
-    assert isinstance(allowed, Allowed) and allowed.grant.id == grant.id and allowed.unjudged == "TimeoutError"
+    assert isinstance(allowed, Allowed) and allowed.grant.id == grant.id and allowed.unjudged == ""
+    evt.ctx.call_llm.assert_not_called()
 
 
 def test_a_judge_that_fails_open_keeps_the_standing_rules(tmp_path: Path) -> None:
@@ -426,16 +423,6 @@ def test_a_judge_that_fails_open_keeps_the_standing_rules(tmp_path: Path) -> Non
     )
     denied = grants.check(evt)
     assert isinstance(denied, Denied) and "never covers a broadcast" in denied.reason
-
-
-def test_a_judge_that_fails_open_never_overrides_its_own_refusal(tmp_path: Path) -> None:
-    minted(evidence=[owner("post it", ident="words:0")])
-    evt = event(tmp_path)
-    refusal = GrantVerdict(reason="the owner withdrew it", allow=False)
-    evt.ctx.call_llm = MagicMock(side_effect=[refusal, *(TimeoutError() for _ in range(5))])  # type: ignore[method-assign]
-    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("hold on"),)),), judge_fails_open=True)
-    denied = grants.check(evt)
-    assert isinstance(denied, Denied) and denied.undecided
 
 
 def test_a_judge_never_turns_incomplete_evidence_into_a_failed_verdict(tmp_path: Path) -> None:
@@ -705,15 +692,6 @@ def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
     )
     assert isinstance(denied, Denied) and "changed after the grant was minted" in denied.explained
     assert declared(evidence=(Fixed((ruling,)),)).check(event(tmp_path, call="c2"))
-
-
-def test_a_refusal_over_later_words_never_revokes_the_grant(tmp_path: Path) -> None:
-    grant = minted(uses=2)
-    later = owner("stop replying there", at=store.now())
-    grants = declared(judge=Judge("rules"), evidence=(Fixed((later,)),))
-    denied = grants.check(event(tmp_path, allow=False, reason="the owner said to stop replying there"))
-    assert isinstance(denied, Denied)
-    assert store.load(grant.id).revoked is None
 
 
 def test_a_standing_grant_covers_its_scope_without_the_judge(tmp_path: Path) -> None:
@@ -1039,16 +1017,6 @@ def test_an_orca_binding_is_revalidated_after_its_ttl(tmp_path: Path, monkeypatc
     later = minted(uses=None)
     declared().check(event(tmp_path / "lane", "done", session="lane-root", call="c3"))
     assert store.adoptions(later.id) == []
-
-
-def test_later_words_whose_record_expired_still_reach_the_judge(tmp_path: Path) -> None:
-    grant = minted(approved={"text": "ok"}, uses=2)
-    recorded_words("stop posting there", expires=store.now() - timedelta(seconds=1), ago=timedelta(seconds=30))
-    evt = event(tmp_path, "ok", allow=False, reason="the owner withdrew it")
-    denied = declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(OwnerWords(),)).check(evt)
-    assert isinstance(denied, Denied) and "withdrew" in denied.reason
-    assert "stop posting there" in evt.ctx.call_llm.call_args_list[0].args[0].system_text
-    assert store.load(grant.id).revoked is None
 
 
 @pytest.mark.parametrize(

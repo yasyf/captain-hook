@@ -276,11 +276,12 @@ def test_a_spent_one_shot_names_what_it_was_spent_on_without_ids(tmp_path: Path)
     again = refused(grants.check(call(tmp_path, "C0FEEDBACK", thread="9.9", text="sent again", **approved)))
     assert again.reason in (
         "The approval that covered this was already used on a reply in C0FEEDBACK.",
+        "The recorded permission does not cover this: it differs from the approved payload:\ntext:\n+ again.",
         "The owner's approval already covers channel=C0FEEDBACK, thread=9.9, not this action.",
     )
 
 
-def test_a_stored_grant_and_a_fresh_approval_judge_twice_in_one_event(tmp_path: Path) -> None:
+def test_a_stored_class_grant_covers_its_scope_without_the_judge(tmp_path: Path) -> None:
     grants = slack(CLASS_RULING, POST_ANSWER)
     allowed(
         grants.check(
@@ -305,8 +306,8 @@ def test_a_stored_grant_and_a_fresh_approval_judge_twice_in_one_event(tmp_path: 
             GrantVerdict(reason="The owner chose to post.", allow=True, relied_on=["ask:toolu_post#0"]),
         ],
     )
-    assert allowed(grants.check(both)).grant.evidence[0].id == "ask:toolu_post#0"
-    assert both.ctx.call_llm.call_count == 2
+    assert allowed(grants.check(both)).grant.evidence[0].id == "ccn:543e865"
+    both.ctx.call_llm.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -348,7 +349,7 @@ def test_a_declaration_without_widen_keeps_the_action_scope(tmp_path: Path) -> N
     assert "do not reach" in denied.reason
 
 
-def test_a_requested_channel_set_grant_needs_verbatim_words_and_the_judge(tmp_path: Path) -> None:
+def test_a_requested_channel_set_grant_needs_verbatim_words(tmp_path: Path) -> None:
     grants = slack(ACCOUNT_WORDS)
     paraphrase = refused(
         grants.request(
@@ -358,20 +359,6 @@ def test_a_requested_channel_set_grant_needs_verbatim_words_and_the_judge(tmp_pa
         )
     )
     assert "not verbatim" in paraphrase.reason
-    general = refused(
-        grants.request(
-            call(
-                tmp_path,
-                ACCOUNTS[0],
-                allow=False,
-                reason="General words name no channel.",
-                refusal="These words name no channel, so they grant no standing posts.",
-            ),
-            scope={"channel": STATUS, "thread": ""},
-            quote="proactively",
-        )
-    )
-    assert general.reason == "These words name no channel, so they grant no standing posts."
     recorded = allowed(
         grants.request(
             call(tmp_path, ACCOUNTS[0], allow=True, reason="The words name the account channels."),
@@ -409,25 +396,17 @@ def test_a_requested_thread_grant_rests_on_the_ruling_that_quotes_the_owner(tmp_
     assert "not verbatim" in paraphrase.reason
 
 
-def test_a_requested_grant_rests_on_the_evidence_the_judge_cites(tmp_path: Path) -> None:
+def test_a_requested_grant_rests_on_the_first_evidence_holding_the_quote(tmp_path: Path) -> None:
     aside = Evidence(id="words:aside", source="words", quote="Yes", said_at=store.now(), key="words:aside")
     grants = slack(aside, CLASS_RULING)
     recorded = allowed(
         grants.request(
-            call(tmp_path, ALERTS, thread="1.1", allow=True, reason="ruled", relied_on=["543e865"]),
-            scope={"channel": ALERTS, "thread": "1.1"},
-            quote="Yes",
-        )
-    )
-    assert recorded.grant.evidence == [CLASS_RULING]
-    unnamed = allowed(
-        grants.request(
-            call(tmp_path, ALERTS, thread="2.2", allow=True, reason="said"),
+            call(tmp_path, ALERTS, thread="2.2", allow=False, reason="never asked"),
             scope={"channel": ALERTS, "thread": "2.2"},
             quote="Yes",
         )
     )
-    assert [item.id for item in unnamed.grant.evidence] == [aside.id]
+    assert [item.id for item in recorded.grant.evidence] == [aside.id]
 
 
 def test_a_counted_approval_spends_across_the_places_it_names(tmp_path: Path) -> None:
@@ -484,3 +463,57 @@ def test_a_counted_approval_spends_across_the_places_it_names(tmp_path: Path) ->
 def test_brief_reasons_meet_the_copy_bar(judged: str, agent: str) -> None:
     assert brief(judged) == agent
     assert copy_violations(f"{brief(judged)} Ask the owner.") == []
+
+
+BEN_CHANNEL, BEN_THREAD = "C0BGWATH8JU", "1791339436.760969"
+REGRANT_ANSWER = Evidence(
+    id="ask:toolu_regrant#0",
+    source="ask",
+    quote="Re-grant and post (Recommended)",
+    said_at=store.now() - timedelta(minutes=2),
+    detail="question: The judge revoked the grant for Ben's thread. Re-grant it and post the reply?",
+    key="ask:toolu_regrant#0",
+)
+
+
+def test_the_959_regrant_records_on_the_owners_answer_without_a_judge(tmp_path: Path) -> None:
+    refusal = {
+        "allow": False,
+        "reason": "different thread",
+        "refusal": "The owner approved a grant for Ben's thread; this request records a grant for a different thread.",
+    }
+    grants = slack(REGRANT_ANSWER)
+    request = call(tmp_path, BEN_CHANNEL, thread=BEN_THREAD, **refusal)
+    recorded = allowed(
+        grants.request(
+            request, scope={"channel": BEN_CHANNEL, "thread": BEN_THREAD}, quote="Re-grant and post (Recommended)"
+        )
+    )
+    assert recorded.grant.uses is None and recorded.grant.scope == {"channel": BEN_CHANNEL, "thread": BEN_THREAD}
+    request.ctx.call_llm.assert_not_called()
+    later = Evidence(
+        id="words:seed",
+        source="words",
+        quote="see theead, soin up a lane to allow those to be swt only if using rhe seed endooint",
+        said_at=store.now(),
+        key="words:seed",
+    )
+    post = call(tmp_path, BEN_CHANNEL, thread=BEN_THREAD, text="Fixed: seeds now go through the endpoint.", **refusal)
+    assert allowed(slack(REGRANT_ANSWER, later).check(post)).grant.id == recorded.grant.id
+    post.ctx.call_llm.assert_not_called()
+    assert store.load(recorded.grant.id).revoked is None
+
+
+def test_a_write_whose_text_the_owner_approved_verbatim_needs_no_judge(tmp_path: Path) -> None:
+    text = "Thanks for flagging this! I'm working on a fix that caps its size."
+    answer = Evidence(
+        id="ask:toolu_send#0",
+        source="ask",
+        quote="Send",
+        said_at=store.now(),
+        detail=f"question: Reply in the thread?\noption (chosen) Send: {text}",
+        key="ask:toolu_send#0",
+    )
+    post = call(tmp_path, BEN_CHANNEL, thread=BEN_THREAD, text=text, allow=False, reason="unsure")
+    assert allowed(slack(answer).check(post)).grant.approved == {"verb": "post", "text": text, "broadcast": False}
+    post.ctx.call_llm.assert_not_called()

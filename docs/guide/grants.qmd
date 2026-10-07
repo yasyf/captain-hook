@@ -172,14 +172,14 @@ Sharing the database does not remove the tree boundary.
 
 ## Apply deterministic rules
 
-Rules run against each stored candidate before the judge. A `deny` rejects that
-candidate and takes precedence over an allow from another rule. An `allow` can
-avoid the model call, while a `defer` leaves the decision to the judge.
+Rules run against each stored candidate. A `deny` rejects that candidate; an
+`allow` or `defer` lets it settle the action. A stored grant never goes to the
+judge: it is the owner's permission, and only the owner revokes it.
 
 `ContentMatches()` compares the whole payload with `Grant.approved`. Text fields
 default to `("text",)` and use `equivalent=str.__eq__`; other fields use equality.
-An exact match allows; a difference defers with a word diff for text. With no
-approved payload, it defers. Include files, broadcast flags, and the operation
+An exact match allows; a difference denies with a word diff for text, since an
+approved payload covers only itself. With no approved payload, it defers. Include files, broadcast flags, and the operation
 verb in the payload so changing them reaches the check.
 
 If your tool renders mentions differently from its preview, pass your comparator
@@ -201,10 +201,9 @@ Before spending a grant minted from evidence, the declaration runs every
 `always=True` rule and every rule the grant names. A `deny` returns `Denied`
 without spending a use, even when the judge allowed the mint.
 
-::: {.callout-warning title="A deferred rule needs a judge"}
-Without a `Judge`, a matching stored grant passes unless a rule denies it.
-`ContentMatches` alone does not reject changed content: a mismatch defers.
-Tree, budget, expiry, revocation, and live-evidence checks still apply.
+::: {.callout-note title="Stored grants settle without a judge"}
+A matching stored grant passes unless a rule denies it. Tree, budget, expiry,
+revocation, and live-evidence checks still apply.
 :::
 
 ## Judge the owner's evidence
@@ -304,10 +303,8 @@ stored grants recheck the answer's revision before spending; editing the answer
 stops its existing grant from covering the action.
 
 Stored `ask` and `words` evidence is collected only while its record is unexpired
-and unrevoked. The judge of a stored grant also reads expired records said after the
-grant was minted, so later instructions keep narrowing it after their records expire. `Asked`
-also reads recent transcript answers. To stop an already minted
-permission, revoke the grant of the declaration's kind.
+and unrevoked. `Asked` also reads recent transcript answers. Later owner words never
+stop an already minted permission; revoke the grant of the declaration's kind.
 
 ## Follow the check order
 
@@ -318,14 +315,13 @@ permission, revoke the grant of the declaration's kind.
    Skip revoked, expired, or exhausted grants, except for an eligible identical
    retry. Evaluate the applicable deterministic rules.
 2. If the grant has live evidence, collect the configured sources again and skip
-   the grant if any live key is missing. When a judge is configured, collect its
-   evidence too: later `ask` or `words` evidence makes it judge before spending,
-   even when a rule allowed. Otherwise, a rule's allow skips the judge; without
-   one, the configured judge decides. A declaration without a judge accepts the
-   matching grant after these checks.
+   the grant if any live key is missing. Otherwise spend it; no judge runs.
 3. If no stored candidate covers the call, use the configured evidence to decide
-   whether to mint. A judge decides when present; otherwise, the first collected
-   item supplies approval. With no evidence, deny without calling the judge.
+   whether to mint. Owner words or an answer that hold the payload's `text`
+   verbatim approve it. Otherwise a judge decides when present, and a judge
+   error fails open when the declaration sets `judge_fails_open`; without a judge,
+   the first collected item supplies approval. With no evidence, deny without
+   calling the judge.
    An allow must cite collected evidence and pass the scope-widening check.
    Ordinary approvals use the verdict's `uses` when set, otherwise the
    declaration's `mint`, with the declaration's `ttl`. Store the proposed payload
@@ -369,14 +365,9 @@ collected evidence cannot mint a grant. A citation matches an evidence id as wri
 inside square brackets, or without its `source:` prefix, so `543e865` cites
 `ccn:543e865`.
 
-Keep `Asked()` and `OwnerWords()` in `evidence` when later owner instructions must
-reach the judge. The stored path sees only evidence from the configured providers
-and their windows. Interpreting later instructions requires a judge, which refuses an action
-they no longer permit but never revokes the grant; only `capt-hook grant revoke` does.
-
-Standing grants minted from evidence have no approved payload. With a judge and
-only the example's rules, later writes still call the judge: `ContentMatches`
-defers, and `Never` never returns an allow.
+Standing grants minted from evidence have no approved payload, so later writes
+under them settle on the rules alone: `ContentMatches` defers, and `Never` denies
+only what it names.
 
 ## Set budgets, expiry, and retry behavior
 
@@ -411,16 +402,13 @@ it does not make a message send or other write idempotent.
 ## Request a grant without spending it
 
 `Grants.request(evt, scope=..., quote=..., uses=None, payload=None)` records a
-grant an agent requests on the owner's behalf. It requires a judge; without one,
-it raises `TypeError`. Supply the declaration's scope keys with exact values,
-lists, or `"*"`, and the owner's quote. The quote must occur verbatim in collected
-`ask` or `words` evidence after folding whitespace. A paraphrase is refused before
-the judge runs.
-
-The judge receives the requested scope, quote, use count, and optional payload.
-It must allow before the grant is recorded. The grant rests on the quoted words,
-uses `standing_ttl` and `standing_rules`, and has no approved payload; `payload`
-provides context for the judge. `uses=None` requests an unlimited budget.
+grant an agent requests on the owner's behalf. Supply the declaration's scope keys
+with exact values, lists, or `"*"`, and the owner's quote. The quote must occur
+verbatim in collected `ask` or `words` evidence, or a ruling, after folding
+whitespace; a paraphrase is refused. No judge runs: the owner's verbatim words are
+the permission. The grant rests on the quoted words, uses `standing_ttl` and
+`standing_rules`, and has no approved payload. `uses=None` requests an unlimited
+budget.
 
 The method returns `Allowed` with the grant and its remaining budget, or `Denied`.
 It reserves and spends no use. Repeating a request with the same quote's evidence

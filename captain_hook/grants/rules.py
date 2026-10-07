@@ -55,7 +55,8 @@ class ContentMatches:
 
     Every key of the grant's ``approved`` payload must equal the action's; *text* keys compare
     through *equivalent*, so a hook can accept differences it knows carry no meaning (a mention
-    rendered as an id, a link wrapped). Any other difference defers to the judge with a word diff.
+    rendered as an id, a link wrapped). Any other difference denies with a word diff, since an approved
+    payload covers only itself.
     """
 
     text: tuple[str, ...] = ("text",)
@@ -76,7 +77,7 @@ class ContentMatches:
                 differences.append(f"{key}: approved {approved!r}, pending {pending!r}")
         if not differences:
             return Ruling(self.name, "allow", "the payload is the one the owner approved")
-        return Ruling(self.name, "defer", "differs from the approved payload:\n" + "\n".join(differences))
+        return Ruling(self.name, "deny", "it differs from the approved payload:\n" + "\n".join(differences))
 
 
 @dataclass(frozen=True, slots=True)
