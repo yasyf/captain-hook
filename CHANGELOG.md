@@ -136,6 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A tooling refusal names the command that refused.** The general pack's refusal
+  record and its warning named each signature's owning tool, so when GitHub refused
+  `gh pr view` for a spent GraphQL quota the warning read "`ccx` refused this action".
+  The record now carries the command that ran, such as `gh pr`, `ccx vcs pr`, or
+  `cc-slack reply`, in the warning and in the repeat-dispatch block. The lane key, such
+  as `github-quota`, is unchanged.
+
 - **A merge-queue check that times out lets the push through.** The graphite pack's
   queued-push guard held every `git push`, `ccx vcs ship`, `ccx vcs stack submit`, and
   `gt submit` whose `gh` PR lookup or `ccx vcs pr status` call timed out, asking for a
