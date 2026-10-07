@@ -136,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A judge never revokes a grant.** When the owner had spoken since a grant was minted,
+  the judge's `withdrawn` flag revoked the grant for good. At 9:15 PM on October 6 it revoked a
+  standing thread grant over unrelated later instructions. The judge now only refuses an action
+  that the later words no longer permit. The grant stays live until the owner revokes it with
+  `capt-hook grant revoke`. `GrantVerdict.withdrawn` is removed.
+
 - **A standing grant on one thread covers its writes without a judge.** A stored standing
   grant whose scope names exact values, such as one Slack thread, now settles every action
   it covers once its rules pass and its evidence is current. The judge no longer re-reads

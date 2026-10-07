@@ -63,7 +63,7 @@ MESSAGE_WRITES = Grants(
     judge=Judge(
         "Require the owner's approval for this destination and payload. "
         "Standing permission covers posts without broadcasts. "
-        "Later owner instructions can narrow or withdraw permission.",
+        "Later owner instructions can narrow permission.",
         model="medium",
     ),
     evidence=(Asked(), OwnerWords()),
@@ -222,7 +222,6 @@ Its `GrantVerdict` includes these fields:
 | `uses` | Positive use count, or `None` when the words set no count |
 | `scope` | Values the words cover for widenable keys, or `None` |
 | `refusal` | One plain sentence for the agent when permission is denied |
-| `withdrawn` | Whether to revoke the stored grant under review |
 
 When minting, the judge receives the declaration's `widen` keys in
 `<widenable_scope>`. It returns a list of exact values or `"*"` for each key it
@@ -306,7 +305,7 @@ stops its existing grant from covering the action.
 
 Stored `ask` and `words` evidence is collected only while its record is unexpired
 and unrevoked. The judge of a stored grant also reads expired records said after the
-grant was minted, so a withdrawal never lapses while the grant is usable. `Asked`
+grant was minted, so later instructions keep narrowing it after their records expire. `Asked`
 also reads recent transcript answers. To stop an already minted
 permission, revoke the grant of the declaration's kind.
 
@@ -372,7 +371,8 @@ inside square brackets, or without its `source:` prefix, so `543e865` cites
 
 Keep `Asked()` and `OwnerWords()` in `evidence` when later owner instructions must
 reach the judge. The stored path sees only evidence from the configured providers
-and their windows. Interpreting withdrawals requires a judge.
+and their windows. Interpreting later instructions requires a judge, which refuses an action
+they no longer permit but never revokes the grant; only `capt-hook grant revoke` does.
 
 Standing grants minted from evidence have no approved payload. With a judge and
 only the example's rules, later writes still call the judge: `ContentMatches`

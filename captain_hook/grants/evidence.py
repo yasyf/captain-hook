@@ -180,8 +180,8 @@ def recorded(evt: BaseHookEvent, kind: str) -> list[Evidence]:
 def lapsed(evt: BaseHookEvent, since: datetime) -> list[Evidence]:
     """The owner's recorded words and answers in *evt*'s tree said after *since* whose records have expired.
 
-    A grant minted before them still reaches the judge with them, so an expired record never ends a
-    withdrawal while the grant it withdrew stays usable.
+    A grant minted before them still reaches the judge with them, so the owner's later words keep
+    narrowing it after their own record expires.
     """
     from captain_hook.grants import store
 

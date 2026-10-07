@@ -707,19 +707,19 @@ def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
     assert declared(evidence=(Fixed((ruling,)),)).check(event(tmp_path, call="c2"))
 
 
-def test_a_withdrawal_revokes_the_grant_for_good(tmp_path: Path) -> None:
+def test_a_refusal_over_later_words_never_revokes_the_grant(tmp_path: Path) -> None:
     grant = minted(uses=2)
     later = owner("stop replying there", at=store.now())
     grants = declared(judge=Judge("rules"), evidence=(Fixed((later,)),))
-    denied = grants.check(event(tmp_path, allow=False, reason="withdrawn", withdrawn=True))
+    denied = grants.check(event(tmp_path, allow=False, reason="the owner said to stop replying there"))
     assert isinstance(denied, Denied)
-    assert store.load(grant.id).revoked is not None
+    assert store.load(grant.id).revoked is None
 
 
 def test_a_standing_grant_covers_its_scope_without_the_judge(tmp_path: Path) -> None:
     grant = minted(uses=None, evidence=[owner("reply in that thread whenever", ident="words:0")])
     later = owner("go ahead with the seed-endpoint code", at=store.now())
-    evt = event(tmp_path, allow=False, reason="not this reply", withdrawn=True)
+    evt = event(tmp_path, allow=False, reason="not this reply")
     allowed = declared(judge=Judge("rules"), evidence=(Fixed((later,)),)).check(evt)
     assert isinstance(allowed, Allowed) and allowed.grant.id == grant.id
     evt.ctx.call_llm.assert_not_called()
@@ -1041,14 +1041,14 @@ def test_an_orca_binding_is_revalidated_after_its_ttl(tmp_path: Path, monkeypatc
     assert store.adoptions(later.id) == []
 
 
-def test_a_withdrawal_whose_record_expired_still_reaches_the_judge(tmp_path: Path) -> None:
+def test_later_words_whose_record_expired_still_reach_the_judge(tmp_path: Path) -> None:
     grant = minted(approved={"text": "ok"}, uses=2)
     recorded_words("stop posting there", expires=store.now() - timedelta(seconds=1), ago=timedelta(seconds=30))
-    evt = event(tmp_path, "ok", allow=False, reason="the owner withdrew it", withdrawn=True)
+    evt = event(tmp_path, "ok", allow=False, reason="the owner withdrew it")
     denied = declared(rules=(ContentMatches(),), judge=Judge("rules"), evidence=(OwnerWords(),)).check(evt)
     assert isinstance(denied, Denied) and "withdrew" in denied.reason
     assert "stop posting there" in evt.ctx.call_llm.call_args_list[0].args[0].system_text
-    assert store.load(grant.id).revoked is not None
+    assert store.load(grant.id).revoked is None
 
 
 @pytest.mark.parametrize(

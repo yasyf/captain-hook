@@ -309,8 +309,6 @@ class Grants:
                             undecided=True,
                         )
                     verdict, unjudged = self.failed_open(exc, relied), exc.cause
-                if verdict.withdrawn:
-                    store.revoke(grant.id)
                 if not verdict.allow:
                     judged_no = True
                     refusals.append(Refusal(verdict.explained, f"grant {grant.id}: {verdict.reason}"))
