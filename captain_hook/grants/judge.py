@@ -18,21 +18,18 @@ if TYPE_CHECKING:
 
     from captain_hook.contexts import PromptContext
     from captain_hook.events import BaseHookEvent
-    from captain_hook.grants.records import Evidence, Grant, Proposal
+    from captain_hook.grants.records import Evidence, Proposal
     from captain_hook.grants.rules import Ruling
 
 FRAME = """
     You decide whether the human owner of this coding agent permitted one pending action, in their own
     words. <grant_rules> are the hook's own rules for this kind of action; follow them. <evidence> lists
     the owner's words that may permit it, each under an id: only those count as the owner speaking.
-    <grant>, when present, is a permission already recorded from the owner's words; <owner_since_grant>
-    lists what the owner said after it was recorded, which can narrow or withdraw it. <proposed_action>
-    is the action, and <rules_evaluated> the deterministic rules already run against it.
+    <proposed_action> is the action, and <rules_evaluated> the deterministic rules already run against it.
 
     Cite in relied_on the ids of every evidence item your verdict rests on, copied exactly as they
     appear in square brackets (for example "ccn:543e865" or "words:1a2b3c4d5e6f"); an allow that cites
-    none is refused. Set withdrawn when the owner's words in <owner_since_grant> withdraw or narrow the
-    recorded grant so that it no longer covers actions like this one. Set standing to the owner's
+    none is refused. Set standing to the owner's
     exact words, copied verbatim from one evidence item, only when those words permit more than this
     one action (for example "reply in that thread without asking"); otherwise leave it empty. When
     those words name how many such actions they permit ("send these three replies"), also set uses
@@ -60,7 +57,6 @@ class GrantVerdict(BaseModel):
     uses: int | None = Field(default=None, ge=1)
     scope: dict[str, str | list[str]] | None = None
     refusal: str = ""
-    withdrawn: bool = False
 
     @property
     def explained(self) -> str:
@@ -92,16 +88,6 @@ def render_evidence(items: Sequence[Evidence]) -> str | None:
 def render_action(action: Proposal) -> str:
     payload = json.dumps(dict(action.payload), indent=1, default=str, ensure_ascii=False)
     return f"{action.summary}\nscope: {dict(action.scope)}\npayload: {payload}"
-
-
-def render_grant(grant: Grant | None) -> str | None:
-    if grant is None:
-        return None
-    uses = "unlimited" if grant.uses is None else f"{grant.uses} use(s)"
-    approved = json.dumps(grant.approved, default=str, ensure_ascii=False) if grant.approved else "none"
-    return f"grant {grant.id}, {uses}, scope {grant.scope}, approved payload: {approved}\n" + (
-        render_evidence(grant.evidence) or ""
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,8 +123,7 @@ class Judge:
         hook: str,
         action: Proposal,
         evidence: Sequence[Evidence],
-        rulings: Sequence[Ruling],
-        grant: Grant | None = None,
+        rulings: Sequence[Ruling] = (),
         widen: Sequence[str] = (),
     ) -> GrantVerdict:
         from captain_hook.primitives.llm import llm_evaluate
@@ -148,8 +133,7 @@ class Judge:
             Prompt()
             .system(dedent_text(FRAME))
             .context("grant_rules", self.rules)
-            .context("grant", render_grant(grant))
-            .context("owner_since_grant" if grant is not None else "evidence", render_evidence(evidence))
+            .context("evidence", render_evidence(evidence))
             .context("proposed_action", render_action(action))
             .context("rules_evaluated", "\n".join(ruling.line() for ruling in rulings) or None)
             .context("widenable_scope", ", ".join(widen) or None)

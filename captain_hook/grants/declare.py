@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook.grants import store
-from captain_hook.grants.evidence import Asked, OwnerWords, lapsed, tree_of, verbatim
+from captain_hook.grants.evidence import Asked, OwnerWords, squeezed, tree_of, verbatim
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
 from captain_hook.grants.orca import adopt_coordinator
 from captain_hook.grants.records import (
@@ -77,6 +77,20 @@ class Refusal:
 
     agent: str
     detail: str
+
+
+def approved_verbatim(action: Proposal, items: Sequence[Evidence]) -> Evidence | None:
+    """The owner evidence whose words or answer detail hold *action*'s message ``text`` verbatim."""
+    if not isinstance(text := action.payload.get("text"), str) or not (folded := squeezed(text)):
+        return None
+    return next(
+        (
+            item
+            for item in items
+            if item.source in OWNER_SOURCES and (folded in squeezed(item.quote) or folded in squeezed(item.detail))
+        ),
+        None,
+    )
 
 
 def unusable_refusal(why: store.Unusable) -> Refusal:
@@ -237,12 +251,11 @@ class Grants:
 
         *action* defaults to the declaration's ``action`` of *evt*. Stored grants of this kind in the
         session tree whose scope covers the action come first, newest first: a rule that denies skips the
-        grant, live evidence the sources no longer collect skips it, and a standing grant on one exact
-        scope, such as one thread, settles it: that grant is the owner's permission, withdrawn only by
-        revoking it. Any other grant settles on a rule that allows unless the owner has spoken since it
-        was minted; anything else goes to the judge with
-        the grant's evidence and the owner's later words. With no stored grant, the judge reads the
-        declared evidence; its allow mints a grant keyed on the approval it relied on and spends it. Standing words and
+        grant, live evidence the sources no longer collect skips it, and otherwise the grant settles the
+        action with no judge, since it is the owner's permission and only the owner revokes it. With no
+        stored grant, owner words or an answer that hold the payload's message ``text`` verbatim approve it;
+        else the judge reads the declared evidence. An allow mints a grant keyed on the approval it relied on and
+        spends it. Standing words and
         rulings permit a class of actions, so they mint a standing grant per scope the judge reads them as
         covering, widened on the declaration's ``widen`` keys; a counted approval keeps one budget, and any
         other approval covers one scope. Every use is reserved and settles with the event's verdict.
@@ -263,7 +276,6 @@ class Grants:
             return collected
 
         refusals: list[Refusal] = []
-        judged_no = False
         found = store.matching(self.kind, tree, scope, fingerprint(action), self.replay)
         refusals.extend(unusable_refusal(why) for _, why in found[:1] if why is not None)
         for grant in (grant for grant, why in found if why is None):
@@ -271,7 +283,8 @@ class Grants:
             if denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
                 refusals.append(
                     Refusal(
-                        f"A standing permission never covers this: {denied.note}.", f"grant {grant.id}: {denied.note}."
+                        f"The recorded permission does not cover this: {denied.note}.",
+                        f"grant {grant.id}: {denied.note}.",
                     )
                 )
                 continue
@@ -283,48 +296,17 @@ class Grants:
                     )
                 )
                 continue
-            reason, relied = f"covered by grant {grant.id}", [item.id for item in grant.evidence]
-            pinned = grant.standing and grant.exact
-            later = [*session(), *lapsed(evt, grant.created)] if self.judge is not None and not pinned else []
-            since = sorted(
-                {
-                    item.id: item
-                    for item in later
-                    if item.source in OWNER_SOURCES and item.said_at is not None and item.said_at > grant.created
-                }.values(),
-                key=lambda item: item.said_at.timestamp() if item.said_at else 0.0,
-            )
-            allowed_by_rule = any(ruling.verdict == "allow" for ruling in rulings)
-            unjudged = ""
-            if self.judge is not None and not pinned and (since or not allowed_by_rule):
-                try:
-                    verdict = self.judge(
-                        evt, hook=self.hook, action=action, evidence=since, rulings=rulings, grant=grant
-                    )
-                except JudgeFailed as exc:
-                    if not self.judge_fails_open:
-                        return Denied(
-                            f"{exc}, and a grant it cannot judge never covers an action.",
-                            self.would_allow,
-                            undecided=True,
-                        )
-                    verdict, unjudged = self.failed_open(exc, relied), exc.cause
-                if verdict.withdrawn:
-                    store.revoke(grant.id)
-                if not verdict.allow:
-                    judged_no = True
-                    refusals.append(Refusal(verdict.explained, f"grant {grant.id}: {verdict.reason}"))
-                    continue
-                reason, relied = verdict.reason, verdict.relied_on
             try:
-                return replace(self.spend(evt, grant, action, reason, relied), unjudged=unjudged)
+                return self.spend(
+                    evt, grant, action, f"covered by grant {grant.id}", [item.id for item in grant.evidence]
+                )
             except store.SpentError as exc:
                 refusals.append(unusable_refusal(exc.why))
         if not self.evidence:
             if not refusals:
                 return Denied(f"No {self.kind} grant covers {action.summary}.", self.would_allow)
             return Denied(refusals[-1].agent, self.would_allow, detail=" ".join(why.detail for why in refusals))
-        return self.from_evidence(evt, action, session(), refusals, fails_open=self.judge_fails_open and not judged_no)
+        return self.from_evidence(evt, action, session(), refusals, fails_open=self.judge_fails_open)
 
     def from_evidence(
         self,
@@ -343,14 +325,18 @@ class Grants:
 
         if not items:
             return denied()
-        if self.judge is None:
+        if said := approved_verbatim(action, items):
+            verdict = GrantVerdict(
+                reason=f"the owner approved this exact text in {said.id}", allow=True, relied_on=[said.id]
+            )
+        elif self.judge is None:
             named = items[0]
             verdict = GrantVerdict(
                 reason=f"{named.detail or named.id} covers {action.summary}", allow=True, relied_on=[named.id]
             )
         else:
             try:
-                verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=(), widen=self.widen)
+                verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, widen=self.widen)
             except JudgeFailed as exc:
                 if not fails_open:
                     return Denied(
@@ -471,7 +457,7 @@ class Grants:
         if rule_denied := next((ruling for ruling in rulings if ruling.verdict == "deny"), None):
             return denied(
                 Refusal(
-                    f"A standing permission never covers this: {rule_denied.note}.",
+                    f"The recorded permission does not cover this: {rule_denied.note}.",
                     f"grant {grant.id}: {rule_denied.note}.",
                 )
             )
@@ -492,13 +478,11 @@ class Grants:
         """Record the grant an agent asks for on the owner's behalf, without spending it.
 
         *quote* must sit verbatim in the owner's own words, or else in a ruling an evidence source
-        collects, and the judge must read those words as permitting every action *scope* admits, *uses*
-        times or without limit. The grant rests on the evidence the judge cites that holds the quote, else
-        the first that does, a ruling kept whole and pinned to its revision, and expires with
-        ``standing_ttl``; asking again for the same words and scope returns the grant already recorded.
+        collects; no judge reads it, since the owner's verbatim words are the permission. The grant rests
+        on the evidence that holds the quote, a ruling kept whole and pinned to its revision, and expires
+        with ``standing_ttl``; asking again for the same words and scope returns the grant already
+        recorded.
         """
-        if self.judge is None:
-            raise TypeError(f"{self.kind} declares no judge, so it records no grant an agent asks for")
         requested = self.pattern(scope)
         summary = f"record a {self.kind} grant for {render_scope(requested)}"
         action = Proposal(
@@ -515,17 +499,6 @@ class Grants:
                 f"The quote for {summary} is not verbatim in the owner's own words or a ruling recording them.",
                 self.would_allow,
             )
-        try:
-            verdict = self.judge(evt, hook=self.hook, action=action, evidence=items, rulings=())
-        except JudgeFailed as exc:
-            if not self.judge_fails_open:
-                return Denied(
-                    f"{exc}, and a grant it cannot judge is never recorded.", self.would_allow, undecided=True
-                )
-            verdict = self.failed_open(exc, [said.id])
-        if not verdict.allow:
-            return Denied(verdict.explained, self.would_allow, detail=verdict.reason)
-        said = verbatim(quote, cited([*owners, *rulings], verdict.relied_on)) or said
         grant = self.grant(
             evt,
             scope=requested,
@@ -539,7 +512,9 @@ class Grants:
             rules=self.standing_rules,
             source_key=f"request:{said.key or said.id}{scope_key(requested)}",
         )
-        return Allowed(grant, store.remaining(grant, store.spends(grant.id), store.now()), verdict.reason)
+        return Allowed(
+            grant, store.remaining(grant, store.spends(grant.id), store.now()), f"{said.id} says {quote!r} verbatim"
+        )
 
     def spend(self, evt: BaseHookEvent, grant: Grant, action: Proposal, reason: str, relied: list[str]) -> Allowed:
         if self.spent_by is not None:
