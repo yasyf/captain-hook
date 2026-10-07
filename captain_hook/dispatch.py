@@ -813,16 +813,22 @@ def collect_mandatory(
         if not closed:
             raise MandatoryDeadlinePassed("a verdict was still publishing at the caller's deadline")
     except BaseException:
-        phase.conclude("failed", blocked=settled_block(futures))
+        phase.conclude("failed", verdict=settled_verdict(futures))
         raise
-    phase.conclude("settled", blocked=settled_block(futures))
+    phase.conclude("settled", verdict=settled_verdict(futures))
 
 
-def settled_block(futures: Sequence[Future[HookResult | None]]) -> HookResult | None:
-    for future in futures:
-        if future.done() and not future.cancelled() and future.exception() is None:
-            if (result := future.result()) is not None and result.action is Action.block:
-                return result
+def settled_verdict(futures: Sequence[Future[HookResult | None]]) -> HookResult | None:
+    """The verdict the settled futures reached, by :func:`combine`'s precedence: block, then rewrite, then allow."""
+    results = [
+        result
+        for future in futures
+        if future.done() and not future.cancelled() and future.exception() is None
+        if (result := future.result()) is not None
+    ]
+    for action in (Action.block, Action.rewrite, Action.allow):
+        if verdict := next((result for result in results if result.action is action), None):
+            return verdict
     return None
 
 
@@ -916,11 +922,19 @@ def dispatch(
 
     Every grant use a hook reserves during the event commits when the envelope lets the call
     through and is released when any hook denies it, so a chained command whose second half is
-    refused never spends the grant its first half matched.
+    refused never spends the grant its first half matched. When dispatch fails after every mandatory
+    hook settled, the uses commit if their verdict lets the call through, since the worker replies
+    with that verdict.
     """
     reqenv.mandatory_phase().unchecked = partial(grant_declare.fail_open, evt)
     with grant_declare.reservations() as reserved:
-        envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
+        try:
+            envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
+        except BaseException:
+            phase = reqenv.mandatory_phase()
+            verdict = phase.verdict if phase.outcome == "settled" else None
+            grant_declare.settle(reserved, allowed=verdict is not None and verdict.action is not Action.block)
+            raise
         if not reserved or denies(envelope):
             grant_declare.settle(reserved, allowed=False)
             return envelope

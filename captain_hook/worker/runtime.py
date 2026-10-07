@@ -192,14 +192,14 @@ class ProductRuntime:
                 )
             except (Exception, SystemExit) as exc:
                 unfinished = unfinished_mandatory(required)
-                blocked = reqenv.mandatory_phase().blocked
-                if not unfinished and blocked is None:
+                settled = reqenv.mandatory_phase().verdict
+                if not unfinished and settled is None:
                     raise
                 logger.bind(hooks=[hook.name for hook in unfinished]).opt(exception=True).error(
                     "dispatch failed; keeping the mandatory verdict and skipping unfinished hooks"
                 )
                 buffers.stderr.write(traceback.format_exc())
-                verdict = format_output(event, blocked) if blocked is not None else None
+                verdict = format_output(event, settled) if settled is not None else None
                 cause = f"{type(exc).__name__}: {exc}"
                 output = mandatory_skip(event, verdict, unfinished, cause) if unfinished else verdict
                 background = _nothing

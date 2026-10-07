@@ -1470,6 +1470,58 @@ class TestMandatorySkip:
         assert "updatedInput" not in envelope["hookSpecificOutput"]
         assert store.grants("test.slack", "s1") == []
 
+    def test_a_completed_grant_rewrite_stands_when_an_advisory_hook_then_fails(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            return evt.rewrite(dict(evt.input.raw) | {"grant_id": "2c810ca88b5d"})
+
+        @on(Event.PreToolUse)
+        def advisory(evt: Any) -> None:
+            raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert envelope["hookSpecificOutput"]["updatedInput"] == {
+            "channel": "C1",
+            "text": "hello",
+            "grant_id": "2c810ca88b5d",
+        }
+        assert "lease does not belong to this claimant or generation" in response.stderr
+
+    def test_a_recovered_grant_rewrite_commits_its_reserved_use(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(grant_declare, "DECLARED", {})
+        grants = Grants(
+            "test.counted",
+            ("channel",),
+            lambda evt: Proposal(scope={"channel": evt.input.raw["channel"]}, payload={"text": evt.input.raw["text"]}),
+            hook="slack_policy",
+        )
+        grant = store.mint(
+            Grant(
+                id=store.new_id(),
+                kind="test.counted",
+                tree="s1",
+                scope={"channel": "C1"},
+                uses=2,
+                author="test",
+                created=store.now(),
+            )
+        )
+
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            assert grants.check(evt)
+            return evt.rewrite(dict(evt.input.raw) | {"grant_id": grant.id})
+
+        @on(Event.PreToolUse)
+        def advisory(evt: Any) -> None:
+            raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+
+        envelope = replied(self.respond(payload=GRANTED_SLACK))
+        assert envelope["hookSpecificOutput"]["updatedInput"]["grant_id"] == grant.id
+        assert [spend.state for spend in store.spends(grant.id)] == ["committed"]
+
     def test_an_unmintable_unchecked_grant_still_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         declare_slack_grants(monkeypatch)
 

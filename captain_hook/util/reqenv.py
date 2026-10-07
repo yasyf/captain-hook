@@ -21,22 +21,23 @@ class MandatoryPhase:
 
     Concluded exactly once, after the phase's cutoff closed, so the worker reads the phase's own
     verdict rather than inferring one from the completions a racing hook may still publish. It
-    keeps the first block a hook settled, so a failure after the verdict cannot drop it, and
+    keeps the verdict the settled hooks reached, the first block, else the first rewrite, else the
+    first allow, so a failure after the verdict cannot drop it or the grant a rewrite carries, and
     ``unchecked``, which maps the hooks that never decided and why to the result letting the call
     through without them.
     """
 
     outcome: Literal["", "settled", "failed"] = ""
-    blocked: HookResult | None = None
+    verdict: HookResult | None = None
     unchecked: Callable[[Sequence[str], str], HookResult | None] | None = None
 
     @property
     def failed(self) -> bool:
         return self.outcome == "failed"
 
-    def conclude(self, outcome: Literal["settled", "failed"], *, blocked: HookResult | None = None) -> None:
+    def conclude(self, outcome: Literal["settled", "failed"], *, verdict: HookResult | None = None) -> None:
         self.outcome = outcome
-        self.blocked = blocked
+        self.verdict = verdict
 
 
 @dataclass(slots=True)
