@@ -1470,6 +1470,25 @@ class TestMandatorySkip:
         assert "updatedInput" not in envelope["hookSpecificOutput"]
         assert store.grants("test.slack", "s1") == []
 
+    def test_a_completed_grant_rewrite_stands_when_an_advisory_hook_then_fails(self) -> None:
+        @on(Event.PreToolUse, mandatory=True)
+        def slack_policy(evt: Any) -> Any:
+            return evt.rewrite(dict(evt.input.raw) | {"grant_id": "2c810ca88b5d"})
+
+        @on(Event.PreToolUse)
+        def advisory(evt: Any) -> None:
+            raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+
+        response = self.respond()
+        assert response.exit == 0
+        envelope = replied(response)
+        assert envelope["hookSpecificOutput"]["updatedInput"] == {
+            "channel": "C1",
+            "text": "hello",
+            "grant_id": "2c810ca88b5d",
+        }
+        assert "lease does not belong to this claimant or generation" in response.stderr
+
     def test_an_unmintable_unchecked_grant_still_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         declare_slack_grants(monkeypatch)
 

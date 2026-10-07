@@ -813,16 +813,22 @@ def collect_mandatory(
         if not closed:
             raise MandatoryDeadlinePassed("a verdict was still publishing at the caller's deadline")
     except BaseException:
-        phase.conclude("failed", blocked=settled_block(futures))
+        phase.conclude("failed", verdict=settled_verdict(futures))
         raise
-    phase.conclude("settled", blocked=settled_block(futures))
+    phase.conclude("settled", verdict=settled_verdict(futures))
 
 
-def settled_block(futures: Sequence[Future[HookResult | None]]) -> HookResult | None:
-    for future in futures:
-        if future.done() and not future.cancelled() and future.exception() is None:
-            if (result := future.result()) is not None and result.action is Action.block:
-                return result
+def settled_verdict(futures: Sequence[Future[HookResult | None]]) -> HookResult | None:
+    """The verdict the settled futures reached, by :func:`combine`'s precedence: block, then rewrite, then allow."""
+    results = [
+        result
+        for future in futures
+        if future.done() and not future.cancelled() and future.exception() is None
+        if (result := future.result()) is not None
+    ]
+    for action in (Action.block, Action.rewrite, Action.allow):
+        if verdict := next((result for result in results if result.action is action), None):
+            return verdict
     return None
 
 
