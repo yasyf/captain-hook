@@ -28,8 +28,10 @@ from captain_hook.primitives.llm import (
     IntAnswer,
     NudgeVerdict,
     PromptCheckVerdict,
+    llm_evaluate,
     llm_gate,
     llm_nudge,
+    prompt_check,
     verdict_from,
     verdict_questions,
 )
@@ -72,6 +74,21 @@ class OneKind(BaseModel):
 
 class EvenRisk(BaseModel):
     risk: int = Field(ge=1, le=5, multiple_of=2)
+
+
+class Permit(BaseModel):
+    reason: str
+    allow: bool
+    relied_on: list[str] = Field(default_factory=list)
+    refusal: str = ""
+
+
+class Uncited(BaseModel):
+    allow: bool
+    relied_on: list[str]
+
+
+CITED = Permit(reason="the owner said ship it", allow=True, relied_on=["ask:1"])
 
 
 def decided(answers: Mapping[str, Answer]) -> Decision:
@@ -242,27 +259,164 @@ def test_a_callable_message_reads_the_jev_summary(tmp_path: Path, monkeypatch: p
     assert result["hookSpecificOutput"]["additionalContext"].endswith("why: jev-1.13.0 decided fire=True")
 
 
-@pytest.mark.parametrize(
-    ("message", "backend"),
-    [
-        pytest.param("Do not widen: {reasoning}.", "jev", id="reasoning-template"),
-        pytest.param("BLOCKED", "llm", id="explicit-opt-out"),
-    ],
-)
-def test_free_text_asks_the_llm(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, backend: Literal["jev", "llm"]
-) -> None:
+def test_an_explicit_llm_backend_skips_jev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = jev_calls(monkeypatch, decided({"block": BinaryAnswer(0.9, 0.8)}))
     ctx = jev_ctx(tmp_path)
     ctx.call_llm = MagicMock(return_value=GateVerdict(block=True, reasoning="use a Protocol"))  # type: ignore[method-assign]
-    llm_gate("Block?", message=message, when=lambda evt: True, backend=backend)
+    llm_gate("Block?", message="Do not widen: {reasoning}.", when=lambda evt: True, backend="llm")
 
     result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
 
     assert result is not None
-    assert result["decision"] == "block"
+    assert result["reason"] == "Do not widen: use a Protocol."
     ctx.call_llm.assert_called_once()
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("message", "escalate"),
+    [
+        pytest.param("Do not widen: {reasoning}.", None, id="reasoning-template"),
+        pytest.param(lambda r: f"Do not widen: {r.reasoning}.", lambda r: r.block, id="callable-message"),
+    ],
+)
+def test_a_blocking_jev_verdict_escalates_for_the_llm_s_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: Any, escalate: Any
+) -> None:
+    calls = jev_calls(monkeypatch, decided({"block": BinaryAnswer(0.9, 0.8)}))
+    ctx = jev_ctx(tmp_path)
+    ctx.call_llm = MagicMock(return_value=GateVerdict(block=True, reasoning="use a Protocol"))  # type: ignore[method-assign]
+    llm_gate("Block?", message=message, when=lambda evt: True, escalate=escalate)
+
+    result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+
+    assert result is not None
+    assert (result["decision"], result["reason"]) == ("block", "Do not widen: use a Protocol.")
+    assert [set(call["questions"]) for call in calls] == [{"block"}]
+    asked = str(ctx.call_llm.call_args.args[0])
+    assert "<quick_verdict>\nA fast classifier read the same evidence and answered block=True." in asked
+    assert ctx.call_llm.call_args.kwargs["response_model"] is GateVerdict
+
+
+def test_a_passing_jev_verdict_never_asks_the_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    jev_calls(monkeypatch, decided({"block": BinaryAnswer(0.1, 0.8)}))
+    ctx = jev_ctx(tmp_path)
+    ctx.call_llm = MagicMock(return_value=GateVerdict(block=True, reasoning="use a Protocol"))  # type: ignore[method-assign]
+    llm_gate("Block?", message="Do not widen: {reasoning}.", when=lambda evt: True)
+
+    assert dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path) is None
+    ctx.call_llm.assert_not_called()
+
+
+def test_defaults_let_a_two_stage_model_keep_its_other_fields() -> None:
+    assert verdict_questions("Permitted?", Permit) is None
+    assert set(verdict_questions("Permitted?", Permit, defaults=True) or {}) == {"allow"}
+    assert set(verdict_questions("Permitted?", GrantVerdict, defaults=True) or {}) == {"allow"}
+    assert verdict_questions("Permitted?", Uncited, defaults=True) is None
+
+
+def permit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: Decision | BaseException, model: type[BaseModel] = Permit
+) -> tuple[BaseModel | str | None, list[dict[str, Any]], HookContext]:
+    calls = jev_calls(monkeypatch, outcome)
+    ctx = jev_ctx(tmp_path)
+    ctx.call_llm = MagicMock(return_value=CITED)  # type: ignore[method-assign]
+    verdict = llm_evaluate(
+        make_post_tool_event(ctx=ctx),
+        "Did the owner permit the action?",
+        model,
+        hook="permit",
+        once_per_turn=False,
+        escalate=lambda v: not v.allow,
+    )
+    return verdict, calls, ctx
+
+
+def test_a_settled_jev_verdict_returns_at_once_with_its_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verdict, calls, ctx = permit(tmp_path, monkeypatch, decided({"allow": BinaryAnswer(0.95, 0.9)}))
+
+    summary = "jev-1.13.0 decided allow=True"
+    assert type(verdict) is Permit
+    assert verdict == Permit(reason=summary, allow=True, relied_on=[], refusal=summary)
+    assert [set(call["questions"]) for call in calls] == [{"allow"}]
+    ctx.call_llm.assert_not_called()  # type: ignore[attr-defined]
+    assert ctx.prepared_evidence is not None
+    assert "<task>\nDid the owner permit the action?" in ctx.prepared_evidence.prompt
+
+
+def test_an_escalated_jev_verdict_returns_the_llm_s_full_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verdict, _, ctx = permit(tmp_path, monkeypatch, decided({"allow": BinaryAnswer(0.2, 0.6)}))
+
+    assert type(verdict) is Permit
+    assert verdict == CITED
+    call_llm: MagicMock = ctx.call_llm  # type: ignore[assignment]
+    call_llm.assert_called_once()
+    assert "answered allow=False. It can be wrong" in str(call_llm.call_args.args[0])
+    assert call_llm.call_args.kwargs["response_model"] is Permit
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param(TimeoutError("no jev decision within 5s"), id="timeout"),
+        pytest.param(DecideError(500, "upstream overloaded"), id="rejected"),
+        pytest.param(DecideKeyMissing("no jev API key"), id="missing-key"),
+        pytest.param(decided({"allow": Refused()}), id="refused"),
+    ],
+)
+def test_a_jev_failure_asks_the_llm_without_a_quick_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: Decision | BaseException
+) -> None:
+    monkeypatch.setattr(faults, "faults_dir", lambda: tmp_path / "faults")
+    verdict, calls, ctx = permit(tmp_path, monkeypatch, outcome)
+
+    assert verdict == CITED
+    assert len(calls) == 1
+    call_llm: MagicMock = ctx.call_llm  # type: ignore[assignment]
+    call_llm.assert_called_once()
+    assert "<quick_verdict>" not in str(call_llm.call_args.args[0])
+
+
+def test_a_model_jev_cannot_settle_asks_only_the_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    verdict, calls, _ = permit(tmp_path, monkeypatch, decided({"allow": BinaryAnswer(0.95, 0.9)}), model=Uncited)
+
+    assert verdict == CITED
+    assert calls == []
+
+
+def test_evt_llm_judges_a_model_in_two_stages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    jev_calls(monkeypatch, decided({"allow": BinaryAnswer(0.2, 0.6)}))
+    ctx = jev_ctx(tmp_path)
+    ctx.call_llm = MagicMock(return_value=CITED)  # type: ignore[method-assign]
+
+    assert make_post_tool_event(ctx=ctx).llm("Permitted?", Permit, escalate=lambda v: not v.allow) == CITED
+    ctx.call_llm.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("chosen", "result"),
+    [
+        pytest.param("ok", None, id="ok-settles-on-jev"),
+        pytest.param("block", "RISK: rm -rf reaches outside the repo", id="block-asks-the-llm"),
+    ],
+)
+def test_prompt_check_asks_the_llm_only_for_a_warning_or_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chosen: str, result: str | None
+) -> None:
+    jev_calls(monkeypatch, decided({"action": LabelAnswer(chosen, {chosen: 0.9}, 0.8)}))
+    ctx = jev_ctx(tmp_path)
+    ctx.call_llm = MagicMock(  # type: ignore[method-assign]
+        return_value=PromptCheckVerdict(action="block", reason="rm -rf reaches outside the repo")
+    )
+
+    checked = prompt_check(make_post_tool_event(ctx=ctx), "Is {thing} risky?", {"thing": "rm -rf"}, prefix="RISK")
+
+    assert (checked.message if checked else None) == result
+    assert ctx.call_llm.call_count == (result is not None)
 
 
 def test_evt_llm_asks_jev_for_a_bool_and_the_llm_for_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

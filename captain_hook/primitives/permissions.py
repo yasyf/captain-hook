@@ -8,6 +8,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from captain_hook.app import on
+from captain_hook.primitives.llm import staged_verdict
 from captain_hook.prompt import Prompt, dedent_text
 from captain_hook.state import hook_name
 from captain_hook.types import Event, HookResult, InlineTests, TCondition
@@ -131,10 +132,12 @@ def llm_approve(
     Replicates Claude Code's auto-mode classifier (which is not programmatically
     invocable): the judge's rubric is seeded from ``claude auto-mode defaults`` (cached
     globally, keyed by ``claude --version``; a static built-in rubric stands in when the
-    binary or verb is unavailable), and *rubric* appends to that base. A ``safe`` verdict
-    answers the dialog with *allow*; an unsafe verdict or any LLM failure returns ``None``
-    so the real dialog shows — it never auto-denies. Adds an LLM round-trip to every
-    matching ask, so scope it tightly with ``only_if``/``skip_if``.
+    binary or verb is unavailable), and *rubric* appends to that base. TypeSafe Jev judges
+    first: its unsafe verdict shows the dialog at once, and its safe verdict, or a Jev
+    failure, goes on to the LLM, whose ``safe`` verdict answers the dialog with *allow*. An
+    unsafe LLM verdict or any LLM failure returns ``None`` so the real dialog shows — it
+    never auto-denies. A safe call costs an LLM round-trip, so scope it tightly with
+    ``only_if``/``skip_if``.
 
     Unlike ``approve()``/``deny()``, the default stays ``PermissionRequest``-only: a
     dialog is a rare event, but ``PreToolUse`` fires on every matching tool call, which
@@ -186,7 +189,17 @@ def llm_approve(
             .context("tool_input", json.dumps({"tool_name": evt.tool_name} | dict(evt.input.raw)))
         )
         try:
-            verdict = evt.ctx.call_llm(prompt, model=model, timeout=30, response_model=SafetyVerdict)
+            verdict = staged_verdict(
+                evt,
+                system,
+                str(Prompt(contexts=prompt.contexts)),
+                SafetyVerdict,
+                lambda v: v.safe,
+                lambda note: evt.ctx.call_llm(
+                    prompt.context("quick_verdict", note), model=model, timeout=30, response_model=SafetyVerdict
+                ),
+                evidence=True,
+            )
         except Exception:
             logger.bind(hook=name).opt(exception=True).warning("llm approve failed")
             return None

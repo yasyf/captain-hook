@@ -63,7 +63,10 @@ BRANCH = {
         [{"id": i, "title": t, "body": b, "tags": [RULINGS_LABEL]} for i, t, b in (LEDGER_RULING, SLACK_RULING)]
     ),
 }
-HIT = {"contradictions": [{"ruling": "ec2881e", "sentence": "resolve.go reads the applied commit from the ledger."}]}
+HIT = {
+    "contradictions": [{"ruling": "ec2881e", "sentence": "resolve.go reads the applied commit from the ledger."}],
+    "contradicts": True,
+}
 
 PROMPT = """You check a code change against the owner's durable rulings: decisions the owner
 made once and expects every later change to keep. `<diff>` is the branch's change against
@@ -85,7 +88,7 @@ Do NOT report:
 
 For each contradiction give the ruling id exactly as shown and one sentence naming what in
 the diff goes against it. Return an empty list when nothing contradicts a ruling; that is
-the common answer."""
+the common answer. Set contradicts to whether the diff contradicts any ruling."""
 
 
 class Contradiction(BaseModel):
@@ -95,6 +98,7 @@ class Contradiction(BaseModel):
 
 class RulingsVerdict(BaseModel):
     contradictions: list[Contradiction] = Field(default_factory=list)
+    contradicts: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +277,7 @@ def rules_nudge(evt: BaseHookEvent) -> HookResult | None:
             once_per_turn=False,
             evidence=False,
             retries=0,
-            backend="llm",
+            escalate=lambda v: v.contradicts,
         )
     named = found.named(verdict) if isinstance(verdict, RulingsVerdict) else []
     return nudge(named) if named else None
