@@ -599,6 +599,7 @@ class TestPromptCheckReasoning:
             texts=["I decided to do X because Y"],
             call_llm_return=PromptCheckVerdict(action="block", reason="bad reasoning"),
         )
+        ctx.decide_verdict = MagicMock(return_value=PromptCheckVerdict(action="block", reason="jev"))  # type: ignore[method-assign]
 
         evt = make_stop_event(ctx=ctx)
         prompt_check(
@@ -640,7 +641,8 @@ class TestPromptBuilderUsed:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
         from captain_hook.prompt import Prompt
 
-        ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="ok", reason="fine"))
+        ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="warning", reason="fine"))
+        ctx.decide_verdict = MagicMock(return_value=PromptCheckVerdict(action="warning", reason="jev"))  # type: ignore[method-assign]
 
         evt = make_stop_event(ctx=ctx)
         prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")

@@ -449,6 +449,7 @@ class BaseHookEvent:
         budget: Budget | None = None,
         diff: bool | str = False,
         backend: TJudge = "jev",
+        escalate: Callable[[M], bool] | None = None,
     ) -> M | None: ...
     def llm(
         self,
@@ -469,6 +470,7 @@ class BaseHookEvent:
         budget: Budget | None = None,
         diff: bool | str = False,
         backend: TJudge = "jev",
+        escalate: Callable[[Any], bool] | None = None,
     ) -> BaseModel | str | bool | int | None:
         """Ask an LLM a question about this event and return a typed answer.
 
@@ -482,7 +484,9 @@ class BaseHookEvent:
         A ``bool`` answer, or a model whose every field is categorical (see
         :func:`~captain_hook.primitives.llm.verdict_questions`), goes to TypeSafe Jev instead of the
         LLM unless ``backend="llm"``; a ``str`` reply, an ``int``, or any other model always asks
-        the LLM.
+        the LLM. ``escalate`` judges a model in two stages, as
+        [`llm_evaluate`][captain_hook.llm_evaluate] does: Jev decides its categorical fields, and
+        only a verdict ``escalate`` returns true for goes on to the LLM for the rest.
 
         A skipped call — already fired this turn, or a ``required`` context came up empty — returns
         ``None``; a call that still fails after ``retries`` re-asks raises, and so does a Jev call
@@ -513,6 +517,7 @@ class BaseHookEvent:
             diff=diff,
             retries=retries,
             backend=backend,
+            escalate=escalate,
         )
         match result:
             case BoolAnswer(answer=answer) | IntAnswer(answer=answer):

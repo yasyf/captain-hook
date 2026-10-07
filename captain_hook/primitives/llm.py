@@ -3,7 +3,7 @@ from __future__ import annotations
 import builtins
 import json
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import count
 from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from captain_hook.app import on
-from captain_hook.context import is_unsupported_model
+from captain_hook.context import decision_prompt, is_unsupported_model
 from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt, render_template
@@ -117,19 +117,29 @@ def field_question(instructions: str, name: str, info: FieldInfo) -> Question | 
             return None
 
 
-def verdict_questions(instructions: str, response_model: type[BaseModel] | None) -> dict[str, Question] | None:
+def free_text(info: FieldInfo) -> bool:
+    return info.annotation is str and not info.metadata
+
+
+def verdict_questions(
+    instructions: str, response_model: type[BaseModel] | None, *, defaults: bool = False
+) -> dict[str, Question] | None:
     """One Jev question per categorical field of ``response_model``, or ``None`` when Jev cannot answer it.
 
     A ``bool`` field becomes a ``Binary``, a ``Literal`` of strings a ``Label`` in declared order, and an
     ``int`` bounded by ``ge`` and ``le`` alone to 2 to 10 values a ``Score``. A ``str`` field asks nothing:
     :func:`verdict_from` fills it with a summary of the answers. A model with no categorical field, with
     any other field, or with a field constraint Jev's answer could break, such as a ``max_length``, needs the LLM.
+    ``defaults=True`` also lets through any other field that has a default, which a Jev verdict keeps:
+    the first stage of a two-stage call, where only an escalated verdict reaches the LLM for those fields.
     """
     fields: dict[str, FieldInfo] = response_model.model_fields if response_model is not None else {}
     asked = {name: question for name, info in fields.items() if (question := field_question(instructions, name, info))}
     free = fields.keys() - asked.keys()
     return (
-        asked if asked and all(fields[name].annotation is str and not fields[name].metadata for name in free) else None
+        asked
+        if asked and all(free_text(fields[name]) or (defaults and not fields[name].is_required()) for name in free)
+        else None
     )
 
 
@@ -154,15 +164,15 @@ def verdict_from[M: BaseModel](
     """Build ``response_model`` from a Jev ``decision`` on :func:`verdict_questions`, or ``None`` when Jev refused one.
 
     A ``Binary`` is true above even odds, a ``Label`` takes its choice, and a ``Score`` rounds to the
-    nearest level. Every ``str`` field carries one line naming the model and its answers.
+    nearest level. Every ``str`` field carries one line naming the model and its answers, and every
+    other field keeps its default.
     """
     answers = {name: answer_value(question, decision.answers[name]) for name, question in questions.items()}
     if any(value is None for value in answers.values()):
         return None
     summary = f"{decision.model} decided " + ", ".join(f"{name}={value}" for name, value in answers.items())
-    return response_model.model_validate(
-        answers | dict.fromkeys(response_model.model_fields.keys() - answers.keys(), summary), by_name=True
-    )
+    texts = [name for name, info in response_model.model_fields.items() if name not in answers and free_text(info)]
+    return response_model.model_validate(answers | dict.fromkeys(texts, summary), by_name=True)
 
 
 def verdict_state(transcript: str, evidence: Prompt) -> str:
@@ -201,6 +211,7 @@ def llm_evaluate[M: BaseModel](
     once_per_turn: bool = True,
     evidence: bool = True,
     backend: TJudge = "jev",
+    escalate: Callable[[M], bool] | None = None,
 ) -> M | str | None:
     """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
 
@@ -217,6 +228,12 @@ def llm_evaluate[M: BaseModel](
     validation retries, and ``specialty``/``model``/``agent`` unused. Jev's timeout, rejection, or
     missing key raises like a failed LLM call, and a question Jev refuses returns ``None`` like a
     skip. ``backend="llm"`` always asks the LLM, as does any ``response_model`` Jev cannot answer.
+    ``escalate`` judges in two stages: Jev decides every categorical field first (see
+    :func:`verdict_questions` with ``defaults=True``, so any other field needs a default), and only a
+    verdict ``escalate`` returns true for goes on to the LLM, whose prompt carries Jev's answer as a
+    ``<quick_verdict>`` block and whose verdict, in the full ``response_model``, is the result. Any
+    other Jev verdict returns at once, each ``str`` field holding the one-line summary and every other
+    field its default. A Jev timeout, error, or refusal goes on to the LLM without a quick verdict.
     ``evidence=False`` keeps the event's transcripts open after the call, for a caller that judges
     again within the same event.
     ``root_transcript`` takes a window like ``transcript`` and, when the event fires inside a subagent
@@ -258,62 +275,124 @@ def llm_evaluate[M: BaseModel](
         return None
 
     instructions = str(Prompt(system_text=built.system_text, ask_text=built.ask_text))
-    if backend == "jev" and response_model is not None and verdict_questions(instructions, response_model) is not None:
-        return evt.ctx.decide_verdict(
-            instructions,
-            verdict_state(
-                evt.ctx.transcript_evidence(
-                    transcript=transcript,
-                    tool_results=tool_results,
-                    budget=budget,
-                    root_transcript=root_transcript,
-                    root_excerpt=root_excerpt(evt) if root_excerpt else (),
-                ),
-                built.context("diff", diff_text),
+    excerpt = root_excerpt(evt) if root_excerpt else ()
+
+    def ask(asked: Prompt) -> M | str | None:
+        dispatched = evt.ctx.assemble_prompt(
+            asked.context("diff", diff_text),
+            (),
+            {},
+            transcript=transcript,
+            tool_results=tool_results,
+            budget=budget,
+            diff_text=None,
+            root_transcript=root_transcript,
+            root_excerpt=excerpt,
+        )
+        current = dispatched
+        for attempt in count():
+            try:
+                return evt.ctx.call_llm(
+                    Prompt(system_text=current),
+                    specialty=specialty,
+                    model=model,
+                    agent=agent,
+                    evidence=evidence,
+                    response_model=response_model,
+                )
+            except ValidationError as e:
+                if attempt >= retries or not retry_affordable():
+                    raise
+                current = str(
+                    Prompt(system_text=dispatched).context(
+                        "validation_error",
+                        f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
+                    )
+                )
+                logger.bind(attempt=attempt).opt(exception=True).warning("llm output failed validation; retrying")
+            except EvidenceIncomplete:
+                raise
+            except Exception as e:
+                if attempt >= retries or is_unsupported_model(e) or not retry_affordable():
+                    raise
+                logger.bind(attempt=attempt).opt(exception=True).warning("llm call failed; retrying")
+
+    if (
+        backend == "jev"
+        and response_model is not None
+        and verdict_questions(instructions, response_model, defaults=escalate is not None) is not None
+    ):
+        state = verdict_state(
+            evt.ctx.transcript_evidence(
+                transcript=transcript,
+                tool_results=tool_results,
+                budget=budget,
+                root_transcript=root_transcript,
+                root_excerpt=excerpt,
             ),
+            built.context("diff", diff_text),
+        )
+        if escalate is None:
+            return evt.ctx.decide_verdict(
+                instructions, state, response_model, root=str(evt.cwd) if evt.cwd else None, evidence=evidence
+            )
+        return staged_verdict(
+            evt,
+            instructions,
+            state,
             response_model,
-            root=str(evt.cwd) if evt.cwd else None,
+            escalate,
+            lambda note: ask(built.context("quick_verdict", note)),
             evidence=evidence,
         )
+    return ask(built)
 
-    dispatched = evt.ctx.assemble_prompt(
-        built.context("diff", diff_text),
-        (),
-        {},
-        transcript=transcript,
-        tool_results=tool_results,
-        budget=budget,
-        diff_text=None,
-        root_transcript=root_transcript,
-        root_excerpt=root_excerpt(evt) if root_excerpt else (),
+
+def quick_note(verdict: BaseModel, fields: Iterable[str]) -> str:
+    answered = ", ".join(f"{name}={getattr(verdict, name)}" for name in fields)
+    return (
+        f"A fast classifier read the same evidence and answered {answered}. It can be wrong: judge the evidence "
+        "yourself, then fill in every field."
     )
-    asked = dispatched
-    for attempt in count():
-        try:
-            return evt.ctx.call_llm(
-                Prompt(system_text=asked),
-                specialty=specialty,
-                model=model,
-                agent=agent,
-                evidence=evidence,
-                response_model=response_model,
-            )
-        except ValidationError as e:
-            if attempt >= retries or not retry_affordable():
-                raise
-            asked = str(
-                Prompt(system_text=dispatched).context(
-                    "validation_error",
-                    f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
-                )
-            )
-            logger.bind(attempt=attempt).opt(exception=True).warning("llm output failed validation; retrying")
-        except EvidenceIncomplete:
-            raise
-        except Exception as e:
-            if attempt >= retries or is_unsupported_model(e) or not retry_affordable():
-                raise
-            logger.bind(attempt=attempt).opt(exception=True).warning("llm call failed; retrying")
+
+
+def staged_verdict[M: BaseModel, R](
+    evt: BaseHookEvent,
+    instructions: str,
+    state: str,
+    response_model: type[M],
+    escalate: Callable[[M], bool],
+    ask: Callable[[str | None], R],
+    *,
+    evidence: bool,
+) -> M | R:
+    """Ask Jev for ``response_model`` first, and ``ask`` the LLM only when ``escalate`` holds for Jev's verdict.
+
+    ``ask`` takes Jev's answer as one line for its prompt, or ``None`` when Jev cannot answer the model,
+    timed out, failed, or refused, and returns the LLM's verdict. ``evidence`` records Jev's state for
+    a verdict that does not escalate, as ``ask`` does for one that does.
+    """
+    if (questions := verdict_questions(instructions, response_model, defaults=True)) is None:
+        return ask(None)
+    try:
+        quick = evt.ctx.decide_verdict(
+            instructions,
+            state,
+            response_model,
+            root=str(evt.cwd) if evt.cwd else None,
+            evidence=False,
+            defaults=True,
+        )
+    except EvidenceIncomplete:
+        raise
+    except Exception:
+        logger.opt(exception=True).warning("jev gave no verdict; asking the llm")
+        quick = None
+    if quick is not None and not escalate(quick):
+        if evidence:
+            evt.ctx.release_preparation(decision_prompt(state, instructions))
+        return quick
+    return ask(None if quick is None else quick_note(quick, questions))
 
 
 def retry_affordable() -> bool:
@@ -375,11 +454,12 @@ def llm_primitive[M: BaseModel](
     diff: bool | str = False,
     on_incomplete: str | None = None,
     backend: TJudge = "jev",
+    escalate: Callable[[M], bool] | None = None,
 ) -> None:
     prompt = str(prompt)
     sig = resolve_signals(signals)
     name = hook_name(prefix, label, prompt)
-    judge: TJudge = "llm" if needs_text(message, response_model) else backend
+    staged = escalate or (verdict if needs_text(message, response_model) else None)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
         try:
@@ -402,7 +482,8 @@ def llm_primitive[M: BaseModel](
                 tool_results=tool_results,
                 budget=budget,
                 diff=diff,
-                backend=judge,
+                backend=backend,
+                escalate=staged,
             )
         except EvidenceIncomplete:
             raise
@@ -470,6 +551,7 @@ def llm_gate(
     diff: bool | str = False,
     on_incomplete: str | None = None,
     backend: TJudge = "jev",
+    escalate: Callable[[GateVerdict], bool] | None = None,
 ) -> None:
     """Register an LLM-powered blocking gate.
 
@@ -485,8 +567,10 @@ def llm_gate(
     becomes the instructions of one question per verdict field, and the transcript window,
     contexts, and diff become its state. ``agent``, ``specialty``, and ``model`` apply only to
     the LLM. Under Jev, ``reasoning`` holds a one-line summary of the answer, so a ``message``
-    that shows the model's own words needs the LLM: a ``{reasoning}`` template asks it on its
-    own, and a callable that reads ``reasoning`` passes ``backend="llm"``.
+    that shows the model's own words needs the LLM. A ``{reasoning}`` template judges in two
+    stages on its own: Jev decides, and only a verdict that fires goes on to the LLM, which reads
+    Jev's answer and writes the verdict the message shows. A callable that reads ``reasoning``
+    asks for the same with ``escalate=lambda r: r.block``, and ``backend="llm"`` skips Jev.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the gate has tool access and a recent transcript window (the path lets the agent
@@ -532,6 +616,10 @@ def llm_gate(
         backend: Who judges. ``"jev"``, the default, asks TypeSafe Jev whenever the verdict
             model is categorical (see :func:`verdict_questions`); ``"llm"`` always asks the LLM.
             A Jev timeout or error skips the gate exactly as a failed LLM call does.
+        escalate: Judge in two stages, as :func:`llm_evaluate` does: Jev first, then the LLM for
+            a Jev verdict this returns true for, such as ``lambda r: r.block``. ``None`` keeps one
+            stage, except for a ``message`` template that names a ``str`` field, which escalates
+            the verdicts that block. A Jev timeout or error there asks the LLM instead of skipping.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -572,6 +660,7 @@ def llm_gate(
         diff=diff,
         on_incomplete=on_incomplete,
         backend=backend,
+        escalate=escalate,
     )
 
 
@@ -601,6 +690,7 @@ def llm_nudge(
     budget: Budget | None = None,
     diff: bool | str = False,
     backend: TJudge = "jev",
+    escalate: Callable[[NudgeVerdict], bool] | None = None,
 ) -> None:
     """Register an LLM-powered advisory nudge.
 
@@ -612,8 +702,10 @@ def llm_nudge(
     becomes the instructions of one question per verdict field, and the transcript window,
     contexts, and diff become its state. ``agent``, ``specialty``, and ``model`` apply only to
     the LLM. Under Jev, ``reasoning`` holds a one-line summary of the answer, so a ``message``
-    that shows the model's own words needs the LLM: a ``{reasoning}`` template asks it on its
-    own, and a callable that reads ``reasoning`` passes ``backend="llm"``.
+    that shows the model's own words needs the LLM. A ``{reasoning}`` template judges in two
+    stages on its own: Jev decides, and only a verdict that fires goes on to the LLM, which reads
+    Jev's answer and writes the verdict the message shows. A callable that reads ``reasoning``
+    asks for the same with ``escalate=lambda r: r.fire``, and ``backend="llm"`` skips Jev.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the nudge has tool access and a recent transcript window (the path lets the agent
@@ -649,6 +741,10 @@ def llm_nudge(
         backend: Who judges. ``"jev"``, the default, asks TypeSafe Jev whenever the verdict
             model is categorical (see :func:`verdict_questions`); ``"llm"`` always asks the LLM.
             A Jev timeout or error skips the nudge exactly as a failed LLM call does.
+        escalate: Judge in two stages, as :func:`llm_evaluate` does: Jev first, then the LLM for
+            a Jev verdict this returns true for, such as ``lambda r: r.fire``. ``None`` keeps one
+            stage, except for a ``message`` template that names a ``str`` field, which escalates
+            the verdicts that fire. A Jev timeout or error there asks the LLM instead of skipping.
 
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
@@ -688,6 +784,7 @@ def llm_nudge(
         budget=budget,
         diff=diff,
         backend=backend,
+        escalate=escalate,
     )
 
 
@@ -752,7 +849,12 @@ def prompt_check(
     diff: bool | str = False,
     response_model: type[PromptCheckVerdict] = PromptCheckVerdict,
 ) -> HookResult | None:
-    """Run an LLM check with a formatted prompt and return block/warn/None."""
+    """Run a two-stage check with a formatted prompt and return block/warn/None.
+
+    TypeSafe Jev picks the action first; an ``"ok"`` returns ``None`` at once, and a ``"warning"``
+    or ``"block"``, or a Jev failure, goes on to the LLM, which reads Jev's answer and writes the
+    ``reason`` the message carries.
+    """
     reasoning = evt.ctx.t.recent(50).assistant_text() if include_reasoning else ""
 
     base = template if isinstance(template, Prompt) else Prompt().system(template.format(**(fmt or {})))
@@ -760,11 +862,17 @@ def prompt_check(
     prompt_str = str(built)
 
     try:
-        verdict = evt.ctx.call_llm(
-            built,
-            timeout=timeout,
-            diff=diff,
-            response_model=response_model,
+        built = built.context("diff", evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None)
+        verdict = staged_verdict(
+            evt,
+            str(Prompt(system_text=built.system_text, ask_text=built.ask_text)),
+            verdict_state("", built),
+            response_model,
+            lambda v: v.action != "ok",
+            lambda note: evt.ctx.call_llm(
+                built.context("quick_verdict", note), timeout=timeout, response_model=response_model
+            ),
+            evidence=True,
         )
     except EvidenceIncomplete:
         raise

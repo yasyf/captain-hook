@@ -150,6 +150,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **LLM judges ask TypeSafe Jev first and the LLM only when the verdict needs it.**
+  `llm_evaluate`, `llm_gate`, `llm_nudge`, and `evt.llm` take `escalate`, a predicate over
+  Jev's verdict. Jev decides every categorical field of the verdict model, and any other
+  field needs a default. A verdict the predicate rejects returns at once, with each `str`
+  field holding Jev's one-line summary and every other field its default. A verdict it
+  accepts goes on to the LLM, whose prompt carries Jev's answer in a `<quick_verdict>`
+  block, and the LLM's verdict in the full model is the result, so the LLM can overrule
+  Jev. A Jev timeout, error, or refused question also goes on to the LLM. A gate or nudge
+  whose `message` template names a `str` field, such as `{reasoning}`, now escalates only
+  the verdicts that fire instead of always asking the LLM. `prompt_check` asks the LLM only
+  for a warning or a block, `llm_approve` only to confirm a call Jev judged safe, and
+  `rules_nudge` only when Jev finds a contradiction; its verdict gains a `contradicts`
+  field. The grant judge stays on the LLM, because every allow needs the evidence ids it
+  rests on.
+
 - **`llm_gate`, `llm_nudge`, and `evt.llm` ask TypeSafe Jev by default.** A verdict
   model whose fields are all `bool`, a `Literal` of strings, an `int` bounded to 2 to 10
   levels, or `str` becomes one Jev question per categorical field. The prompt becomes each

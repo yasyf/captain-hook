@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -186,6 +187,24 @@ class TestLlmApprove:
         )
         assert dispatch(Event.PermissionRequest, evt, session_dir=tmp_path) is None
 
+    def test_unsafe_jev_verdict_shows_the_dialog_without_the_llm(self, tmp_path: Path) -> None:
+        llm_approve("safe commands", only_if=[Tool("Bash")])
+
+        ctx = make_ctx(tmp_path, call_llm_return=SafetyVerdict(safe=True, reasoning="ok"))
+        ctx.decide_verdict = MagicMock(return_value=SafetyVerdict(safe=False, reasoning="jev"))  # type: ignore[method-assign]
+
+        assert dispatch(Event.PermissionRequest, make_permission_event(ctx=ctx), session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+    def test_safe_jev_verdict_still_needs_the_llm(self, tmp_path: Path) -> None:
+        llm_approve("safe commands", only_if=[Tool("Bash")])
+
+        ctx = make_ctx(tmp_path, call_llm_return=SafetyVerdict(safe=False, reasoning="risky"))
+        ctx.decide_verdict = MagicMock(return_value=SafetyVerdict(safe=True, reasoning="jev"))  # type: ignore[method-assign]
+
+        assert dispatch(Event.PermissionRequest, make_permission_event(ctx=ctx), session_dir=tmp_path) is None
+        ctx.call_llm.assert_called_once()
+
     def test_two_consecutive_safe_asks_both_allow(self, tmp_path: Path) -> None:
         llm_approve("safe commands", only_if=[Tool("Bash")])
 
@@ -195,7 +214,7 @@ class TestLlmApprove:
 
         assert first == ALLOW_ENVELOPE
         assert second == ALLOW_ENVELOPE
-        assert ctx.call_llm.call_count == 2
+        assert ctx.call_llm.call_count == 4
 
     def test_call_llm_failure_falls_through_to_dialog(self, tmp_path: Path) -> None:
         llm_approve("safe commands", only_if=[Tool("Bash")])
@@ -217,7 +236,8 @@ class TestLlmApprove:
         prompt = ctx.call_llm.call_args.args[0]
         assert isinstance(prompt, Prompt)
         assert "rm -rf /tmp/probe" not in prompt.system_text
-        assert prompt.contexts == (("tool_input", json.dumps({"tool_name": "Bash", "command": "rm -rf /tmp/probe"})),)
+        assert prompt.contexts[0] == ("tool_input", json.dumps({"tool_name": "Bash", "command": "rm -rf /tmp/probe"}))
+        assert [tag for tag, _ in prompt.contexts] == ["tool_input", "quick_verdict"]
 
         rendered = str(prompt)
         block = rendered.split("<tool_input>\n")[1].split("\n</tool_input>")[0]

@@ -117,19 +117,27 @@ risky = evt.llm("Does this diff delete a public API?", bool, diff=True)
 
 `llm_gate`, `llm_nudge`, and `evt.llm` send a categorical verdict to TypeSafe Jev by default, the same classifier [`evt.decide`](#decide) calls, so the answer comes back in about a tenth of a second instead of after a chat-model round trip. The framework builds the questions from what the hook already passes. Each `bool` field of the verdict model becomes a `Binary` question, a `Literal` of strings becomes a `Label`, and an `int` bounded by `ge` and `le` to between 2 and 10 values becomes a `Score`. The prompt becomes each question's instructions, and the transcript window, contexts, and diff become the state. Jev answers from the state alone, without tools, so `agent`, `specialty`, and `model` apply only when the LLM judges.
 
-Under Jev, a `str` field such as `reasoning` holds a one-line summary of the answer, not the model's own words. When the hook shows those words to the agent, pass `backend="llm"`:
+Under Jev, a `str` field such as `reasoning` holds a one-line summary of the answer, not the model's own words. When the hook shows those words to the agent, judge in two stages. Jev decides, and only the verdicts that need the words go on to the LLM. Pass `escalate`, a predicate over Jev's verdict:
 
 ```python
 llm_gate(
     "Does the new code widen a typed slot to Any?",
     message=lambda verdict: f"Do not widen the type: {verdict.reasoning}",
-    backend="llm",
+    escalate=lambda verdict: verdict.block,
 )
 ```
 
-A `message` template that names a `str` field, such as `"Do not widen: {reasoning}."`, asks the LLM without the flag. A verdict model with any other field type, such as a list, a dict, an optional, or an unbounded `int`, always asks the LLM, as does `evt.llm` with a bare prompt.
+Jev answers every call. A verdict that does not block returns at once, and one that blocks goes to the LLM, whose prompt carries Jev's answer in a `<quick_verdict>` block. The LLM's verdict, in the full verdict model, is the one the gate acts on, so the LLM can overrule Jev. A Jev timeout, error, or declined question also goes to the LLM, without the block. A `message` template that names a `str` field, such as `"Do not widen: {reasoning}."`, escalates the verdicts that fire without the argument. `backend="llm"` skips Jev altogether.
 
-A Jev call fails the way an LLM call does. A timeout, a rejected request, or a missing key skips the gate or nudge, and `evt.llm` raises. A rejected request or a missing key also records a fault that the next session start reports. A question Jev declines to answer skips the hook. Inline tests need no change, because `Input(llm={"fire": False})` stubs the verdict whichever backend judges.
+Jev answers every `bool`, `Literal`, and bounded `int` field of the verdict model. Under `escalate`, any other field needs a default. A verdict Jev settles keeps the defaults and fills each `str` field with the summary; an escalated verdict gets every field from the LLM. `llm_evaluate` and `evt.llm` take the same `escalate`, so a judge whose verdict needs evidence ids or a refusal sentence only some of the time names the answers that need them:
+
+```python
+verdict = llm_evaluate(evt, prompt, Verdict, hook="judge", escalate=lambda v: not v.allow)
+```
+
+Without `escalate`, a verdict model with any other field type, such as a list, a dict, an optional, or an unbounded `int`, always asks the LLM, as does `evt.llm` with a bare prompt.
+
+A single-stage Jev call fails the way an LLM call does. A timeout, a rejected request, or a missing key skips the gate or nudge, and `evt.llm` raises. A rejected request or a missing key also records a fault that the next session start reports. A question Jev declines to answer skips the hook. Inline tests need no change, because `Input(llm={"fire": False})` stubs the verdict whichever backend judges.
 
 ## Ask a fast typed classifier {#decide}
 

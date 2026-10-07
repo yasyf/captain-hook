@@ -41,6 +41,10 @@ DECIDE_MARGIN_SECONDS = 0.5
 VERDICT_TIMEOUT_SECONDS = 5.0
 
 
+def decision_prompt(state: str, instructions: str) -> str:
+    return f"{state}\n\n<task>\n{instructions}\n</task>"
+
+
 def record_decide_failure(
     provider: TDecideProvider, exc: DecideError | DecideKeyMissing, root: str | None
 ) -> DecideError | DecideKeyMissing:
@@ -623,7 +627,14 @@ class HookContext:
         return decide_sync(state, questions, provider=provider, timeout=timeout, api_key=key)
 
     def decide_verdict[M: BaseModel](
-        self, instructions: str, state: str, response_model: type[M], *, root: str | None, evidence: bool = True
+        self,
+        instructions: str,
+        state: str,
+        response_model: type[M],
+        *,
+        root: str | None,
+        evidence: bool = True,
+        defaults: bool = False,
     ) -> M | None:
         """Ask TypeSafe Jev for the categorical fields of ``response_model``, or ``None`` when it refuses one.
 
@@ -631,6 +642,7 @@ class HookContext:
         under ``instructions``, and :func:`~captain_hook.primitives.llm.verdict_from` maps the answers
         back. A rejected request or a missing key records a fault under ``root`` and raises, as a
         timeout does. ``evidence=False`` keeps the transcript open after the call, as in :meth:`call_llm`.
+        ``defaults=True`` keeps the default of every field Jev cannot answer, as a two-stage call's first stage.
 
         Raises:
             TypeError: When a field of ``response_model`` needs free text Jev cannot give.
@@ -639,10 +651,10 @@ class HookContext:
 
         from captain_hook.primitives.llm import verdict_from, verdict_questions
 
-        if (questions := verdict_questions(instructions, response_model)) is None:
+        if (questions := verdict_questions(instructions, response_model, defaults=defaults)) is None:
             raise TypeError(f"{response_model.__name__} has a field Jev cannot answer; ask the LLM instead")
         if evidence:
-            self.release_preparation(f"{state}\n\n<task>\n{instructions}\n</task>")
+            self.release_preparation(decision_prompt(state, instructions))
         try:
             decision = self.decide(state, questions, provider=JEV, timeout=VERDICT_TIMEOUT_SECONDS)
         except (DecideError, DecideKeyMissing) as exc:
