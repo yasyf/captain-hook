@@ -13,6 +13,7 @@ from spawnllm import Binary, BinaryAnswer, Label, LabelAnswer
 
 from captain_hook.grants import store
 from captain_hook.grants.evidence import tree_of
+from captain_hook.grants.records import covers
 from captain_hook.prompt import Prompt, dedent_text
 from captain_hook.util import reqenv
 
@@ -53,8 +54,10 @@ PERMITTED = 0.8
 STANDING = 0.2
 JEV_UNSETTLED = "Jev found no single owner approval that permits exactly this action."
 STANDING_QUESTION = Binary(
-    "Do any of the owner's words in <evidence> permit more than the one action in <proposed_action>: further actions "
-    "of its kind, every reply in a thread or channel, a stated number of them, or other places?",
+    "Do any of the owner's words in <evidence> give standing permission for <proposed_action>'s kind of action: "
+    'repeated actions from now on without asking again, such as "reply in that thread without asking", "keep '
+    '#releases posted", or "send these three replies"? One-off actions the words name, one for each place, are not '
+    "standing permission.",
     yes="Some evidence item permits more than this one action.",
     no="No evidence item permits anything beyond this one action.",
 )
@@ -132,10 +135,11 @@ class Judge:
     """A check that the owner's words permit the action, shared by every grant declaration.
 
     TypeSafe Jev judges first, citing the one evidence item that permits exactly this action. When Jev is
-    sure of that item, no grant rests on it yet, and no item's words reach past this one action, the
-    action goes ahead on that citation. Any other answer, a refusal, or a Jev failure asks the LLM, which
-    writes the citations, standing words, scope, and refusal, and may still allow. With ``llm`` off, Jev
-    alone judges: any other answer refuses, and a Jev failure raises :class:`JudgeFailed`.
+    sure of that item, no grant covering this action's scope rests on it yet, and no item's words give
+    standing permission, the action goes ahead on that citation. Any other answer, a refusal, or a Jev
+    failure asks the LLM, which writes the citations, standing words, scope, and refusal, and may still
+    allow. With ``llm`` off, Jev alone judges: any other answer refuses, and a Jev failure raises
+    :class:`JudgeFailed`.
 
     Attributes:
         rules: The hook's rules for this kind of action, in prose.
@@ -186,7 +190,7 @@ class Judge:
         left = reqenv.seconds_left()
         try:
             with reqenv.deadline_in(self.deadline if left is None else min(self.deadline, left)):
-                if (quick := self.quick(evt, prompt, evidence)) is not None:
+                if (quick := self.quick(evt, prompt, action, evidence)) is not None:
                     return quick
                 if not self.llm:
                     return GrantVerdict(reason=JEV_UNSETTLED, allow=False)
@@ -215,8 +219,10 @@ class Judge:
             raise JudgeFailed(f"{type(verdict).__name__} instead of a verdict")
         return verdict
 
-    def quick(self, evt: BaseHookEvent, prompt: Prompt, evidence: Sequence[Evidence]) -> GrantVerdict | None:
-        """Jev's allow on one evidence item no grant rests on yet, or ``None`` when the LLM must judge."""
+    def quick(
+        self, evt: BaseHookEvent, prompt: Prompt, action: Proposal, evidence: Sequence[Evidence]
+    ) -> GrantVerdict | None:
+        """Jev's allow on one evidence item no grant covering *action* rests on yet, else ``None`` for the LLM."""
         from spawnllm import JEV, DecideError, DecideKeyMissing
 
         from captain_hook.context import VERDICT_TIMEOUT_SECONDS, record_decide_failure
@@ -224,7 +230,12 @@ class Judge:
         from captain_hook.primitives.llm import VERDICT_STATE_CHARS, verdict_state
         from captain_hook.snapshots.client import EvidenceIncomplete
 
-        cited = {item.id for grant in store.grants(tree=tree_of(evt)) for item in grant.evidence}
+        cited = {
+            item.id
+            for grant in store.grants(tree=tree_of(evt))
+            if covers(grant.scope, action.scope)
+            for item in grant.evidence
+        }
         if not (fresh := [item for item in evidence if item.id not in cited]):
             return None
         built = apply_contexts(prompt, evt, with_defaults(self.contexts))

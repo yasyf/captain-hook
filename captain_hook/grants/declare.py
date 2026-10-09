@@ -243,6 +243,27 @@ class Grants:
             across_trees=across_trees,
         )
 
+    def paid_by(self, evt: BaseHookEvent, approval: str, action: Proposal) -> Grant | None:
+        """The grant *approval* already minted for *action*: its counted budget anywhere, or a grant at this scope.
+
+        One approval buys one action per place, so only a counted budget or an earlier grant here binds it.
+        """
+        own = self.canonical(action)
+        return next(
+            (
+                grant
+                for grant in store.grants(self.kind, tree_of(evt))
+                if any((item.key or item.id) == approval for item in grant.evidence)
+                and (grant.source_key == approval or covers(grant.scope, own))
+            ),
+            None,
+        )
+
+    def approval_key(self, approval: str, scope: dict[str, ScopeValue], *, counted: bool) -> str:
+        if self.judge is None:
+            return f"{approval}{scope_key(scope)}"
+        return approval if counted else f"once:{approval}{scope_key(scope)}"
+
     def stale(self, grant: Grant, items: Sequence[Evidence]) -> str | None:
         current = {item.key for item in items if item.live}
         return next((item.id for item in grant.evidence if item.live and item.key not in current), None)
@@ -269,8 +290,9 @@ class Grants:
         destination alike, approve it; else the judge reads the declared evidence. An allow mints a grant
         keyed on the approval it relied on and spends it. Standing words and rulings permit a class of
         actions, so they mint a standing grant per scope the judge reads them as covering, widened on the
-        declaration's ``widen`` keys; a counted approval keeps one budget, and any other approval covers
-        one scope. Every use is reserved and settles with the event's verdict.
+        declaration's ``widen`` keys; a counted approval keeps one budget, and any other approval mints one
+        grant per scope the judge allows it for, so one answer naming two destinations pays for one action at
+        each. Every use is reserved and settles with the event's verdict.
         """
         if action is None:
             if self.action is None:
@@ -378,28 +400,30 @@ class Grants:
             if said is not None:
                 quoted = said.model_copy(update={"quote": verdict.standing, "detail": said.quote})
                 evidence = [quoted, *(item for item in relied if item.id != said.id)]
-            grant = self.grant(
+            key = basis.key or basis.id
+            counted = self.paid_by(evt, key, action) if verdict.uses is not None else None
+            grant = counted or self.grant(
                 evt,
                 scope=scope,
                 evidence=evidence,
                 uses=verdict.uses,
                 ttl=self.standing_ttl,
                 rules=self.standing_rules,
-                source_key=f"{basis.key or basis.id}{scope_key(scope) if verdict.uses is None else ''}",
+                source_key=f"{key}{scope_key(scope) if verdict.uses is None else ''}",
             )
         else:
             approval = relied[0].key or relied[0].id
+            if verdict.uses is None:
+                scope = self.canonical(action)
             uses = verdict.uses or self.mint
-            grant = self.grant(
+            grant = self.paid_by(evt, approval, action) or self.grant(
                 evt,
                 scope=scope,
                 evidence=relied,
                 uses=uses,
                 ttl=self.ttl,
-                approved=dict(action.payload)
-                if uses == 1 and action.payload and scope == self.canonical(action)
-                else None,
-                source_key=approval if self.judge is not None else f"{approval}{scope_key(scope)}",
+                approved=dict(action.payload) if uses == 1 and action.payload else None,
+                source_key=self.approval_key(approval, scope, counted=verdict.uses is not None),
                 across_trees=self.judge is None,
             )
         if not covers(grant.scope, self.canonical(action)):

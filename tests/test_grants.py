@@ -249,7 +249,7 @@ def test_the_judge_mints_one_grant_per_approval(tmp_path: Path) -> None:
     said = owner("yes post it", ident="ask:toolu_9#0")
     grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
     first = grants.check(event(tmp_path, "first", allow=True, reason="approved", relied_on=["ask:toolu_9#0"]))
-    assert isinstance(first, Allowed) and first.grant.source_key == "ask:toolu_9#0"
+    assert isinstance(first, Allowed) and first.grant.source_key == f"once:ask:toolu_9#0#{json.dumps(SCOPE)}"
     assert first.grant.approved == {"text": "first"}
     second = grants.check(
         event(tmp_path, "second", call="c2", allow=True, reason="approved", relied_on=["ask:toolu_9#0"])
@@ -432,7 +432,8 @@ def test_jev_sure_of_one_fresh_approval_allows_without_the_llm(tmp_path: Path, m
     evt.ctx.call_llm = MagicMock(side_effect=AssertionError("the LLM must not judge a sure Jev allow"))  # type: ignore[method-assign]
     grants = declared(judge=Judge("rules"), evidence=(Fixed((owner("yes post it", ident=APPROVAL),)),))
     allowed = grants.check(evt)
-    assert isinstance(allowed, Allowed) and allowed.grant.source_key == APPROVAL and allowed.grant.uses == 1
+    assert isinstance(allowed, Allowed) and allowed.grant.source_key == f"once:{APPROVAL}#{json.dumps(SCOPE)}"
+    assert allowed.grant.uses == 1
     assert allowed.grant.approved == {"text": "first"} and "jev-1.13.0 read" in allowed.reason
     (call,) = calls
     assert list(call["questions"]["permits"].options) == ["none", APPROVAL]
@@ -809,19 +810,73 @@ def test_an_uncited_allow_mints_nothing(tmp_path: Path) -> None:
     assert store.grants("test.write", TREE) == []
 
 
-def test_an_approval_spent_on_one_destination_never_covers_another(tmp_path: Path) -> None:
-    said = owner("yes post it", ident="ask:toolu_9#0")
-    other = Grants(
+def channel_post(evt: Any) -> Proposal:
+    return Proposal(scope={"channel": "C1", "thread": ""}, payload={"text": evt.input.raw["text"]}, summary="a C1 post")
+
+
+def test_one_approval_pays_for_one_action_at_each_destination_the_judge_allows(tmp_path: Path) -> None:
+    said = owner("post a bug report in C1, and do the same in that thread", ident="ask:toolu_9#0")
+    reply = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
+    post = Grants("test.write", ("channel", "thread"), channel_post, judge=Judge("rules"), evidence=(Fixed((said,)),))
+    first = reply.check(event(tmp_path, "rerank", allow=True, reason="the thread reply", relied_on=[said.id]))
+    second = post.check(event(tmp_path, "bug", call="c2", allow=True, reason="the channel post", relied_on=[said.id]))
+    assert isinstance(first, Allowed) and isinstance(second, Allowed) and first.grant.id != second.grant.id
+    assert second.grant.scope == {"channel": "C1", "thread": ""} and second.grant.uses == 1
+    again = post.check(event(tmp_path, "bug 2", call="c3", allow=True, reason="the channel post", relied_on=[said.id]))
+    assert isinstance(again, Denied) and f"Grant {second.grant.id} was spent" in again.explained
+
+
+def test_a_one_use_verdict_widened_to_several_places_still_buys_one_action_at_each(tmp_path: Path) -> None:
+    said = owner("post a bug report in C1, and do the same in that thread", ident="ask:toolu_9#0")
+    both = {"allow": True, "reason": "ok", "relied_on": [said.id], "scope": {"thread": ["", "1.2"]}}
+    first = declared(judge=Judge("rules"), evidence=(Fixed((said,)),), widen=("thread",)).check(
+        event(tmp_path, "rerank", **both)
+    )
+    post = Grants(
         "test.write",
         ("channel", "thread"),
-        lambda evt: Proposal(scope={"channel": "C9", "thread": ""}, payload={"text": "x"}),
+        channel_post,
+        judge=Judge("rules"),
+        evidence=(Fixed((said,)),),
+        widen=("thread",),
     )
-    first = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
-    assert first.check(event(tmp_path, "one", allow=True, reason="ok", relied_on=[said.id]))
-    second = Grants(
-        "test.write", ("channel", "thread"), other.action, judge=Judge("rules"), evidence=(Fixed((said,)),)
-    ).check(event(tmp_path, "one", call="c2", allow=True, reason="ok", relied_on=[said.id]))
-    assert isinstance(second, Denied) and "already went to grant" in second.explained
+    second = post.check(event(tmp_path, "bug", call="c2", **both))
+    assert isinstance(first, Allowed) and first.grant.scope == SCOPE
+    assert isinstance(second, Allowed) and second.grant.id != first.grant.id
+
+
+def test_a_counted_budget_binds_its_approval_at_every_place(tmp_path: Path) -> None:
+    said = owner("send these two replies in that thread", ident="ask:toolu_9#0")
+    counted = {"allow": True, "reason": "ok", "relied_on": [said.id], "uses": 2}
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((said,)),))
+    assert grants.check(event(tmp_path, "one", **counted))
+    assert grants.check(event(tmp_path, "two", call="c2", **counted))
+    post = Grants("test.write", ("channel", "thread"), channel_post, judge=Judge("rules"), evidence=(Fixed((said,)),))
+    elsewhere = post.check(event(tmp_path, "three", call="c3", allow=True, reason="ok", relied_on=[said.id]))
+    assert isinstance(elsewhere, Denied) and "already went to grant" in elsewhere.explained
+
+
+def test_a_counted_reading_never_refills_a_place_the_approval_already_paid_for(tmp_path: Path) -> None:
+    words = "send these three replies in that thread"
+    grants = declared(judge=Judge("rules"), evidence=(Fixed((owner(words),)),))
+    assert grants.check(event(tmp_path, "one", allow=True, reason="ok", relied_on=["words:1"]))
+    counted = event(tmp_path, "two", call="c2", allow=True, reason="ok", relied_on=["words:1"], standing=words, uses=3)
+    denied = grants.check(counted)
+    assert isinstance(denied, Denied) and "was spent" in denied.explained
+
+
+def test_jev_cites_an_approval_spent_elsewhere_for_another_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = jev(monkeypatch)
+    evidence = (Fixed((owner("post a bug report in C1, and do the same in that thread", ident=APPROVAL),)),)
+    first = declared(judge=Judge("rules", llm=False), evidence=evidence).check(event(tmp_path, "rerank"))
+    post = Grants("test.write", ("channel", "thread"), channel_post, judge=Judge("rules", llm=False), evidence=evidence)
+    second = post.check(event(tmp_path, "bug", call="c2"))
+    assert isinstance(first, Allowed) and isinstance(second, Allowed) and first.grant.id != second.grant.id
+    again = post.check(event(tmp_path, "bug again", call="c3"))
+    assert isinstance(again, Denied) and JEV_UNSETTLED in again.explained
+    assert len(calls) == 2
 
 
 def test_an_edited_ruling_stops_its_grant(tmp_path: Path) -> None:
