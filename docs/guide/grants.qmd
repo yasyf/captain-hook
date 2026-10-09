@@ -620,8 +620,20 @@ The CLI reads the adopting session from the session environment variables even
 when `--tree` is explicit. `grant show` logs each adoption with its destination
 tree, timestamp, session, and agent.
 
-An Orca lane adopts its Run coordinator's grants without a command. The builtin
-`general` pack records the Orca terminal of each attended Claude session from
+A Claude session on a live Orca dispatch runs as a lane of the session that
+dispatched it. The framework reads the terminal's dispatch with
+`orca orchestration check --peek`, `worker-show`, and `dispatch-show`, then looks
+up the Claude session in the dispatching pane in Orca's
+`agent-hooks/last-status.json`. Orca must record the worker's own pane as the
+session asking, so a `claude -p` started inside the worker's terminal binds
+nothing. `evt.ctx.root_path` and `evt.ctx.root_transcript` then name the
+coordinator's transcript, as they do for a subagent. The worker's tree is the
+coordinator's session id, its judges read the coordinator's words, and its own
+prompts, the brief included, count as lane prompts, not owner words. The binding
+is re-read after one minute, so a settled dispatch stops binding.
+
+An Orca session that does not bind as a lane, such as a Codex worker, adopts its
+Run coordinator's grants without a command. The builtin `general` pack records the Orca terminal of each attended Claude session from
 `ORCA_TERMINAL_HANDLE`, once per session. A `claude -p` session is unattended and
 records nothing.
 
