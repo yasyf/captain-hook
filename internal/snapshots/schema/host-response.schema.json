@@ -597,6 +597,19 @@
           "title": "Lease Expires Unix Ms",
           "type": "integer"
         },
+        "model": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
         "mtime_ns": {
           "pattern": "^[0-9]+$",
           "title": "Mtime Ns",
@@ -672,6 +685,7 @@
         "source_bytes",
         "window_start",
         "window_started_unix_ms",
+        "model",
         "committed_bytes",
         "event_count",
         "turn_count",

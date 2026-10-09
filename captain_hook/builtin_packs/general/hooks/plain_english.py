@@ -22,12 +22,17 @@ URL = re.compile(r"https?://\S+")
 CODE_SPAN = re.compile(r"`[^`\n]+`")
 LIST_ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s", re.MULTILINE)
 MIN_KEPT_RATIO = 0.6
+PLAIN_WRITERS = (("opus", 5, 5), ("fable", 5, 1))
 REWRITE_RULES = str(Prompt.load("plain_english_rules"))
 
 
 class PlainEnglishBuffer(BaseModel):
     messages: dict[str, dict[int, str]] = Field(default_factory=dict)
     finalized: list[str] = Field(default_factory=list)
+
+
+def writes_plain_english(evt: MessageDisplayEvent) -> bool:
+    return (model := evt.ctx.model) is not None and any(model.at_least(*writer) for writer in PLAIN_WRITERS)
 
 
 def assembled(evt: MessageDisplayEvent) -> str:
@@ -132,6 +137,8 @@ def rewrite_plain_english(evt: MessageDisplayEvent) -> HookResult | None:
         return None
     with slot.mutate() as buffer:
         if evt.message_id in buffer.finalized:
+            return None
+        if evt.message_id not in buffer.messages and writes_plain_english(evt):
             return None
         buffer.messages.setdefault(evt.message_id, {})[evt.index] = evt.delta
     if not evt.final:

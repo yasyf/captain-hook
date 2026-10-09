@@ -104,6 +104,7 @@ from captain_hook.grants import Never as Never
 from captain_hook.grants import OwnerWords as OwnerWords
 from captain_hook.grants import Proposal as Proposal
 from captain_hook.grants import Rulings as Rulings
+from captain_hook.model import Model as Model
 from captain_hook.primitives.commands import Rewritten as Rewritten
 from captain_hook.primitives.commands import WalkContext as WalkContext
 from captain_hook.primitives.commands import block_command as block_command

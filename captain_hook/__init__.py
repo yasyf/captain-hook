@@ -99,6 +99,7 @@ EXPORTS: dict[str, str] = {
     "Deque": "captain_hook.fields",
     "File": "captain_hook.file",
     "categorize_files": "captain_hook.file",
+    "Model": "captain_hook.model",
     "Rewritten": "captain_hook.primitives.commands",
     "WalkContext": "captain_hook.primitives.commands",
     "block_command": "captain_hook.primitives.commands",

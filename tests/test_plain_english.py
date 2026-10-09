@@ -6,7 +6,7 @@ import json
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -112,6 +112,48 @@ def stream(ctx: HookContext, text: str, *, size: int = 60) -> dict[str, Any] | N
     results = [chunk(ctx, i, part, final=i == len(parts) - 1) for i, part in enumerate(parts)]
     assert results[:-1] == [shown("")] * (len(parts) - 1)
     return results[-1]
+
+
+def answered_by(model: str) -> Any:
+    return fixture_session(
+        [
+            {"type": "user", "message": {"role": "user", "content": QUESTION}},
+            {
+                "type": "assistant",
+                "message": {"model": model, "role": "assistant", "content": [{"type": "text", "text": "Looking."}]},
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "<synthetic>",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "No response"}],
+                },
+            },
+        ]
+    )
+
+
+def test_plain_english_writer_is_never_rewritten(ctx: CerebrasStub) -> None:
+    ctx.transcript = answered_by("claude-opus-5-5")
+
+    assert chunk(ctx, 0, PROSE[:40]) is None
+    assert chunk(ctx, 1, PROSE[40:], final=True) is None
+    assert ctx.calls == []
+    assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}
+
+
+def test_message_already_buffered_keeps_its_rewrite(ctx: CerebrasStub) -> None:
+    assert chunk(ctx, 0, PROSE[:40]) == shown("")
+    ctx = replace(ctx, transcript=answered_by("claude-fable-5-1"))
+
+    assert chunk(ctx, 1, PROSE[40:], final=True) == shown(REWRITTEN)
+
+
+def test_older_model_is_rewritten(ctx: CerebrasStub) -> None:
+    ctx.transcript = answered_by("claude-opus-4-7")
+
+    assert stream(ctx, PROSE) == shown(REWRITTEN)
 
 
 def test_no_api_key_leaves_chunks_displayed(ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch) -> None:

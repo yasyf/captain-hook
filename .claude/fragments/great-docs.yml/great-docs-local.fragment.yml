@@ -186,6 +186,7 @@ reference:
       - SessionStartEvent
       - SessionEndEvent
       - HookContext
+      - Model
       - Turn
       - HookResult
       - Action

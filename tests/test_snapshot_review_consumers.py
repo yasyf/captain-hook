@@ -80,6 +80,7 @@ def description(handle):
         "source_bytes": 1,
         "window_start": 0,
         "window_started_unix_ms": None,
+        "model": None,
         "committed_bytes": 1,
         "event_count": 1,
         "turn_count": 1,
