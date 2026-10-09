@@ -6,7 +6,6 @@ import time
 from concurrent.futures import wait
 from typing import TYPE_CHECKING
 
-from cc_transcript.models import AssistantEvent
 from pydantic import BaseModel, Field
 
 from captain_hook import Action, Event, HookResult, Prompt, faults, on
@@ -23,36 +22,17 @@ URL = re.compile(r"https?://\S+")
 CODE_SPAN = re.compile(r"`[^`\n]+`")
 LIST_ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s", re.MULTILINE)
 MIN_KEPT_RATIO = 0.6
-PLAIN_WRITERS = {"opus": (5, 5), "fable": (5, 1)}
-MODEL_VERSION = re.compile(r"claude-(opus|fable)-(\d+)(?:-(\d{1,2})(?!\d))?")
-MODEL_LOOKBACK_EVENTS = 64
-SYNTHETIC_MODEL = "<synthetic>"
+PLAIN_WRITERS = (("opus", 5, 5), ("fable", 5, 1))
 REWRITE_RULES = str(Prompt.load("plain_english_rules"))
 
 
 class PlainEnglishBuffer(BaseModel):
     messages: dict[str, dict[int, str]] = Field(default_factory=dict)
     finalized: list[str] = Field(default_factory=list)
-    passthrough: list[str] = Field(default_factory=list)
 
 
-def writes_plain_english(model: str | None) -> bool:
-    if not model or not (match := MODEL_VERSION.search(model)):
-        return False
-    family, major, minor = match.groups()
-    return (int(major), int(minor or 0)) >= PLAIN_WRITERS[family]
-
-
-def session_model(evt: MessageDisplayEvent) -> str | None:
-    events = evt.ctx.transcript.recent(MODEL_LOOKBACK_EVENTS).events
-    return next(
-        (
-            event.model
-            for event in reversed(events)
-            if isinstance(event, AssistantEvent) and event.model != SYNTHETIC_MODEL
-        ),
-        None,
-    )
+def writes_plain_english(evt: MessageDisplayEvent) -> bool:
+    return (model := evt.ctx.model) is not None and any(model.at_least(*writer) for writer in PLAIN_WRITERS)
 
 
 def assembled(evt: MessageDisplayEvent) -> str:
@@ -156,10 +136,9 @@ def rewrite_plain_english(evt: MessageDisplayEvent) -> HookResult | None:
     if slot.path is None:
         return None
     with slot.mutate() as buffer:
-        if evt.message_id in buffer.finalized or evt.message_id in buffer.passthrough:
+        if evt.message_id in buffer.finalized:
             return None
-        if evt.message_id not in buffer.messages and writes_plain_english(session_model(evt)):
-            buffer.passthrough = [*buffer.passthrough, evt.message_id][-64:]
+        if evt.message_id not in buffer.messages and writes_plain_english(evt):
             return None
         buffer.messages.setdefault(evt.message_id, {})[evt.index] = evt.delta
     if not evt.final:

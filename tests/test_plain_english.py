@@ -6,7 +6,7 @@ import json
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -134,31 +134,20 @@ def answered_by(model: str) -> Any:
     )
 
 
-@pytest.mark.parametrize(
-    ("model", "plain"),
-    [
-        pytest.param("claude-opus-5-5", True, id="opus-5-5"),
-        pytest.param("claude-opus-5-5[1m]", True, id="opus-5-5-1m"),
-        pytest.param("claude-opus-6", True, id="opus-6"),
-        pytest.param("claude-opus-5-20260101", False, id="opus-5-dated"),
-        pytest.param("claude-opus-4-7", False, id="opus-4-7"),
-        pytest.param("claude-fable-5-1", True, id="fable-5-1"),
-        pytest.param("claude-fable-5", False, id="fable-5"),
-        pytest.param("claude-sonnet-5-5", False, id="sonnet-5-5"),
-        pytest.param(None, False, id="unknown"),
-    ],
-)
-def test_newer_opus_and_fable_write_plain_english(model: str | None, plain: bool) -> None:
-    assert plain_english.writes_plain_english(model) is plain
-
-
 def test_plain_english_writer_is_never_rewritten(ctx: CerebrasStub) -> None:
     ctx.transcript = answered_by("claude-opus-5-5")
 
     assert chunk(ctx, 0, PROSE[:40]) is None
     assert chunk(ctx, 1, PROSE[40:], final=True) is None
     assert ctx.calls == []
-    assert ctx.session.load(plain_english.PlainEnglishBuffer).passthrough == ["msg_1"]
+    assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}
+
+
+def test_message_already_buffered_keeps_its_rewrite(ctx: CerebrasStub) -> None:
+    assert chunk(ctx, 0, PROSE[:40]) == shown("")
+    ctx = replace(ctx, transcript=answered_by("claude-fable-5-1"))
+
+    assert chunk(ctx, 1, PROSE[40:], final=True) == shown(REWRITTEN)
 
 
 def test_older_model_is_rewritten(ctx: CerebrasStub) -> None:

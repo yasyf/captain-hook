@@ -10,6 +10,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
+from captain_hook.model import Model
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import RemoteSession
@@ -210,6 +211,7 @@ class HookContext:
         for name in (
             "event_count",
             "window_start",
+            "model",
             "current_turn_event_count",
             "transcript_path",
             "transcript_ref",
@@ -222,6 +224,11 @@ class HookContext:
     @cached_property
     def event_count(self) -> int:
         return len(self.transcript)
+
+    @cached_property
+    def model(self) -> Model | None:
+        """The session's model, from the transcript's latest assistant reply; ``None`` before the first."""
+        return None if (model := self.t.model) is None else Model.parse(model)
 
     @cached_property
     def window_start(self) -> int:

@@ -941,6 +941,10 @@ class RemoteSession:
     def window_start(self) -> int:
         return self.lease.description["window_start"]
 
+    @property
+    def model(self) -> str | None:
+        return self.lease.description["model"]
+
     def view(self) -> dict[str, object]:
         return {
             "handle": self.lease.require(),
