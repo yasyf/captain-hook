@@ -41,6 +41,7 @@ from captain_hook.grants import cli as grant_cli_module
 from captain_hook.grants import evidence as evidence_module
 from captain_hook.grants import orca as orca_module
 from captain_hook.grants.cli import grant as grant_cli
+from captain_hook.grants.judge import JEV_UNSETTLED
 from captain_hook.hook_lint import result_violations
 from captain_hook.snapshots.client import EvidenceIncomplete
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
@@ -474,6 +475,45 @@ def test_jev_unsure_or_unavailable_leaves_the_verdict_to_the_llm(
     evt.ctx.call_llm.assert_called_once()
     assert "<quick_verdict>" not in str(evt.ctx.call_llm.call_args.args[0])
     assert bool(faults.drain(None)) is isinstance(answer.get("outcome"), DecideKeyMissing)
+
+
+@pytest.mark.parametrize("answer", [{"choice": "none"}, {"sure": 0.7}, {"standing": 0.3}])
+def test_a_jev_only_judge_refuses_what_jev_does_not_settle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: dict[str, Any]
+) -> None:
+    calls = jev(monkeypatch, **answer)
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=AssertionError("a Jev-only judge never asks the LLM"))  # type: ignore[method-assign]
+    grants = declared(judge=Judge("rules", llm=False), evidence=(Fixed((owner("x", ident=APPROVAL),)),))
+    denied = grants.check(evt)
+    assert isinstance(denied, Denied) and JEV_UNSETTLED in denied.explained and not denied.undecided
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("outcome", [TimeoutError(), DecideKeyMissing("no jev key")])
+def test_a_jev_only_judge_fails_when_jev_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: BaseException
+) -> None:
+    monkeypatch.setattr(faults, "faults_dir", lambda: tmp_path / "faults")
+    jev(monkeypatch, outcome=outcome)
+    evt = event(tmp_path)
+    evt.ctx.call_llm = MagicMock(side_effect=AssertionError("a Jev-only judge never asks the LLM"))  # type: ignore[method-assign]
+    evidence = (Fixed((owner("x", ident=APPROVAL),)),)
+    denied = declared(judge=Judge("rules", llm=False), evidence=evidence).check(evt)
+    assert isinstance(denied, Denied) and "no verdict" in denied.reason and denied.undecided
+    allowed = declared(judge=Judge("rules", llm=False), evidence=evidence, judge_fails_open=True).check(
+        event(tmp_path, call="c2")
+    )
+    assert isinstance(allowed, Allowed)
+
+
+def test_a_jev_only_judge_allows_what_jev_is_sure_of(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    jev(monkeypatch)
+    evt = event(tmp_path, "first")
+    evt.ctx.call_llm = MagicMock(side_effect=AssertionError("a Jev-only judge never asks the LLM"))  # type: ignore[method-assign]
+    grants = declared(judge=Judge("rules", llm=False), evidence=(Fixed((owner("yes post it", ident=APPROVAL),)),))
+    allowed = grants.check(evt)
+    assert isinstance(allowed, Allowed) and "jev-1.13.0 read" in allowed.reason
 
 
 def test_jev_never_judges_evidence_it_would_read_clipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

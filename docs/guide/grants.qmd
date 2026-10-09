@@ -243,6 +243,12 @@ a refused question, a timeout, or a missing key goes to the LLM, which returns t
 full `GrantVerdict` above. Standing words, counted approvals, widened scope, and
 every refusal therefore come from the LLM.
 
+`Judge(rules, llm=False)` makes Jev the only judge. An answer Jev does not settle,
+including no fresh evidence item, refuses the action with no LLM call. A Jev
+timeout, rejection, or missing key raises `JudgeFailed`, so the declaration's
+`judge_fails_open` decides the action. Such a declaration mints standing grants
+only through `Grants.request`, from the owner's verbatim words.
+
 The defaults are `model="small"`, `specialty="review"`, and `deadline=20` seconds.
 `contexts` accepts the same prompt contexts as other LLM hooks.
 `transcript` and `root_transcript` default to `False`; set either to a message
