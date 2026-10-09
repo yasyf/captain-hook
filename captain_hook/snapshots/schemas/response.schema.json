@@ -293,6 +293,19 @@
           "minimum": 0,
           "title": "Window Start",
           "type": "integer"
+        },
+        "window_started_unix_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Window Started Unix Ms"
         }
       },
       "required": [
@@ -308,6 +321,7 @@
         "parser_version",
         "source_bytes",
         "window_start",
+        "window_started_unix_ms",
         "committed_bytes",
         "event_count",
         "turn_count",

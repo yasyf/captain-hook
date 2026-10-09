@@ -29,7 +29,6 @@ CORE_SCHEMA = "cc-transcript.snapshot/1"
 HOST_SCHEMA = "captain.transcript/1"
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
-MAX_VIEW_ATTACHMENTS = 1024
 CLEANUP_SECONDS = 5
 GRAPH_WORK_SECONDS = 0.75
 GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
@@ -118,11 +117,6 @@ class EvidenceIncomplete(RuntimeError):
 class SnapshotProtocolError(EvidenceIncomplete):
     def __init__(self, reason: str) -> None:
         super().__init__("invalid_request", reason)
-
-
-class AttachmentLimit(EvidenceIncomplete):
-    def __init__(self) -> None:
-        super().__init__("source_limit", f"registered transcript attachments exceed {MAX_VIEW_ATTACHMENTS}")
 
 
 class GraphEvidenceExpired(EvidenceIncomplete):
@@ -655,6 +649,7 @@ class GraphSources:
     roots: tuple[Path, ...] = ()
     direct_paths: tuple[Path, ...] = ()
     session_key: str | None = None
+    active_since_unix_ms: int | None = None
 
 
 @dataclass
@@ -680,6 +675,7 @@ class RegisteredWarmState:
             thread_ids=list(self.sources.thread_ids),
             roots=[str(root) for root in self.sources.roots],
             direct_paths=[str(path) for path in self.sources.direct_paths],
+            active_since_unix_ms=self.sources.active_since_unix_ms,
             start_index=self.start_index,
             membership_revision=self.membership_revision,
             deadline_unix_ms=int((time.time() + deadline_seconds) * 1000),
@@ -853,12 +849,6 @@ class PreparedGraphEvidence:
                     if deadline <= int(time.time() * 1000):
                         raise EvidenceIncomplete("deadline", "no time remains for prepared graph evidence")
                     self.deadline_unix_ms = deadline
-                    if (
-                        len(self.sources.thread_ids) > 1024
-                        or len(self.sources.direct_paths) > 1024
-                        or len(self.sources.roots) > 64
-                    ):
-                        raise AttachmentLimit()
                     pages = list(
                         session.client.pages(
                             "prepare_graph",
@@ -866,6 +856,7 @@ class PreparedGraphEvidence:
                             thread_ids=list(self.sources.thread_ids),
                             roots=[str(path) for path in self.sources.roots],
                             direct_paths=[str(path) for path in self.sources.direct_paths],
+                            active_since_unix_ms=self.sources.active_since_unix_ms,
                             deadline_unix_ms=deadline,
                             limits=graph_limits(),
                         )
@@ -959,7 +950,8 @@ class RemoteSession:
         }
 
     def with_registered_sources(self, sources: GraphSources) -> RemoteSession:
-        return replace(self, graph=PreparedGraphEvidence(sources))
+        window = replace(sources, active_since_unix_ms=self.lease.description["window_started_unix_ms"])
+        return replace(self, graph=PreparedGraphEvidence(window))
 
     def selected(self, **selector: object) -> RemoteSession:
         return replace(self, selectors=(*self.selectors, selector))
