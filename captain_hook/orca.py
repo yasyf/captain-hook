@@ -51,9 +51,13 @@ def dispatch_panes(handle: str) -> tuple[str, str] | None:
 
 def pane_entries(user_data: Path) -> dict[str, object]:
     try:
-        return json.loads((user_data / PANE_STATUS).read_text())["entries"]
-    except (OSError, ValueError, KeyError):
+        status = json.loads((user_data / PANE_STATUS).read_text())
+    except (OSError, ValueError):
         return {}
+    match status:
+        case {"entries": dict() as entries}:
+            return entries
+    return {}
 
 
 def claude_session(entry: object) -> tuple[str, Path] | None:

@@ -130,6 +130,15 @@ def test_a_coordinator_pane_without_a_claude_session_resolves_nothing(
         assert coordinator_transcript(WORKER) is None
 
 
+@pytest.mark.parametrize("status", ["[]", '{"entries": []}', "{"], ids=["list", "entries-list", "truncated"])
+def test_a_malformed_pane_status_resolves_nothing(tmp_path: Path, status: str) -> None:
+    path = tmp_path / "orca" / "agent-hooks" / "last-status.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(status)
+    with in_worker(tmp_path / "orca"), stubbed_commands(orca_commands()):
+        assert coordinator_transcript(WORKER) is None
+
+
 def test_outside_orca_resolves_nothing() -> None:
     assert coordinator_transcript(WORKER) is None
 
