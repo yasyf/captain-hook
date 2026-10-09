@@ -101,7 +101,7 @@ class Grant(BaseModel):
         expires: When it stops covering anything.
         rules: Names of declared rules this grant asserts on top of the always-on ones.
         evidence: The owner's words it rests on.
-        source_key: The approval it was minted from; one approval mints one grant.
+        source_key: The approval it was minted from, with the scope it covers; one approval mints one grant per scope.
         links: Ids of the same permission in other systems, such as a daemon's own grant.
         author: Who minted it.
         created: When it was minted.
