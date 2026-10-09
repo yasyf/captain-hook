@@ -228,6 +228,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Registered transcripts follow the root's evidence window.** A deep query used to
+  send every codex thread registered against the session and failed open with
+  `source_limit: registered transcript attachments exceed 1024` once a long session
+  passed 1,024 registrations. It now passes the root lease's window start, and the
+  snapshot owner admits only threads whose rollout changed inside the 4 MiB window
+  hooks already read. A session whose transcript fits the window keeps every thread.
 - **A tooling refusal names the command that refused.** The general pack's refusal
   record and its warning named each signature's owning tool, so when GitHub refused
   `gh pr view` for a spent GraphQL quota the warning read "`ccx` refused this action".
