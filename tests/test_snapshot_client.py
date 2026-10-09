@@ -16,8 +16,6 @@ from captain_hook.snapshots.client import (
     GATE_WORK_SECONDS,
     GRAPH_WORK_SECONDS,
     HOST_SCHEMA,
-    MAX_VIEW_ATTACHMENTS,
-    AttachmentLimit,
     EvidenceIncomplete,
     GraphEvidenceExpired,
     GraphSources,
@@ -62,6 +60,7 @@ def description(lease="lease", classifier=None):
         "parser_version": "1",
         "source_bytes": 100,
         "window_start": 0,
+        "window_started_unix_ms": None,
         "committed_bytes": 100,
         "event_count": 1,
         "turn_count": 1,
@@ -102,19 +101,28 @@ def test_local_queries_do_not_send_registered_attachments():
     assert all(request["view"]["attachments"] == [] for request in requests)
 
 
-def test_deep_query_over_attachment_bound_is_incomplete_before_transport():
-    client = SnapshotClient(lambda _: pytest.fail("overbound view reached transport"))
+def test_deep_query_sends_every_registration_scoped_to_the_root_window():
+    prepared = []
+
+    def exchange(wrapper):
+        prepared.append(wrapper["request"])
+        return {
+            "schema": HOST_SCHEMA,
+            "response": failure(wrapper["request"]["id"], "incomplete", "registered membership is not warmed"),
+        }
+
+    client = SnapshotClient(exchange)
     client.bind_tool_registry({})
-    source = description()
+    source = description() | {"window_start": 40, "window_started_unix_ms": 1_767_323_045_000}
     session = RemoteSession(
         client, Lease(client, source), Path(source["canonical_path"]), source["classifier"]
-    ).with_registered_sources(
-        GraphSources(thread_ids=tuple(f"thread-{index}" for index in range(MAX_VIEW_ATTACHMENTS + 1)))
-    )
+    ).with_registered_sources(GraphSources(thread_ids=tuple(f"thread-{index}" for index in range(1281))))
 
-    assert len(session.view()["attachments"]) == 0
-    with pytest.raises(AttachmentLimit, match="registered transcript attachments exceed 1024"):
+    with pytest.raises(EvidenceIncomplete, match="registered membership is not warmed"):
         session.has_edit_to("src/**")
+    assert [(r["operation"], len(r["thread_ids"]), r["active_since_unix_ms"]) for r in prepared] == [
+        ("prepare_graph", 1281, 1_767_323_045_000)
+    ]
 
 
 def test_real_owner_reuses_prepared_graph(tmp_path, monkeypatch):

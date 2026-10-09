@@ -643,6 +643,19 @@
           "minimum": 0,
           "title": "Window Start",
           "type": "integer"
+        },
+        "window_started_unix_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Window Started Unix Ms"
         }
       },
       "required": [
@@ -658,6 +671,7 @@
         "parser_version",
         "source_bytes",
         "window_start",
+        "window_started_unix_ms",
         "committed_bytes",
         "event_count",
         "turn_count",
@@ -1910,6 +1924,20 @@
     "Core_PrepareGraph": {
       "additionalProperties": false,
       "properties": {
+        "active_since_unix_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Since Unix Ms"
+        },
         "deadline_unix_ms": {
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991,
@@ -1923,7 +1951,6 @@
             "pattern": "^/",
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Direct Paths",
           "type": "array"
         },
@@ -1963,7 +1990,6 @@
             "minLength": 1,
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Thread Ids",
           "type": "array"
         },
@@ -3916,6 +3942,20 @@
     "Core_WarmRegistered": {
       "additionalProperties": false,
       "properties": {
+        "active_since_unix_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Since Unix Ms"
+        },
         "classifier": {
           "$ref": "#/$defs/Core_Classifier"
         },
@@ -3932,7 +3972,6 @@
             "pattern": "^/",
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Direct Paths",
           "type": "array"
         },
@@ -3991,7 +4030,6 @@
             "minLength": 1,
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Thread Ids",
           "type": "array"
         }

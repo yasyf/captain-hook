@@ -288,6 +288,7 @@ class WorkerService:
             "thread_ids": sources.thread_ids,
             "roots": [str(root) for root in sources.roots],
             "direct_paths": [str(path) for path in sources.direct_paths],
+            "active_since_unix_ms": sources.active_since_unix_ms,
             "tool_registry": client.tool_registry(),
         }
         fingerprint = hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

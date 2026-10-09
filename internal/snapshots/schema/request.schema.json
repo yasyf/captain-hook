@@ -1032,6 +1032,20 @@
     "PrepareGraph": {
       "additionalProperties": false,
       "properties": {
+        "active_since_unix_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Since Unix Ms"
+        },
         "deadline_unix_ms": {
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991,
@@ -1045,7 +1059,6 @@
             "pattern": "^/",
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Direct Paths",
           "type": "array"
         },
@@ -1085,7 +1098,6 @@
             "minLength": 1,
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Thread Ids",
           "type": "array"
         },
@@ -2341,6 +2353,20 @@
     "WarmRegistered": {
       "additionalProperties": false,
       "properties": {
+        "active_since_unix_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Since Unix Ms"
+        },
         "classifier": {
           "$ref": "#/$defs/Classifier"
         },
@@ -2357,7 +2383,6 @@
             "pattern": "^/",
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Direct Paths",
           "type": "array"
         },
@@ -2416,7 +2441,6 @@
             "minLength": 1,
             "type": "string"
           },
-          "maxItems": 1024,
           "title": "Thread Ids",
           "type": "array"
         }
