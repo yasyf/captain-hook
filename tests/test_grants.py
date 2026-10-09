@@ -826,6 +826,14 @@ def test_one_approval_pays_for_one_action_at_each_destination_the_judge_allows(t
     assert isinstance(again, Denied) and f"Grant {second.grant.id} was spent" in again.explained
 
 
+def test_a_one_use_grant_keyed_on_the_bare_approval_never_binds_another_place(tmp_path: Path) -> None:
+    said = owner("post a bug report in C1, and do the same in that thread", ident="ask:toolu_9#0")
+    minted(uses=1, evidence=[said], source_key=said.key)
+    post = Grants("test.write", ("channel", "thread"), channel_post, judge=Judge("rules"), evidence=(Fixed((said,)),))
+    allowed = post.check(event(tmp_path, "bug", allow=True, reason="the channel post", relied_on=[said.id]))
+    assert isinstance(allowed, Allowed) and allowed.grant.scope == {"channel": "C1", "thread": ""}
+
+
 def test_a_one_use_verdict_widened_to_several_places_still_buys_one_action_at_each(tmp_path: Path) -> None:
     said = owner("post a bug report in C1, and do the same in that thread", ident="ask:toolu_9#0")
     both = {"allow": True, "reason": "ok", "relied_on": [said.id], "scope": {"thread": ["", "1.2"]}}

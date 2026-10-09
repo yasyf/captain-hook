@@ -246,7 +246,7 @@ class Grants:
     def paid_by(self, evt: BaseHookEvent, approval: str, action: Proposal) -> Grant | None:
         """The grant *approval* already minted for *action*: its counted budget anywhere, or a grant at this scope.
 
-        One approval buys one action per place, so only a counted budget or an earlier grant here binds it.
+        One approval buys one action per place, so only a budget of several uses or an earlier grant here binds it.
         """
         own = self.canonical(action)
         return next(
@@ -254,7 +254,7 @@ class Grants:
                 grant
                 for grant in store.grants(self.kind, tree_of(evt))
                 if any((item.key or item.id) == approval for item in grant.evidence)
-                and (grant.source_key == approval or covers(grant.scope, own))
+                and ((grant.uses or 0) > 1 or covers(grant.scope, own))
             ),
             None,
         )
