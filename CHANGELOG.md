@@ -150,6 +150,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A Claude session on a live Orca dispatch reads its coordinator's session as its root.**
+  When `ORCA_TERMINAL_HANDLE` names a terminal whose dispatch is live and Orca records this
+  session in the worker's pane, `evt.ctx.root_transcript` and `evt.ctx.root_path` name the
+  dispatching pane's Claude transcript, as they do for a subagent. The worker's grant tree
+  becomes the coordinator's session id, so a write gate judges it against the owner's words
+  in the coordinator's session instead of the worker's brief. The binding comes from
+  `orca orchestration check --peek`, `worker-show`, `dispatch-show`, and Orca's
+  `agent-hooks/last-status.json`, re-read after one minute.
+
 - **The grant judge asks TypeSafe Jev first.** `Judge` asks Jev which one evidence item
   permits exactly the pending action, and whether any item's words reach past it. When Jev
   puts at least 0.8 on one item that no grant in the tree rests on yet, and under 0.2 on

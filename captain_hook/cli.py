@@ -285,6 +285,7 @@ def dispatch_event(
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
+    from captain_hook.orca import coordinator_transcript
     from captain_hook.transcripts import (
         ROOT_TAIL_EVENTS,
         claim_unborn,
@@ -305,6 +306,9 @@ def dispatch_event(
     )
     parent = raw.get("transcript_path")
     in_lane = bool(parent) and resolved_path != parent
+    lane_root = (coordinator_transcript(raw.get("session_id")) if provider == "claude" else None) or (
+        Path(parent) if in_lane else None
+    )
     root_session = bool(parent) and not in_lane and not raw.get("agent_id") and provider == "claude"
     if root_session and event is Event.SessionStart and raw.get("source") == "startup":
         record_unborn(session_dir, parent)
@@ -323,8 +327,8 @@ def dispatch_event(
         transcript=transcript,
         settings=_state.settings,
         project_root=root,
-        root_transcript=root_transcript(parent, ROOT_TAIL_EVENTS) if in_lane else None,
-        root_path=Path(parent) if in_lane else None,
+        root_transcript=root_transcript(lane_root, ROOT_TAIL_EVENTS) if lane_root else None,
+        root_path=lane_root,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
     within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)

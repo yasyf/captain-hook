@@ -186,8 +186,9 @@ class HookContext:
     """Runtime context injected into every hook event.
 
     Holds session state, the transcript ``Session``, settings, and LLM/CLI helpers. Inside a
-    subagent or teammate lane, ``transcript`` is the lane's own and ``root_transcript`` tails the
-    session that spawned it, where the user's own words live; it is ``None`` everywhere else.
+    subagent or teammate lane, or a Claude session on a live Orca dispatch, ``transcript`` is the
+    lane's own and ``root_transcript`` tails the session that spawned or dispatched it, where the
+    user's own words live; it is ``None`` everywhere else.
     """
 
     session: SessionStore

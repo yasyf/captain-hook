@@ -17,6 +17,7 @@ from captain_hook.app import reset
 from captain_hook.context import READY_BACKENDS, UNSUPPORTED_MODELS
 from captain_hook.daemon.registry import MARKER_WALKS, PLUGIN_WALKS
 from captain_hook.durable import DurableStore
+from captain_hook.orca import dispatched_coordinator
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
 from captain_hook.util.http import github_token
@@ -103,6 +104,7 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
 def clear_global_caches():
     caches = (
         github_token,
+        dispatched_coordinator,
         model_version,
         model_sha256,
         resolve_repo_key,
