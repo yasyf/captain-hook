@@ -51,6 +51,7 @@ FRAME = """
 UNPERMITTED = "none"
 PERMITTED = 0.8
 STANDING = 0.2
+JEV_UNSETTLED = "Jev found no single owner approval that permits exactly this action."
 STANDING_QUESTION = Binary(
     "Do any of the owner's words in <evidence> permit more than the one action in <proposed_action>: further actions "
     "of its kind, every reply in a thread or channel, a stated number of them, or other places?",
@@ -133,7 +134,8 @@ class Judge:
     TypeSafe Jev judges first, citing the one evidence item that permits exactly this action. When Jev is
     sure of that item, no grant rests on it yet, and no item's words reach past this one action, the
     action goes ahead on that citation. Any other answer, a refusal, or a Jev failure asks the LLM, which
-    writes the citations, standing words, scope, and refusal, and may still allow.
+    writes the citations, standing words, scope, and refusal, and may still allow. With ``llm`` off, Jev
+    alone judges: any other answer refuses, and a Jev failure raises :class:`JudgeFailed`.
 
     Attributes:
         rules: The hook's rules for this kind of action, in prose.
@@ -145,6 +147,7 @@ class Judge:
         root_transcript: The spawning session's window, for a lane.
         root_excerpt: Maps the event to needles whose root-session mentions the judge reads.
         tool_results: Whether the transcript windows carry tool output.
+        llm: Whether an action Jev does not settle goes to the LLM; off, it is refused.
     """
 
     rules: str
@@ -156,6 +159,7 @@ class Judge:
     root_transcript: bool | int | Literal["recent", "full"] = False
     root_excerpt: Callable[[BaseHookEvent], Sequence[str]] | None = None
     tool_results: bool = False
+    llm: bool = True
 
     def __call__(
         self,
@@ -184,6 +188,8 @@ class Judge:
             with reqenv.deadline_in(self.deadline if left is None else min(self.deadline, left)):
                 if (quick := self.quick(evt, prompt, evidence)) is not None:
                     return quick
+                if not self.llm:
+                    return GrantVerdict(reason=JEV_UNSETTLED, allow=False)
                 verdict = llm_evaluate(
                     evt,
                     prompt,
@@ -244,8 +250,12 @@ class Judge:
             raise
         except (DecideError, DecideKeyMissing) as exc:
             record_decide_failure("jev", exc, str(evt.cwd) if evt.cwd else None)
+            if not self.llm:
+                raise
             return None
         except Exception:
+            if not self.llm:
+                raise
             logger.opt(exception=True).warning("jev gave no grant verdict; asking the llm")
             return None
         return quick_verdict(decision)
