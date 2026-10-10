@@ -238,7 +238,14 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
     assert calls[2][1]["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024
 
 
-def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("cache_bytes_read", "paced"),
+    [
+        pytest.param(0, [], id="memory-hits-are-not-paced"),
+        pytest.param(4096, [10, 10], id="prepared-cache-reads-are-paced"),
+    ],
+)
+def test_warm_command_paces_only_progress_that_read_from_disk(tmp_path, monkeypatch, cache_bytes_read, paced):
     from captain_hook.snapshots.client import SnapshotClient
 
     register_transcript("s-cached", thread_id="thread-1")
@@ -272,7 +279,12 @@ def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
         registry_calls = sum(name == "warm_registered" for name, _ in calls)
         return {
             "status": "ok",
-            "usage": {"source_bytes_read": 0, "discovery_entries_examined": 0, "cache_hits": 8},
+            "usage": {
+                "source_bytes_read": 0,
+                "prepared_cache_bytes_read": cache_bytes_read,
+                "discovery_entries_examined": 0,
+                "cache_hits": 8,
+            },
             "data": {
                 "kind": "warmed_registry",
                 "owner_epoch": "owner",
@@ -305,11 +317,14 @@ def test_warm_command_does_not_pace_cache_only_progress(tmp_path, monkeypatch):
     monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
     monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
     monkeypatch.setattr("captain_hook.worker.service.WARM_INTERVAL_SECONDS", 10)
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
     started = time.monotonic()
     result = CliRunner().invoke(cli, ["transcripts", "warm", "--session", "s-cached", "--root", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
     assert time.monotonic() - started < 1
+    assert slept == paced
     assert len(calls) == 6
     assert json.loads(result.output)["verify_cache_hits"] == 16
 

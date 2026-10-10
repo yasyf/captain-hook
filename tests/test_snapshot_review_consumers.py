@@ -120,6 +120,8 @@ def response(request, data, *, status="ok", cursor=None):
                     "nonincremental_lowering_calls",
                     "nonincremental_lowering_source_bytes",
                     "discovery_entries_examined",
+                    "prepared_cache_reads",
+                    "prepared_cache_bytes_read",
                 ),
                 0,
             ),

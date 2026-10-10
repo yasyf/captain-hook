@@ -236,6 +236,40 @@ def test_root_and_registered_warming_share_one_paced_fair_worker(monkeypatch, tm
         close(worker)
 
 
+@pytest.mark.parametrize(
+    ("usage", "paced"),
+    [
+        pytest.param({"source_bytes_read": 0, "prepared_cache_bytes_read": 4096}, True, id="prepared-cache-read"),
+        pytest.param({"source_bytes_read": 4096, "prepared_cache_bytes_read": 0}, True, id="source-read"),
+        pytest.param(
+            {"source_bytes_read": 0, "prepared_cache_bytes_read": 0, "cache_hits": 8}, False, id="memory-only"
+        ),
+    ],
+)
+def test_warming_paces_every_step_that_read_source_or_prepared_cache_bytes(monkeypatch, usage, paced):
+    import captain_hook.worker.service as module
+
+    worker = service()
+    waits = []
+
+    def step(job):
+        job.state.last_usage = usage
+        return True
+
+    def wait(interval):
+        waits.append(interval)
+        return False
+
+    monkeypatch.setattr(worker, "_warm_step", step)
+    monkeypatch.setattr(worker._warm_stop, "wait", wait)
+    try:
+        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",), session_key="session"))
+        wait_until(lambda: not worker._warm_running)
+        assert waits == [module.WARM_INTERVAL_SECONDS if paced else 0]
+    finally:
+        close(worker)
+
+
 def test_root_warmer_advances_bounded_source_without_restarting():
     calls = []
     offsets = iter((8 * 1024 * 1024, 16 * 1024 * 1024, 16 * 1024 * 1024))

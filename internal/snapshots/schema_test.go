@@ -117,3 +117,36 @@ func TestDefaultConfigurationPreservesHookReserves(t *testing.T) {
 		}
 	}
 }
+
+func TestHostConfigurationGrowsRetentionByItsFactCacheBudget(t *testing.T) {
+	budgets := func(load func() (json.RawMessage, error)) map[string]int64 {
+		t.Helper()
+		data, err := load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Validate("config", data); err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]int64
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatal(err)
+		}
+		return config
+	}
+	library, host := budgets(DefaultConfig), budgets(HostConfig)
+	backgroundHeadroom := func(config map[string]int64) int64 {
+		return config["max_retained_bytes"] - config["reserved_hook_accounted_bytes"] - config["max_prepared_fact_memory_bytes"]
+	}
+	if host["max_prepared_fact_memory_bytes"] != 512<<20 || host["max_retained_bytes"] != 1408<<20 {
+		t.Fatalf("host fact memory=%d retained=%d", host["max_prepared_fact_memory_bytes"], host["max_retained_bytes"])
+	}
+	if backgroundHeadroom(host) != backgroundHeadroom(library) || backgroundHeadroom(host) != 384<<20 {
+		t.Fatalf("background headroom host=%d library=%d", backgroundHeadroom(host), backgroundHeadroom(library))
+	}
+	for key, want := range library {
+		if key != "max_prepared_fact_memory_bytes" && key != "max_retained_bytes" && host[key] != want {
+			t.Fatalf("%s=%d want library default %d", key, host[key], want)
+		}
+	}
+}
