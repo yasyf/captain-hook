@@ -100,7 +100,7 @@ def test_builtin_pack_ids_are_namespaced() -> None:
 
 @pytest.mark.parametrize("name", ["general", "steering"])
 def test_nlp_builtins_declare_resources(name: str) -> None:
-    assert manager.resolve_builtin(name).descriptor.resources == ("spacy:en_core_web_sm", "wordnet:oewn:2025")
+    assert manager.resolve_builtin(name).descriptor.resources == ("spacy:en_core_web_sm",)
 
 
 @pytest.mark.parametrize("name", ["fixes", "go", "python", "performance", "graphite"])

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import hashlib
+import sqlite3
+import subprocess
 import sys
+import threading
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +17,7 @@ import pytest
 from captain_hook.util import model_cache
 
 MODEL_VERSION = "3.9.5"
+RUN = subprocess.run
 
 
 @pytest.fixture
@@ -221,28 +226,78 @@ def test_model_sha256_raises_when_checksum_absent(monkeypatch: pytest.MonkeyPatc
         model_cache.model_sha256("3.9.5")
 
 
-class FakeWn:
-    def __init__(self, data_dir: Path, *, installed: bool) -> None:
-        self.config = SimpleNamespace(data_directory=str(data_dir))
-        self.installed = installed
-        self.adds: list[Path] = []
+LEXICON_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE LexicalResource SYSTEM "http://globalwordnet.github.io/schemas/WN-LMF-1.0.dtd">
+<LexicalResource xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <Lexicon id="{lexicon}" label="{lexicon}" language="en" email="a@example.com"
+           license="https://creativecommons.org/licenses/by/4.0/" version="{version}">
+    <LexicalEntry id="{lexicon}-change-n">
+      <Lemma writtenForm="{lemma}" partOfSpeech="n"/>
+      <Sense id="{lexicon}-change-n-1" synset="{lexicon}-1-n"/>
+    </LexicalEntry>
+    <Synset id="{lexicon}-1-n" ili="" partOfSpeech="n"/>
+  </Lexicon>
+</LexicalResource>
+"""
 
-    def lexicons(self, lexicon: str) -> list[str]:
-        assert lexicon == model_cache.WN_SPEC
-        return ["oewn"] if self.installed else []
 
-    def add(self, path: Path, progress_handler: object = None) -> None:
-        assert progress_handler is None
-        assert path.is_file()
-        self.adds.append(path)
-        self.installed = True
+@dataclass
+class WnHome:
+    data_dir: Path
+    downloads: list[Path] = field(default_factory=list)
+    imports: list[list[str]] = field(default_factory=list)
+    locks: list[str] = field(default_factory=list)
+
+    @property
+    def database(self) -> Path:
+        return self.data_dir / "wn.db"
+
+    @property
+    def stamp(self) -> Path:
+        return self.data_dir / "oewn-2025+.verified"
+
+    def stagings(self) -> list[Path]:
+        return list(self.data_dir.glob(".wn.db.staging-*"))
+
+    def lemmas(self) -> set[str]:
+        with contextlib.closing(sqlite3.connect(self.database)) as conn:
+            return {form for (form,) in conn.execute("SELECT form FROM forms")}
+
+    def seed(self, lexicon: str, version: str, lemma: str = "unfinished") -> None:
+        self.data_dir.mkdir(exist_ok=True)
+        source = self.data_dir.parent / f"{lexicon}.xml"
+        source.write_text(LEXICON_XML.format(lexicon=lexicon, version=version, lemma=lemma))
+        RUN([sys.executable, "-P", "-c", model_cache.WN_IMPORT, str(self.data_dir), str(source)], check=True)
 
 
 @pytest.fixture
-def fake_wn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeWn:
-    fake = FakeWn(tmp_path / "wn-data", installed=False)
-    monkeypatch.setitem(sys.modules, "wn", fake)
-    return fake
+def wn_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WnHome:
+    import wn
+
+    home = WnHome(tmp_path / "wn-data")
+    payload = gzip.compress(LEXICON_XML.format(lexicon="oewn", version="2025+", lemma="change").encode())
+    lock = model_cache.FileLock
+
+    def download(_url: str, dest: Path) -> None:
+        home.downloads.append(dest)
+        dest.write_bytes(payload)
+
+    def import_lexicon(argv: list[str], **kwargs: object) -> object:
+        home.imports.append(argv)
+        return RUN(argv, **kwargs)
+
+    def take_lock(path: str) -> object:
+        home.locks.append(path)
+        return lock(path)
+
+    monkeypatch.setattr(wn.config, "data_directory", home.data_dir)
+    monkeypatch.setattr(wn.config, "allow_multithreading", False)
+    monkeypatch.setattr(model_cache, "WN_ARCHIVE_SIZE", len(payload))
+    monkeypatch.setattr(model_cache, "WN_ARCHIVE_SHA256", hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(model_cache.http, "github_download", download)
+    monkeypatch.setattr(model_cache.subprocess, "run", import_lexicon)
+    monkeypatch.setattr(model_cache, "FileLock", take_lock)
+    return home
 
 
 def test_wn_lexicon_source_is_exactly_pinned() -> None:
@@ -255,47 +310,158 @@ def test_wn_lexicon_source_is_exactly_pinned() -> None:
     assert model_cache.WN_ARCHIVE_SHA256 == "31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc"
 
 
-def test_wn_lexicon_cached_skips_download(fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_wn.installed = True
-    monkeypatch.setattr(
-        model_cache.http,
-        "github_download",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("cached lexicon must not access the network")),
-    )
+def test_wn_lexicon_first_use_builds_in_staging_then_verifies_and_stamps(wn_home: WnHome) -> None:
+    model_cache.ensure_wn_lexicon()
+    model_cache.ensure_wn_lexicon()
+
+    archive = wn_home.data_dir / model_cache.WN_ARCHIVE_NAME
+    assert wn_home.downloads == [archive.with_name(f".{archive.name}.part")]
+    assert [argv[-1] for argv in wn_home.imports] == [str(archive)]
+    assert Path(wn_home.imports[0][-2]).parent == wn_home.data_dir
+    assert wn_home.locks == [str(wn_home.data_dir / "oewn-2025+.lock")]
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+    assert wn_home.stamp.read_text() == model_cache.wn_fingerprint(wn_home.database)
+    assert wn_home.stagings() == []
+
+
+def test_wn_lexicon_concurrent_first_uses_share_one_build(wn_home: WnHome) -> None:
+    callers = 4
+    barrier = threading.Barrier(callers)
+    failures: list[BaseException] = []
+
+    def first_use() -> None:
+        barrier.wait()
+        try:
+            model_cache.ensure_wn_lexicon()
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=first_use) for _ in range(callers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failures == []
+    assert len(wn_home.imports) == 1
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+
+
+def test_wn_lexicon_recovers_from_an_interrupted_build(wn_home: WnHome) -> None:
+    abandoned = wn_home.data_dir / ".wn.db.staging-abandoned"
+    abandoned.mkdir(parents=True)
+    (abandoned / "wn.db").write_bytes(b"SQLite format 3\x00 half an import")
 
     model_cache.ensure_wn_lexicon()
 
-    assert fake_wn.adds == []
+    assert len(wn_home.imports) == 1
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+    assert wn_home.stagings() == []
 
 
-def test_wn_lexicon_adds_verified_atomic_archive_once_under_idempotent_filelock(
-    tmp_path: Path, fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("sidecar", ["wn.db-journal", "wn.db-wal", "wn.db-shm"])
+def test_wn_lexicon_rebuilds_a_database_with_an_unfinished_write(wn_home: WnHome, sidecar: str) -> None:
+    wn_home.seed("oewn", "2025+")
+    (wn_home.data_dir / sidecar).write_bytes(b"unfinished")
+    assert model_cache.intact_wn_lexicons(wn_home.database) == set()
+
+    model_cache.ensure_wn_lexicon()
+
+    assert len(wn_home.imports) == 1
+    assert not (wn_home.data_dir / sidecar).exists()
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+
+
+def test_wn_lexicon_rebuilds_a_damaged_database(wn_home: WnHome) -> None:
+    wn_home.seed("oewn", "2025+")
+    damaged = bytearray(wn_home.database.read_bytes())
+    damaged[4096:8192] = b"\xff" * 4096
+    wn_home.database.write_bytes(damaged)
+    assert model_cache.intact_wn_lexicons(wn_home.database) == set()
+
+    model_cache.ensure_wn_lexicon()
+
+    assert len(wn_home.imports) == 1
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+
+
+def test_wn_lexicon_reverifies_a_database_that_changed_after_its_stamp(wn_home: WnHome) -> None:
+    model_cache.ensure_wn_lexicon()
+    wn_home.database.write_bytes(b"not a database")
+
+    model_cache.ensure_wn_lexicon()
+
+    assert len(wn_home.imports) == 2
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+    assert wn_home.stamp.read_text() == model_cache.wn_fingerprint(wn_home.database)
+
+
+def test_wn_lexicon_rebuilds_a_database_no_stamp_vouches_for(wn_home: WnHome) -> None:
+    wn_home.seed("oewn", "2025+")
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"oewn:2025+"}
+
+    model_cache.ensure_wn_lexicon()
+
+    assert len(wn_home.imports) == 1
+    assert wn_home.lemmas() == {"change"}
+    assert wn_home.stamp.read_text() == model_cache.wn_fingerprint(wn_home.database)
+
+
+def test_wn_lexicon_keeps_the_other_lexicons_installed(wn_home: WnHome) -> None:
+    wn_home.seed("other", "1.0", lemma="kept")
+
+    model_cache.ensure_wn_lexicon()
+
+    assert [argv[-1] for argv in wn_home.imports] == [str(wn_home.data_dir / model_cache.WN_ARCHIVE_NAME)]
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"other:1.0", "oewn:2025+"}
+    assert wn_home.lemmas() == {"kept", "change"}
+
+
+def test_wn_lexicon_replaces_its_unvouched_lexicon_beside_the_others(wn_home: WnHome) -> None:
+    wn_home.seed("other", "1.0", lemma="kept")
+    wn_home.seed("oewn", "2025+")
+
+    model_cache.ensure_wn_lexicon()
+
+    assert [argv[-1] for argv in wn_home.imports] == ["oewn:2025+"]
+    assert model_cache.intact_wn_lexicons(wn_home.database) == {"other:1.0", "oewn:2025+"}
+    assert wn_home.lemmas() == {"kept", "change"}
+
+
+@pytest.mark.parametrize(
+    ("program", "error"),
+    [
+        pytest.param("raise SystemExit(3)", subprocess.CalledProcessError, id="import_fails"),
+        pytest.param("pass", RuntimeError, id="import_adds_nothing"),
+    ],
+)
+def test_wn_lexicon_failed_import_never_reaches_the_database(
+    wn_home: WnHome, monkeypatch: pytest.MonkeyPatch, program: str, error: type[Exception]
 ) -> None:
-    payload = b"pinned-oewn-archive"
-    locks: list[str] = []
-    downloads: list[tuple[str, Path]] = []
+    monkeypatch.setattr(model_cache, "WN_IMPORT", program)
 
-    def download(url: str, dest: Path) -> None:
-        downloads.append((url, dest))
-        dest.write_bytes(payload)
+    with pytest.raises(error):
+        model_cache.ensure_wn_lexicon()
 
-    monkeypatch.setattr(model_cache, "WN_ARCHIVE_SIZE", len(payload))
-    monkeypatch.setattr(model_cache, "WN_ARCHIVE_SHA256", hashlib.sha256(payload).hexdigest())
-    monkeypatch.setattr(model_cache.http, "github_download", download)
-    monkeypatch.setattr(model_cache, "FileLock", lambda path: (locks.append(path), contextlib.nullcontext())[1])
-
-    model_cache.ensure_wn_lexicon()
-    model_cache.ensure_wn_lexicon()
-
-    archive = tmp_path / "wn-data" / model_cache.WN_ARCHIVE_NAME
-    assert downloads == [(model_cache.WN_ASSET_URL, archive.with_name(f".{archive.name}.part"))]
-    assert fake_wn.adds == [archive]
-    assert archive.read_bytes() == payload
-    assert not archive.with_name(f".{archive.name}.part").exists()
-    assert locks == [str(tmp_path / "wn-data" / "oewn-2025+.lock")] * 2
+    assert not wn_home.database.exists()
+    assert not wn_home.stamp.exists()
 
 
-def test_wn_lexicon_digest_mismatch_never_adds(fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wn_lexicon_failed_rebuild_leaves_the_existing_database_alone(
+    wn_home: WnHome, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wn_home.seed("other", "1.0", lemma="kept")
+    before = wn_home.database.read_bytes()
+    monkeypatch.setattr(model_cache, "WN_IMPORT", "raise SystemExit(3)")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        model_cache.ensure_wn_lexicon()
+
+    assert wn_home.database.read_bytes() == before
+    assert not wn_home.stamp.exists()
+
+
+def test_wn_lexicon_digest_mismatch_never_imports(wn_home: WnHome, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         model_cache.http,
         "github_download",
@@ -305,8 +471,9 @@ def test_wn_lexicon_digest_mismatch_never_adds(fake_wn: FakeWn, monkeypatch: pyt
     with pytest.raises(RuntimeError, match="integrity mismatch for oewn:2025\\+"):
         model_cache.ensure_wn_lexicon()
 
-    archive = Path(fake_wn.config.data_directory) / model_cache.WN_ARCHIVE_NAME
-    assert fake_wn.adds == []
+    archive = wn_home.data_dir / model_cache.WN_ARCHIVE_NAME
+    assert wn_home.imports == []
+    assert not wn_home.database.exists()
     assert not archive.exists()
     assert not archive.with_name(f".{archive.name}.part").exists()
 

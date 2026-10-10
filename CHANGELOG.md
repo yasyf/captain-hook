@@ -150,6 +150,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **WordNet is provisioned on first use, and builtin hooks no longer read it.** The two
+  `steering` clauses that called `Phrase.expand` now carry their synonyms as literals, four
+  for `change` and 17 for `fix`, and a test fails when a literal differs from the pinned
+  lexicon's expansion. `general` and `steering` declare only `spacy:en_core_web_sm`, and the
+  worker's warm-up thread loads only spaCy, so a session that runs builtin hooks never opens
+  `~/.wn_data`. `Phrase.expand` stays public. The first hook that reads an expanded phrase
+  provisions the lexicon and waits for it, and a pack that declares `wordnet:oewn:2025`
+  still provisions at session start.
+
 - **A Claude session on a live Orca dispatch reads its coordinator's session as its root.**
   When `ORCA_TERMINAL_HANDLE` names a terminal whose dispatch is live and Orca records this
   session in the worker's pane, `evt.ctx.root_transcript` and `evt.ctx.root_path` name the
@@ -236,6 +245,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `judge_timeout_seconds` defaults to 3.
 
 ### Fixed
+
+- **An interrupted WordNet import can no longer leave a database that hooks read.**
+  `wn.add` imports with `journal_mode=MEMORY`, so a killed import left `wn.db` half written
+  with no journal to roll back. That file could still pass `PRAGMA quick_check` and list
+  the lexicon with none of its synsets, and the next hook read it as installed.
+  `ensure_wn_lexicon` now imports in a child process into a staging copy and renames it over
+  `wn.db` only after the child exits cleanly, `quick_check` passes, and the lexicon is
+  listed. It then writes a stamp holding the database's size and mtime. A database no stamp
+  vouches for is rebuilt, which includes every database an earlier version imported in
+  place, so the first `Phrase.expand` after upgrading pays one import. Other lexicons in an
+  intact database are carried into the rebuild, and each build stages in its own directory.
+  One caller builds while every other process
+  and thread waits on the file lock, and a later first use reads the stamp without taking
+  the lock.
 
 - **Registered transcripts follow the root's evidence window.** A deep query used to
   send every codex thread registered against the session and failed open with

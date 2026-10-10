@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+import captain_hook
+from captain_hook.loader import import_pack_module
 from captain_hook.signals.nlp import (
     Clause,
     NlpSignal,
@@ -111,6 +114,15 @@ class TestPhraseExpand:
         with ThreadPoolExecutor(max_workers=1) as pool:
             lemmas = pool.submit(lambda: Phrase.expand("modify", pos="v").lemmas).result(timeout=30)
         assert any(syn in lemmas for syn in ("change", "alter"))
+
+    @pytest.mark.parametrize(("literal", "term"), [("CHANGE_NOUNS", "change"), ("FIX_NOUNS", "fix")])
+    def test_steering_literals_match_the_pinned_expansion(self, literal: str, term: str, isolate_modules: None) -> None:
+        steering = import_pack_module(
+            "captain_hook._packs.steering.steering",
+            Path(captain_hook.__file__).parent / "builtin_packs" / "steering" / "hooks" / "steering.py",
+        )
+
+        assert set(getattr(steering, literal).lemmas) == set(Phrase.expand(term).lemmas)
 
 
 class TestClauseValidation:
