@@ -244,6 +244,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on 73 of them and scored 70%. Jev answers in 133 ms. The `judge_tier` setting is gone
   and `judge_timeout_seconds` defaults to 3.
 
+- **The transcript host keeps 512 MiB of prepared facts in memory, up from 128 MiB.**
+  The facts for one registry's 897 traces measured 337 MB. Under a 128 MiB budget about
+  350 of them stayed in memory, and every graph query read the rest back from the disk
+  cache. A replay at that size read 897 entries and 282 MB on each query. With 512 MiB
+  the same queries read nothing once warming finished, and they returned the same
+  answers. The host sends the budget in its handshake and raises retained memory from
+  1024 MiB to 1408 MiB by the same 384 MiB, so snapshots and the 512 MiB hook reserve
+  keep the room they had. The owner's resident memory in the replay rose from 793 MB to
+  1,473 MB.
+
+- **Warming waits after a step that read the prepared-facts cache.** The worker's warm
+  loop and `capt-hook transcripts warm` waited 2 seconds only after a step that read
+  transcript bytes, so steps served from the disk cache ran back to back. Both now wait
+  after a step that read either kind. A step that read nothing from disk still runs the
+  next one at once. cc-transcript 14.40.0 reports those reads as `prepared_cache_reads`
+  and `prepared_cache_bytes_read` in every reply's `usage`, and its warming charges them
+  against the step's 8 MiB read budget.
+- The `cc-transcript[judge]` pin moves to 14.40.0.
+
 ### Fixed
 
 - **An interrupted WordNet import can no longer leave a database that hooks read.**
