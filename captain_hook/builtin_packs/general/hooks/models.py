@@ -272,6 +272,13 @@ llm_gate(
             prompt="Write the PR description below to a body file and open the PR.\ntitle: fix retry\nbody: ...",
         ): Allow(),
         Input(
+            agent_type="ship-pr",
+            model="sonnet",
+            prompt='Run exactly: ccx vcs ship -m "docs: write the retry guide" --pr-title "docs: write the '
+            'retry guide" --pr-body-file /tmp/body.md',
+            llm={"block": False},
+        ): Allow(),
+        Input(
             model="opus",
             prompt="Fix the import in cli.py, have the codex skill review the diff, then draft the "
             "CHANGELOG entry yourself.",
