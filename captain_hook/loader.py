@@ -99,6 +99,9 @@ def discover_hooks(hooks_dir: str | Path) -> None:
 
 def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
     if existing := sys.modules.get(fqn):
+        if existing.__path__ != search_paths:
+            existing.__path__ = search_paths
+            evict_submodules(fqn)
         return existing
     spec = importlib.util.spec_from_loader(fqn, loader=None, is_package=True)
     if spec is None:

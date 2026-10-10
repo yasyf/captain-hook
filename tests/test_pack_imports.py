@@ -89,6 +89,36 @@ def test_ensure_pack_package_idempotent(pack: Path, isolate_modules: None) -> No
     assert sys.modules["captain_hook._packs.ccx_idem.beta"].SHARED == 1
 
 
+def _release(base: Path, helpers: dict[str, str]) -> Path:
+    base.mkdir(parents=True)
+    for stem, value in helpers.items():
+        (base / f"{stem}.py").write_text(f"__capt_hook_skip__ = True\n{stem.upper()} = {value!r}\n")
+    imports = "".join(f"from .{stem} import {stem.upper()}\n" for stem in helpers)
+    message = " + ".join(stem.upper() for stem in helpers)
+    for stem in ("alpha", "beta"):
+        (base / f"{stem}.py").write_text(
+            f"{imports}from captain_hook import Event, hook\nhook(Event.PreToolUse, message={message})\n"
+        )
+    return base
+
+
+def test_rediscovery_loads_helpers_from_the_newest_release(tmp_path: Path, isolate_modules: None) -> None:
+    old = _release(tmp_path / "0.7.46" / "hooks", {"turns": "old"})
+    new = _release(tmp_path / "0.7.49" / "hooks", {"turns": "new", "installed": "+installed"})
+
+    app.reset()
+    discover_pack("long-running", old)
+    app.reset()
+    discover_pack("long-running", new)
+
+    assert app._state.load_errors == []
+    assert sys.modules["captain_hook._packs.long_running"].__path__ == [str(new)]
+    assert sorted((h.source_file, h.spec.message) for h in app._state.hooks) == [
+        (str(new / "alpha.py"), "new+installed"),
+        (str(new / "beta.py"), "new+installed"),
+    ]
+
+
 def _pack_root(base: Path, src: str = ON_HANDLER_SRC) -> Path:
     base.mkdir(parents=True)
     (base / "guard.py").write_text(src)
