@@ -265,6 +265,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pack's helpers load from the release its hooks load from.** A worker that
+  rediscovered a pack after a plugin update reloaded each hook module from the new release,
+  but the pack's package kept the `__path__` of the first release it loaded, and a helper a
+  hook imported relatively stayed cached from that release. A helper new in the update failed
+  to import, and every hook importing it dropped out. When long-running went from 0.7.46 to
+  0.7.49, six of its hooks dropped. Rediscovery now points the package at the release it is
+  loading and evicts the package's cached modules when that directory changes.
+
 - **An interrupted WordNet import can no longer leave a database that hooks read.**
   `wn.add` imports with `journal_mode=MEMORY`, so a killed import left `wn.db` half written
   with no journal to roll back. That file could still pass `PRAGMA quick_check` and list
