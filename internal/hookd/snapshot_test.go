@@ -66,6 +66,43 @@ func fakeSnapshotOwner(t *testing.T, frames chan<- wireproto.Frame) (*snapshotOw
 	return owner, server
 }
 
+func TestSnapshotServiceHandshakesTheHostBudgets(t *testing.T) {
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	offered := make(chan json.RawMessage, 1)
+	go func() {
+		hello, err := wireproto.DecodeFrameLimit(server, snapshots.MaxFrameBytes)
+		if err != nil {
+			close(offered)
+			return
+		}
+		offered <- hello.SnapshotConfig
+		_ = wireproto.EncodeFrameLimit(server, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: Build}, snapshots.MaxFrameBytes)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := handshakeSnapshotOwner(ctx, client, service.config); err != nil {
+		t.Fatal(err)
+	}
+	config := <-offered
+	if err := snapshots.Validate("config", config); err != nil {
+		t.Fatal(err)
+	}
+	var budgets map[string]int64
+	if err := json.Unmarshal(config, &budgets); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]int64{"max_prepared_fact_memory_bytes": 512 << 20, "max_retained_bytes": 1408 << 20, "reserved_hook_accounted_bytes": 512 << 20} {
+		if budgets[key] != want {
+			t.Fatalf("%s=%d want %d", key, budgets[key], want)
+		}
+	}
+}
+
 func failSnapshot(t *testing.T, server net.Conn, id uint64) {
 	t.Helper()
 	if err := wireproto.EncodeFrameLimit(server, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpError, ID: id, Error: "fixture"}, snapshots.MaxFrameBytes); err != nil {
@@ -351,7 +388,7 @@ func TestTranscriptBridgeCancellationUsesRequestContext(t *testing.T) {
 func snapshotFailure(t *testing.T, id string) json.RawMessage {
 	t.Helper()
 	usage := map[string]int{}
-	for _, name := range []string{"source_opens", "source_bytes_read", "bytes_decoded", "events_parsed", "cold_parses", "append_parses", "activity_lifts", "cache_hits", "inflight_joins", "generations_published", "generations_invalidated", "requests_cancelled", "requests_failed", "output_bytes", "transport_bytes", "nonincremental_lowering_calls", "nonincremental_lowering_source_bytes", "discovery_entries_examined"} {
+	for _, name := range []string{"source_opens", "source_bytes_read", "bytes_decoded", "events_parsed", "cold_parses", "append_parses", "activity_lifts", "cache_hits", "inflight_joins", "generations_published", "generations_invalidated", "requests_cancelled", "requests_failed", "output_bytes", "transport_bytes", "nonincremental_lowering_calls", "nonincremental_lowering_source_bytes", "discovery_entries_examined", "prepared_cache_reads", "prepared_cache_bytes_read"} {
 		usage[name] = 0
 	}
 	body, err := wireproto.Marshal(map[string]any{"schema": "captain.transcript/1", "response": map[string]any{"schema": "cc-transcript.snapshot/1", "id": id, "status": "cancelled", "complete": false, "data": nil, "cursor": nil, "reason": "fixture", "usage": usage}})

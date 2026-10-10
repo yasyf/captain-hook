@@ -15,6 +15,8 @@ import (
 
 const MaxFrameBytes = 1 << 20
 
+const HostPreparedFactMemoryBytes = 512 << 20
+
 //go:embed schema/*.json
 var schemas embed.FS
 
@@ -133,6 +135,27 @@ func DefaultConfig() (json.RawMessage, error) {
 		defaults[name] = property.Default
 	}
 	return json.Marshal(defaults)
+}
+
+func HostConfig() (json.RawMessage, error) {
+	data, err := DefaultConfig()
+	if err != nil {
+		return nil, err
+	}
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+	var facts, retained int64
+	if err := json.Unmarshal(config["max_prepared_fact_memory_bytes"], &facts); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(config["max_retained_bytes"], &retained); err != nil {
+		return nil, err
+	}
+	config["max_prepared_fact_memory_bytes"] = json.RawMessage(strconv.FormatInt(HostPreparedFactMemoryBytes, 10))
+	config["max_retained_bytes"] = json.RawMessage(strconv.FormatInt(retained+HostPreparedFactMemoryBytes-facts, 10))
+	return json.Marshal(config)
 }
 
 type Authority struct {

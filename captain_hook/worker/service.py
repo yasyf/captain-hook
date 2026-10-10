@@ -53,7 +53,12 @@ MAX_WARM_JOBS = 32
 WARM_STEP_BYTES = 8 * 1024 * 1024
 WARM_STEP_SECONDS = 3
 WARM_INTERVAL_SECONDS = 2
+WARM_IO_COUNTERS = ("source_bytes_read", "prepared_cache_bytes_read")
 BACKGROUND_SNAPSHOT_CLIENT: ContextVar[Any] = ContextVar("background_snapshot_client", default=None)
+
+
+def warm_interval(usage: Mapping[str, int]) -> float:
+    return WARM_INTERVAL_SECONDS if any(usage.get(name, 0) for name in WARM_IO_COUNTERS) else 0
 
 
 @dataclass
@@ -372,8 +377,7 @@ class WorkerService:
                 logger.bind(warm_key=job.fingerprint[:16], kind=type(job.state).__name__).info(
                     "transcript warming complete"
                 )
-            interval = WARM_INTERVAL_SECONDS if job.state.last_usage.get("source_bytes_read", 0) else 0
-            if self._warm_stop.wait(interval):
+            if self._warm_stop.wait(warm_interval(job.state.last_usage)):
                 break
         with self._warm_guard:
             self._warm_running = False

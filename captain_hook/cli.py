@@ -937,7 +937,7 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
         registered_sources,
         resolved_transcript_paths,
     )
-    from captain_hook.worker.service import WARM_INTERVAL_SECONDS, WARM_STEP_BYTES, WARM_STEP_SECONDS
+    from captain_hook.worker.service import WARM_STEP_BYTES, WARM_STEP_SECONDS, warm_interval
 
     if not session_id or INVALID_SESSION_ID.search(session_id):
         raise click.UsageError("invalid session id")
@@ -966,8 +966,8 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
             cache_hits += state.last_usage["cache_hits"]
             if complete:
                 break
-            if state.last_usage["source_bytes_read"]:
-                sleep(min(WARM_INTERVAL_SECONDS, max(0, max_seconds - (monotonic() - started))))
+            if interval := warm_interval(state.last_usage):
+                sleep(min(interval, max(0, max_seconds - (monotonic() - started))))
         return complete, steps, failure, read_bytes, cache_hits
 
     with client_scope() as client:

@@ -1429,6 +1429,18 @@
           "title": "Output Bytes",
           "type": "integer"
         },
+        "prepared_cache_bytes_read": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Prepared Cache Bytes Read",
+          "type": "integer"
+        },
+        "prepared_cache_reads": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Prepared Cache Reads",
+          "type": "integer"
+        },
         "requests_cancelled": {
           "maximum": 9007199254740991,
           "minimum": 0,
@@ -1478,7 +1490,9 @@
         "transport_bytes",
         "nonincremental_lowering_calls",
         "nonincremental_lowering_source_bytes",
-        "discovery_entries_examined"
+        "discovery_entries_examined",
+        "prepared_cache_reads",
+        "prepared_cache_bytes_read"
       ],
       "title": "Usage",
       "type": "object"
