@@ -76,7 +76,6 @@ class NlpResources:
             return self.__dict__["wn"]
 
     def warm(self) -> None:
-        self.wn
         self.spacy
 
     def wn_lemmas(self, terms: tuple[str, ...], pos: str) -> frozenset[str]:

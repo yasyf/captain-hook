@@ -253,7 +253,6 @@ def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
 
 def provision_pack_resources(resolved: Sequence[manager.ResolvedPack]) -> None:
     import httpx
-    import wn
 
     from captain_hook.util import http, model_cache
 
@@ -263,7 +262,7 @@ def provision_pack_resources(resolved: Sequence[manager.ResolvedPack]) -> None:
     click.echo(f"Provisioning pack resources ({', '.join(resources)}, cached)...")
     try:
         model_cache.provision_resources(resources)
-    except (http.GitHubFetchError, OSError, wn.Error, httpx.HTTPError) as e:
+    except (http.GitHubFetchError, OSError, httpx.HTTPError, subprocess.CalledProcessError) as e:
         click.echo(f"  deferred (offline?): {e} — the SessionStart hook will retry at session start")
 
 

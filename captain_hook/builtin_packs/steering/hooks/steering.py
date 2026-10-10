@@ -51,6 +51,27 @@ THINKING_MISFIRES = (
     "leaving the chime composite alerts alone since they're already properly gated.",
 )
 
+CHANGE_NOUNS = Phrase("change", "alteration", "modification", "variety")
+FIX_NOUNS = Phrase(
+    "fix",
+    "fixing",
+    "fixture",
+    "hole",
+    "jam",
+    "kettle of fish",
+    "localisation",
+    "localization",
+    "locating",
+    "location",
+    "mend",
+    "mending",
+    "mess",
+    "muddle",
+    "pickle",
+    "repair",
+    "reparation",
+)
+
 
 class TypeCheckerContext(CustomCondition):
     """True when the recent assistant transcript is discussing a type checker / diagnostics."""
@@ -94,7 +115,7 @@ nudge(
                 weight=1,
             ),
             NlpSignal(
-                clauses=[Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True)],
+                clauses=[Clause(noun=CHANGE_NOUNS, verb=Phrase("cause", "introduce"), negated=True)],
                 weight=1,
             ),
             NlpSignal(
@@ -636,7 +657,7 @@ tell that decided it) in `reasoning`.""",
             ),
             Signal(pattern=r"(?i)\bmov(?:e[ds]?|ing)\s+on\b", weight=1),
             NlpSignal(
-                clauses=[Clause(noun=Phrase.expand("fix"), verb=Phrase("defer", "postpone", "punt"))],
+                clauses=[Clause(noun=FIX_NOUNS, verb=Phrase("defer", "postpone", "punt"))],
                 weight=2,
             ),
         ],

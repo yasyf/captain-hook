@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import os
 import re
 import shutil
 import sqlite3
+import subprocess
+import sys
+import tempfile
 import zipfile
 from collections.abc import Callable, Iterable
+from contextlib import closing
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import Any
@@ -24,6 +29,17 @@ WN_ASSET_URL = (
 )
 WN_ARCHIVE_SIZE = 12_925_887
 WN_ARCHIVE_SHA256 = "31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc"
+WN_IMPORT = """
+import sys
+
+import wn
+
+wn.config.data_directory = sys.argv[1]
+for stale in sys.argv[3:]:
+    wn.remove(stale, progress_handler=None)
+wn.add(sys.argv[2], progress_handler=None)
+"""
+WN_SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
 
 
 def cache_root() -> Path:
@@ -125,21 +141,81 @@ def fetch_wn_archive(data_dir: Path) -> Path:
     return archive
 
 
+def wn_sidecars(database: Path) -> list[Path]:
+    return [database.with_name(f"{database.name}{suffix}") for suffix in WN_SIDECAR_SUFFIXES]
+
+
+def intact_wn_lexicons(database: Path) -> set[str]:
+    if database.is_symlink() or not database.is_file() or any(path.exists() for path in wn_sidecars(database)):
+        return set()
+    try:
+        with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as conn:
+            if conn.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                return set()
+            return {f"{lexicon}:{version}" for lexicon, version in conn.execute("SELECT id, version FROM lexicons")}
+    except sqlite3.DatabaseError:
+        return set()
+
+
+def wn_fingerprint(database: Path) -> str:
+    stat = database.stat()
+    return f"{stat.st_size} {stat.st_mtime_ns}"
+
+
+def wn_verified(database: Path, stamp: Path) -> bool:
+    try:
+        return stamp.read_text() == wn_fingerprint(database)
+    except FileNotFoundError:
+        return False
+
+
+def build_wn_database(database: Path) -> None:
+    # wn.add writes with journal_mode=MEMORY, so a killed import corrupts its file and leaves no
+    # journal. Import into a staging copy; rename it into place only after quick_check passes.
+    for abandoned in database.parent.glob(f".{database.name}.staging-*"):
+        shutil.rmtree(abandoned, ignore_errors=True)
+    staging = Path(tempfile.mkdtemp(dir=database.parent, prefix=f".{database.name}.staging-"))
+    staged = staging / database.name
+    installed = intact_wn_lexicons(database)
+    others = installed - {WN_SPEC}
+    if others:
+        with (
+            closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as source,
+            closing(sqlite3.connect(staged)) as target,
+        ):
+            source.backup(target)
+    archive = fetch_wn_archive(database.parent)
+    stale = sorted(installed - others) if others else []
+    subprocess.run([sys.executable, "-P", "-c", WN_IMPORT, str(staging), str(archive), *stale], check=True)
+    if WN_SPEC not in intact_wn_lexicons(staged):
+        raise RuntimeError(f"importing {WN_SPEC} left no intact database at {staged}")
+    with staged.open("rb") as built:
+        os.fsync(built.fileno())
+    if not others:
+        for unfinished in (database, *wn_sidecars(database)):
+            unfinished.unlink(missing_ok=True)
+    staged.replace(database)
+    shutil.rmtree(staging)
+
+
 def ensure_wn_lexicon() -> None:
     import wn
 
     if sqlite3.threadsafety != 3:
         raise RuntimeError(f"wn multithreading requires serialized sqlite (threadsafety 3), got {sqlite3.threadsafety}")
     # wn pools one process-global sqlite connection; worker dispatch reads it from many
-    # threads, which serialized sqlite makes safe. The existence check stays under the
-    # FileLock so a concurrent first-run `wn.add` can't leak a half-imported lexicon.
+    # threads, which serialized sqlite makes safe.
     wn.config.allow_multithreading = True
-    data_dir = Path(wn.config.data_directory)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(data_dir / f"{WN_SPEC.replace(':', '-')}.lock")):
-        if wn.lexicons(lexicon=WN_SPEC):
-            return
-        wn.add(fetch_wn_archive(data_dir), progress_handler=None)
+    database = Path(wn.config.database_path).absolute()
+    stem = WN_SPEC.replace(":", "-")
+    stamp = database.with_name(f"{stem}.verified")
+    if wn_verified(database, stamp):
+        return
+    database.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(database.with_name(f"{stem}.lock"))):
+        if not wn_verified(database, stamp):
+            build_wn_database(database)
+            stamp.write_text(wn_fingerprint(database))
 
 
 def ensure_nlp_resources() -> None:

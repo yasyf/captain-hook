@@ -295,9 +295,9 @@ class TestNlpLoadRace:
         warm = threading.Thread(target=resources.warm)
         warm.start()
         time.sleep(0.01)
-        seen = [resources.spacy, resources.wn]
+        seen = resources.spacy
         warm.join()
 
-        assert sorted(loads) == ["spacy", "wn"]
-        assert seen[0] is pipeline
-        assert seen[1] is resources.wn
+        assert loads == ["spacy"]
+        assert seen is pipeline
+        assert "wn" not in resources.__dict__

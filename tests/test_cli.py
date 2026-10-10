@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
@@ -9,7 +10,6 @@ from typing import Any
 
 import httpx
 import pytest
-import wn
 
 from captain_hook.util import http
 from tests.helpers import (
@@ -913,7 +913,7 @@ class TestNlpProvisioning:
         "make_exc",
         [
             pytest.param(lambda: http.GitHubFetchError("offline"), id="github_fetch_error"),
-            pytest.param(lambda: wn.Error("corrupt lexicon"), id="wn_error"),
+            pytest.param(lambda: subprocess.CalledProcessError(1, ["python"]), id="import_child_error"),
             pytest.param(
                 lambda: httpx.HTTPStatusError(
                     "500", request=httpx.Request("GET", "https://x"), response=httpx.Response(500)

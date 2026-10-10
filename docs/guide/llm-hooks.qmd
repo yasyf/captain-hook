@@ -354,6 +354,8 @@ Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=
 
 `Phrase.expand("issue")` pulls in WordNet synonyms of "issue" so the clause matches "problem," "bug," and other near-synonyms without you listing each one. The bare `Phrase("existing", "previous")` stays exact.
 
+The first hook that reads an expanded phrase provisions the WordNet lexicon and waits for the import. Declare `wordnet:oewn:2025` under `resources` in the pack's `pack.toml` to provision it at session start instead; see [Troubleshooting](troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model).
+
 ### Bundle signals with a threshold and window
 
 A `Signals` bundle groups patterns, sets the score `threshold` that triggers the hook, and bounds the `window` of recent transcript events to score. The window is a rolling slice of the last N events, so old matches age out as the conversation moves on.
