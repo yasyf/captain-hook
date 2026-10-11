@@ -317,6 +317,9 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
     folds = ", ".join(f"{rune_literal(source)}: {literal(target)}" for source, target in definition["folds"].items())
     kinds = "".join(f"    {literal(kind)},\n" for kind in definition["kinds"])
     exempt_heads = "".join(f"    {literal(head)},\n" for head in definition["exempt_heads"])
+    remedies = "".join(
+        f"    {literal(platform)}: {wrapped_literal(remedy)},\n" for platform, remedy in definition["remedies"].items()
+    )
     return (
         f"{GUARD_HEADER}\n"
         "from __future__ import annotations\n\n"
@@ -333,6 +336,7 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         f"FOLDS: dict[str, str] = {{{folds}}}\n"
         f"KINDS: tuple[str, ...] = (\n{kinds})\n"
         f"NOTE: str = {wrapped_literal(definition['note'])}\n"
+        f"REMEDIES: dict[str, str] = {{\n{remedies}}}\n"
         f"MAX_EVENT_INPUT: int = {definition['max_event_input']}\n"
         f"PASS_EXIT: int = {definition['pass_exit']}\n"
         "GUARDED_WORD: re.Pattern[str] = re.compile(GUARDED, re.IGNORECASE | re.ASCII)\n"
@@ -457,10 +461,10 @@ def render_guard_literal(definition: dict[str, Any]) -> str:
         '    if tool == "Bash" and first_party_command(payload_fields.get("tool_input")):\n'
         "        return False\n"
         '    return names_guarded_value(tool) or names_guarded_value(payload_fields.get("tool_input"))\n\n\n'
-        "def skip_envelope(event: str, kind: str) -> str:\n"
+        "def skip_envelope(event: str, kind: str, platform: str = sys.platform) -> str:\n"
         "    if kind not in KINDS:\n"
         '        raise ValueError(f"unknown guard kind {kind!r}")\n'
-        '    note = NOTE.replace("{kind}", kind)\n'
+        '    note = NOTE.replace("{kind}", kind).replace("{remedy}", REMEDIES[platform])\n'
         '    output: dict[str, object] = {"systemMessage": note}\n'
         '    if event != "PermissionRequest":\n'
         '        output["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": note}\n'
@@ -485,11 +489,16 @@ def rendered_guard(definition: dict[str, Any]) -> ModuleType:
 
 def render_guard_shell(definition: dict[str, Any]) -> str:
     guard = rendered_guard(definition)
-    skips = "".join(
-        f"GUARD_SKIP_{event}={shlex.quote(guard.skip_envelope(event, STATIC_SKIP_KIND))}\n"
-        for event in definition["events"]
+    arms = "".join(
+        f"  {platform}*)\n"
+        + "".join(
+            f"    GUARD_SKIP_{event}={shlex.quote(guard.skip_envelope(event, STATIC_SKIP_KIND, platform))}\n"
+            for event in definition["events"]
+        )
+        + "    ;;\n"
+        for platform in definition["remedies"]
     )
-    return f"{GUARD_HEADER}GUARD_PASS_EXIT={definition['pass_exit']}\n{skips}"
+    return f'{GUARD_HEADER}GUARD_PASS_EXIT={definition["pass_exit"]}\ncase "$OSTYPE" in\n{arms}esac\n'
 
 
 def write_guard_literals(root: Path) -> None:

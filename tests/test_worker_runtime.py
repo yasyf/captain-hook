@@ -420,7 +420,7 @@ def test_invalid_event_is_a_result_error_without_dispatch() -> None:
     assert after is None
 
 
-def test_dispatch_exception_returns_traceback_error() -> None:
+def test_dispatch_exception_returns_traceback_error(logcap: Any) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise ValueError("broken hook")
 
@@ -433,6 +433,7 @@ def test_dispatch_exception_returns_traceback_error() -> None:
     assert response.status == "error"
     assert response.exit == 1
     assert "ValueError: broken hook" in response.stderr
+    assert [record.message.startswith("dispatch failed") for record in logcap.records if record.levelno >= 40] == [True]
 
 
 @pytest.mark.parametrize("status", ["retained_limit", "lease_limit"])
@@ -530,7 +531,7 @@ def test_user_prompt_transcript_missing_fails_open_without_traceback(
 
 
 @pytest.mark.parametrize("status", ["invalid_request", "parse_error", "permission_denied", "stale_handle"])
-def test_invalid_evidence_remains_visible(status: str) -> None:
+def test_invalid_evidence_remains_visible(status: str, logcap: Any) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise EvidenceIncomplete(status, "invalid transcript evidence")
 
@@ -543,6 +544,7 @@ def test_invalid_evidence_remains_visible(status: str) -> None:
     assert response.status == "error"
     assert response.exit == 1
     assert "invalid transcript evidence" in response.stderr
+    assert [record.message.startswith("dispatch failed") for record in logcap.records if record.levelno >= 40] == [True]
 
 
 def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:

@@ -265,6 +265,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A hook with an event window no longer fails every Codex tool call it matches.**
+  `transcript_events` reads the newest events through the snapshot owner's `tail`, which
+  takes Claude transcripts only. On a Codex rollout it answered `invalid_request: tail
+  requires a Claude source` whenever the rollout ended in a Codex line, and the whole
+  `PreToolUse` dispatch exited 1. With ccx installed, the graphite pack's
+  `landing_state_through_ccx` matches every Bash call, so Codex showed `hook exited with
+  code 1` on most of them, and a call naming a guarded program ran under `the session guard
+  did not complete (worker-error)` on a healthy host. A Codex hook with an event window now
+  reads the whole rollout, the way every other Codex hook already does.
+
+- **A dispatch that fails outside a hook is logged.** The worker returned the traceback in
+  the response's stderr and wrote nothing to the session log. For a guarded call the client
+  keeps only the failure kind, so `capt-hook logs` showed a clean dispatch beside a
+  `worker-error` note. The worker now logs `dispatch failed` with the traceback.
+
+- **Codex gets only the hook envelopes its schema names.** Codex takes `permissionDecision:
+  allow` only beside `updatedInput`, and failed the hook on a warn or an allow with `PreToolUse
+  hook returned unsupported permissionDecision:allow`, dropping the warn's context. It reads a
+  `PostToolUse` or `UserPromptSubmit` block from the top-level `decision` and rejects
+  `permissionDecision` there, so those blocks never landed. Under `CAPT_HOOK_PROVIDER=codex`
+  a warn or allow now carries no approval, a rewrite keeps its own, and those two events
+  block with `decision: block` and the reason.
+
+- **The session guard's skip note names commands the platform has.** The note sent every
+  host to `capt-hook helper status` and `capt-hook helper install`, which drive Homebrew and
+  the macOS app. A Linux host has neither, and a Codex worker there has no `capt-hook` on
+  `PATH`, so both commands exited 127. On Linux the note now points to `capt-hookd status`,
+  which `package-install` links into `~/.local/bin`, then to reinstalling the host.
+
 - **A pack's helpers load from the release its hooks load from.** A worker that
   rediscovered a pack after a plugin update reloaded each hook module from the new release,
   but the pack's package kept the `__path__` of the first release it loaded, and a helper a

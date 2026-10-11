@@ -43,9 +43,12 @@ KINDS: tuple[str, ...] = (
 )
 NOTE: str = (
     "capt-hook: the session guard did not complete ({kind}), so this call ran without its check for sessi"
-    "on-ending programs. Run `capt-hook helper status`, then `capt-hook helper install` if the host is mi"
-    "ssing or outdated."
+    "on-ending programs. {remedy}"
 )
+REMEDIES: dict[str, str] = {
+    "darwin": "Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
+    "linux": "Run `capt-hookd status`, then reinstall the Captain Hook host if it is missing or outdated.",
+}
 MAX_EVENT_INPUT: int = 33554432
 PASS_EXIT: int = 3
 GUARDED_WORD: re.Pattern[str] = re.compile(GUARDED, re.IGNORECASE | re.ASCII)
@@ -183,10 +186,10 @@ def mandatory(event: str, payload: bytes) -> bool:
     return names_guarded_value(tool) or names_guarded_value(payload_fields.get("tool_input"))
 
 
-def skip_envelope(event: str, kind: str) -> str:
+def skip_envelope(event: str, kind: str, platform: str = sys.platform) -> str:
     if kind not in KINDS:
         raise ValueError(f"unknown guard kind {kind!r}")
-    note = NOTE.replace("{kind}", kind)
+    note = NOTE.replace("{kind}", kind).replace("{remedy}", REMEDIES[platform])
     output: dict[str, object] = {"systemMessage": note}
     if event != "PermissionRequest":
         output["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": note}

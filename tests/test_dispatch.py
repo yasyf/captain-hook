@@ -347,6 +347,73 @@ class TestFormatOutput:
     def test_message_display_non_rewrite_leaves_the_chunk_displayed(self, result: HookResult) -> None:
         assert format_output(Event.MessageDisplay, result) is None
 
+    @pytest.mark.parametrize(
+        ("event", "result", "envelope"),
+        [
+            pytest.param(
+                Event.PreToolUse,
+                HookResult(action=Action.warn, message="careful"),
+                {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "careful"}},
+                id="warn-carries-no-approval",
+            ),
+            pytest.param(
+                Event.PreToolUse,
+                HookResult(action=Action.allow),
+                {"hookSpecificOutput": {"hookEventName": "PreToolUse"}},
+                id="allow-carries-no-approval",
+            ),
+            pytest.param(
+                Event.PreToolUse,
+                HookResult(action=Action.rewrite, updated_input={"command": "ls -la"}, note="listed"),
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": {"command": "ls -la"},
+                        "additionalContext": "listed",
+                    }
+                },
+                id="rewrite-keeps-its-approval",
+            ),
+            pytest.param(
+                Event.PreToolUse,
+                HookResult(action=Action.block, message="no"),
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "no",
+                    }
+                },
+                id="pre-tool-block-denies",
+            ),
+            pytest.param(
+                Event.PostToolUse,
+                HookResult(action=Action.block, message="no"),
+                {"decision": "block", "reason": "no"},
+                id="post-tool-block-is-top-level",
+            ),
+            pytest.param(
+                Event.UserPromptSubmit,
+                HookResult(action=Action.block, message="no"),
+                {"decision": "block", "reason": "no"},
+                id="prompt-block-is-top-level",
+            ),
+            pytest.param(
+                Event.PostToolUse,
+                HookResult(action=Action.warn, message="careful"),
+                {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "careful"}},
+                id="post-tool-warn-is-context",
+            ),
+        ],
+    )
+    def test_codex_takes_only_the_envelopes_its_schema_names(
+        self, tmp_path: Path, event: Event, result: HookResult, envelope: dict[str, Any]
+    ) -> None:
+        scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": "codex"}, str(tmp_path), 0, "codex-envelopes")
+        with reqenv.use_request(scope):
+            assert format_output(event, result) == envelope
+
 
 class TestExecuteHook:
     def test_handler_returns_result(self, tmp_path: Path) -> None:

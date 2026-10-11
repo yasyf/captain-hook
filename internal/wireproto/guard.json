@@ -20,7 +20,11 @@
     "worker-error",
     "dependency-unavailable"
   ],
-  "note": "capt-hook: the session guard did not complete ({kind}), so this call ran without its check for session-ending programs. Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
+  "note": "capt-hook: the session guard did not complete ({kind}), so this call ran without its check for session-ending programs. {remedy}",
+  "remedies": {
+    "darwin": "Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
+    "linux": "Run `capt-hookd status`, then reinstall the Captain Hook host if it is missing or outdated."
+  },
   "max_event_input": 33554432,
   "pass_exit": 3
 }

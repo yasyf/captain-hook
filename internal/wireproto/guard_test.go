@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode"
@@ -158,9 +159,12 @@ func TestGuardInputBoundIsTheWireCeiling(t *testing.T) {
 
 func TestSkipEnvelopeNotesEachEventShapeWithKindOnlyDiagnosticsAndNoDecision(t *testing.T) {
 	t.Parallel()
+	remedy := map[string]string{
+		"darwin": "Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
+		"linux":  "Run `capt-hookd status`, then reinstall the Captain Hook host if it is missing or outdated.",
+	}[runtime.GOOS]
 	note := "capt-hook: the session guard did not complete (host-unavailable), so this call ran without its check " +
-		"for session-ending programs. Run `capt-hook helper status`, then `capt-hook helper install` if the host " +
-		"is missing or outdated."
+		"for session-ending programs. " + remedy
 	for event, want := range map[string]string{
 		"PreToolUse": `{"hookSpecificOutput":{"additionalContext":"` + note + `","hookEventName":"PreToolUse"},` +
 			`"systemMessage":"` + note + `"}`,
