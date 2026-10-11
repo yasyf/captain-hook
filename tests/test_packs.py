@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance", "graphite"}
 UNCONDITIONAL = {"fixes", "general", "steering", "performance", "graphite"}
-PRELOAD_SELECT = "select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,Monitor,SendMessage"
+PRELOAD_SELECT = "select:TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,Monitor,SendMessage"
 GENERAL_HOOKS = {
     "commands",
     "comments",
@@ -220,7 +220,7 @@ def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path)
     discover_pack("general", manager.resolve_builtin("general").path)
     rendered = (
         "Load the always-used deferred tools in one batch before anything else on your first turn. "
-        f"Run `ToolSearch` with query `{PRELOAD_SELECT},EnterPlanMode,ExitPlanMode` and `max_results` 10."
+        f"Run `ToolSearch` with query `{PRELOAD_SELECT},EnterPlanMode,ExitPlanMode` and `max_results` 9."
     )
 
     def context(source: str, *, agent_id: str | None = None) -> str | None:
@@ -246,13 +246,13 @@ def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path)
         pytest.param(
             ("AskUserQuestion",),
             "claude",
-            f"`{PRELOAD_SELECT},EnterPlanMode,ExitPlanMode` and `max_results` 10.",
+            f"`{PRELOAD_SELECT},EnterPlanMode,ExitPlanMode` and `max_results` 9.",
             id="unrelated-tool-disallowed",
         ),
         pytest.param(
             ("AskUserQuestion", "EnterPlanMode", "ExitPlanMode"),
             "claude",
-            f"`{PRELOAD_SELECT}` and `max_results` 8.",
+            f"`{PRELOAD_SELECT}` and `max_results` 7.",
             id="plan-mode-disallowed",
         ),
         pytest.param(

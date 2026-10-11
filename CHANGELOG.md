@@ -271,8 +271,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--disallowedTools EnterPlanMode,ExitPlanMode` was sent looking for two tools it was
   started without. The nudge now stays silent under `CAPT_HOOK_PROVIDER=codex`, drops each
   name the launch lists under `--disallowedTools`, sets `max_results` to the number of
-  names left, and says nothing when none are left. A Claude session launched without that
-  flag gets the same message as before.
+  names left, and says nothing when none are left. `TaskOutput` is gone from the list on
+  every host, because Claude Code no longer has a tool by that name.
 
 - **A burst of tool calls no longer fails hooks on a remote actor host.** A worker that runs
   Captain Hook as an API actor forks one evaluator per event, and 15 calls sent at once

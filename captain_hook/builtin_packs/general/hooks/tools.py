@@ -19,7 +19,6 @@ PRELOADED = (
     "TaskCreate",
     "TaskGet",
     "TaskList",
-    "TaskOutput",
     "TaskStop",
     "TaskUpdate",
     "Monitor",
@@ -47,12 +46,11 @@ class CodexSession(CustomCondition):
         Input(source="startup", agent_id="sub-1"): Allow(),
         Input(source="clear", agent_id="sub-1"): Allow(),
         Input(source="startup", disallowed_tools=("AskUserQuestion",)): Warn(
-            pattern="select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,Monitor,SendMessage,"
-            "EnterPlanMode,ExitPlanMode` and `max_results` 10"
+            pattern="select:TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,Monitor,SendMessage,"
+            "EnterPlanMode,ExitPlanMode` and `max_results` 9"
         ),
         Input(source="startup", disallowed_tools=("AskUserQuestion", "EnterPlanMode", "ExitPlanMode")): Warn(
-            pattern="select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,Monitor,SendMessage` "
-            "and `max_results` 8"
+            pattern="select:TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,Monitor,SendMessage` and `max_results` 7"
         ),
         Input(source="startup", disallowed_tools=PRELOADED): Allow(),
         Input(source="startup", env={"CAPT_HOOK_PROVIDER": "codex"}): Allow(),
