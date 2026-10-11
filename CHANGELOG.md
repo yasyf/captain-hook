@@ -265,6 +265,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Linux install puts `capt-hook` on `PATH`.** `package-install` linked only `capt-hookd`
+  into `~/.local/bin`, and the `capt-hook` CLI reached `PATH` through the plugin's `bin/`,
+  which Claude Code adds and Codex does not. A Codex worker had no `capt-hook`, though the
+  note for a skipped hook tells it to run `capt-hook logs`. `package-install` now links
+  `~/.local/bin/capt-hook` to this build's tool env, beside `capt-hookd`, and
+  `package-uninstall` removes it.
+
 - **The session guard no longer blocks a `command -v` lookup that names a guarded program.**
   `command -v orca ccx cc-notes` was refused with `uses an orca command group the guard does
   not know`, and `command -v pkill`, `command -v shutdown` and `command -v tmux kill-server`

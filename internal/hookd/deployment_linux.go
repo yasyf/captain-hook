@@ -16,6 +16,7 @@ import (
 
 const (
 	installedHostName    = "capt-hookd"
+	installedCLIName     = "capt-hook"
 	installedVersionName = "version.json"
 	installLockName      = "install.lock"
 	superviseLockName    = "supervise.lock"
@@ -26,11 +27,12 @@ type installedPaths struct {
 	dir  string
 	host string
 	link string
+	cli  string
 }
 
 // resolveInstalledPaths names the fixed Linux install: the plugin's hook shim
-// execs host, the CLI descriptor reads the version.json beside it, and link
-// puts it on the user's PATH.
+// execs host, the CLI descriptor reads the version.json beside it, link puts
+// it on the user's PATH, and cli puts this build's capt-hook beside it.
 func resolveInstalledPaths() (installedPaths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -43,6 +45,7 @@ func resolveInstalledPaths() (installedPaths, error) {
 		dir:  dir,
 		host: filepath.Join(dir, installedHostName),
 		link: filepath.Join(home, ".local", "bin", installedHostName),
+		cli:  filepath.Join(home, ".local", "bin", installedCLIName),
 	}, nil
 }
 
@@ -92,6 +95,9 @@ func applyPackagedApplication(ctx context.Context) error {
 		return fmt.Errorf("captain package: publish installed version: %w", err)
 	}
 	if err := linkExecutable(installed.host, installed.link); err != nil {
+		return err
+	}
+	if err := linkInstalledCLI(installed.cli); err != nil {
 		return err
 	}
 	client, err := openSupervisedHost()
@@ -153,8 +159,10 @@ func uninstallPackagedApplication(ctx context.Context) error {
 	if err := stopInstalledHost(ctx); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
 		return err
 	}
-	if err := durable.Remove(installed.link); err != nil {
-		return fmt.Errorf("captain package: remove %q: %w", installed.link, err)
+	for _, link := range []string{installed.link, installed.cli} {
+		if err := durable.Remove(link); err != nil {
+			return fmt.Errorf("captain package: remove %q: %w", link, err)
+		}
 	}
 	if err := durable.RemoveTree(installed.dir); err != nil {
 		return fmt.Errorf("captain package: remove %q: %w", installed.dir, err)
@@ -180,6 +188,14 @@ func installExecutable(source, target string) error {
 		return fmt.Errorf("captain package: publish %q: %w", target, err)
 	}
 	return nil
+}
+
+func linkInstalledCLI(link string) error {
+	python, err := installedPython()
+	if err != nil {
+		return err
+	}
+	return linkExecutable(filepath.Join(filepath.Dir(python), installedCLIName), link)
 }
 
 func linkExecutable(host, link string) error {

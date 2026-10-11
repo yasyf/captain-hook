@@ -107,6 +107,8 @@ jobs:
           test "$(cat ~/.local/share/captain-hook/host/version.json)" = '{"schema":1,"build":"0.0.0"}'
           cmp "$RUNNER_TEMP/capt-hookd" ~/.local/share/captain-hook/host/capt-hookd
           test "$(~/.local/bin/capt-hookd --version)" = '{"schema":1,"build":"0.0.0"}'
+          test "$(realpath ~/.local/bin/capt-hook)" = "$(realpath ~/.daemonkit/tools/capt-hook/0.0.0/capt-hook/bin/capt-hook)"
+          ~/.local/bin/capt-hook --help > /dev/null
 
       - name: Start the workspace supervisor
         run: |
@@ -137,6 +139,8 @@ jobs:
           status="$(captain_hook/bin/hook status)"
           test "$(jq -r .build <<< "$status")" = 0.0.1
           test "$(jq -r .pid <<< "$status")" != "$before"
+          test "$(realpath ~/.local/bin/capt-hook)" = "$(realpath ~/.daemonkit/tools/capt-hook/0.0.1/capt-hook/bin/capt-hook)"
+          ~/.local/bin/capt-hook --help > /dev/null
 
       - name: Dispatch through the upgraded host
         env:
@@ -145,6 +149,14 @@ jobs:
           set -euo pipefail
           captain_hook/bin/capt-hook --help > /dev/null
           uv run --no-sync pytest tests/test_linux_host.py
+
+      - name: Uninstall the host
+        run: |
+          set -euo pipefail
+          ~/.local/bin/capt-hookd package-uninstall
+          test ! -L ~/.local/bin/capt-hookd
+          test ! -L ~/.local/bin/capt-hook
+          test ! -e ~/.local/share/captain-hook/host
 
       - name: Host logs
         if: failure()

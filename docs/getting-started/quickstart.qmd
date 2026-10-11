@@ -25,6 +25,7 @@ event once with this build's installed Python runtime. The guard must complete t
 
 On a private single-user VM, install the captain-hook plugin. With `uv`,
 `curl`, and `sha256sum` on PATH, run `"$CLAUDE_PLUGIN_ROOT/linux/install.sh"`.
+It links `capt-hookd` and the `capt-hook` CLI into `~/.local/bin`.
 Keep `~/.local/bin/capt-hookd supervise` running in the foreground under
 the workspace's manager for long-lived processes.
 The host trusts any process with the same UID, which can impersonate it.
