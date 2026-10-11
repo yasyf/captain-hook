@@ -139,7 +139,9 @@ def test_cold_root_schedules_background_progress_and_fails_open(tmp_path, provid
         CURRENT_CLIENT.reset(token)
 
     assert attempts == [(path, {"tail_bytes": tail_bytes})]
-    assert scheduled == ([] if status == "invalid_request" else [(client, path, {"id": "native", "version": "1"}, tail_bytes)])
+    assert scheduled == (
+        [] if status == "invalid_request" else [(client, path, {"id": "native", "version": "1"}, tail_bytes)]
+    )
 
 
 def test_graph_work_stays_inside_the_hook_deadline():
@@ -440,7 +442,7 @@ def test_ordinary_query_schema_rejects_attachment_paths():
         )
 
 
-def test_expired_prepared_graph_query_is_typed_for_fail_open():
+def test_a_prepared_graph_that_stays_expired_after_one_more_preparation_is_typed_for_fail_open():
     from captain_hook.snapshots.client import GraphEvidenceExpired
 
     client = RecordingClient()
@@ -449,7 +451,8 @@ def test_expired_prepared_graph_query_is_typed_for_fail_open():
 
     with pytest.raises(GraphEvidenceExpired, match="prepared graph expired"):
         session.has_edit_to("src/**")
-    assert client.prepare_count == 1
+    assert client.prepare_count == 2
+    assert [operation for operation, _ in client.requests].count("query_graph") == 2
 
 
 def test_failed_graph_release_retries_when_request_client_closes(monkeypatch):
