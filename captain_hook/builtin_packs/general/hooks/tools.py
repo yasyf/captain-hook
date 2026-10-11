@@ -2,20 +2,42 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
+    BaseHookEvent,
+    CustomCondition,
     Event,
     FreshSession,
     FromSubagent,
+    HookResult,
     Input,
     Prompt,
     Warn,
-    nudge,
+    on,
+)
+from captain_hook.util import reqenv
+
+PRELOADED = (
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+    "Monitor",
+    "SendMessage",
+    "EnterPlanMode",
+    "ExitPlanMode",
 )
 
-nudge(
-    str(Prompt.load("tools/preload_nudge")),
+
+class CodexSession(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        return reqenv.provider() == "codex"
+
+
+@on(
+    Event.SessionStart,
     only_if=[FreshSession()],
-    skip_if=[FromSubagent()],
-    events=Event.SessionStart,
+    skip_if=[FromSubagent(), CodexSession()],
     max_fires=1,
     tests={
         Input(source="startup"): Warn(pattern="select:TaskCreate"),
@@ -24,5 +46,20 @@ nudge(
         Input(source="compact"): Allow(),
         Input(source="startup", agent_id="sub-1"): Allow(),
         Input(source="clear", agent_id="sub-1"): Allow(),
+        Input(source="startup", disallowed_tools=("AskUserQuestion",)): Warn(
+            pattern="select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,Monitor,SendMessage,"
+            "EnterPlanMode,ExitPlanMode` and `max_results` 10"
+        ),
+        Input(source="startup", disallowed_tools=("AskUserQuestion", "EnterPlanMode", "ExitPlanMode")): Warn(
+            pattern="select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,Monitor,SendMessage` "
+            "and `max_results` 8"
+        ),
+        Input(source="startup", disallowed_tools=PRELOADED): Allow(),
+        Input(source="startup", env={"CAPT_HOOK_PROVIDER": "codex"}): Allow(),
+        Input(source="clear", env={"CAPT_HOOK_PROVIDER": "codex"}): Allow(),
     },
 )
+def preload_tools(evt: BaseHookEvent) -> HookResult | None:
+    if not (tools := [name for name in PRELOADED if name not in evt.disallowed_tools]):
+        return None
+    return evt.warn(str(Prompt.load("tools/preload_nudge", tools=",".join(tools), count=len(tools))))
