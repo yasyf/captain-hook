@@ -47,7 +47,7 @@ NOTE: str = (
 )
 REMEDIES: dict[str, str] = {
     "darwin": "Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
-    "linux": "Run `capt-hookd status`, then the plugin's `linux/install.sh` if the host is missing or outdated.",
+    "linux": "Run `capt-hookd status`, then reinstall the Captain Hook host if it is missing or outdated.",
 }
 MAX_EVENT_INPUT: int = 33554432
 PASS_EXIT: int = 3

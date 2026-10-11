@@ -161,7 +161,7 @@ func TestSkipEnvelopeNotesEachEventShapeWithKindOnlyDiagnosticsAndNoDecision(t *
 	t.Parallel()
 	remedy := map[string]string{
 		"darwin": "Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
-		"linux":  "Run `capt-hookd status`, then the plugin's `linux/install.sh` if the host is missing or outdated.",
+		"linux":  "Run `capt-hookd status`, then reinstall the Captain Hook host if it is missing or outdated.",
 	}[runtime.GOOS]
 	note := "capt-hook: the session guard did not complete (host-unavailable), so this call ran without its check " +
 		"for session-ending programs. " + remedy

@@ -313,7 +313,7 @@ top-level `systemMessage` and `hookSpecificOutput.additionalContext`, with no
 The note says the session guard did not complete, names the failure kind, and says the call
 ran without its check for session-ending programs. On macOS it points to `capt-hook helper status`,
 then `capt-hook helper install` if the host is missing or outdated. On Linux it points to
-`capt-hookd status`, then the plugin's `linux/install.sh`.
+`capt-hookd status`, then to reinstalling the host.
 
 A mandatory hook that raises, misses its deadline, or is left unrun adds a note beside a deny the
 other hooks reached. Any other output, including an allow, a rewrite, or advisory context, gives way

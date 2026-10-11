@@ -292,7 +292,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host to `capt-hook helper status` and `capt-hook helper install`, which drive Homebrew and
   the macOS app. A Linux host has neither, and a Codex worker there has no `capt-hook` on
   `PATH`, so both commands exited 127. On Linux the note now points to `capt-hookd status`,
-  which `package-install` links into `~/.local/bin`, then the plugin's `linux/install.sh`.
+  which `package-install` links into `~/.local/bin`, then to reinstalling the host.
 
 - **A pack's helpers load from the release its hooks load from.** A worker that
   rediscovered a pack after a plugin update reloaded each hook module from the new release,

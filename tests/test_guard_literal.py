@@ -386,7 +386,7 @@ def test_mandatory_decodes_the_payload_rather_than_scanning_it(payload: bytes, m
             "darwin",
             "Run `capt-hook helper status`, then `capt-hook helper install` if the host is missing or outdated.",
         ),
-        ("linux", "Run `capt-hookd status`, then the plugin's `linux/install.sh` if the host is missing or outdated."),
+        ("linux", "Run `capt-hookd status`, then reinstall the Captain Hook host if it is missing or outdated."),
     ],
 )
 def test_skip_envelopes_match_the_go_renderings_byte_for_byte(platform: str, remedy: str) -> None:
