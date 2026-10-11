@@ -21,7 +21,13 @@ from loguru import logger
 from captain_hook import faults, hook_lint
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.desktop.cli import helper
-from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch, dispatch_async, envelope_text
+from captain_hook.dispatch import (
+    SYNC_DEADLINE_MARGIN_SECONDS,
+    attributed,
+    dispatch,
+    dispatch_async,
+    envelope_text,
+)
 from captain_hook.grants.cli import grant
 from captain_hook.loader import (
     CONF_MODULE,
@@ -410,6 +416,7 @@ def run_event(state: CliState, event_name: str) -> None:
     with client_scope() as client:
         client.bind_tool_registry(tools)
         output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
+        output = attributed(event, raw, output)
         if output:
             print(envelope_text(output), flush=True)
         background()

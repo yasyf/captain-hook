@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -40,6 +41,7 @@ ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
 HOOK_FANOUT_THREADS = 64
 BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
+AGENT_ID_VARIABLE = "CCI_AGENT_ID"
 
 type Envelope = dict[str, Any] | str
 type Settle = Callable[[HookResult | None], None]
@@ -969,6 +971,23 @@ def denies(envelope: Envelope | None) -> bool:
         or decision.get("behavior") == "deny"
         or envelope.get("decision") == "block"
     )
+
+
+def attributed(event: Event, raw: dict[str, Any], envelope: Envelope | None) -> Envelope | None:
+    if (
+        event is not Event.PreToolUse
+        or raw.get("tool_name") != "Bash"
+        or not (agent_id := raw.get("agent_id"))
+        or reqenv.provider() != "claude"
+        or isinstance(envelope, str)
+        or denies(envelope)
+    ):
+        return envelope
+    rendered = envelope or {}
+    specific = rendered.get("hookSpecificOutput", {"hookEventName": event.name})
+    tool_input = specific.get("updatedInput") or raw["tool_input"]
+    command = f"export {AGENT_ID_VARIABLE}={shlex.quote(agent_id)}\n{tool_input['command']}"
+    return rendered | {"hookSpecificOutput": specific | {"updatedInput": tool_input | {"command": command}}}
 
 
 def dispatch_hooks(

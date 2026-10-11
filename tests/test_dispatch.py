@@ -25,6 +25,7 @@ from captain_hook.dispatch import (
     ASYNC_HOOK_TIMEOUT_SECONDS,
     SYNC_DEADLINE_MARGIN_SECONDS,
     FirstBlock,
+    attributed,
     dispatch,
     dispatch_async,
     doomed_by_block,
@@ -32,7 +33,7 @@ from captain_hook.dispatch import (
     format_output,
     run_declarative,
 )
-from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent, PreCompactEvent
+from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent, PreCompactEvent, PreToolUseEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.session import SessionStore
 from captain_hook.types import Action, CustomCondition, Event, HookResult, HookSpec, RegisteredHook
@@ -1195,6 +1196,89 @@ class TestDispatch:
         register_hook(Event.PreToolUse, message="test")
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
+
+
+LANE = "atool-capt-hook-agent-id-b8e1585bce214ce2"
+EXPORT = f"export CCI_AGENT_ID={LANE}\n"
+LANE_BASH = {"tool_name": "Bash", "tool_input": {"command": "git status", "description": "status"}, "agent_id": LANE}
+
+
+def rendered(raw: dict[str, Any] = LANE_BASH) -> Any:
+    evt = PreToolUseEvent(_raw=raw, ctx=make_ctx())
+    return attributed(Event.PreToolUse, raw, dispatch(Event.PreToolUse, evt))
+
+
+class TestAgentAttribution:
+    def test_lane_bash_with_no_verdict_carries_only_the_export(self) -> None:
+        assert rendered() == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": {"command": EXPORT + "git status", "description": "status"},
+            }
+        }
+
+    def test_export_prefixes_the_winning_rewrite(self) -> None:
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return evt.rewrite_command("ccx vcs stack submit", note="rewrote")
+
+        hso = rendered(LANE_BASH | {"tool_input": {"command": "gt submit", "description": "status"}})[
+            "hookSpecificOutput"
+        ]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"] == {"command": EXPORT + "ccx vcs stack submit", "description": "status"}
+        assert hso["additionalContext"] == "rewrote"
+
+    def test_export_keeps_a_warn_without_granting_approval(self) -> None:
+        @on(Event.PreToolUse)
+        def warner(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="careful", approve=False)
+
+        hso = rendered()["hookSpecificOutput"]
+        assert "permissionDecision" not in hso
+        assert hso["additionalContext"] == "careful"
+        assert hso["updatedInput"]["command"] == EXPORT + "git status"
+
+    def test_export_rides_an_allow(self) -> None:
+        @on(Event.PreToolUse)
+        def allower(evt: Any) -> HookResult:
+            return HookResult(action=Action.allow)
+
+        hso = rendered()["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"]["command"] == EXPORT + "git status"
+
+    def test_denied_lane_call_stays_a_deny(self) -> None:
+        @on(Event.PreToolUse)
+        def blocker(evt: Any) -> HookResult:
+            return HookResult(action=Action.block, message="blocked")
+
+        hso = rendered()["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "deny"
+        assert "updatedInput" not in hso
+
+    def test_quotes_an_agent_id_the_shell_would_split(self) -> None:
+        raw = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_id": "lane one"}
+        assert rendered(raw)["hookSpecificOutput"]["updatedInput"] == {"command": "export CCI_AGENT_ID='lane one'\nls"}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param({"tool_name": "Bash", "tool_input": {"command": "git status"}}, id="main-thread"),
+            pytest.param({**LANE_BASH, "agent_id": ""}, id="empty-agent-id"),
+            pytest.param({"tool_name": "Read", "tool_input": {"file_path": "/x"}, "agent_id": LANE}, id="non-bash"),
+        ],
+    )
+    def test_leaves_main_thread_and_other_tools_alone(self, raw: dict[str, Any]) -> None:
+        assert rendered(raw) is None
+
+    def test_other_events_pass_through(self) -> None:
+        assert attributed(Event.PostToolUse, LANE_BASH, None) is None
+
+    def test_codex_host_gets_no_export(self, tmp_path: Path) -> None:
+        scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": "codex"}, str(tmp_path), 0, "codex-attribution")
+        with reqenv.use_request(scope):
+            assert rendered() is None
 
 
 class TestConcurrentDispatch:
