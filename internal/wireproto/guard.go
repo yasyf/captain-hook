@@ -247,13 +247,18 @@ func joinedStrings(items []any) (string, bool) {
 	return strings.Join(words, " "), true
 }
 
+// Remedy names the commands that repair a missing or outdated host on this platform.
+func Remedy() string {
+	return guard.Remedies[runtime.GOOS]
+}
+
 // SkipEnvelope renders the decision-free note for a mandatory event whose
 // guard did not complete for kind; the call runs under the user's own permissions.
 func SkipEnvelope(event, kind string) string {
 	if !slices.Contains(guard.Kinds, kind) {
 		panic(fmt.Sprintf("captain: unknown guard kind %q", kind))
 	}
-	note := strings.NewReplacer("{kind}", kind, "{remedy}", guard.Remedies[runtime.GOOS]).Replace(guard.Note)
+	note := strings.NewReplacer("{kind}", kind, "{remedy}", Remedy()).Replace(guard.Note)
 	output := map[string]any{"systemMessage": note}
 	if event != "PermissionRequest" {
 		output["hookSpecificOutput"] = map[string]any{"hookEventName": event, "additionalContext": note}

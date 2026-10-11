@@ -1051,5 +1051,5 @@ func installedPython() (string, error) {
 		}
 		return filepath.Join(filepath.Dir(entrypoint), "python"), nil
 	}
-	return "", fmt.Errorf("captain: the capt-hook %s tool env is not installed; run `capt-hook helper install`", Build)
+	return "", fmt.Errorf("captain: the capt-hook %s tool env is not installed: %s", Build, wireproto.Remedy())
 }

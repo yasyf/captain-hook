@@ -405,10 +405,6 @@ def opaque_command_name(evt: ToolRewriteEvent) -> HookResult | None:
     return block_first(evt, map(head_reason, Scan.of(evt).calls))
 
 
-def queries_path(call: Call) -> bool:
-    return "command" in call.wrappers and not {"-v", "-V"}.isdisjoint(call.source.args)
-
-
 def unread_reason(call: Call, arguments: Arguments) -> str:
     negative = next(
         (
@@ -438,7 +434,7 @@ def probe_pid(call: Call, word: Word, value: Scalar | None) -> bool:
 
 
 def kill_verdict(call: Call, facts: Facts) -> str | None:
-    if call.name != "kill" or queries_path(call):
+    if call.name != "kill":
         return None
     spelling = spell(call)
     deny = partial(unresolvable, spelling, fix=KILL_FIX)
@@ -574,6 +570,10 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
         guarded(command="kill -l 9"): Allow(),
         guarded(command="kill"): Allow(),
         guarded(command="command -v kill"): Allow(),
+        guarded(command="command -v kill >/dev/null 2>&1"): Allow(),
+        guarded(command="sudo command -v kill"): Block(pattern="a wrapper supplies its targets"),
+        guarded(command="command -v -i kill -9 14575"): Block(pattern="an agent session"),
+        guarded(command="env -u command -v kill -9 14575"): Block(pattern="an agent session"),
         guarded(command="ps -p 1743"): Allow(),
     }
 )
@@ -583,7 +583,7 @@ def kill_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:
 
 
 def renice_verdict(call: Call, facts: Facts) -> str | None:
-    if call.name != "renice" or queries_path(call):
+    if call.name != "renice":
         return None
     spelling = spell(call)
     deny = partial(unresolvable, spelling, fix=RENICE_FIX)
@@ -728,6 +728,7 @@ def criteria_verdict(call: Call) -> str | None:
         guarded(command="pkill -0 -fx --newest claude"): Allow(),
         guarded(command="pgrep -f claude"): Allow(),
         guarded(command="echo pkill -f never"): Allow(),
+        guarded(command="command -v pkill killall"): Allow(),
         guarded(tool="mcp__runner__exec", tool_input={"cmd": "pgrep -f claude"}): Allow(),
         guarded(tool="mcp__x__call", tool_input={"subject": "pkill", "mode": "x"}): Allow(),
         guarded(tool="SendMessage", tool_input={"to": "a", "message": "never pkill by name"}): Allow(),
@@ -756,6 +757,8 @@ def shutdown_verdict(call: Call) -> str | None:
         guarded(command="poweroff"): Block(),
         guarded(tool="mcp__srv__Bash", tool_input={"command": "reboot"}): Block(),
         guarded(command="echo reboot later"): Allow(),
+        guarded(command="command -v shutdown reboot"): Allow(),
+        guarded(command="command shutdown -r now"): Block(),
     }
 )
 def shutdown_ends_sessions(evt: ToolRewriteEvent) -> HookResult | None:
@@ -1266,6 +1269,12 @@ def orca_vm_run_flag(call: Call) -> str | None:
         guarded(command="orca --json status"): Allow(),
         guarded(command="orca orchestration check --peek --run r --json"): Allow(),
         guarded(command="orca worktree list --json"): Allow(),
+        guarded(command="command -v orca ccx cc-notes"): Allow(),
+        guarded(command="command -V orca terminal close"): Allow(),
+        guarded(command="if command -pv orca ccx >/dev/null 2>&1; then orca status; fi"): Allow(),
+        guarded(command="command -v orca ccx; orca terminal close --terminal t"): Block(pattern="closes terminal `t`"),
+        guarded(command="command orca terminal close --terminal t"): Block(pattern="closes terminal `t`"),
+        guarded(command="command -p orca terminal close --terminal t"): Block(pattern="closes terminal `t`"),
     }
 )
 def orca_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
@@ -1835,6 +1844,8 @@ def tmux_verdict(call: Call) -> str | None:
         guarded(command="tmux -L work kill-session -t main"): Block(pattern="`tmux -L work kill-session -t main`"),
         guarded(command="tmux -N kill-server"): Block(pattern="hides its tmux verb behind `-N`"),
         guarded(command="tmux ls"): Allow(),
+        guarded(command="command -v tmux kill-server"): Allow(),
+        guarded(command="command tmux kill-server"): Block(pattern="tmux kill-server"),
         guarded(command="tmux send-keys -t main ls Enter"): Allow(),
     }
 )
