@@ -160,6 +160,14 @@ def test_unchanged_root_walks_for_language_markers_once(project: CliState, monke
     assert walks == []
 
 
+def test_cold_registry_walks_for_language_markers_once(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    walks: list[Path] = []
+    real = manager.detect_languages
+    monkeypatch.setattr(manager, "detect_languages", lambda root: (walks.append(root), real(root))[1])
+    Registry(project).get()
+    assert walks == [project.root]
+
+
 def test_home_root_skips_language_marker_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(manager.os, "walk", lambda *args, **kwargs: pytest.fail("home root was walked"))
@@ -453,14 +461,14 @@ def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pyt
     original = CliState.discover
     calls: list[int] = []
 
-    def racing_discover(self: CliState) -> list[registry.manager.ResolvedPack]:
+    def racing_discover(self: CliState, *, languages: tuple[str, ...]) -> list[registry.manager.ResolvedPack]:
         calls.append(1)
         if len(calls) == 1:
             hook_file.write_text("")  # torn: discovery reads an empty, truncated hook file
-            resolved = original(self)  # discovers nothing
+            resolved = original(self, languages=languages)  # discovers nothing
             hook_file.write_text(HOOK)  # the rewrite completes right after the torn read
             return resolved
-        return original(self)
+        return original(self, languages=languages)
 
     monkeypatch.setattr(CliState, "discover", racing_discover)
     snapshot = reg._build()
@@ -473,11 +481,17 @@ def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pyt
 def test_build_is_bounded_when_the_tree_keeps_moving(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     # R4: an endlessly-churning tree must not spin forever — retries cap at BUILD_RETRIES.
     digests = iter(str(n) for n in range(1000))
-    monkeypatch.setattr(Fingerprint, "compute", classmethod(lambda cls, cli, *, fresh=False: cls(next(digests))))
+    monkeypatch.setattr(
+        Fingerprint, "with_languages", classmethod(lambda cls, cli, languages, *, fresh: cls(next(digests)))
+    )
     reg = Registry(project)
     calls: list[int] = []
     real_discover = reg._discover_once
-    monkeypatch.setattr(reg, "_discover_once", lambda fingerprint: (calls.append(1), real_discover(fingerprint))[1])
+    monkeypatch.setattr(
+        reg,
+        "_discover_once",
+        lambda fingerprint, languages: (calls.append(1), real_discover(fingerprint, languages))[1],
+    )
     result = reg._build()
     assert len(calls) == registry.BUILD_RETRIES, "the build was not bounded"
     assert result.state is not None
@@ -492,7 +506,9 @@ def test_get_does_not_cache_a_non_cacheable_snapshot(project: CliState, monkeypa
     builds: list[int] = []
     real = reg._discover_once
     monkeypatch.setattr(
-        reg, "_discover_once", lambda fingerprint: (builds.append(1), replace(real(fingerprint), cacheable=False))[1]
+        reg,
+        "_discover_once",
+        lambda fingerprint, languages: (builds.append(1), replace(real(fingerprint, languages), cacheable=False))[1],
     )
     first = reg.get()
     reg.get()

@@ -150,6 +150,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A cold registry build walks the repo for language markers once, not four times.**
+  An API actor forks one evaluator per hook event, and each one fingerprinted the
+  repo before the build, twice inside it, and walked again to pick the language packs.
+  `Registry._build` now walks once per attempt and hands that result to both
+  fingerprints and to discovery, and `Registry.get` skips the fingerprint while its
+  cache is empty. `framework_frame` remembers its answer per absolute filename, so
+  registering the hooks resolves 120 paths where it resolved 1409. On an 8 vCPU remote
+  worker a `PreToolUse` drops from 4.16 s to 2.35 s and a `PostToolUse` from 6.44 s to
+  4.77 s. A language marker that appears while a build is discovering is picked up by
+  the next fingerprint, within the 30 s marker window, instead of by a retry.
+
 - **WordNet is provisioned on first use, and builtin hooks no longer read it.** The two
   `steering` clauses that called `Phrase.expand` now carry their synonyms as literals, four
   for `change` and 17 for `fix`, and a test fails when a literal differs from the pinned

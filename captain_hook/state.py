@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import re
 import threading
 import time
@@ -279,9 +280,14 @@ def package_aware_stem(p: Path) -> str:
     return p.stem
 
 
-def framework_frame(filename: str) -> bool:
-    resolved = Path(filename).resolve()
+@lru_cache(maxsize=4096)
+def framework_path(absolute: str) -> bool:
+    resolved = Path(absolute).resolve()
     return resolved.is_relative_to(FRAMEWORK_DIR) and not resolved.is_relative_to(BUILTIN_PACKS_DIR)
+
+
+def framework_frame(filename: str) -> bool:
+    return framework_path(os.path.join(os.getcwd(), filename))
 
 
 def caller_frame() -> FrameType | None:
