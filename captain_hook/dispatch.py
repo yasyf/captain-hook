@@ -19,7 +19,6 @@ from loguru import logger
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
 from captain_hook.conditions import matches_conditions
 from captain_hook.confirm import confirmed
-from captain_hook.events import PreToolUseEvent
 from captain_hook.grants import declare as grant_declare
 from captain_hook.grants.declare import lifted
 from captain_hook.session import SessionStore
@@ -941,7 +940,7 @@ def dispatch(
     reqenv.mandatory_phase().unchecked = partial(grant_declare.fail_open, evt)
     with grant_declare.reservations() as reserved:
         try:
-            envelope = attributed(evt, dispatch_hooks(event, evt, session_dir, advisory=advisory))
+            envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
         except BaseException:
             phase = reqenv.mandatory_phase()
             verdict = phase.verdict if phase.outcome == "settled" else None
@@ -974,25 +973,21 @@ def denies(envelope: Envelope | None) -> bool:
     )
 
 
-def attributed(evt: BaseHookEvent, envelope: Envelope | None) -> Envelope | None:
+def attributed(event: Event, raw: dict[str, Any], envelope: Envelope | None) -> Envelope | None:
     if (
-        not isinstance(evt, PreToolUseEvent)
-        or evt.tool_name != "Bash"
-        or evt.agent_id is None
+        event is not Event.PreToolUse
+        or raw.get("tool_name") != "Bash"
+        or not (agent_id := raw.get("agent_id"))
         or reqenv.provider() != "claude"
         or isinstance(envelope, str)
         or denies(envelope)
     ):
         return envelope
     rendered = envelope or {}
-    specific = rendered.get("hookSpecificOutput", {"hookEventName": Event.PreToolUse.name})
-    export = f"export {AGENT_ID_VARIABLE}={shlex.quote(evt.agent_id)}\n"
-    updated = (
-        rewritten | {"command": export + rewritten["command"]}
-        if (rewritten := specific.get("updatedInput")) is not None
-        else evt.rewrite_command(export + evt.cmd.raw).updated_input
-    )
-    return rendered | {"hookSpecificOutput": specific | {"updatedInput": updated}}
+    specific = rendered.get("hookSpecificOutput", {"hookEventName": event.name})
+    tool_input = specific.get("updatedInput") or raw["tool_input"]
+    command = f"export {AGENT_ID_VARIABLE}={shlex.quote(agent_id)}\n{tool_input['command']}"
+    return rendered | {"hookSpecificOutput": specific | {"updatedInput": tool_input | {"command": command}}}
 
 
 def dispatch_hooks(

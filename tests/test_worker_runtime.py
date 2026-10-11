@@ -125,6 +125,53 @@ def test_dispatch_writes_a_plain_text_envelope_verbatim() -> None:
     assert response.stdout == "discovered out\nKeep the plan path.\n"
 
 
+LANE_PAYLOAD = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_id": "lane-1"})
+LANE_EXPORT = {
+    "hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": {"command": "export CCI_AGENT_ID=lane-1\nls"}}
+}
+
+
+def test_a_lane_bash_reply_exports_its_agent_id() -> None:
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=lambda *_, **__: (None, lambda: None),
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    response, _ = runtime.dispatch(request(payload_raw=LANE_PAYLOAD))
+
+    assert response.stdout == "discovered out\n" + json.dumps(LANE_EXPORT) + "\n"
+
+
+def test_a_lane_bash_skipped_mandatory_hook_still_exports_its_agent_id() -> None:
+    state = app.State()
+    state.hooks.append(mandatory_hook("guard_sessions"))
+
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        raise ValueError("broken hook")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, _ = runtime.dispatch(request(payload_raw=LANE_PAYLOAD))
+    envelope = json.loads(response.stdout.removeprefix("discovered out\n"))
+
+    assert envelope["hookSpecificOutput"]["updatedInput"] == LANE_EXPORT["hookSpecificOutput"]["updatedInput"]
+    assert "guard_sessions did not complete" in envelope["hookSpecificOutput"]["additionalContext"]
+
+
+def test_a_lane_bash_whose_evidence_fails_open_still_exports_its_agent_id() -> None:
+    def fail(*_: object, **__: object) -> tuple[None, object]:
+        raise EvidenceIncomplete("retained_limit", "snapshot capacity occupied")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
+    )
+    response, _ = runtime.dispatch(request(payload_raw=LANE_PAYLOAD))
+
+    assert response.stdout == json.dumps(LANE_EXPORT) + "\n"
+
+
 def mandatory_hook(name: str, events: Event = Event.PreToolUse, pack: str | None = "general") -> RegisteredHook:
     return RegisteredHook(
         spec=HookSpec(events=events, mandatory=True), name=name, source_file=f"/hooks/{name}.py", pack_name=pack

@@ -17,7 +17,7 @@ from captain_hook.cli import EVENT_NAMES, dispatch_event
 from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
-from captain_hook.dispatch import denies, envelope_text, format_output, mandatory_completions
+from captain_hook.dispatch import attributed, denies, envelope_text, format_output, mandatory_completions
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
 from captain_hook.state import RESOURCES
@@ -145,7 +145,9 @@ class ProductRuntime:
                         if session_id
                         else None
                     )
-                    envelope = fail_open_envelope(event, warning) if warning else None
+                    envelope = attributed(
+                        event, raw_dict or {}, fail_open_envelope(event, warning) if warning else None
+                    )
                     return EventResponse(stdout=envelope_text(envelope) + "\n" if envelope else ""), None
                 logger.opt(exception=True).error("dispatch failed")
                 buffers.stderr.write(traceback.format_exc())
@@ -212,6 +214,7 @@ class ProductRuntime:
             guard = _guard_completion(event) if request.mandatory and not unfinished else ""
         if session_id and (gaps := reqenv.evidence_gaps()) and (warning := tally_fail_open(event, session_id, gaps)):
             output = with_warning(event, output, warning)
+        output = attributed(event, raw, output)
         if output:
             buffers.stdout.write(envelope_text(output) + "\n")
         return lambda: self._after_reply(context, background, session_id), guard

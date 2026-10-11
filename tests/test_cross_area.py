@@ -18,7 +18,7 @@ from captain_hook.app import (
 from captain_hook.app import (
     hook as register_hook,
 )
-from captain_hook.dispatch import denies, dispatch
+from captain_hook.dispatch import dispatch
 from captain_hook.events import (
     BaseHookEvent,
     PreToolUseEvent,
@@ -384,11 +384,11 @@ class TestMaxFiresSessionStore:
             )
             return dispatch(Event.PreToolUse, evt, session_dir=session_dir)
 
-        assert denies(fire(None))
-        assert denies(fire("a1"))
-        assert denies(fire("a2"))
-        assert not denies(fire("a1"))
-        assert not denies(fire("")), "empty agent_id spends the main budget"
+        assert fire(None) is not None
+        assert fire("a1") is not None
+        assert fire("a2") is not None
+        assert fire("a1") is None
+        assert fire("") is None, "empty agent_id spends the main budget"
 
         hook_dir = session_dir / _state.hooks[0].state_key
         for agent_slot in ("main", "a1", "a2"):

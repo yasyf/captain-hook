@@ -12,10 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Claude Code hands a subagent's `agent_id` to hooks only, so a lane's commands could not
   tell which agent ran them. A `PreToolUse` Bash call carrying an `agent_id` now runs with
   `export CCI_AGENT_ID=<agent_id>` on the line before its command, so every script it
-  starts inherits the id. The export joins the one envelope the dispatch renders: it is
-  prepended to a hook's rewrite, or added as the only change beside any other verdict,
-  leaving the permission decision to the hooks. A denied call, a main-thread call, any
-  other tool, and a Codex host are unchanged.
+  starts inherits the id. The export joins the one envelope the reply carries, including
+  the worker's fail-open and skipped-mandatory-hook replies: it is prepended to a hook's
+  rewrite, or added as the only change beside any other verdict, leaving the permission
+  decision to the hooks. A denied call, a main-thread call, any other tool, and a Codex
+  host are unchanged.
 
 - **`evt.decide` asks TypeSafe Jev or OpenAI Decisions a typed question set.**
   A hook passes the state and an ordered map of spawnllm `Binary`, `Label`, and `Score`

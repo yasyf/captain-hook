@@ -152,13 +152,11 @@ def make_pre_tool_event(
     ctx: Any = None,
     *,
     permission_mode: str | None = None,
-    agent_id: str | None = None,
 ) -> PreToolUseEvent:
     return PreToolUseEvent(
         _raw={"tool_name": tool_name}
         | ({"tool_input": tool_input} if tool_input is not None else {})
-        | ({"permission_mode": permission_mode} if permission_mode is not None else {})
-        | ({"agent_id": agent_id} if agent_id is not None else {}),
+        | ({"permission_mode": permission_mode} if permission_mode is not None else {}),
         ctx=ctx or make_ctx(),
     )
 
