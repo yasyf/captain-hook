@@ -21,7 +21,9 @@ from typing import Any
 import pytest
 
 from captain_hook.daemon.logsink import daemon_log_path
+from captain_hook.testing.helpers import fixture_line
 from captain_hook.util.paths import resolve_log_dir
+from tests.helpers import raw_text
 
 ROOT = Path(__file__).parents[1]
 HOOK = ROOT / "captain_hook/bin/hook"
@@ -46,6 +48,29 @@ def record(event: PostToolUseEvent) -> None:
 """
 
 
+ACTOR_HOOKS = """
+from pathlib import Path
+
+from captain_hook import Event, PostToolUseEvent, on
+from captain_hook.snapshots import client
+
+client.GRAPH_WORK_SECONDS = 20
+
+
+@on(Event.PostToolUse)
+def read_evidence(event: PostToolUseEvent) -> None:
+    marker = Path(event.tool_response)
+    try:
+        for index in range(24):
+            event.ctx.t.has_skill(f"skill-{index}")
+    except Exception as exc:
+        marker.write_text(f"{type(exc).__name__}: {exc}")
+        raise
+    marker.write_text("read")
+"""
+ACTOR_BURST = 30
+
+
 def make_project(root: Path) -> Path:
     hooks = root / ".claude" / "hooks"
     hooks.mkdir(parents=True)
@@ -62,7 +87,9 @@ def environment(root: Path) -> dict[str, str]:
     return {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "CLAUDE_PROJECT_DIR": str(root)}
 
 
-def dispatch(root: Path, event: str, session: str, **payload: Any) -> subprocess.CompletedProcess[str]:
+def dispatch(
+    root: Path, event: str, session: str, env: dict[str, str] | None = None, **payload: Any
+) -> subprocess.CompletedProcess[str]:
     transcript = root / f"{session}.jsonl"
     transcript.touch()
     body = {
@@ -75,7 +102,7 @@ def dispatch(root: Path, event: str, session: str, **payload: Any) -> subprocess
     return subprocess.run(
         [HOOK, "run", event],
         input=json.dumps(body),
-        env=environment(root),
+        env=environment(root) | (env or {}),
         capture_output=True,
         text=True,
         check=False,
@@ -125,7 +152,11 @@ def reuse_process_state(pid: int) -> dict[str, str]:
 
 
 def reuse_diagnostics(
-    project: Path, session: str, calls: list[subprocess.CompletedProcess[str]], before: dict[str, Any], after: dict[str, Any]
+    project: Path,
+    session: str,
+    calls: list[subprocess.CompletedProcess[str]],
+    before: dict[str, Any],
+    after: dict[str, Any],
 ) -> str:
     previous = [worker for worker in before["workers"] if worker["root"] == str(project)]
     current = [worker for worker in after["workers"] if worker["root"] == str(project)]
@@ -206,6 +237,35 @@ def test_async_hook_finishes_after_the_event_returns(project: Path, tmp_path: Pa
     while not marker.exists() and time.monotonic() < deadline:
         time.sleep(0.2)
     assert marker.read_text() == "recorded"
+
+
+def test_a_burst_of_actor_dispatches_all_read_their_evidence(tmp_path: Path) -> None:
+    project = tmp_path / "actor"
+    hooks = project / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "actor_burst.py").write_text(textwrap.dedent(ACTOR_HOOKS))
+    session = uuid.uuid4().hex
+    (project / f"{session}.jsonl").write_text(json.dumps(fixture_line(0, raw_text("user", "burst"))) + "\n")
+    actor = {"CAPT_HOOK_ACTOR_JUDGE": "claude", "ANTHROPIC_API_KEY": "not-a-key"}
+    markers = [tmp_path / f"marker-{index}" for index in range(ACTOR_BURST)]
+
+    def post(marker: Path) -> subprocess.CompletedProcess[str]:
+        return dispatch(
+            project,
+            "PostToolUse",
+            session,
+            env=actor,
+            tool_name="Bash",
+            tool_input={"command": "ls"},
+            tool_response=str(marker),
+        )
+
+    with ThreadPoolExecutor(ACTOR_BURST) as pool:
+        results = list(pool.map(post, markers))
+
+    assert [(result.returncode, result.stderr[-512:]) for result in results] == [(0, "")] * ACTOR_BURST
+    assert [marker.read_text() for marker in markers] == ["read"] * ACTOR_BURST
+    assert "admission queue exhausted" not in (resolve_log_dir() / f"{session}.log").read_text()
 
 
 def test_a_mismatched_build_is_fenced_from_the_host(project: Path) -> None:

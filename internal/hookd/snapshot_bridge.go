@@ -27,7 +27,7 @@ func (p *hostProduct) transcript(ctx context.Context, req daemonkit.Request) (da
 		return daemonkit.Reply{}, err
 	}
 	admission := "review"
-	if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
+	if req.Op == opEventTranscript || metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
 		admission = "hook"
 	}
 	callContext := userSnapshotContext(fmt.Sprintf("review:%d", req.Session.ID()), admission, req.Caller.UID)
@@ -97,7 +97,7 @@ func runTranscriptBridge(stdin io.Reader, stdout io.Writer, call snapshotBusines
 		if err != nil {
 			return err
 		}
-		if frame.ID == 0 || frame.ParentID != 0 || frame.Build != "" || frame.Request != nil || frame.Response != nil || frame.Adopt != nil || frame.Error != "" || len(frame.SnapshotContext)+len(frame.SnapshotConfig) != 0 {
+		if frame.ID == 0 || frame.Build != "" || frame.Request != nil || frame.Response != nil || frame.Adopt != nil || frame.Error != "" || len(frame.SnapshotContext)+len(frame.SnapshotConfig) != 0 {
 			return errors.New("captain: invalid transcript client frame")
 		}
 		if frame.Op == wireproto.OpSnapshotCancel {
@@ -119,6 +119,10 @@ func runTranscriptBridge(stdin io.Reader, stdout io.Writer, call snapshotBusines
 		if err != nil {
 			return err
 		}
+		op := opTranscript
+		if frame.ParentID != 0 {
+			op = opEventTranscript
+		}
 		requestCtx, stop := context.WithDeadline(ctx, deadline)
 		mu.Lock()
 		if _, duplicate := pending[frame.ID]; duplicate {
@@ -137,7 +141,7 @@ func runTranscriptBridge(stdin io.Reader, stdout io.Writer, call snapshotBusines
 		go func() {
 			defer wg.Done()
 			defer stop()
-			body, err := call(requestCtx, opTranscript, frame.Snapshot)
+			body, err := call(requestCtx, op, frame.Snapshot)
 			response := wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotResult, ID: frame.ID, Snapshot: body}
 			if err == nil {
 				err = snapshots.Validate("host-response", body)

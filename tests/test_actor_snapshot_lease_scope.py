@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from captain_hook.snapshots import client as snapshots
-from captain_hook.snapshots.client import GraphEvidenceExpired, GraphSources, RegisteredWarmState, client_scope
+from captain_hook.snapshots.client import GraphSources, RegisteredWarmState, client_scope
 from captain_hook.testing.snapshots import FixtureOwner
 from captain_hook.transcripts import load_transcript
 from tests.helpers import raw_text
@@ -50,14 +50,14 @@ def owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         pytest.fail("registered fixture did not finish warming")
     fixture.context["work_class"] = "foreground"
     closed: list[int] = []
-    monkeypatch.setattr(snapshots, "Bridge", lambda: FixtureBridge(fixture, closed))
+    monkeypatch.setattr(snapshots, "Bridge", lambda event=0: FixtureBridge(fixture, closed))
     try:
         yield fixture, source, sources, closed
     finally:
         fixture.close()
 
 
-def test_an_immediate_event_scope_expires_the_graph_a_later_branch_borrows(owner) -> None:
+def test_an_immediate_event_scope_prepares_the_graph_again_for_a_later_branch(owner) -> None:
     fixture, source, sources, closed = owner
     baseline = active_leases(fixture)
     with client_scope() as client:
@@ -66,15 +66,11 @@ def test_an_immediate_event_scope_expires_the_graph_a_later_branch_borrows(owner
         first, second = session.retain(), session.retain()
         assert first.has_edit_to("src/**") is False
         first.release()
-        with pytest.raises(GraphEvidenceExpired) as expired:
-            second.has_edit_to("src/**")
-        assert (expired.value.status, expired.value.reason) == (
-            "stale_handle",
-            "lease does not belong to this claimant or generation",
-        )
+        assert second.has_edit_to("src/**") is False
         second.release()
         session.release()
     assert closed == [baseline]
+    assert not client._graphs
 
 
 @pytest.mark.parametrize(

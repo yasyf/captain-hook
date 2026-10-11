@@ -759,6 +759,82 @@ func TestTranscriptClientWarmUsesHookAdmission(t *testing.T) {
 	}
 }
 
+func TestAnEventsTranscriptRequestsUseHookAdmission(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, ownerServer := fakeSnapshotOwner(t, frames)
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.owner = owner
+	product := &hostProduct{snapshots: service}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, lane := range []struct{ op, admission string }{{opTranscript, "review"}, {opEventTranscript, "hook"}} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := product.Handle(ctx, daemonkit.Request{Op: lane.op, Body: statsRequest, Caller: daemonkit.Caller{UID: 501}})
+			done <- err
+		}()
+		frame := receiveSnapshot(t, frames)
+		var callContext snapshots.CallContext
+		if err := json.Unmarshal(frame.SnapshotContext, &callContext); err != nil {
+			t.Fatal(err)
+		}
+		if callContext.Admission != lane.admission || callContext.WorkClass != "" {
+			t.Fatalf("%s context=%+v, want %s admission", lane.op, callContext, lane.admission)
+		}
+		failSnapshot(t, ownerServer, frame.ID)
+		if err := <-done; err == nil || err.Error() != "fixture" {
+			t.Fatalf("%s response=%v", lane.op, err)
+		}
+		if lane.op == opTranscript {
+			for range cap(service.reviewSlots) {
+				service.reviewSlots <- struct{}{}
+			}
+		}
+	}
+}
+
+func TestTranscriptBridgeSendsAnEventsRequestsOnTheEventOp(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	ops := make(chan string, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- runTranscriptBridge(server, server, func(_ context.Context, op string, _ []byte) ([]byte, error) {
+			ops <- op
+			return nil, errors.New("fixture")
+		})
+	}()
+	if err := wireproto.EncodeFrameLimit(client, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: Build}, snapshots.MaxFrameBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wireproto.DecodeFrameLimit(client, snapshots.MaxFrameBytes); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []struct {
+		parent uint64
+		op     string
+	}{{0, opTranscript}, {1, opEventTranscript}} {
+		frame := wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotRequest, ID: 9 + request.parent, ParentID: request.parent, Snapshot: statsRequest}
+		if err := wireproto.EncodeFrameLimit(client, frame, snapshots.MaxFrameBytes); err != nil {
+			t.Fatal(err)
+		}
+		response, err := wireproto.DecodeFrameLimit(client, snapshots.MaxFrameBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op := <-ops; op != request.op || response.ID != frame.ID || response.Error != "fixture" {
+			t.Fatalf("parent %d went to %s with response=%+v, want %s", request.parent, op, response, request.op)
+		}
+	}
+	_ = client.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCaptainDomainRequestUsesGeneratedIngressSchema(t *testing.T) {
 	request := map[string]any{"schema": "captain.transcript/1", "tool_registry": []any{}, "request": map[string]any{
 		"schema": "captain.transcript/1", "id": "one", "operation": "prepare_review", "deadline_unix_ms": time.Now().Add(time.Second).UnixMilli(),

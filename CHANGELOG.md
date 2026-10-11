@@ -265,6 +265,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A burst of tool calls no longer fails hooks on a remote actor host.** A worker that runs
+  Captain Hook as an API actor forks one evaluator per event, and 15 calls sent at once
+  slowed each dispatch from 1.1 s to as much as 6 s. Two faults then exited 1. A prepared
+  graph carried one 0.75 s deadline for every later query, so a hook that asked after it
+  sent a request the wire refused, and the actor's bridge reported any refused request as
+  `invalid_request`, which does not fail open. Above 17 concurrent requests the host
+  refused the rest with `snapshot admission queue exhausted`, because an actor's evidence
+  requests entered on the review lane, which has one slot and a queue of 16. Each graph
+  query is now budgeted from when it is sent, and prepares the graph again when the owner
+  has dropped it. The bridge reports a refused request as `cancelled` and an expired one as
+  `deadline`, as the host workers' transport does. An actor's requests enter on the hook
+  lane, four slots and a queue of 64, through their own wire op.
+
 - **The Linux install puts `capt-hook` on `PATH`.** `package-install` linked only `capt-hookd`
   into `~/.local/bin`, and the `capt-hook` CLI reached `PATH` through the plugin's `bin/`,
   which Claude Code adds and Codex does not. A Codex worker had no `capt-hook`, though the

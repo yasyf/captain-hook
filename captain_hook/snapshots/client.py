@@ -75,7 +75,22 @@ SCALAR_QUERY_KINDS = frozenset(
     }
 )
 SCALAR_MISS = object()
-type ScalarKey = tuple[str, tuple[tuple[str, str], ...], SnapshotClient, PreparedGraphEvidence | None, str, str]
+type ScalarKey = tuple[
+    str, tuple[tuple[str, str], ...], SnapshotClient, tuple[PreparedGraphEvidence, int] | None, str, str
+]
+
+
+def graph_deadline(client: SnapshotClient) -> int:
+    from captain_hook.util import reqenv
+
+    deadline = int((time.time() + GRAPH_WORK_SECONDS) * 1000)
+    if client.foreground_deadline_unix_ms is not None:
+        deadline = min(deadline, client.foreground_deadline_unix_ms)
+    if (request := reqenv.current()) is not None and request.deadline_unix_ms:
+        deadline = min(deadline, request.deadline_unix_ms - 1000)
+    if deadline <= int(time.time() * 1000):
+        raise EvidenceIncomplete("deadline", "no time remains for prepared graph evidence")
+    return deadline
 
 
 def graph_limits() -> dict[str, int]:
@@ -179,10 +194,11 @@ def read_frame(stream: Any) -> dict[str, Any]:
 
 
 class Bridge:
-    def __init__(self, command: Sequence[str] | None = None) -> None:
+    def __init__(self, command: Sequence[str] | None = None, *, event: int = 0) -> None:
         if command is None and os.environ.get("CAPT_HOOK_TEST_NO_LIVE") == "1":
             raise SnapshotProtocolError("tests must supply an isolated snapshot transport")
         self._command = tuple(command or (HOST, "transcript-client"))
+        self._event = event
         self._process: subprocess.Popen[bytes] | None = None
         self._guard = threading.Lock()
         self._id = 0
@@ -200,6 +216,8 @@ class Bridge:
                     raise SnapshotProtocolError("snapshot bridge rejected exact build handshake")
             self._id += 1
             frame = {"protocol": 1, "op": "snapshot_request", "id": self._id, "snapshot": request}
+            if self._event:
+                frame["parent_id"] = self._event
             process = self._process
             if process.stdin is None or process.stdout is None:
                 raise SnapshotProtocolError("snapshot bridge did not create pipes")
@@ -207,7 +225,11 @@ class Bridge:
             process.stdin.flush()
             response = read_frame(process.stdout)
             if response.get("op") == "error" and response.get("id") == self._id:
-                raise SnapshotProtocolError(f"snapshot host failed the request: {response.get('error')}")
+                nested = request.get("request")
+                deadline = nested.get("deadline_unix_ms") if isinstance(nested, dict) else None
+                if type(deadline) is int and time.time() * 1000 >= deadline:
+                    raise EvidenceIncomplete("deadline", "snapshot transport deadline elapsed")
+                raise EvidenceIncomplete("cancelled", f"snapshot host failed the request: {response.get('error')}")
             if (
                 type(response.get("protocol")) is not int
                 or type(response.get("id")) is not int
@@ -813,7 +835,7 @@ class PreparedGraphEvidence:
         self.classifier: tuple[tuple[str, str], ...] | None = None
         self.client: SnapshotClient | None = None
         self.native_released = False
-        self.deadline_unix_ms: int | None = None
+        self.lapses = 0
 
     def require_unprepared_classifier_change(self) -> None:
         with self.guard:
@@ -839,16 +861,6 @@ class PreparedGraphEvidence:
             if self.outcome is None:
                 self.classifier = classifier
                 try:
-                    from captain_hook.util import reqenv
-
-                    deadline = int((time.time() + GRAPH_WORK_SECONDS) * 1000)
-                    if session.client.foreground_deadline_unix_ms is not None:
-                        deadline = min(deadline, session.client.foreground_deadline_unix_ms)
-                    if (request := reqenv.current()) is not None and request.deadline_unix_ms:
-                        deadline = min(deadline, request.deadline_unix_ms - 1000)
-                    if deadline <= int(time.time() * 1000):
-                        raise EvidenceIncomplete("deadline", "no time remains for prepared graph evidence")
-                    self.deadline_unix_ms = deadline
                     pages = list(
                         session.client.pages(
                             "prepare_graph",
@@ -857,7 +869,7 @@ class PreparedGraphEvidence:
                             roots=[str(path) for path in self.sources.roots],
                             direct_paths=[str(path) for path in self.sources.direct_paths],
                             active_since_unix_ms=self.sources.active_since_unix_ms,
-                            deadline_unix_ms=deadline,
+                            deadline_unix_ms=graph_deadline(session.client),
                             limits=graph_limits(),
                         )
                     )
@@ -878,18 +890,37 @@ class PreparedGraphEvidence:
                     raise failure from exc
             return self.outcome
 
+    def answer(self, session: RemoteSession, query: Mapping[str, object]) -> list[dict[str, Any]]:
+        handle = self.require(session)
+        try:
+            return list(
+                session.client.pages(
+                    "query_graph",
+                    handle=handle.wire(),
+                    selectors=[dict(selector) for selector in session.selectors],
+                    query=dict(query),
+                    deadline_unix_ms=graph_deadline(session.client),
+                    limits=graph_limits(),
+                )
+            )
+        except EvidenceIncomplete as exc:
+            if exc.status == "stale_handle":
+                with self.guard:
+                    if self.outcome is handle:
+                        assert self.client is not None
+                        self.outcome = None
+                        self.lapses += 1
+                        self.client._graphs.discard(self)
+            raise
+
     def query_pages(self, session: RemoteSession, query: Mapping[str, object]) -> Iterator[dict[str, Any]]:
         try:
-            handle = self.require(session)
-            assert self.deadline_unix_ms is not None
-            yield from session.client.pages(
-                "query_graph",
-                handle=handle.wire(),
-                selectors=[dict(selector) for selector in session.selectors],
-                query=dict(query),
-                deadline_unix_ms=self.deadline_unix_ms,
-                limits=graph_limits(),
-            )
+            try:
+                yield from self.answer(session, query)
+            except EvidenceIncomplete as exc:
+                if exc.status != "stale_handle":
+                    raise
+                yield from self.answer(session, query)
         except EvidenceIncomplete as exc:
             if exc.status in {"incomplete", "deadline"}:
                 session.client.schedule_graph_warm(self.sources)
@@ -1050,7 +1081,7 @@ class RemoteSession:
             self.evidence_ref,
             tuple(sorted(self.classifier.items())),
             self.client,
-            self.graph if deep else None,
+            (self.graph, self.graph.lapses) if deep else None,
             json.dumps(self.selectors, sort_keys=True, separators=(",", ":")),
             json.dumps(query, sort_keys=True, separators=(",", ":")),
         )
@@ -1413,11 +1444,11 @@ def foreground_evidence(seconds: float) -> Iterator[None]:
 
 
 @contextmanager
-def client_scope(*, defer_cleanup: bool = False) -> Iterator[SnapshotClient]:
+def client_scope(*, defer_cleanup: bool = False, event: int = 0) -> Iterator[SnapshotClient]:
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
-    bridge = Bridge()
+    bridge = Bridge(event=event)
     client = SnapshotClient(bridge, defer_cleanup=defer_cleanup)
     token = CURRENT_CLIENT.set(client)
     try:
