@@ -16,8 +16,10 @@ from captain_hook.snapshots.client import (
     HOST_SCHEMA,
     MAX_FRAME_BYTES,
     Bridge,
+    EvidenceIncomplete,
     SnapshotProtocolError,
     encode_frame,
+    fails_open,
 )
 from captain_hook.snapshots.validation import checked, validator
 from captain_hook.snapshots.worker import OWNER_ADMISSION, OwnerService, empty_usage, failure, handshake, read_frame
@@ -602,8 +604,21 @@ write({"protocol": 1, "op": "error", "id": frame["id"], "error": "captain: snaps
 """
 
 
-def test_the_bridge_names_the_error_the_host_returns():
+@pytest.mark.parametrize(
+    ("deadline_in_seconds", "status", "reason"),
+    [
+        pytest.param(None, "cancelled", "snapshot host failed the request: captain: snapshot admission", id="refused"),
+        pytest.param(60, "cancelled", "snapshot host failed the request: captain: snapshot admission", id="in_time"),
+        pytest.param(-1, "deadline", "snapshot transport deadline elapsed", id="past_its_deadline"),
+    ],
+)
+def test_the_bridge_fails_open_on_a_request_the_host_did_not_serve(deadline_in_seconds, status, reason):
+    request = {"schema": CORE_SCHEMA, "operation": "query_graph", "id": "one"}
+    if deadline_in_seconds is not None:
+        request["deadline_unix_ms"] = int((time.time() + deadline_in_seconds) * 1000)
     bridge = Bridge((sys.executable, "-c", REFUSING_HOST))
-    with pytest.raises(SnapshotProtocolError, match="snapshot host failed the request: captain: snapshot admission"):
-        bridge({"schema": HOST_SCHEMA})
+    with pytest.raises(EvidenceIncomplete, match=reason) as raised:
+        bridge({"schema": HOST_SCHEMA, "request": request})
     bridge.close()
+    assert raised.value.status == status
+    assert fails_open(raised.value)

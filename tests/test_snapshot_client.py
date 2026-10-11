@@ -396,6 +396,50 @@ def test_foreground_graph_latency_stays_bounded_while_registry_warms(tmp_path, m
         fixture.close()
 
 
+def test_a_graph_query_after_the_prepared_graph_lapsed_prepares_it_again(tmp_path, monkeypatch):
+    from captain_hook.testing.snapshots import FixtureOwner
+    from tests.helpers import raw_text
+    from tests.test_snapshot_fixture_owner import write_messages
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr("captain_hook.snapshots.client.GRAPH_WORK_SECONDS", 0.5)
+    source = tmp_path / "root.jsonl"
+    attachment = tmp_path / "attachment.jsonl"
+    write_messages(source, raw_text("user", "root"))
+    write_messages(attachment, raw_text("user", "attached"))
+    fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
+    sent = []
+    exchange = fixture.client._exchange
+
+    def record(wrapper):
+        request = wrapper["request"]
+        reply = exchange(wrapper)
+        if request["operation"] in {"prepare_graph", "query_graph"}:
+            sent.append((request["operation"], request["deadline_unix_ms"], reply["response"]["status"]))
+        return reply
+
+    fixture.client._exchange = record
+    session = fixture.load(source).with_registered_sources(GraphSources(direct_paths=(attachment,)))
+    try:
+        assert session.has_edit_to("src/**") is False
+        prepared_until = sent[0][1]
+        time.sleep(max(0.0, prepared_until / 1000 - time.time()) + 0.1)
+        assert session.has_read("README.md") is False
+    finally:
+        session.release()
+        fixture.close()
+
+    assert [(operation, status) for operation, _, status in sent] == [
+        ("prepare_graph", "ok"),
+        ("query_graph", "ok"),
+        ("query_graph", "stale_handle"),
+        ("prepare_graph", "ok"),
+        ("query_graph", "ok"),
+    ]
+    assert all(deadline > prepared_until for _, deadline, _ in sent[2:])
+
+
 def test_codex_append_warming_does_not_lower_the_whole_source(tmp_path, monkeypatch):
     from captain_hook.testing.snapshots import FixtureOwner
     from tests.helpers import raw_text
