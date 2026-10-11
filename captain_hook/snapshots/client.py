@@ -192,10 +192,11 @@ def read_frame(stream: Any) -> dict[str, Any]:
 
 
 class Bridge:
-    def __init__(self, command: Sequence[str] | None = None) -> None:
+    def __init__(self, command: Sequence[str] | None = None, *, event: int = 0) -> None:
         if command is None and os.environ.get("CAPT_HOOK_TEST_NO_LIVE") == "1":
             raise SnapshotProtocolError("tests must supply an isolated snapshot transport")
         self._command = tuple(command or (HOST, "transcript-client"))
+        self._event = event
         self._process: subprocess.Popen[bytes] | None = None
         self._guard = threading.Lock()
         self._id = 0
@@ -213,6 +214,8 @@ class Bridge:
                     raise SnapshotProtocolError("snapshot bridge rejected exact build handshake")
             self._id += 1
             frame = {"protocol": 1, "op": "snapshot_request", "id": self._id, "snapshot": request}
+            if self._event:
+                frame["parent_id"] = self._event
             process = self._process
             if process.stdin is None or process.stdout is None:
                 raise SnapshotProtocolError("snapshot bridge did not create pipes")
@@ -1435,11 +1438,11 @@ def foreground_evidence(seconds: float) -> Iterator[None]:
 
 
 @contextmanager
-def client_scope(*, defer_cleanup: bool = False) -> Iterator[SnapshotClient]:
+def client_scope(*, defer_cleanup: bool = False, event: int = 0) -> Iterator[SnapshotClient]:
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
-    bridge = Bridge()
+    bridge = Bridge(event=event)
     client = SnapshotClient(bridge, defer_cleanup=defer_cleanup)
     token = CURRENT_CLIENT.set(client)
     try:

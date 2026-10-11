@@ -604,6 +604,28 @@ write({"protocol": 1, "op": "error", "id": frame["id"], "error": "captain: snaps
 """
 
 
+ECHOING_HOST = """
+import json, struct, sys
+def read():
+    (size,) = struct.unpack(">I", sys.stdin.buffer.read(4))
+    return json.loads(sys.stdin.buffer.read(size))
+def write(value):
+    body = json.dumps(value).encode()
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+write(read())
+frame = read()
+write({"protocol": 1, "op": "snapshot_result", "id": frame["id"], "snapshot": {"parent_id": frame.get("parent_id")}})
+"""
+
+
+@pytest.mark.parametrize(("event", "parent"), [pytest.param(0, None, id="no_event"), pytest.param(7, 7, id="event")])
+def test_the_bridge_sends_an_events_requests_under_the_event(event, parent):
+    bridge = Bridge((sys.executable, "-c", ECHOING_HOST), event=event)
+    assert bridge({"schema": HOST_SCHEMA}) == {"parent_id": parent}
+    bridge.close()
+
+
 @pytest.mark.parametrize(
     ("deadline_in_seconds", "status", "reason"),
     [

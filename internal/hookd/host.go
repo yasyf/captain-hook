@@ -17,14 +17,15 @@ import (
 const maxHostFrame daemonkit.Bytes = (wireproto.MaxHostPayload*4+2)/3 + 4<<10
 
 const (
-	opTranscript     = "transcript"
-	opEvent          = "captain.event.v1"
-	opStatus         = "captain.status.v1"
-	opRestartWorkers = "captain.restart-workers.v1"
-	opRuntimeHealth  = "captain.host.v1.runtime.health"
-	opHelperPing     = "captain.helper.ping.v1"
-	opHelperNotify   = "captain.helper.notify.v1"
-	opHelperNext     = "captain.helper.next.v1"
+	opTranscript      = "transcript"
+	opEventTranscript = "captain.event.transcript.v1"
+	opEvent           = "captain.event.v1"
+	opStatus          = "captain.status.v1"
+	opRestartWorkers  = "captain.restart-workers.v1"
+	opRuntimeHealth   = "captain.host.v1.runtime.health"
+	opHelperPing      = "captain.helper.ping.v1"
+	opHelperNotify    = "captain.helper.notify.v1"
+	opHelperNext      = "captain.helper.next.v1"
 )
 
 // hostSchema is the stable v1 application protocol shared across runtime releases.

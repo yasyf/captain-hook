@@ -80,7 +80,7 @@ type hostProduct struct {
 // any op here.
 func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemonkit.Reply, error) {
 	switch req.Op {
-	case opTranscript:
+	case opTranscript, opEventTranscript:
 		return p.transcript(ctx, req)
 	case opEvent:
 		var event wireproto.EventRequest
