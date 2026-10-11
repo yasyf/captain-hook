@@ -75,7 +75,9 @@ SCALAR_QUERY_KINDS = frozenset(
     }
 )
 SCALAR_MISS = object()
-type ScalarKey = tuple[str, tuple[tuple[str, str], ...], SnapshotClient, PreparedGraphEvidence | None, str, str]
+type ScalarKey = tuple[
+    str, tuple[tuple[str, str], ...], SnapshotClient, tuple[PreparedGraphEvidence, int] | None, str, str
+]
 
 
 def graph_deadline(client: SnapshotClient) -> int:
@@ -833,6 +835,7 @@ class PreparedGraphEvidence:
         self.classifier: tuple[tuple[str, str], ...] | None = None
         self.client: SnapshotClient | None = None
         self.native_released = False
+        self.lapses = 0
 
     def require_unprepared_classifier_change(self) -> None:
         with self.guard:
@@ -904,7 +907,10 @@ class PreparedGraphEvidence:
             if exc.status == "stale_handle":
                 with self.guard:
                     if self.outcome is handle:
+                        assert self.client is not None
                         self.outcome = None
+                        self.lapses += 1
+                        self.client._graphs.discard(self)
             raise
 
     def query_pages(self, session: RemoteSession, query: Mapping[str, object]) -> Iterator[dict[str, Any]]:
@@ -1075,7 +1081,7 @@ class RemoteSession:
             self.evidence_ref,
             tuple(sorted(self.classifier.items())),
             self.client,
-            self.graph if deep else None,
+            (self.graph, self.graph.lapses) if deep else None,
             json.dumps(self.selectors, sort_keys=True, separators=(",", ":")),
             json.dumps(query, sort_keys=True, separators=(",", ":")),
         )

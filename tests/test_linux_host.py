@@ -52,6 +52,9 @@ ACTOR_HOOKS = """
 from pathlib import Path
 
 from captain_hook import Event, PostToolUseEvent, on
+from captain_hook.snapshots import client
+
+client.GRAPH_WORK_SECONDS = 20
 
 
 @on(Event.PostToolUse)

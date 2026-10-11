@@ -788,8 +788,10 @@ func TestAnEventsTranscriptRequestsUseHookAdmission(t *testing.T) {
 		if err := <-done; err == nil || err.Error() != "fixture" {
 			t.Fatalf("%s response=%v", lane.op, err)
 		}
-		for range cap(service.reviewSlots) {
-			service.reviewSlots <- struct{}{}
+		if lane.op == opTranscript {
+			for range cap(service.reviewSlots) {
+				service.reviewSlots <- struct{}{}
+			}
 		}
 	}
 }

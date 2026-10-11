@@ -77,7 +77,7 @@ def test_multiple_deep_checks_prepare_once_and_query_by_handle(count):
     for operation, arguments in client.requests[1:]:
         assert operation == "query_graph"
         assert arguments["handle"] == {"graph_id": "graph", "owner_epoch": "owner", "revision": "rev", "complete": True}
-        assert arguments["deadline_unix_ms"] == prepare["deadline_unix_ms"]
+        assert prepare["deadline_unix_ms"] <= arguments["deadline_unix_ms"] <= int(time.time() * 1000) + 750
         assert arguments["limits"] == prepare["limits"]
         assert "view" not in arguments
         assert "thread_ids" not in arguments

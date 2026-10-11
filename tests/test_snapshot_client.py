@@ -426,6 +426,7 @@ def test_a_graph_query_after_the_prepared_graph_lapsed_prepares_it_again(tmp_pat
         prepared_until = sent[0][1]
         time.sleep(max(0.0, prepared_until / 1000 - time.time()) + 0.1)
         assert session.has_read("README.md") is False
+        assert session.has_edit_to("src/**") is False
     finally:
         session.release()
         fixture.close()
@@ -436,8 +437,10 @@ def test_a_graph_query_after_the_prepared_graph_lapsed_prepares_it_again(tmp_pat
         ("query_graph", "stale_handle"),
         ("prepare_graph", "ok"),
         ("query_graph", "ok"),
+        ("query_graph", "ok"),
     ]
     assert all(deadline > prepared_until for _, deadline, _ in sent[2:])
+    assert not fixture.client._graphs
 
 
 def test_codex_append_warming_does_not_lower_the_whole_source(tmp_path, monkeypatch):
