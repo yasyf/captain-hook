@@ -206,9 +206,9 @@ def reason(envelope: dict[str, Any] | None) -> str | None:
     if envelope is None:
         return None
     output = envelope["hookSpecificOutput"]
-    if "permissionDecision" in output:
-        return output["permissionDecisionReason"] if output["permissionDecision"] == "deny" else None
-    return output["decision"]["message"] if output["decision"]["behavior"] == "deny" else None
+    if "decision" in output:
+        return output["decision"]["message"] if output["decision"]["behavior"] == "deny" else None
+    return output["permissionDecisionReason"] if output.get("permissionDecision") == "deny" else None
 
 
 def envelope_of(
@@ -556,7 +556,7 @@ def launch(
 ) -> Path:
     session = tmp_path / "session"
     session.mkdir()
-    assert in_session(bash(command, agent_id=agent), tmp_path, session) is None
+    assert reason(in_session(bash(command, agent_id=agent), tmp_path, session)) is None
     fake_table["table"] = table(*MAC.rows.values(), *spawned)
     assert in_session(bash(command, agent_id=agent), tmp_path, session, Event.PostToolUse) is None
     return session
