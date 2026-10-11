@@ -22,8 +22,13 @@ FAKE_HOST = '#!/bin/sh\necho "host $*"\ncat\n'
 HOST_ECHO = "host run PreToolUse\n" + DESTRUCTIVE_PAYLOAD.decode()
 ENVELOPES = {event: skip_envelope(event, "host-unavailable") + "\n" for event in ("PreToolUse", "PermissionRequest")}
 STATIC_ENVELOPES = {
-    event: skip_envelope(event, "dependency-unavailable") + "\n" for event in ("PreToolUse", "PermissionRequest")
+    platform: {
+        event: skip_envelope(event, "dependency-unavailable", platform) + "\n"
+        for event in ("PreToolUse", "PermissionRequest")
+    }
+    for platform in ("darwin", "linux")
 }
+STATIC = "the rendered dependency-unavailable envelope"
 BELOW_MINIMUM = "is version 12.30.9, want at least 12.31.0; run: brew upgrade yasyf/tap/captain-hook"
 NOT_INSTALLED = "hook: Captain Hook is not installed; run: brew install yasyf/tap/captain-hook"
 FAKE_BINRUN_REFUSING = f"#!/bin/sh\necho {shlex.quote(NOT_INSTALLED)} >&2\nexit 1\n"
@@ -327,7 +332,10 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
     return macos_arm(path) | fake_binrun(tmp_path, FAKE_BINRUN_REFUSING)
 
 
-@pytest.mark.parametrize("branch", [pytest.param(linux_branch, id="linux"), pytest.param(macos_branch, id="macos")])
+@pytest.mark.parametrize(
+    ("branch", "platform"),
+    [pytest.param(linux_branch, "linux", id="linux"), pytest.param(macos_branch, "darwin", id="macos")],
+)
 @pytest.mark.parametrize(
     ("python3", "event", "payload", "code", "stdout"),
     [
@@ -336,18 +344,16 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             "PreToolUse",
             DESTRUCTIVE_PAYLOAD,
             0,
-            STATIC_ENVELOPES["PreToolUse"],
+            STATIC,
             id="no-python3-skips-destructive",
         ),
-        pytest.param(
-            None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC_ENVELOPES["PreToolUse"], id="no-python3-skips-benign"
-        ),
+        pytest.param(None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC, id="no-python3-skips-benign"),
         pytest.param(
             None,
             "PermissionRequest",
             DESTRUCTIVE_PAYLOAD,
             0,
-            STATIC_ENVELOPES["PermissionRequest"],
+            STATIC,
             id="no-python3-skips-permission-request",
         ),
         pytest.param(None, "Stop", DESTRUCTIVE_PAYLOAD, 1, "", id="no-python3-fails-open-unguarded-event"),
@@ -356,7 +362,7 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             "PreToolUse",
             DESTRUCTIVE_PAYLOAD,
             0,
-            STATIC_ENVELOPES["PreToolUse"],
+            STATIC,
             id="python3-cannot-run-the-literal-skips",
         ),
         pytest.param(PASSING_PYTHON, "PreToolUse", DESTRUCTIVE_PAYLOAD, 1, "", id="python3-pass-exit-fails-open"),
@@ -374,7 +380,7 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
             "PreToolUse",
             DESTRUCTIVE_PAYLOAD,
             0,
-            STATIC_ENVELOPES["PreToolUse"],
+            STATIC,
             id="python3-stdout-before-failing-is-dropped",
         ),
         pytest.param(
@@ -397,6 +403,7 @@ def macos_branch(tmp_path: Path, path: Path) -> dict[str, str]:
 )
 def test_hook_dispatch_notes_statically_when_nothing_can_classify(
     branch: Callable[[Path, Path], dict[str, str]],
+    platform: str,
     python3: str | None,
     event: str,
     payload: bytes,
@@ -420,7 +427,8 @@ def test_hook_dispatch_notes_statically_when_nothing_can_classify(
         check=False,
         timeout=30,
     )
-    assert (result.returncode, result.stdout) == (code, stdout), result.stderr
+    expected = STATIC_ENVELOPES[platform][event] if stdout is STATIC else stdout
+    assert (result.returncode, result.stdout) == (code, expected), result.stderr
 
 
 @pytest.mark.parametrize("runner", UNRUNNABLE_RUNNERS)
@@ -449,18 +457,23 @@ def test_hook_dispatch_notes_statically_when_nothing_can_classify(
             "PreToolUse",
             DESTRUCTIVE_PAYLOAD,
             0,
-            STATIC_ENVELOPES["PreToolUse"],
+            STATIC_ENVELOPES["darwin"]["PreToolUse"],
             id="no-python3-skips-destructive",
         ),
         pytest.param(
-            None, "PreToolUse", BENIGN_PAYLOAD, 0, STATIC_ENVELOPES["PreToolUse"], id="no-python3-skips-benign"
+            None,
+            "PreToolUse",
+            BENIGN_PAYLOAD,
+            0,
+            STATIC_ENVELOPES["darwin"]["PreToolUse"],
+            id="no-python3-skips-benign",
         ),
         pytest.param(
             None,
             "PermissionRequest",
             DESTRUCTIVE_PAYLOAD,
             0,
-            STATIC_ENVELOPES["PermissionRequest"],
+            STATIC_ENVELOPES["darwin"]["PermissionRequest"],
             id="no-python3-skips-permission-request",
         ),
     ],

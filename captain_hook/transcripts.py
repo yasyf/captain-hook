@@ -319,7 +319,8 @@ def lazy_transcript(
     def tail(source: str | Path, count: int) -> Session:
         return guarded_load(source, lambda _: tail_transcript(source, count), unborn=unborn)
 
-    return LazyTranscript(TranscriptPins(load, partial(tail, path) if path else None), seed=True)
+    windowed = bool(path) and reqenv.provider() == "claude"
+    return LazyTranscript(TranscriptPins(load, partial(tail, path) if windowed else None), seed=True)
 
 
 def root_transcript(path: str | Path, events: int) -> LazyTranscript:

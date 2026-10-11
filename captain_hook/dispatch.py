@@ -460,7 +460,13 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
     compaction's custom instructions, so a non-block result renders as its plain message. The host-fired
     ``ResourcePressure`` takes only the proceed acknowledgement capt-hookd parses: a warn or allow renders it,
     anything else renders nothing.
+
+    Codex fails a hook whose envelope its schema does not name. It takes ``permissionDecision: allow`` only
+    beside ``updatedInput`` and reads a ``PostToolUse`` or ``UserPromptSubmit`` block from the top-level
+    ``decision``, so under ``CAPT_HOOK_PROVIDER=codex`` a warn or allow carries no approval and those two
+    events block the way ``Stop`` does.
     """
+    codex = reqenv.provider() == "codex"
     if event is Event.ResourcePressure:
         return {"decision": "proceed"} if result.action in (Action.warn, Action.allow) else None
     if event in (Event.Stop | Event.SubagentStop):
@@ -475,7 +481,10 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
             if result.action is Action.rewrite
             else None
         )
+    if codex and event in (Event.PostToolUse | Event.UserPromptSubmit) and result.action is Action.block:
+        return {"decision": "block", "reason": result.message}
 
+    approval = {} if codex else {"permissionDecision": "allow"}
     match result.action:
         case Action.block:
             return {
@@ -490,14 +499,14 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
                 "hookSpecificOutput": {
                     "hookEventName": event.name,
                     "additionalContext": result.message,
-                    **({"permissionDecision": "allow"} if event is Event.PreToolUse and result.approve else {}),
+                    **(approval if event is Event.PreToolUse and result.approve else {}),
                 }
             }
         case Action.allow:
             return {
                 "hookSpecificOutput": {
                     "hookEventName": event.name,
-                    "permissionDecision": "allow",
+                    **approval,
                     **({"additionalContext": result.message} if result.message else {}),
                 }
             }

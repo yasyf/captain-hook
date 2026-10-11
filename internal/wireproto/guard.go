@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -24,6 +25,7 @@ type guardSpec struct {
 	Folds         map[string]string `json:"folds"`
 	Kinds         []string          `json:"kinds"`
 	Note          string            `json:"note"`
+	Remedies      map[string]string `json:"remedies"`
 	MaxEventInput int               `json:"max_event_input"`
 }
 
@@ -251,7 +253,7 @@ func SkipEnvelope(event, kind string) string {
 	if !slices.Contains(guard.Kinds, kind) {
 		panic(fmt.Sprintf("captain: unknown guard kind %q", kind))
 	}
-	note := strings.ReplaceAll(guard.Note, "{kind}", kind)
+	note := strings.NewReplacer("{kind}", kind, "{remedy}", guard.Remedies[runtime.GOOS]).Replace(guard.Note)
 	output := map[string]any{"systemMessage": note}
 	if event != "PermissionRequest" {
 		output["hookSpecificOutput"] = map[string]any{"hookEventName": event, "additionalContext": note}

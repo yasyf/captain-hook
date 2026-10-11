@@ -751,6 +751,39 @@ def test_codex_hook_dispatch_reads_native_root_transcript(tmp_path, event):
         fixture.close()
 
 
+def test_codex_hook_with_an_event_window_reads_the_whole_root_transcript(tmp_path):
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.testing.snapshots import FixtureOwner
+    from captain_hook.util import reqenv
+
+    rollout = write_apply_patch_rollout(tmp_path / "rollout.jsonl", "codex-window")
+    observed = []
+
+    @on(Event.PreToolUse, transcript_events=8)
+    def windowed_evidence(evt):
+        observed.append(evt.ctx.t.has_edit_to("src/a.py", subagents=False))
+
+    raw = {
+        "session_id": "codex-window",
+        "transcript_path": str(rollout),
+        "cwd": str(tmp_path),
+        "hook_event_name": "PreToolUse",
+        "model": "gpt-6.1-sol",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pwd"},
+    }
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": "codex"}, str(tmp_path), 0, "codex-window")
+    try:
+        with reqenv.use_request(scope):
+            dispatch_event(tmp_path, Event.PreToolUse, raw, session_dir=ensure_session(SessionId("codex-window")))
+        assert observed == [True]
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
 def test_unknown_hook_provider_is_rejected_before_dispatch(tmp_path):
     from captain_hook.util import reqenv
 

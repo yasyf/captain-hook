@@ -147,9 +147,11 @@ class ProductRuntime:
                     )
                     envelope = fail_open_envelope(event, warning) if warning else None
                     return EventResponse(stdout=envelope_text(envelope) + "\n" if envelope else ""), None
+                logger.opt(exception=True).error("dispatch failed")
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
             except Exception:
+                logger.opt(exception=True).error("dispatch failed")
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
             finally:
