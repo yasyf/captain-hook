@@ -18,6 +18,7 @@ from captain_hook.state import (
     PrimitiveState,
     SeenKeys,
     fired_this_turn,
+    framework_frame,
     hook_name,
     package_aware_stem,
     record_fire,
@@ -419,6 +420,31 @@ class TestPackageAwareStem:
         pkg.mkdir()
         (pkg / "__init__.py").write_text("x = 1\n")
         assert package_aware_stem(pkg / "tasks.py") == "hooks.tasks"
+
+
+class TestFrameworkFrame:
+    def test_symlinked_framework_file_resolves_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        (site := tmp_path / "site").symlink_to(PACKS_DIR.parent, target_is_directory=True)
+        frame = site / "app.py"
+        resolves: list[Path] = []
+        real = Path.resolve
+
+        def counted(self: Path, strict: bool = False) -> Path:
+            if self == frame:
+                resolves.append(self)
+            return real(self, strict)
+
+        monkeypatch.setattr(Path, "resolve", counted)
+        assert [framework_frame(str(frame)) for _ in range(3)] == [True, True, True]
+        assert resolves == [frame]
+
+    def test_relative_filename_follows_the_working_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(PACKS_DIR.parent)
+        assert framework_frame("app.py")
+        monkeypatch.chdir(tmp_path)
+        assert not framework_frame("app.py")
 
 
 class TestSessionStateTracking:

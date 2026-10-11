@@ -88,9 +88,13 @@ class Fingerprint:
 
     @classmethod
     def compute(cls, cli_state: CliState, *, fresh: bool = False) -> Fingerprint:
+        return cls.with_languages(cli_state, _language_markers(cli_state.root, fresh=fresh), fresh=fresh)
+
+    @classmethod
+    def with_languages(cls, cli_state: CliState, languages: tuple[str, ...], *, fresh: bool) -> Fingerprint:
         root = cli_state.root
         inputs = (
-            _language_markers(root, fresh=fresh),
+            languages,
             _hooks_tree(cli_state.hooks_dir, fresh=fresh),
             _stat_entry(root / ".gitignore"),
             _plugin_inputs(root, fresh=fresh),
@@ -116,11 +120,11 @@ class Registry:
         self._build_lock = threading.Lock()
 
     def get(self) -> RegistrySnapshot:
-        if (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
+        if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
             self._reconcile_tools(hit)
             return hit
         with self._build_lock:
-            if (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
+            if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
                 reqenv.warmed("registry")
                 self._reconcile_tools(hit)
                 return hit
@@ -143,15 +147,16 @@ class Registry:
     def _build(self) -> RegistrySnapshot:
         # Retry a discovery whose stable inputs moved under it (a torn mid-rewrite read); serve the latest.
         for _ in range(BUILD_RETRIES):
-            before = Fingerprint.compute(self._cli_state, fresh=True)
-            latest = self._discover_once(before)
-            if Fingerprint.compute(self._cli_state, fresh=True) == before:
+            languages = _language_markers(self._cli_state.root, fresh=True)
+            before = Fingerprint.with_languages(self._cli_state, languages, fresh=True)
+            latest = self._discover_once(before, languages)
+            if Fingerprint.with_languages(self._cli_state, languages, fresh=True) == before:
                 return latest
         # Every retry churned: serve the freshest attempt but mark it non-cacheable so a possibly-torn
         # snapshot cannot poison the next request.
         return replace(latest, cacheable=False)
 
-    def _discover_once(self, fingerprint: Fingerprint) -> RegistrySnapshot:
+    def _discover_once(self, fingerprint: Fingerprint, languages: tuple[str, ...]) -> RegistrySnapshot:
         from captain_hook.cli import PLUGIN_ROSTER_SOURCE, pack_tool_specs
         from captain_hook.daemon.context import capture_output
 
@@ -159,7 +164,7 @@ class Registry:
         # Capture discovery's output on BOTH streams (stderr notices, stdout import-time prints); the
         # server replays it per request so warm mirrors cold's per-invocation print.
         with capture_output() as captured, app.use_state(state):
-            resolved = self._cli_state.discover()
+            resolved = self._cli_state.discover(languages=languages)
         return RegistrySnapshot(
             fingerprint=fingerprint,
             state=state,

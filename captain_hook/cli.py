@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -116,7 +116,9 @@ class CliState:
             faults.record(PLUGIN_ROSTER_SOURCE, exc)
             return []
 
-    def discover(self, *, scope: DiscoveryScope = "all") -> list[manager.ResolvedPack]:
+    def discover(
+        self, *, scope: DiscoveryScope = "all", languages: Iterable[str] | None = None
+    ) -> list[manager.ResolvedPack]:
         reset()
         load_gitignore(self.root)
         if (root := str(self.root)) not in sys.path:
@@ -124,7 +126,8 @@ class CliState:
         discover_hooks(self.hooks_dir)
         if scope == "hooks":
             return []
-        builtins = [manager.resolve_builtin(name) for name in manager.active_builtins(self.root)]
+        names = manager.active_builtins(self.root) if languages is None else manager.builtins_for(languages)
+        builtins = [manager.resolve_builtin(name) for name in names]
         packs = [*builtins, *self.plugin_packs()]
         for pack_ in packs:
             discover_pack(pack_.name, pack_.path)

@@ -28,8 +28,12 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pathspec import GitIgnoreSpec
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 PACK_DESCRIPTOR = "pack.toml"
 HOOKS_DIRNAME = "hooks"
@@ -299,6 +303,10 @@ def detect_languages(root: Path) -> frozenset[str]:
     return frozenset(found)
 
 
+def builtins_for(languages: Iterable[str]) -> tuple[str, ...]:
+    return tuple(sorted({"fixes", "general", "graphite", "performance", "steering", *languages}))
+
+
 def active_builtins(root: Path) -> tuple[str, ...]:
     """The builtin pack names active for ``root``: the unconditional ones plus detected languages, name-ordered."""
-    return tuple(sorted({"fixes", "general", "graphite", "performance", "steering", *detect_languages(root)}))
+    return builtins_for(detect_languages(root))
