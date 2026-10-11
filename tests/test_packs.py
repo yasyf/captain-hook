@@ -11,7 +11,7 @@ import pytest
 from loguru import logger
 
 import captain_hook
-from captain_hook import Prompt, app
+from captain_hook import app
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack, import_pack_module
 from captain_hook.packs import manager
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance", "graphite"}
 UNCONDITIONAL = {"fixes", "general", "steering", "performance", "graphite"}
+PRELOAD_SELECT = "select:TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,Monitor,SendMessage"
 GENERAL_HOOKS = {
     "commands",
     "comments",
@@ -216,13 +217,11 @@ def test_fixes_pack_walks_the_claude_ancestry_once_per_request(
 
 
 def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path) -> None:
-    general = manager.resolve_builtin("general")
-    discover_pack("general", general.path)
-    select = (
-        "select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,"
-        "Monitor,SendMessage,EnterPlanMode,ExitPlanMode"
+    discover_pack("general", manager.resolve_builtin("general").path)
+    rendered = (
+        "Load the always-used deferred tools in one batch before anything else on your first turn. "
+        f"Run `ToolSearch` with query `{PRELOAD_SELECT},EnterPlanMode,ExitPlanMode` and `max_results` 9."
     )
-    rendered = str(Prompt.load("tools/preload_nudge", base=general.path / "prompts"))
 
     def context(source: str, *, agent_id: str | None = None) -> str | None:
         evt = input_to_event(Event.SessionStart, Input(source=source, agent_id=agent_id))
@@ -232,13 +231,55 @@ def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path)
     injected = context("startup")
     assert injected is not None and rendered in injected
     cleared = context("clear")
-    assert cleared is not None and select in cleared
+    assert cleared is not None and rendered in cleared
     assert context("resume") is None
     assert context("compact") is None
     assert context("startup", agent_id="sub-1") is None
     assert context("clear", agent_id="sub-1") is None
     # max_fires=1: a repeat startup in the same session dir never re-injects
     assert context("startup") is None
+
+
+@pytest.mark.parametrize(
+    ("disallowed", "provider", "expected"),
+    [
+        pytest.param(
+            ("AskUserQuestion",),
+            "claude",
+            f"`{PRELOAD_SELECT},EnterPlanMode,ExitPlanMode` and `max_results` 9.",
+            id="unrelated-tool-disallowed",
+        ),
+        pytest.param(
+            ("AskUserQuestion", "EnterPlanMode", "ExitPlanMode"),
+            "claude",
+            f"`{PRELOAD_SELECT}` and `max_results` 7.",
+            id="plan-mode-disallowed",
+        ),
+        pytest.param(
+            (*PRELOAD_SELECT.removeprefix("select:").split(","), "EnterPlanMode", "ExitPlanMode"),
+            "claude",
+            None,
+            id="every-tool-disallowed",
+        ),
+        pytest.param((), "codex", None, id="codex"),
+    ],
+)
+def test_general_pack_preload_tools_nudge_names_only_tools_the_session_has(
+    isolate_modules: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    disallowed: tuple[str, ...],
+    provider: str,
+    expected: str | None,
+) -> None:
+    discover_pack("general", manager.resolve_builtin("general").path)
+    monkeypatch.setenv("CAPT_HOOK_PROVIDER", provider)
+    evt = input_to_event(Event.SessionStart, Input(source="startup", disallowed_tools=disallowed))
+    out = dispatch(Event.SessionStart, evt, session_dir=tmp_path)
+    if expected is None:
+        assert out is None
+    else:
+        assert out is not None and expected in out["hookSpecificOutput"]["additionalContext"]
 
 
 # --- PackDescriptor -------------------------------------------------------------------

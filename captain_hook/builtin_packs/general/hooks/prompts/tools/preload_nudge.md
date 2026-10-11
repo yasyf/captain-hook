@@ -1,1 +1,1 @@
-Load the always-used deferred tools in one batch before anything else on your first turn. Run `ToolSearch` with query `select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,Monitor,SendMessage,EnterPlanMode,ExitPlanMode` and `max_results` 10.
+Load the always-used deferred tools in one batch before anything else on your first turn. Run `ToolSearch` with query `select:{tools}` and `max_results` {count}.
