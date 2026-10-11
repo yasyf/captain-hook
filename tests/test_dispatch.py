@@ -1197,6 +1197,85 @@ class TestDispatch:
         assert result is not None
 
 
+LANE = "atool-capt-hook-agent-id-b8e1585bce214ce2"
+EXPORT = f"export CCI_AGENT_ID={LANE}\n"
+
+
+def lane_bash(command: str = "git status") -> Any:
+    return make_pre_tool_event(tool_input={"command": command, "description": "status"}, agent_id=LANE)
+
+
+class TestAgentAttribution:
+    def test_lane_bash_with_no_verdict_carries_only_the_export(self) -> None:
+        assert dispatch(Event.PreToolUse, lane_bash()) == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": {"command": EXPORT + "git status", "description": "status"},
+            }
+        }
+
+    def test_export_prefixes_the_winning_rewrite(self) -> None:
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return evt.rewrite_command("ccx vcs stack submit", note="rewrote")
+
+        hso = dispatch(Event.PreToolUse, lane_bash("gt submit"))["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"] == {"command": EXPORT + "ccx vcs stack submit", "description": "status"}
+        assert hso["additionalContext"] == "rewrote"
+
+    def test_export_keeps_a_warn_without_granting_approval(self) -> None:
+        @on(Event.PreToolUse)
+        def warner(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="careful", approve=False)
+
+        hso = dispatch(Event.PreToolUse, lane_bash())["hookSpecificOutput"]
+        assert "permissionDecision" not in hso
+        assert hso["additionalContext"] == "careful"
+        assert hso["updatedInput"]["command"] == EXPORT + "git status"
+
+    def test_export_rides_an_allow(self) -> None:
+        @on(Event.PreToolUse)
+        def allower(evt: Any) -> HookResult:
+            return HookResult(action=Action.allow)
+
+        hso = dispatch(Event.PreToolUse, lane_bash())["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"]["command"] == EXPORT + "git status"
+
+    def test_denied_lane_call_stays_a_deny(self) -> None:
+        @on(Event.PreToolUse)
+        def blocker(evt: Any) -> HookResult:
+            return HookResult(action=Action.block, message="blocked")
+
+        hso = dispatch(Event.PreToolUse, lane_bash())["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "deny"
+        assert "updatedInput" not in hso
+
+    def test_quotes_an_agent_id_the_shell_would_split(self) -> None:
+        evt = make_pre_tool_event(tool_input={"command": "ls"}, agent_id="lane one")
+        assert dispatch(Event.PreToolUse, evt)["hookSpecificOutput"]["updatedInput"] == {
+            "command": "export CCI_AGENT_ID='lane one'\nls"
+        }
+
+    @pytest.mark.parametrize(
+        "evt",
+        [
+            pytest.param(make_pre_tool_event(tool_input={"command": "git status"}), id="main-thread"),
+            pytest.param(
+                make_pre_tool_event("Read", tool_input={"file_path": "/x"}, agent_id=LANE), id="non-bash-tool"
+            ),
+        ],
+    )
+    def test_leaves_main_thread_and_other_tools_alone(self, evt: Any) -> None:
+        assert dispatch(Event.PreToolUse, evt) is None
+
+    def test_codex_host_gets_no_export(self, tmp_path: Path) -> None:
+        scope = reqenv.RequestOverrides({"CAPT_HOOK_PROVIDER": "codex"}, str(tmp_path), 0, "codex-attribution")
+        with reqenv.use_request(scope):
+            assert dispatch(Event.PreToolUse, lane_bash()) is None
+
+
 class TestConcurrentDispatch:
     def test_hooks_of_one_event_run_concurrently(self) -> None:
         def sleep_then_warn(name: str) -> HookResult:

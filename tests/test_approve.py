@@ -20,7 +20,11 @@ from captain_hook.util.automode import automode_rubric
 from tests.helpers import make_ctx
 
 ALLOW_ENVELOPE = {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
-PRE_TOOL_ALLOW_ENVELOPE = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
+TEAMMATE_BASH = {"command": "export CCI_AGENT_ID=tm1\necho hi"}
+PRE_TOOL_ALLOW_ENVELOPE = {
+    "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": TEAMMATE_BASH}
+}
+PRE_TOOL_ATTRIBUTION_ENVELOPE = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": TEAMMATE_BASH}}
 
 
 def make_permission_event(
@@ -65,7 +69,10 @@ class TestApprove:
 
         entry = _state.hooks[-1]
         assert entry.spec.events is Event.PermissionRequest
-        assert dispatch(Event.PreToolUse, make_pre_tool_event(ctx=make_ctx(tmp_path)), session_dir=tmp_path) is None
+        assert (
+            dispatch(Event.PreToolUse, make_pre_tool_event(ctx=make_ctx(tmp_path)), session_dir=tmp_path)
+            == PRE_TOOL_ATTRIBUTION_ENVELOPE
+        )
 
     def test_allows_twice_in_a_row(self, tmp_path: Path) -> None:
         approve("teammate bash", only_if=[Tool("Bash")])
