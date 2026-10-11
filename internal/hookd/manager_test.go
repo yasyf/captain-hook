@@ -365,8 +365,8 @@ func TestInstalledPythonOnlyLooksUpTheToolEnv(t *testing.T) {
 	}
 	t.Setenv("DAEMONKIT_HOME", home)
 	t.Setenv("PATH", t.TempDir())
-	if _, err := installedPython(); err == nil || !strings.Contains(err.Error(), "run `capt-hook helper install`") {
-		t.Fatalf("installedPython without a tool env = %v, want the helper install remedy", err)
+	if _, err := installedPython(); err == nil || !strings.Contains(err.Error(), wireproto.Remedy()) {
+		t.Fatalf("installedPython without a tool env = %v, want the platform's remedy", err)
 	}
 
 	toolDir := filepath.Join(home, ".daemonkit", "tools", "capt-hook", Build)

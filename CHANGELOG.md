@@ -265,6 +265,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Linux install puts `capt-hook` on `PATH`.** `package-install` linked only `capt-hookd`
+  into `~/.local/bin`, and the `capt-hook` CLI reached `PATH` through the plugin's `bin/`,
+  which Claude Code adds and Codex does not. A Codex worker had no `capt-hook`, though the
+  note for a skipped hook tells it to run `capt-hook logs`. `package-install` now links
+  `~/.local/bin/capt-hook` to this build's tool env, beside `capt-hookd`, and
+  `package-uninstall` removes it.
+
+- **The session guard no longer blocks a `command -v` lookup that names a guarded program.**
+  `command -v orca ccx cc-notes` was refused with `uses an orca command group the guard does
+  not know`, and `command -v pkill`, `command -v shutdown` and `command -v tmux kill-server`
+  were refused as if they ran. cc-transcript unwrapped `command -v` like `command`, so every
+  guard saw a call to the first operand. cc-transcript 14.40.1 reads the bare spelling as the
+  lookup it is: `command`, clusters of `p`, `v` and `V`, plain program names, and at the end
+  only `>/dev/null`, `2>/dev/null`, `&>/dev/null`, `2>&1` or `>&2`. The pin moves to it, and
+  the `kill` and `renice` guards lose their own looser exception, which let
+  `env -u command -v kill -9 <pid>` through as a lookup. Any other spelling is still read as
+  a call, so `sudo command -v kill`, which that exception also let through, is now refused.
+
+- **A missing tool env names the platform's own repair on Linux.** `capt-hookd` answered
+  `the capt-hook <build> tool env is not installed; run capt-hook helper install` on every
+  platform, and that command drives Homebrew and the macOS app. The error now ends with the
+  remedy the skipped-guard note already uses: unchanged on macOS, and on Linux
+  `capt-hookd status`, then reinstalling the host.
+
 - **A hook with an event window no longer fails every Codex tool call it matches.**
   `transcript_events` reads the newest events through the snapshot owner's `tail`, which
   takes Claude transcripts only. On a Codex rollout it answered `invalid_request: tail
