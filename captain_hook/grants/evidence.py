@@ -278,7 +278,9 @@ def plan_feedback(use: Any) -> str:
     """
     if use.call.name != PLAN_TOOL or use.result is None or use.result.denial_kind != DENIAL_KIND_USER_REJECTED:
         return ""
-    return use.result.content.partition(USER_SAID_MARKER)[2].partition(USER_SAID_TRAILER)[0].strip()
+    said = use.result.content.partition(USER_SAID_MARKER)[2]
+    typed, trailer, _ = said.rpartition(USER_SAID_TRAILER)
+    return (typed if trailer else said).strip()
 
 
 @dataclass(frozen=True, slots=True)

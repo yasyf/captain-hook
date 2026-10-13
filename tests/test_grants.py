@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import spawnllm
+from cc_transcript.filterspec import USER_SAID_MARKER, USER_SAID_TRAILER
 from click.testing import CliRunner
 from spawnllm import BinaryAnswer, DecideKeyMissing, Decision, LabelAnswer, Refused
 
@@ -1370,6 +1371,7 @@ def test_another_tools_error_carrying_the_rejection_banner_is_not_the_owners_wor
 
 
 def test_a_plan_approved_or_rejected_without_feedback_adds_no_words(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
     from captain_hook.testing.fixtures import T
     from captain_hook.testing.helpers import disk_fixture_session
 
@@ -1379,13 +1381,32 @@ def test_a_plan_approved_or_rejected_without_feedback_adds_no_words(tmp_path: Pa
         [
             T.user("plan the rollout"),
             T.assistant(approved),
-            T.user(T.result(f"User has approved your plan. They said:\n{PLAN_FEEDBACK}", of=approved)),
+            T.user(T.result(f"User has approved your plan:\n{USER_SAID_MARKER}{PLAN_FEEDBACK}", of=approved)),
             T.assistant(refused),
             T.user(T.result(silent, of=refused, is_error=True)),
         ]
     )
+    evt = stopping(tmp_path, transcript)
+
+    record_plan_feedback(evt)
 
     assert [item.quote for item in owner_words_of(tmp_path, transcript)] == ["plan the rollout"]
+    assert evidence_module.recorded(evt, "words") == []
+
+
+def test_plan_feedback_quoting_the_harness_trailer_is_kept_whole(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    said = f'post the summary under the heading "{USER_SAID_TRAILER}" and wait for my review before sending'
+    transcript = disk_fixture_session([T.user("plan the rollout"), *rejected(said)])
+    evt = stopping(tmp_path, transcript)
+
+    record_plan_feedback(evt)
+
+    assert sorted(item.quote for item in owner_words_of(tmp_path, transcript)) == ["plan the rollout", said]
+    assert [item.quote for item in evidence_module.recorded(evt, "words")] == [said]
 
 
 def test_a_lanes_own_rejected_plan_is_not_the_owners_words(tmp_path: Path) -> None:
