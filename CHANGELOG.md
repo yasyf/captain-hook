@@ -313,10 +313,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Prepared facts on disk were private to the owner that wrote them, so every owner start
   rebuilt the facts for every transcript. The host now names a prepared-fact producer in
   its handshake, `capt-hook/<build>`, and the owner appends its cc-transcript version and
-  the SHA-256 of the native extension it loaded. An owner that starts under the same
-  producer reads the facts for unchanged transcripts from disk and rebuilds only the ones
-  that changed. A new capt-hook build, cc-transcript version, or extension file changes
-  the producer, and the next owner rebuilds every fact once. The facts live in
+  the SHA-256 of the file its native extension was loaded from. An owner that starts
+  under the same producer reads the facts for unchanged transcripts from disk and rebuilds
+  only the ones that changed. A new capt-hook build, cc-transcript version, or extension
+  file changes the producer, and the next owner rebuilds every fact once. The owner hashes
+  that file as it starts, so replace an installed extension only while the host is
+  stopped: an owner that starts during the swap can label its facts with the new file's
+  digest. The facts live in
   `cc-transcript-prepared-reuse` under the temp directory. An owner that names a producer
   never reads or cleans `cc-transcript-prepared`, so what an earlier owner left there
   stays until an owner with reuse off cleans it or someone deletes it.
