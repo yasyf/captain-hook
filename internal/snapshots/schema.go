@@ -137,7 +137,7 @@ func DefaultConfig() (json.RawMessage, error) {
 	return json.Marshal(defaults)
 }
 
-func HostConfig() (json.RawMessage, error) {
+func HostConfig(producer string) (json.RawMessage, error) {
 	data, err := DefaultConfig()
 	if err != nil {
 		return nil, err
@@ -155,6 +155,13 @@ func HostConfig() (json.RawMessage, error) {
 	}
 	config["max_prepared_fact_memory_bytes"] = json.RawMessage(strconv.FormatInt(HostPreparedFactMemoryBytes, 10))
 	config["max_retained_bytes"] = json.RawMessage(strconv.FormatInt(retained+HostPreparedFactMemoryBytes-facts, 10))
+	if producer != "" {
+		named, err := json.Marshal(producer)
+		if err != nil {
+			return nil, err
+		}
+		config["prepared_fact_producer"] = named
+	}
 	return json.Marshal(config)
 }
 

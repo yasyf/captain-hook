@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -134,7 +135,7 @@ func TestHostConfigurationGrowsRetentionByItsFactCacheBudget(t *testing.T) {
 		}
 		return config
 	}
-	library, host := budgets(DefaultConfig), budgets(HostConfig)
+	library, host := budgets(DefaultConfig), budgets(func() (json.RawMessage, error) { return HostConfig("") })
 	backgroundHeadroom := func(config map[string]int64) int64 {
 		return config["max_retained_bytes"] - config["reserved_hook_accounted_bytes"] - config["max_prepared_fact_memory_bytes"]
 	}
@@ -148,5 +149,69 @@ func TestHostConfigurationGrowsRetentionByItsFactCacheBudget(t *testing.T) {
 		if key != "max_prepared_fact_memory_bytes" && key != "max_retained_bytes" && host[key] != want {
 			t.Fatalf("%s=%d want library default %d", key, host[key], want)
 		}
+	}
+}
+
+func TestDefaultConfigurationLeavesTheFactProducerUnnamed(t *testing.T) {
+	data, err := DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if producer := string(config["prepared_fact_producer"]); producer != "null" {
+		t.Fatalf("prepared_fact_producer=%q want null", producer)
+	}
+}
+
+func TestHostConfigurationNamesTheFactProducer(t *testing.T) {
+	tests := []struct {
+		name, producer, want string
+	}{
+		{"named", "capt-hook/1.2.3", `"capt-hook/1.2.3"`},
+		{"unnamed", "", "null"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := HostConfig(test.producer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate("config", data); err != nil {
+				t.Fatal(err)
+			}
+			var config map[string]json.RawMessage
+			if err := json.Unmarshal(data, &config); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]string{"prepared_fact_producer": test.want, "max_prepared_fact_memory_bytes": "536870912", "max_retained_bytes": "1476395008"} {
+				if got := string(config[key]); got != want {
+					t.Fatalf("%s=%s want %s", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestConfigSchemaBoundsTheFactProducer(t *testing.T) {
+	tests := []struct {
+		name, producer string
+		valid          bool
+	}{
+		{"longest", `"` + strings.Repeat("p", 256) + `"`, true},
+		{"unnamed", "null", true},
+		{"empty", `""`, false},
+		{"too long", `"` + strings.Repeat("p", 257) + `"`, false},
+		{"number", "1", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := Validate("config", json.RawMessage(`{"prepared_fact_producer":`+test.producer+`}`))
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+		})
 	}
 }

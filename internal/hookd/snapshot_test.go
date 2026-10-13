@@ -67,7 +67,8 @@ func fakeSnapshotOwner(t *testing.T, frames chan<- wireproto.Frame) (*snapshotOw
 	return owner, server
 }
 
-func TestSnapshotServiceHandshakesTheHostBudgets(t *testing.T) {
+func TestSnapshotServiceHandshakesTheHostBudgetsAndFactProducer(t *testing.T) {
+	t.Setenv("CAPT_HOOK_PREPARED_FACT_REUSE", "")
 	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
@@ -93,14 +94,17 @@ func TestSnapshotServiceHandshakesTheHostBudgets(t *testing.T) {
 	if err := snapshots.Validate("config", config); err != nil {
 		t.Fatal(err)
 	}
-	var budgets map[string]int64
-	if err := json.Unmarshal(config, &budgets); err != nil {
+	var offer struct {
+		Facts    int64  `json:"max_prepared_fact_memory_bytes"`
+		Retained int64  `json:"max_retained_bytes"`
+		Reserved int64  `json:"reserved_hook_accounted_bytes"`
+		Producer string `json:"prepared_fact_producer"`
+	}
+	if err := json.Unmarshal(config, &offer); err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]int64{"max_prepared_fact_memory_bytes": 512 << 20, "max_retained_bytes": 1408 << 20, "reserved_hook_accounted_bytes": 512 << 20} {
-		if budgets[key] != want {
-			t.Fatalf("%s=%d want %d", key, budgets[key], want)
-		}
+	if offer.Facts != 512<<20 || offer.Retained != 1408<<20 || offer.Reserved != 512<<20 || offer.Producer != "capt-hook/"+Build {
+		t.Fatalf("offer=%+v", offer)
 	}
 }
 

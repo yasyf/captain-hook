@@ -159,6 +159,7 @@ func newPythonMonitorHarness(t *testing.T) *pythonMonitorHarness {
 	h.spawnAnchor()
 	t.Cleanup(h.reapWorkers)
 	h.manager = mustWorkerManager(t)
+	t.Setenv("CAPT_HOOK_PREPARED_FACT_REUSE", "0")
 	snapshotService, err := newSnapshotService(h.manager)
 	if err != nil {
 		t.Fatal(err)

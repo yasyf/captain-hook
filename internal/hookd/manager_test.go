@@ -594,6 +594,24 @@ func TestWorkersPerRootReadsTheHostEnvironment(t *testing.T) {
 	}
 }
 
+func TestHostFactProducerReadsTheHostEnvironment(t *testing.T) {
+	tests := []struct {
+		name, reuse, want string
+	}{
+		{"unset", "", "capt-hook/" + Build},
+		{"off", "0", ""},
+		{"on", "1", "capt-hook/" + Build},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("CAPT_HOOK_PREPARED_FACT_REUSE", test.reuse)
+			if got := hostFactProducer(); got != test.want {
+				t.Fatalf("hostFactProducer = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestWorkerCmdCarriesTheShard(t *testing.T) {
 	t.Parallel()
 	cmd := workerCmd(workerKey{id: "abc", root: t.TempDir(), shard: 2}, "/usr/bin/python3")
