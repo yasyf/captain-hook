@@ -936,10 +936,13 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
     from captain_hook.snapshots.client import (
         HOOK_TAIL_BYTES,
         NATIVE_CLASSIFIER,
+        WARM_STEP_BYTES,
+        WARM_STEP_SECONDS,
         EvidenceIncomplete,
         RegisteredWarmState,
         RootWarmState,
         client_scope,
+        warm_interval,
     )
     from captain_hook.transcripts import (
         INVALID_SESSION_ID,
@@ -947,7 +950,6 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
         registered_sources,
         resolved_transcript_paths,
     )
-    from captain_hook.worker.service import WARM_STEP_BYTES, WARM_STEP_SECONDS, warm_interval
 
     if not session_id or INVALID_SESSION_ID.search(session_id):
         raise click.UsageError("invalid session id")

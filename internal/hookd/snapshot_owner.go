@@ -282,6 +282,7 @@ type snapshotService struct {
 	releaseQueue chan struct{}
 	config       json.RawMessage
 	start        func(context.Context) (*snapshotOwner, error)
+	warm         *warmCoordinator
 }
 
 func newSnapshotService(manager *workerManager) (*snapshotService, error) {
@@ -295,6 +296,9 @@ func newSnapshotService(manager *workerManager) (*snapshotService, error) {
 		warmSlots: make(chan struct{}, 1), warmQueue: make(chan struct{}, 4),
 		releaseSlots: make(chan struct{}, 4), releaseQueue: make(chan struct{}, 64)}
 	service.start = service.startOwner
+	service.warm = newWarmCoordinator(func(ctx context.Context, request json.RawMessage, callContext snapshots.CallContext) (json.RawMessage, error) {
+		return service.admit(ctx, service.warmSlots, service.warmQueue, request, callContext)
+	}, manager.now, manager.logWriter)
 	return service, nil
 }
 
@@ -408,15 +412,22 @@ func (s *snapshotService) call(ctx context.Context, request json.RawMessage, cal
 	}
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
+		body, err := s.admit(ctx, s.warmSlots, s.warmQueue, request, callContext)
+		s.warm.charge(decodeWarmReply(body, err))
+		return body, err
+	}
 	slots, queue := s.reviewSlots, s.reviewQueue
 	if callContext.Admission == "hook" {
 		slots, queue = s.hookSlots, s.hookQueue
 	}
 	if metadata.Operation == "release" {
 		slots, queue = s.releaseSlots, s.releaseQueue
-	} else if metadata.Operation == "warm_registered" || metadata.Operation == "warm_root" {
-		slots, queue = s.warmSlots, s.warmQueue
 	}
+	return s.admit(ctx, slots, queue, request, callContext)
+}
+
+func (s *snapshotService) admit(ctx context.Context, slots, queue chan struct{}, request json.RawMessage, callContext snapshots.CallContext) (json.RawMessage, error) {
 	select {
 	case queue <- struct{}{}:
 	default:
@@ -440,6 +451,13 @@ func (s *snapshotService) call(ctx context.Context, request json.RawMessage, cal
 
 func minTime(a, b time.Time) time.Time {
 	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
 		return a
 	}
 	return b
@@ -475,6 +493,7 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 }
 
 func (s *snapshotService) Close(ctx context.Context) error {
+	s.warm.close()
 	s.mu.Lock()
 	s.closed = true
 	owner, starting := s.owner, s.starting
@@ -486,11 +505,14 @@ func (s *snapshotService) Close(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+	var err error
 	if owner != nil {
-		return owner.stop(ctx)
+		err = owner.stop(ctx)
+	} else if starting != nil {
+		err = starting.closeErr
 	}
-	if starting != nil {
-		return starting.closeErr
+	if waitErr := s.warm.wait(ctx); waitErr != nil {
+		return errors.Join(err, waitErr)
 	}
-	return nil
+	return err
 }

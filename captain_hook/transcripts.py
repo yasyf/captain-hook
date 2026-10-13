@@ -455,7 +455,6 @@ def registered_sources(session_dir: Path | None) -> GraphSources:
         thread_ids=tuple(dict.fromkeys(entry.thread_id for entry in entries if entry.thread_id)),
         roots=(sessions_root(),) if any(entry.thread_id for entry in entries) else (),
         direct_paths=tuple(dict.fromkeys(Path(entry.path) for entry in entries if entry.path)),
-        session_key=str(session_dir) if session_dir is not None else None,
     )
 
 

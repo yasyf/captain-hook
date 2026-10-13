@@ -34,6 +34,7 @@ from captain_hook.worker.protocol import (
     OP_SNAPSHOT_CANCEL,
     OP_SNAPSHOT_REQUEST,
     OP_SNAPSHOT_RESULT,
+    OP_SNAPSHOT_WARM,
     PROTOCOL,
     SNAPSHOT_FRAME_FIELDS,
     EventRequest,
@@ -80,6 +81,7 @@ def python_descriptor() -> dict[str, object]:
             "snapshot_request": OP_SNAPSHOT_REQUEST,
             "snapshot_result": OP_SNAPSHOT_RESULT,
             "snapshot_cancel": OP_SNAPSHOT_CANCEL,
+            "snapshot_warm": OP_SNAPSHOT_WARM,
         },
         "fields": {
             "worker_frame": sorted(

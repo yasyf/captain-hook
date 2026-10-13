@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -687,6 +688,7 @@ func TestBackgroundWarmUsesHookIdentityWithoutHookAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.owner = owner
+	t.Cleanup(service.warm.close)
 	for range cap(service.hookSlots) {
 		service.hookSlots <- struct{}{}
 	}
@@ -696,34 +698,103 @@ func TestBackgroundWarmUsesHookIdentityWithoutHookAdmission(t *testing.T) {
 	for range cap(service.reviewSlots) {
 		service.reviewSlots <- struct{}{}
 	}
-	workerConn, pythonConn := net.Pipe()
-	defer pythonConn.Close()
-	worker := &workerClient{conn: workerConn, snapshots: service, snapshotNamespace: 17, snapshotEvents: map[uint64]snapshotEvent{}, reverseSnapshots: map[uint64]reverseSnapshot{}}
-	defer workerConn.Close()
-	for index, body := range []json.RawMessage{warmRequest, warmRootRequest} {
-		id := uint64(10 + index)
-		if err := worker.snapshotFrame(wireproto.Frame{Protocol: 1, Op: wireproto.OpSnapshotRequest, ID: id, Snapshot: body}); err != nil {
+	worker := &workerClient{snapshots: service, snapshotNamespace: 17}
+	for _, scope := range []struct {
+		demand    map[string]any
+		operation string
+		complete  map[string]any
+	}{
+		{registeredDemand(), `"warm_registered"`, registryProgress(1, true, "epoch-1", "rev-1", 0)},
+		{rootDemand(), `"warm_root"`, rootProgress(true, true, "epoch-1", "src-1", 0)},
+	} {
+		if err := worker.snapshotWarmFrame(wireproto.Frame{Protocol: 1, Op: wireproto.OpSnapshotWarm, Snapshot: encodeDemand(t, scope.demand)}); err != nil {
 			t.Fatal(err)
 		}
-		request := receiveSnapshot(t, frames)
-		var callContext snapshots.CallContext
-		if err := json.Unmarshal(request.SnapshotContext, &callContext); err != nil {
-			t.Fatal(err)
+		call := answerWarmFrame(t, ownerServer, receiveSnapshot(t, frames), warmResult{status: "ok", data: scope.complete})
+		if call.callContext.Admission != "hook" || call.callContext.WorkClass != "background" || !strings.HasPrefix(call.callContext.Claimant, "warm:") || call.callContext.Authority.Kind != "user" {
+			t.Fatalf("warm context=%+v", call.callContext)
 		}
-		if callContext.Admission != "hook" || callContext.WorkClass != "background" || callContext.Claimant != "worker:17" || callContext.Authority.Kind != "user" {
-			t.Fatalf("warm context=%+v", callContext)
+		if got := string(call.fields["operation"]); got != scope.operation {
+			t.Fatalf("host step operation=%s, want %s", got, scope.operation)
 		}
-		failSnapshot(t, ownerServer, request.ID)
-		reply, err := wireproto.DecodeFrame(pythonConn)
-		if err != nil || reply.ID != id || reply.ParentID != 0 || reply.Op != wireproto.OpError {
-			t.Fatalf("warm reply=%+v err=%v", reply, err)
-		}
+		awaitWarmIdle(t, service.warm)
 	}
 	if len(service.hookSlots) != cap(service.hookSlots) || len(service.hookQueue) != cap(service.hookQueue) {
 		t.Fatal("warming consumed hook admission")
 	}
-	if len(service.reviewSlots) != cap(service.reviewSlots) || len(service.warmSlots) != 0 {
-		t.Fatal("warming consumed review admission or retained a warm slot")
+	if len(service.reviewSlots) != cap(service.reviewSlots) || len(service.warmSlots) != 0 || len(service.warmQueue) != 0 {
+		t.Fatal("warming consumed review admission or retained warm admission")
+	}
+	select {
+	case extra := <-frames:
+		t.Fatalf("completed warm jobs requested more owner work: %+v", extra)
+	default:
+	}
+}
+
+func TestWorkerDrivenWarmStepIsNotGrantedBackgroundWork(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, ownerServer := fakeSnapshotOwner(t, frames)
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.owner = owner
+	workerConn, pythonConn := net.Pipe()
+	defer pythonConn.Close()
+	worker := &workerClient{conn: workerConn, snapshots: service, snapshotNamespace: 17, snapshotEvents: map[uint64]snapshotEvent{}, reverseSnapshots: map[uint64]reverseSnapshot{}}
+	defer workerConn.Close()
+	if err := worker.snapshotFrame(wireproto.Frame{Protocol: 1, Op: wireproto.OpSnapshotRequest, ID: 10, Snapshot: warmRequest}); err != nil {
+		t.Fatal(err)
+	}
+	request := receiveSnapshot(t, frames)
+	var callContext snapshots.CallContext
+	if err := json.Unmarshal(request.SnapshotContext, &callContext); err != nil {
+		t.Fatal(err)
+	}
+	if callContext.Admission != "review" || callContext.WorkClass != "" || callContext.Claimant != "worker:17" {
+		t.Fatalf("worker-driven warm context=%+v", callContext)
+	}
+	failSnapshot(t, ownerServer, request.ID)
+	reply, err := wireproto.DecodeFrame(pythonConn)
+	if err != nil || reply.ID != 10 || reply.ParentID != 0 || reply.Op != wireproto.OpError {
+		t.Fatalf("worker-driven warm reply=%+v err=%v", reply, err)
+	}
+}
+
+func TestTranscriptClientWarmChargesTheSharedAllowance(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, ownerServer := fakeSnapshotOwner(t, frames)
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: clock.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.owner = owner
+	product := &hostProduct{snapshots: service}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := product.transcript(ctx, daemonkit.Request{Op: opTranscript, Body: warmRequest, Caller: daemonkit.Caller{UID: 501}})
+		done <- err
+	}()
+	frame := receiveSnapshot(t, frames)
+	reply := warmReplyBody(t, "warm", warmResult{status: "ok", data: registryProgress(1, false, "epoch-1", "rev-1", 0), usage: map[string]int64{"source_bytes_read": 2 << 20, "prepared_cache_bytes_read": 6 << 20}})
+	if err := wireproto.EncodeFrameLimit(ownerServer, wireproto.Frame{Protocol: 1, Op: wireproto.OpSnapshotResult, ID: frame.ID, Snapshot: reply}, snapshots.MaxFrameBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	service.warm.mu.Lock()
+	ready := service.warm.ready
+	service.warm.mu.Unlock()
+	if want := clock.Now().Add(2 * time.Second); !ready.Equal(want) {
+		t.Fatalf("allowance ready=%v, want the direct step's 8 MiB charged until %v", ready, want)
+	}
+	if len(service.warmSlots) != 0 {
+		t.Fatal("direct warm step retained the warm slot")
 	}
 }
 

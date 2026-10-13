@@ -1,19 +1,33 @@
 import io
-import threading
-import time
+import json
 from pathlib import Path
 
 import pytest
 
 from captain_hook.snapshots.client import (
+    WARM_INTERVAL_SECONDS,
+    WARM_STEP_BYTES,
+    WARM_STEP_SECONDS,
     EvidenceIncomplete,
     GraphSources,
     RegisteredWarmState,
     RootWarmState,
     SnapshotClient,
+    warm_interval,
 )
-from captain_hook.worker.protocol import EventResponse
-from captain_hook.worker.service import WarmJob, WorkerService
+from captain_hook.worker.protocol import EventResponse, read_message
+from captain_hook.worker.service import MAX_WARM_DEMAND_BYTES, MAX_WARM_DEMANDS, WARM_DEMAND_SECONDS, WorkerService
+
+LIMITS = {
+    "max_read_bytes": 512 * 1024 * 1024,
+    "max_source_read_bytes": 512 * 1024 * 1024,
+    "max_events": 1_000_000,
+    "max_items": 65_536,
+    "max_output_bytes": 16 * 1024 * 1024,
+    "max_discovery_entries": 50_000,
+    "max_sources": 4096,
+}
+HOST_STEP_FIELDS = {"id", "deadline_unix_ms", "start_index", "membership_revision"}
 
 
 def service():
@@ -21,10 +35,7 @@ def service():
 
 
 def close(service):
-    with service._warm_guard:
-        service._warm_stop.set()
     service._close_snapshots()
-    service._warm_executor.shutdown(wait=True)
     service._executor.shutdown()
     service._background.shutdown()
     service._cleanup.shutdown()
@@ -36,107 +47,256 @@ def client():
     return result
 
 
-def wait_until(predicate):
-    deadline = time.monotonic() + 2
-    while not predicate() and time.monotonic() < deadline:
-        time.sleep(0.005)
-    assert predicate()
+def at(monkeypatch, seconds):
+    monkeypatch.setattr("captain_hook.worker.service.time.monotonic", lambda: seconds)
 
 
-def test_repeated_events_share_one_active_warmer(monkeypatch):
-    import captain_hook.worker.service as module
+def frames(service):
+    stream = io.BytesIO(service._output.getvalue())
+    return list(iter(lambda: read_message(stream), None))
 
+
+def warm_frame(demand):
+    return {"protocol": 1, "op": "snapshot_warm", "snapshot": demand}
+
+
+def registered_demand(thread_ids, *, roots=(), direct_paths=(), active_since_unix_ms=None, tool_registry=()):
+    return {
+        "schema": "captain.transcript/1",
+        "request": {
+            "schema": "cc-transcript.snapshot/1",
+            "operation": "warm_registered",
+            "classifier": {"id": "native", "version": "1"},
+            "thread_ids": list(thread_ids),
+            "roots": list(roots),
+            "direct_paths": list(direct_paths),
+            "active_since_unix_ms": active_since_unix_ms,
+            "limits": LIMITS,
+        },
+        "tool_registry": list(tool_registry),
+    }
+
+
+def root_demand(path, classifier, tail_bytes):
+    return {
+        "schema": "captain.transcript/1",
+        "request": {
+            "schema": "cc-transcript.snapshot/1",
+            "operation": "warm_root",
+            "path": path,
+            "classifier": classifier,
+            "tail_bytes": tail_bytes,
+            "limits": LIMITS,
+        },
+        "tool_registry": [],
+    }
+
+
+def test_repeated_events_post_one_demand_for_a_scope(monkeypatch):
     worker = service()
-    started = threading.Event()
-    finish = threading.Event()
-    calls = []
-
-    def step(job):
-        calls.append(job.state.sources.thread_ids)
-        started.set()
-        assert finish.wait(2)
-        return True
-
-    monkeypatch.setattr(module, "WARM_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(worker, "_warm_step", step)
-    sources = GraphSources(thread_ids=("one",), session_key="session")
+    sources = GraphSources(
+        thread_ids=("one", "two"),
+        roots=(Path("/sessions"),),
+        direct_paths=(Path("/logs/direct.jsonl"),),
+        active_since_unix_ms=1_700_000_000_000,
+    )
+    at(monkeypatch, 1000)
     try:
-        worker.schedule_graph_warm(client(), sources)
-        assert started.wait(2)
         for _ in range(20):
             worker.schedule_graph_warm(client(), sources)
-        finish.set()
-        wait_until(lambda: not worker._warm_jobs)
-        assert calls == [("one",)]
+        assert frames(worker) == [
+            warm_frame(
+                registered_demand(
+                    ["one", "two"],
+                    roots=["/sessions"],
+                    direct_paths=["/logs/direct.jsonl"],
+                    active_since_unix_ms=1_700_000_000_000,
+                )
+            )
+        ]
     finally:
-        finish.set()
         close(worker)
 
 
-def test_new_membership_supersedes_active_warmer(monkeypatch):
-    import captain_hook.worker.service as module
-
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        pytest.param(GraphSources(thread_ids=("one", "two")), registered_demand(["one", "two"]), id="thread-added"),
+        pytest.param(
+            GraphSources(thread_ids=("one",), roots=(Path("/sessions"),)),
+            registered_demand(["one"], roots=["/sessions"]),
+            id="root-added",
+        ),
+        pytest.param(
+            GraphSources(thread_ids=("one",), direct_paths=(Path("/logs/direct.jsonl"),)),
+            registered_demand(["one"], direct_paths=["/logs/direct.jsonl"]),
+            id="direct-path-added",
+        ),
+        pytest.param(
+            GraphSources(thread_ids=("one",), active_since_unix_ms=1_700_000_000_000),
+            registered_demand(["one"], active_since_unix_ms=1_700_000_000_000),
+            id="window-moved",
+        ),
+    ],
+)
+def test_changed_scope_posts_its_own_demand(monkeypatch, changed, expected):
     worker = service()
-    started = threading.Event()
-    finish = threading.Event()
-    calls = []
-
-    def step(job):
-        calls.append(job.state.sources.thread_ids)
-        if job.state.sources.thread_ids == ("old",):
-            started.set()
-            assert finish.wait(2)
-        return True
-
-    monkeypatch.setattr(module, "WARM_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(worker, "_warm_step", step)
+    at(monkeypatch, 1000)
     try:
-        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("old",), session_key="session"))
-        assert started.wait(2)
-        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("new",), session_key="session"))
-        finish.set()
-        wait_until(lambda: not worker._warm_jobs)
-        assert calls == [("old",), ("new",)]
+        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",)))
+        worker.schedule_graph_warm(client(), changed)
+        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",)))
+        assert frames(worker) == [warm_frame(registered_demand(["one"])), warm_frame(expected)]
     finally:
-        finish.set()
         close(worker)
 
 
-def test_full_warm_queue_admits_new_owner_and_evicted_owner_can_return(monkeypatch):
-    import captain_hook.worker.service as module
-
+def test_scope_is_demanded_again_only_after_the_renewal_interval(monkeypatch):
     worker = service()
-    started = threading.Event()
-    finish = threading.Event()
-    served = []
+    sources = GraphSources(thread_ids=("one",))
+    demand = warm_frame(registered_demand(["one"]))
+    try:
+        at(monkeypatch, 1000)
+        worker.schedule_graph_warm(client(), sources)
+        at(monkeypatch, 1000 + WARM_DEMAND_SECONDS - 1)
+        worker.schedule_graph_warm(client(), sources)
+        assert frames(worker) == [demand]
+        at(monkeypatch, 1000 + WARM_DEMAND_SECONDS)
+        worker.schedule_graph_warm(client(), sources)
+        assert frames(worker) == [demand, demand]
+        at(monkeypatch, 1000 + 2 * WARM_DEMAND_SECONDS - 1)
+        worker.schedule_graph_warm(client(), sources)
+        assert frames(worker) == [demand, demand]
+    finally:
+        close(worker)
 
-    def step(job):
-        served.append(job.owner_key)
-        if job.owner_key == "owner-0":
-            started.set()
-            assert finish.wait(2)
-        return True
 
-    monkeypatch.setattr(module, "WARM_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(worker, "_warm_step", step)
+def test_demand_carries_the_foreground_tool_registry(monkeypatch):
+    worker = service()
+    source_client = SnapshotClient(lambda _: {})
+    source_client.bind_tool_registry({"custom_write": ("Write", {"file": "path"})})
+    at(monkeypatch, 1000)
+    try:
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",)))
+        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",)))
+        assert frames(worker) == [
+            warm_frame(
+                registered_demand(
+                    ["one"],
+                    tool_registry=[
+                        {"name": "custom_write", "behaves_like": "Write", "span_edit": {"file": "path", "delete": None}}
+                    ],
+                )
+            ),
+            warm_frame(registered_demand(["one"])),
+        ]
+    finally:
+        close(worker)
+
+
+def test_root_and_registered_scopes_post_their_own_demands(monkeypatch, tmp_path):
+    worker = service()
+    source_client = SnapshotClient(
+        lambda _: {}, warm_scheduler=worker.schedule_graph_warm, root_warm_scheduler=worker.schedule_root_warm
+    )
+    source_client.bind_tool_registry({})
+    path = tmp_path / "root.jsonl"
+    at(monkeypatch, 1000)
+    try:
+        source_client.schedule_root_warm(path, {"id": "native", "version": "1"}, 4 * 1024 * 1024)
+        source_client.schedule_root_warm(str(path), {"id": "captain-configured", "version": "policy"}, None)
+        source_client.schedule_root_warm(str(path), {"id": "captain-lane", "version": "1"}, None)
+        source_client.schedule_root_warm(path, {"id": "native", "version": "1"}, None)
+        source_client.schedule_graph_warm(GraphSources(thread_ids=("one",)))
+        assert frames(worker) == [
+            warm_frame(root_demand(str(path), {"id": "native", "version": "1"}, 4 * 1024 * 1024)),
+            warm_frame(root_demand(str(path), {"id": "captain-lane", "version": "1"}, None)),
+            warm_frame(root_demand(str(path), {"id": "native", "version": "1"}, None)),
+            warm_frame(registered_demand(["one"])),
+        ]
+    finally:
+        close(worker)
+
+
+def test_sources_without_members_post_nothing():
+    worker = service()
+    try:
+        worker.schedule_graph_warm(client(), GraphSources(roots=(Path("/sessions"),), active_since_unix_ms=1))
+        assert frames(worker) == []
+        assert worker._warm_demands == {}
+    finally:
+        close(worker)
+
+
+@pytest.mark.parametrize(
+    ("excess", "posted"),
+    [pytest.param(0, True, id="at-the-bound"), pytest.param(1, False, id="one-byte-over")],
+)
+def test_demand_is_posted_only_within_its_frame_bound(excess, posted):
+    worker = service()
+    smallest = json.dumps(registered_demand([], direct_paths=["/"]), sort_keys=True, separators=(",", ":"))
+    path = "/" + "p" * (MAX_WARM_DEMAND_BYTES - len(smallest) + excess)
+    try:
+        worker.schedule_graph_warm(client(), GraphSources(direct_paths=(Path(path),)))
+        assert frames(worker) == ([warm_frame(registered_demand([], direct_paths=[path]))] if posted else [])
+    finally:
+        close(worker)
+
+
+def test_full_demand_table_stays_bounded_and_evicted_scope_posts_again(monkeypatch):
+    worker = service()
+    source_client = client()
+    at(monkeypatch, 1000)
+    try:
+        for index in range(MAX_WARM_DEMANDS + 1):
+            worker.schedule_graph_warm(source_client, GraphSources(thread_ids=(str(index),)))
+        assert len(worker._warm_demands) == MAX_WARM_DEMANDS
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("2",)))
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",)))
+        assert len(worker._warm_demands) == MAX_WARM_DEMANDS
+        assert [frame["snapshot"]["request"]["thread_ids"] for frame in frames(worker)] == [
+            *([str(index)] for index in range(MAX_WARM_DEMANDS + 1)),
+            ["0"],
+        ]
+    finally:
+        close(worker)
+
+
+def test_renewed_scope_outlives_older_scopes_in_a_full_demand_table(monkeypatch):
+    worker = service()
     source_client = client()
     try:
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",), session_key="owner-0"))
-        assert started.wait(2)
-        for index in range(1, 33):
-            worker.schedule_graph_warm(
-                source_client,
-                GraphSources(thread_ids=(str(index),), session_key=f"owner-{index}"),
-            )
-        assert len(worker._warm_jobs) == module.MAX_WARM_JOBS
-        finish.set()
-        wait_until(lambda: not worker._warm_jobs)
-        assert "owner-32" in served
-        assert "owner-31" not in served
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("31",), session_key="owner-31"))
-        wait_until(lambda: "owner-31" in served)
+        at(monkeypatch, 1000)
+        for index in range(MAX_WARM_DEMANDS):
+            worker.schedule_graph_warm(source_client, GraphSources(thread_ids=(str(index),)))
+        at(monkeypatch, 1000 + WARM_DEMAND_SECONDS)
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",)))
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("new",)))
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",)))
+        assert len(worker._warm_demands) == MAX_WARM_DEMANDS
+        assert [frame["snapshot"]["request"]["thread_ids"] for frame in frames(worker)] == [
+            *([str(index)] for index in range(MAX_WARM_DEMANDS)),
+            ["0"],
+            ["new"],
+        ]
     finally:
-        finish.set()
+        close(worker)
+
+
+def test_worker_posts_demand_without_stepping_the_warm_itself(monkeypatch, tmp_path):
+    worker = service()
+    source_client = client()
+    at(monkeypatch, 1000)
+    try:
+        worker.schedule_root_warm(source_client, tmp_path / "root.jsonl", {"id": "native", "version": "1"}, None)
+        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",)))
+        posted = frames(worker)
+        assert [frame["op"] for frame in posted] == ["snapshot_warm", "snapshot_warm"]
+        assert [set(frame) for frame in posted] == [{"protocol", "op", "snapshot"}] * 2
+        assert [HOST_STEP_FIELDS & frame["snapshot"]["request"].keys() for frame in posted] == [set(), set()]
+        assert worker._snapshot_next_id == 0
+        assert worker._snapshot_pending == {}
+    finally:
         close(worker)
 
 
@@ -163,77 +323,57 @@ def test_warm_step_has_small_independent_budget_and_progress(monkeypatch):
                 },
             }
 
-    worker = service()
-    job = WarmJob(
-        "session",
-        "fingerprint",
-        RegisteredWarmState(GraphSources(thread_ids=("one", "two", "three"), session_key="session"), Client()),
+    state = RegisteredWarmState(GraphSources(thread_ids=("one", "two", "three")), Client())
+    with monkeypatch.context() as clock:
+        clock.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+        assert state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=WARM_STEP_SECONDS) is False
+    operation, arguments = calls[0]
+    assert operation == "warm_registered"
+    assert arguments["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024
+    assert arguments["deadline_unix_ms"] == 103_000
+    assert state.start_index == 3
+    assert state.fact_cache_write_bytes == 200
+    assert state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=WARM_STEP_SECONDS) is False
+    assert calls[1][1]["start_index"] == 3
+    assert calls[1][1]["membership_revision"] == "revision"
+
+
+def test_warm_step_sends_the_scope_fields_a_demand_names(monkeypatch):
+    calls = []
+
+    class Client:
+        def call(self, operation, **arguments):
+            calls.append(arguments)
+            return {
+                "status": "changed",
+                "reason": "membership changed",
+                "usage": {"source_bytes_read": 0, "discovery_entries_examined": 0},
+            }
+
+    sources = GraphSources(
+        thread_ids=("one", "two"),
+        roots=(Path("/sessions"),),
+        direct_paths=(Path("/logs/direct.jsonl"),),
+        active_since_unix_ms=1_700_000_000_000,
     )
-    try:
-        with monkeypatch.context() as clock:
-            clock.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
-            assert worker._warm_step(job) is False
-        operation, arguments = calls[0]
-        assert operation == "warm_registered"
-        assert arguments["limits"]["max_source_read_bytes"] == 8 * 1024 * 1024
-        assert arguments["deadline_unix_ms"] == 103_000
-        assert job.state.start_index == 3
-        assert job.state.fact_cache_write_bytes == 200
-        assert worker._warm_step(job) is False
-        assert calls[1][1]["start_index"] == 3
-        assert calls[1][1]["membership_revision"] == "revision"
-    finally:
-        close(worker)
 
-
-def test_warmer_uses_the_foreground_tool_registry(monkeypatch):
-    worker = service()
-    source_client = SnapshotClient(lambda _: {})
-    source_client.bind_tool_registry({"custom_write": ("Write", {"file": "path"})})
-    observed = []
-
-    def step(job):
-        observed.append(job.state.client.tool_registry())
-        return True
-
-    monkeypatch.setattr(worker, "_warm_step", step)
-    try:
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",), session_key="session"))
-        wait_until(lambda: not worker._warm_jobs)
-        assert observed == [source_client.tool_registry()]
-    finally:
-        close(worker)
-
-
-def test_root_and_registered_warming_share_one_paced_fair_worker(monkeypatch, tmp_path):
-    import captain_hook.worker.service as module
-
-    worker = service()
-    observed = []
-    started = threading.Event()
-    advance = threading.Event()
-
-    def step(job):
-        observed.append(type(job.state).__name__)
-        if len(observed) == 1:
-            started.set()
-            assert advance.wait(2)
-        job.state.last_usage = {"source_bytes_read": 0}
-        return observed.count(type(job.state).__name__) == 2
-
-    monkeypatch.setattr(module, "WARM_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(worker, "_warm_step", step)
-    source_client = client()
-    try:
-        worker.schedule_root_warm(source_client, tmp_path / "root.jsonl", {"id": "native", "version": "1"}, None)
-        assert started.wait(2)
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",), session_key="session"))
-        advance.set()
-        wait_until(lambda: not worker._warm_jobs)
-        assert observed == ["RootWarmState", "RegisteredWarmState", "RootWarmState", "RegisteredWarmState"]
-    finally:
-        advance.set()
-        close(worker)
+    state = RegisteredWarmState(sources, Client())
+    with monkeypatch.context() as clock:
+        clock.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+        assert state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=WARM_STEP_SECONDS) is False
+    assert calls == [
+        {
+            "classifier": {"id": "native", "version": "1"},
+            "thread_ids": ["one", "two"],
+            "roots": ["/sessions"],
+            "direct_paths": ["/logs/direct.jsonl"],
+            "active_since_unix_ms": 1_700_000_000_000,
+            "start_index": 0,
+            "membership_revision": None,
+            "deadline_unix_ms": 103_000,
+            "limits": LIMITS | {"max_source_read_bytes": 8 * 1024 * 1024},
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -246,28 +386,8 @@ def test_root_and_registered_warming_share_one_paced_fair_worker(monkeypatch, tm
         ),
     ],
 )
-def test_warming_paces_every_step_that_read_source_or_prepared_cache_bytes(monkeypatch, usage, paced):
-    import captain_hook.worker.service as module
-
-    worker = service()
-    waits = []
-
-    def step(job):
-        job.state.last_usage = usage
-        return True
-
-    def wait(interval):
-        waits.append(interval)
-        return False
-
-    monkeypatch.setattr(worker, "_warm_step", step)
-    monkeypatch.setattr(worker._warm_stop, "wait", wait)
-    try:
-        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",), session_key="session"))
-        wait_until(lambda: not worker._warm_running)
-        assert waits == [module.WARM_INTERVAL_SECONDS if paced else 0]
-    finally:
-        close(worker)
+def test_warming_paces_every_step_that_read_source_or_prepared_cache_bytes(usage, paced):
+    assert warm_interval(usage) == (WARM_INTERVAL_SECONDS if paced else 0)
 
 
 def test_root_warmer_advances_bounded_source_without_restarting():

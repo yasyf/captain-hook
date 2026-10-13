@@ -29,6 +29,7 @@ OP_BACKGROUND_END = "background_end"
 OP_SNAPSHOT_REQUEST = "snapshot_request"
 OP_SNAPSHOT_RESULT = "snapshot_result"
 OP_SNAPSHOT_CANCEL = "snapshot_cancel"
+OP_SNAPSHOT_WARM = "snapshot_warm"
 OP_ABANDON = "abandon"
 SNAPSHOT_FRAME_FIELDS = frozenset({"snapshot", "snapshot_context", "snapshot_config", "parent_id"})
 
@@ -296,6 +297,10 @@ def snapshot_cancel_message(request_id: int, parent_id: int) -> dict[str, object
         "id": request_id,
         **({"parent_id": parent_id} if parent_id else {}),
     }
+
+
+def snapshot_warm_message(snapshot: dict[str, object]) -> dict[str, object]:
+    return {"protocol": PROTOCOL, "op": OP_SNAPSHOT_WARM, "snapshot": snapshot}
 
 
 def _read_exact(stream: BinaryIO, length: int) -> bytes:
