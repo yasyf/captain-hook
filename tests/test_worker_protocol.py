@@ -21,6 +21,7 @@ from captain_hook.worker.protocol import (
     decode_event,
     decode_hello,
     read_message,
+    snapshot_warm_message,
     write_message,
 )
 from captain_hook.worker.service import REQUEST_THREADS, WorkerService, handshake
@@ -74,6 +75,13 @@ def test_hello_frame_is_exact_golden() -> None:
     output = io.BytesIO()
     write_message(output, {"protocol": 1, "op": "hello", "build": "12.9.1"})
     payload = b'{"build":"12.9.1","op":"hello","protocol":1}'
+    assert output.getvalue() == struct.pack(">I", len(payload)) + payload
+
+
+def test_snapshot_warm_frame_is_exact_golden_without_a_reply_id() -> None:
+    output = io.BytesIO()
+    write_message(output, snapshot_warm_message({"schema": "captain.transcript/1", "tool_registry": []}))
+    payload = b'{"op":"snapshot_warm","protocol":1,"snapshot":{"schema":"captain.transcript/1","tool_registry":[]}}'
     assert output.getvalue() == struct.pack(">I", len(payload)) + payload
 
 

@@ -316,7 +316,7 @@ def test_warm_command_paces_only_progress_that_read_from_disk(tmp_path, monkeypa
     )
     monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
     monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
-    monkeypatch.setattr("captain_hook.worker.service.WARM_INTERVAL_SECONDS", 10)
+    monkeypatch.setattr("captain_hook.snapshots.client.WARM_INTERVAL_SECONDS", 10)
     slept: list[float] = []
     monkeypatch.setattr(time, "sleep", slept.append)
     started = time.monotonic()

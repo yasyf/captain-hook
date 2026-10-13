@@ -246,6 +246,13 @@ func (w *workerClient) readLoop() {
 			}
 			continue
 		}
+		if frame.Op == wireproto.OpSnapshotWarm {
+			if err := w.snapshotWarmFrame(frame); err != nil {
+				w.fail(err)
+				return
+			}
+			continue
+		}
 		if len(frame.Snapshot)+len(frame.SnapshotContext)+len(frame.SnapshotConfig) != 0 || frame.ParentID != 0 {
 			w.fail(errors.New("captain: snapshot fields on event response"))
 			return

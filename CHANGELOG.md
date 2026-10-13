@@ -160,6 +160,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Transcript warming runs as one job per evidence scope on the host, not one per worker.**
+  Every product worker ran its own background warmer, so the workers serving one root
+  warmed the same registered transcripts independently. A worker that hit a deadline or a
+  full queue dropped its cursor and started again from the first source. The snapshot
+  host now owns warming. A worker whose evidence comes back incomplete posts a
+  `snapshot_warm` demand, and the host keeps one resumable job per scope. A scope is its
+  members, window, tool registry, classifier, and authority, so the same demand from any
+  worker joins that job. A caller that times out or exits takes no progress with it, and a job whose
+  demand lapses for five minutes keeps its cursor for the next demand. One allowance paces
+  every warm step on the host at 4 MiB/s across source and prepared-cache reads together,
+  where each worker used to pace only itself. Hook admission is unchanged, and
+  `capt-hook transcripts warm` still drives its own steps, which count against the same
+  allowance.
+
 - **A cold registry build walks the repo for language markers once, not four times.**
   An API actor forks one evaluator per hook event, and each one fingerprinted the
   repo before the build, twice inside it, and walked again to pick the language packs.

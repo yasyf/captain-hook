@@ -49,10 +49,18 @@ DEFAULT_LIMITS = {
 NATIVE_CLASSIFIER = {"id": "native", "version": "1"}
 SOURCE_FIELDS = ("path", "direct_paths", "roots", "session_ids", "thread_ids")
 HANDLE_FIELDS = ("handles", "handle", "view", "cursor", "token")
+WARM_STEP_BYTES = 8 * 1024 * 1024
+WARM_STEP_SECONDS = 3
+WARM_INTERVAL_SECONDS = 2
+WARM_IO_COUNTERS = ("source_bytes_read", "prepared_cache_bytes_read")
 
 
 def monotonic_deadline(deadline_unix_ms: int) -> float:
     return time.monotonic() + deadline_unix_ms / 1000 - time.time()
+
+
+def warm_interval(usage: Mapping[str, int]) -> float:
+    return WARM_INTERVAL_SECONDS if any(usage.get(name, 0) for name in WARM_IO_COUNTERS) else 0
 
 
 def foreground_seconds(event: str) -> float:
@@ -262,7 +270,7 @@ class SnapshotClient:
         cleanup_exchange: Callable[[dict[str, object]], dict[str, Any]] | None = None,
         preparation_seconds: float = 120,
         warm_scheduler: Callable[[SnapshotClient, GraphSources], None] | None = None,
-        root_warm_scheduler: Callable[[SnapshotClient, Path, Mapping[str, str]], None] | None = None,
+        root_warm_scheduler: Callable[[SnapshotClient, Path, Mapping[str, str], int | None], None] | None = None,
         defer_cleanup: bool = False,
         foreground_seconds: float | None = None,
     ) -> None:
@@ -320,10 +328,32 @@ class SnapshotClient:
             for name, kind, fields in self._tool_registry
         ]
 
-    def clone_for_exchange(self, exchange: Callable[[dict[str, object]], dict[str, Any]]) -> SnapshotClient:
-        clone = SnapshotClient(exchange)
-        clone._tool_registry = self._tool_registry
-        return clone
+    def registered_warm_demand(self, sources: GraphSources) -> dict[str, object]:
+        return {
+            "schema": HOST_SCHEMA,
+            "request": {
+                "schema": CORE_SCHEMA,
+                "operation": "warm_registered",
+                "classifier": NATIVE_CLASSIFIER,
+                **sources.wire(),
+                "limits": graph_limits(),
+            },
+            "tool_registry": self.tool_registry(),
+        }
+
+    def root_warm_demand(self, path: Path, classifier: Mapping[str, str], tail_bytes: int | None) -> dict[str, object]:
+        return {
+            "schema": HOST_SCHEMA,
+            "request": {
+                "schema": CORE_SCHEMA,
+                "operation": "warm_root",
+                "path": str(path),
+                "classifier": dict(classifier),
+                "tail_bytes": tail_bytes,
+                "limits": graph_limits(),
+            },
+            "tool_registry": self.tool_registry(),
+        }
 
     def schedule_graph_warm(self, sources: GraphSources) -> None:
         if self._warm_scheduler is not None:
@@ -670,8 +700,15 @@ class GraphSources:
     thread_ids: tuple[str, ...] = ()
     roots: tuple[Path, ...] = ()
     direct_paths: tuple[Path, ...] = ()
-    session_key: str | None = None
     active_since_unix_ms: int | None = None
+
+    def wire(self) -> dict[str, object]:
+        return {
+            "thread_ids": list(self.thread_ids),
+            "roots": [str(root) for root in self.roots],
+            "direct_paths": [str(path) for path in self.direct_paths],
+            "active_since_unix_ms": self.active_since_unix_ms,
+        }
 
 
 @dataclass
@@ -694,10 +731,7 @@ class RegisteredWarmState:
         result = self.client.call(
             "warm_registered",
             classifier=NATIVE_CLASSIFIER,
-            thread_ids=list(self.sources.thread_ids),
-            roots=[str(root) for root in self.sources.roots],
-            direct_paths=[str(path) for path in self.sources.direct_paths],
-            active_since_unix_ms=self.sources.active_since_unix_ms,
+            **self.sources.wire(),
             start_index=self.start_index,
             membership_revision=self.membership_revision,
             deadline_unix_ms=int((time.time() + deadline_seconds) * 1000),

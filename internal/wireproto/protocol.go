@@ -53,6 +53,7 @@ const (
 	OpSnapshotRequest = "snapshot_request"
 	OpSnapshotResult  = "snapshot_result"
 	OpSnapshotCancel  = "snapshot_cancel"
+	OpSnapshotWarm    = "snapshot_warm"
 	OpAbandon         = "abandon"
 )
 

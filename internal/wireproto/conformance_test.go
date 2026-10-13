@@ -47,6 +47,7 @@ func describeProtocol() protocolDescriptor {
 			"snapshot_request": OpSnapshotRequest,
 			"snapshot_result":  OpSnapshotResult,
 			"snapshot_cancel":  OpSnapshotCancel,
+			"snapshot_warm":    OpSnapshotWarm,
 			"background_begin": OpBackgroundBegin,
 			"background_end":   OpBackgroundEnd,
 		},
