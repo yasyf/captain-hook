@@ -17,12 +17,18 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
-from captain_hook.conditions import matches_conditions
+from captain_hook.conditions import matches_conditions, planned_predicates
 from captain_hook.confirm import confirmed
 from captain_hook.grants import declare as grant_declare
 from captain_hook.grants.declare import lifted
 from captain_hook.session import SessionStore
-from captain_hook.snapshots.client import MANDATORY_WORK_SECONDS, EvidenceIncomplete, fails_open, foreground_evidence
+from captain_hook.snapshots.client import (
+    MANDATORY_WORK_SECONDS,
+    EvidenceIncomplete,
+    fails_open,
+    foreground_evidence,
+    observing,
+)
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -649,15 +655,16 @@ def prepare_hook_events(
         release_transcript(evt.ctx.transcript)
     matched: dict[int, bool] = {}
     try:
-        for index in sorted(range(len(entries)), key=lambda index: entries[index].spec.transcript_events is None):
-            try:
-                matched[index] = matches_conditions(entries[index].spec, forks[index])
-            except EvidenceIncomplete as exc:
-                if not (async_ or fails_open(exc)):
-                    raise
-                if entries[index].spec.on_incomplete is None:
-                    note_evidence_gap(entries[index], exc)
-                matched[index] = entries[index].spec.on_incomplete is not None
+        with observing(predicate for entry in entries for predicate in planned_predicates(entry.spec)):
+            for index in sorted(range(len(entries)), key=lambda index: entries[index].spec.transcript_events is None):
+                try:
+                    matched[index] = matches_conditions(entries[index].spec, forks[index])
+                except EvidenceIncomplete as exc:
+                    if not (async_ or fails_open(exc)):
+                        raise
+                    if entries[index].spec.on_incomplete is None:
+                        note_evidence_gap(entries[index], exc)
+                    matched[index] = entries[index].spec.on_incomplete is not None
         for index, fork in enumerate(forks):
             if not matched[index]:
                 release_transcript(fork.ctx.transcript)

@@ -392,6 +392,7 @@
               "hydrated": "#/$defs/Core_Hydrated",
               "loading": "#/$defs/Core_Loading",
               "located": "#/$defs/Core_Located",
+              "observed_scalar": "#/$defs/Core_ObservedScalarResult",
               "prepared_graph": "#/$defs/Core_PreparedGraphResult",
               "records": "#/$defs/Core_RecordsResult",
               "released": "#/$defs/Core_Released",
@@ -445,6 +446,9 @@
             },
             {
               "$ref": "#/$defs/Core_ScalarResult"
+            },
+            {
+              "$ref": "#/$defs/Core_ObservedScalarResult"
             },
             {
               "$ref": "#/$defs/Core_StringsResult"
@@ -1352,6 +1356,7 @@
                   "hydrated": "#/$defs/Core_Hydrated",
                   "loading": "#/$defs/Core_Loading",
                   "located": "#/$defs/Core_Located",
+                  "observed_scalar": "#/$defs/Core_ObservedScalarResult",
                   "prepared_graph": "#/$defs/Core_PreparedGraphResult",
                   "records": "#/$defs/Core_RecordsResult",
                   "released": "#/$defs/Core_Released",
@@ -1405,6 +1410,9 @@
                 },
                 {
                   "$ref": "#/$defs/Core_ScalarResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_ObservedScalarResult"
                 },
                 {
                   "$ref": "#/$defs/Core_StringsResult"
@@ -1851,6 +1859,43 @@
       "title": "NamedCount",
       "type": "object"
     },
+    "Core_ObservedScalarResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "observed_scalar",
+          "title": "Kind",
+          "type": "string"
+        },
+        "observers": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Observers",
+          "type": "array"
+        },
+        "value": {
+          "title": "Value",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "value",
+        "observers"
+      ],
+      "title": "ObservedScalarResult",
+      "type": "object"
+    },
     "Core_OverridePredicate": {
       "additionalProperties": false,
       "properties": {
@@ -2049,6 +2094,40 @@
       "title": "PreparedErrorPredicate",
       "type": "object"
     },
+    "Core_PreparedGlobPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_edit_to",
+            "has_read_glob"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values",
+        "subagents"
+      ],
+      "title": "PreparedGlobPredicate",
+      "type": "object"
+    },
     "Core_PreparedGraphResult": {
       "additionalProperties": false,
       "properties": {
@@ -2095,10 +2174,8 @@
         "kind": {
           "enum": [
             "has_command",
-            "has_edit_to",
             "has_skill",
-            "has_skill_suffix",
-            "has_read_glob"
+            "has_skill_suffix"
           ],
           "title": "Kind",
           "type": "string"
@@ -2164,14 +2241,40 @@
       "title": "PreparedOverridePredicate",
       "type": "object"
     },
+    "Core_PreparedRegexPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "has_command_regex",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "pattern",
+        "subagents"
+      ],
+      "title": "PreparedRegexPredicate",
+      "type": "object"
+    },
     "Core_PreparedToolPredicate": {
       "additionalProperties": false,
       "properties": {
         "kind": {
           "enum": [
             "has_tool",
-            "has_read",
-            "has_command_regex"
+            "has_read"
           ],
           "title": "Kind",
           "type": "string"
@@ -2329,6 +2432,49 @@
         "limits": {
           "$ref": "#/$defs/Core_Limits"
         },
+        "observers": {
+          "anyOf": [
+            {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "has_command": "#/$defs/Core_PreparedListPredicate",
+                    "has_edit": "#/$defs/Core_PreparedErrorPredicate",
+                    "has_error": "#/$defs/Core_PreparedErrorPredicate",
+                    "has_override": "#/$defs/Core_PreparedOverridePredicate",
+                    "has_read": "#/$defs/Core_PreparedToolPredicate",
+                    "has_skill": "#/$defs/Core_PreparedListPredicate",
+                    "has_skill_suffix": "#/$defs/Core_PreparedListPredicate",
+                    "has_tool": "#/$defs/Core_PreparedToolPredicate"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Core_PreparedToolPredicate"
+                  },
+                  {
+                    "$ref": "#/$defs/Core_PreparedListPredicate"
+                  },
+                  {
+                    "$ref": "#/$defs/Core_PreparedOverridePredicate"
+                  },
+                  {
+                    "$ref": "#/$defs/Core_PreparedErrorPredicate"
+                  }
+                ]
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observers"
+        },
         "operation": {
           "const": "query_graph",
           "title": "Operation",
@@ -2339,13 +2485,13 @@
             "mapping": {
               "deep_predicate_inputs": "#/$defs/Core_PreparedInputs",
               "has_command": "#/$defs/Core_PreparedListPredicate",
-              "has_command_regex": "#/$defs/Core_PreparedToolPredicate",
+              "has_command_regex": "#/$defs/Core_PreparedRegexPredicate",
               "has_edit": "#/$defs/Core_PreparedErrorPredicate",
-              "has_edit_to": "#/$defs/Core_PreparedListPredicate",
+              "has_edit_to": "#/$defs/Core_PreparedGlobPredicate",
               "has_error": "#/$defs/Core_PreparedErrorPredicate",
               "has_override": "#/$defs/Core_PreparedOverridePredicate",
               "has_read": "#/$defs/Core_PreparedToolPredicate",
-              "has_read_glob": "#/$defs/Core_PreparedListPredicate",
+              "has_read_glob": "#/$defs/Core_PreparedGlobPredicate",
               "has_skill": "#/$defs/Core_PreparedListPredicate",
               "has_skill_suffix": "#/$defs/Core_PreparedListPredicate",
               "has_tool": "#/$defs/Core_PreparedToolPredicate"
@@ -2360,7 +2506,13 @@
               "$ref": "#/$defs/Core_PreparedToolPredicate"
             },
             {
+              "$ref": "#/$defs/Core_PreparedRegexPredicate"
+            },
+            {
               "$ref": "#/$defs/Core_PreparedListPredicate"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedGlobPredicate"
             },
             {
               "$ref": "#/$defs/Core_PreparedOverridePredicate"
@@ -4378,6 +4530,7 @@
                   "hydrated": "#/$defs/Core_Hydrated",
                   "loading": "#/$defs/Core_Loading",
                   "located": "#/$defs/Core_Located",
+                  "observed_scalar": "#/$defs/Core_ObservedScalarResult",
                   "prepared_graph": "#/$defs/Core_PreparedGraphResult",
                   "records": "#/$defs/Core_RecordsResult",
                   "released": "#/$defs/Core_Released",
@@ -4431,6 +4584,9 @@
                 },
                 {
                   "$ref": "#/$defs/Core_ScalarResult"
+                },
+                {
+                  "$ref": "#/$defs/Core_ObservedScalarResult"
                 },
                 {
                   "$ref": "#/$defs/Core_StringsResult"
@@ -4549,6 +4705,7 @@
                       "hydrated": "#/$defs/Core_Hydrated",
                       "loading": "#/$defs/Core_Loading",
                       "located": "#/$defs/Core_Located",
+                      "observed_scalar": "#/$defs/Core_ObservedScalarResult",
                       "prepared_graph": "#/$defs/Core_PreparedGraphResult",
                       "records": "#/$defs/Core_RecordsResult",
                       "released": "#/$defs/Core_Released",
@@ -4602,6 +4759,9 @@
                     },
                     {
                       "$ref": "#/$defs/Core_ScalarResult"
+                    },
+                    {
+                      "$ref": "#/$defs/Core_ObservedScalarResult"
                     },
                     {
                       "$ref": "#/$defs/Core_StringsResult"

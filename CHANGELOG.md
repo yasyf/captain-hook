@@ -298,6 +298,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the step's 8 MiB read budget.
 - The `cc-transcript[judge]` pin moves to 14.40.0.
 
+- **One transcript walk answers the deep conditions of every hook waiting on it.** A deep
+  `UsedTool`, `UsedSkill`, or literal `RanCommand` is one graph query. A query the root
+  transcript cannot answer reads every subagent transcript, and each hook asked on its
+  own, so five such conditions read the same facts five times. A dispatch's first deep
+  condition now carries the other hooks' conditions with it, the host answers them from
+  the facts that walk loads, and a hook reached later takes the recorded answer without a
+  query. That condition still decides what is read and how the query fails, and an answer
+  is kept only when a loaded fact matched or the walk reached every transcript. `ReadFile`
+  and `TouchedFile` globs, regex `RanCommand` entries, custom conditions, mandatory hooks,
+  and hooks with an event window ask on their own as before.
+
 ### Fixed
 
 - **The general pack's tool preload nudge names only tools the session has.** A fresh
