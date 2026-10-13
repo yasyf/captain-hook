@@ -12,12 +12,13 @@ from unittest.mock import MagicMock
 
 import pytest
 import spawnllm
+from cc_transcript.filterspec import USER_SAID_MARKER, USER_SAID_TRAILER
 from click.testing import CliRunner
 from spawnllm import BinaryAnswer, DecideKeyMissing, Decision, LabelAnswer, Refused
 
 from captain_hook import Event, faults
 from captain_hook.dispatch import denies, execute_hook
-from captain_hook.events import PreToolUseEvent
+from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.grants import (
     Allowed,
     Asked,
@@ -43,7 +44,7 @@ from captain_hook.grants import orca as orca_module
 from captain_hook.grants.cli import grant as grant_cli
 from captain_hook.grants.judge import JEV_UNSETTLED
 from captain_hook.hook_lint import result_violations
-from captain_hook.snapshots.client import EvidenceIncomplete
+from captain_hook.snapshots.client import EvidenceIncomplete, RemoteSession
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from tests.helpers import make_ctx
@@ -52,6 +53,7 @@ TREE = "root-session"
 SCOPE = {"channel": "C1", "thread": "1.2"}
 STANDING = "reply in that thread without asking"
 APPROVAL = "ask:toolu_9#0"
+PLAN_FEEDBACK = "also create a thread in the sprint channel and add to it with each update"
 
 
 @pytest.fixture(autouse=True)
@@ -1325,3 +1327,144 @@ def test_owner_evidence_skips_one_event_over_the_record_bound_with_a_gap(tmp_pat
     assert answers == ["Post it"]
     assert request.evidence_gaps
     assert all(gap.startswith("transcript event: output_limit: ") for gap in request.evidence_gaps)
+
+
+def rejected(said: str, tool: str = "ExitPlanMode") -> list[dict[str, Any]]:
+    from captain_hook.testing.fixtures import T
+
+    banner = (
+        "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit,"
+        f" the new_string was NOT written to the file). To tell you how to proceed, the user said:\n{said}\n\n"
+        "Note: The user's next message may contain a correction or preference."
+    )
+    call = T.tool(tool, plan="post the rollout plan")
+    return [T.assistant(call), T.user(T.result(banner, of=call, is_error=True), toolUseResult=f"Error: {banner}")]
+
+
+def owner_words_of(tmp_path: Path, transcript: RemoteSession, root: RemoteSession | None = None) -> list[Evidence]:
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    ctx = HookContext(SessionStore(tmp_path), transcript, None, root_transcript=root)
+    return OwnerWords().collect(PreToolUseEvent(_raw={"session_id": TREE}, ctx=ctx), Proposal(scope={}))
+
+
+def test_plan_rejection_feedback_is_the_owners_words(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    words = owner_words_of(tmp_path, disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK)]))
+
+    assert [item.quote for item in words] == ["plan the rollout", PLAN_FEEDBACK]
+    assert evidence_module.verbatim(PLAN_FEEDBACK, words) == words[1]
+    assert evidence_module.verbatim("post an update in the sprint channel thread", words) is None
+
+
+@pytest.mark.parametrize("tool", ["Bash", "EnterPlanMode", "mcp__notes__save"])
+def test_another_tools_error_carrying_the_rejection_banner_is_not_the_owners_words(tmp_path: Path, tool: str) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    words = owner_words_of(tmp_path, disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK, tool)]))
+
+    assert [item.quote for item in words] == ["plan the rollout"]
+
+
+def test_a_plan_approved_or_rejected_without_feedback_adds_no_words(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    silent = "The user doesn't want to proceed with this tool use. The tool use was rejected."
+    approved, refused = T.tool("ExitPlanMode", plan="a"), T.tool("ExitPlanMode", plan="b")
+    transcript = disk_fixture_session(
+        [
+            T.user("plan the rollout"),
+            T.assistant(approved),
+            T.user(T.result(f"User has approved your plan:\n{USER_SAID_MARKER}{PLAN_FEEDBACK}", of=approved)),
+            T.assistant(refused),
+            T.user(T.result(silent, of=refused, is_error=True)),
+        ]
+    )
+    evt = stopping(tmp_path, transcript)
+
+    record_plan_feedback(evt)
+
+    assert [item.quote for item in owner_words_of(tmp_path, transcript)] == ["plan the rollout"]
+    assert evidence_module.recorded(evt, "words") == []
+
+
+def test_plan_feedback_quoting_the_harness_trailer_is_kept_whole(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    said = f'post the summary under the heading "{USER_SAID_TRAILER}" and wait for my review before sending'
+    transcript = disk_fixture_session([T.user("plan the rollout"), *rejected(said)])
+    evt = stopping(tmp_path, transcript)
+
+    record_plan_feedback(evt)
+
+    assert sorted(item.quote for item in owner_words_of(tmp_path, transcript)) == ["plan the rollout", said]
+    assert [item.quote for item in evidence_module.recorded(evt, "words")] == [said]
+
+
+def test_a_lanes_own_rejected_plan_is_not_the_owners_words(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    root = disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK)])
+    lane = disk_fixture_session([T.user("draft the plan"), *rejected("post it everywhere")])
+
+    assert [item.quote for item in owner_words_of(tmp_path, lane, root)] == ["plan the rollout", PLAN_FEEDBACK]
+
+
+def stopping(tmp_path: Path, transcript: RemoteSession, **raw: str) -> StopEvent:
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    return StopEvent(_raw={"session_id": TREE} | raw, ctx=HookContext(SessionStore(tmp_path), transcript, None))
+
+
+def test_plan_feedback_records_as_words_when_the_turn_ends(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    turn = [T.user("plan the rollout"), *rejected(PLAN_FEEDBACK), *rejected("post it everywhere", "Bash")]
+    transcript = disk_fixture_session(turn)
+    evt = stopping(tmp_path, transcript)
+
+    record_plan_feedback(evt)
+    record_plan_feedback(evt)
+
+    assert [item.quote for item in evidence_module.recorded(evt, "words")] == [PLAN_FEEDBACK]
+    assert sorted(item.quote for item in owner_words_of(tmp_path, transcript)) == [PLAN_FEEDBACK, "plan the rollout"]
+
+
+def test_recorded_plan_feedback_outlives_the_window(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    steps = [T.assistant(f"step {index}") for index in range(evidence_module.OWNER_WINDOW + 10)]
+    transcript = disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK), *steps])
+    assert PLAN_FEEDBACK not in [item.quote for item in owner_words_of(tmp_path, transcript)]
+
+    record_plan_feedback(stopping(tmp_path, transcript))
+
+    assert [item.quote for item in owner_words_of(tmp_path, transcript)].count(PLAN_FEEDBACK) == 1
+
+
+def test_a_lane_records_no_plan_feedback(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    evt = stopping(
+        tmp_path, disk_fixture_session([T.user("draft the plan"), *rejected(PLAN_FEEDBACK)]), agent_id="a-lane"
+    )
+
+    record_plan_feedback(evt)
+
+    assert evidence_module.recorded(evt, "words") == []

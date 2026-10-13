@@ -311,6 +311,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`OwnerWords` reads what the owner typed when rejecting a plan.** An owner who rejects
+  an `ExitPlanMode` plan and types feedback gave an instruction no evidence source could
+  see: the harness delivers that text inside the tool result, and `OwnerWords` read only
+  prompts and queued messages. A hook that quotes the owner verbatim refused the quote and
+  made the session ask again. `OwnerWords` now collects the feedback text of a rejected
+  plan in the root session, without the harness banner around it. A lane's own rejected
+  plan is not read, and neither is a rejection of any other tool, because a tool can
+  return the same banner as its own error. The general pack records the feedback as a
+  7-day `words` grant on `Stop` and `UserPromptSubmit`, beside queued messages. Until
+  the turn stops it is read only while the rejected plan is inside the source's window
+  of 60 messages, so a hook that must reach further back in a long turn passes a larger
+  `window`.
+
 - **The general pack's tool preload nudge names only tools the session has.** A fresh
   session start told every session to run `ToolSearch` for ten deferred tools. A Codex
   session has none of them and no `ToolSearch`, and a Claude session launched with
