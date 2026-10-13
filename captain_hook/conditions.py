@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from itertools import groupby
+from collections.abc import Iterator, Sequence
+from itertools import chain, groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from cc_transcript.tools import TaskCall, WorkflowCall, expand_tool_names, tool_name_matches
 
-from captain_hook.snapshots.client import RemoteSession
+from captain_hook.snapshots.client import RemoteSession, canonical_json, list_predicate, tool_predicate
 from captain_hook.types import (
     Agent,
     And,
@@ -66,6 +66,8 @@ NON_SOURCE_SUFFIXES = (
     ".cfg",
     ".lock",
 )
+TRANSCRIPT_SELECTORS = canonical_json(())
+TURN_SELECTORS = canonical_json(({"kind": "current_turn"},))
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
@@ -154,7 +156,7 @@ def coerce_tool_input(value: object) -> str | None:
 
 def has_read_glob(t: Session, *globs: str, subagents: bool = True) -> bool:
     if isinstance(t, RemoteSession):
-        return t.query({"kind": "has_read_glob", "values": list(globs), "subagents": subagents})
+        return t.query(list_predicate("has_read_glob", globs, subagents=subagents))
     inputs = t.deep_inputs() if subagents else (t.predicate_inputs,)
     return any(f.matches(*globs) for window in inputs for f in window.files("Read"))
 
@@ -165,7 +167,7 @@ def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
 
 def has_used_skill(t: Session, names: tuple[str, ...], *, subagents: bool = True) -> bool:
     if isinstance(t, RemoteSession):
-        return t.query({"kind": "has_skill_suffix", "values": list(names), "subagents": subagents})
+        return t.query(list_predicate("has_skill_suffix", names, subagents=subagents))
     inputs = t.deep_inputs() if subagents else (t.predicate_inputs,)
     return any(skill_name_matches(skill, names) for window in inputs for skill in window.skills)
 
@@ -554,3 +556,38 @@ def matches_conditions(spec: HookSpec, evt: BaseHookEvent) -> bool:
     if any(not check_condition(c, evt) for c in spec.only_if):
         return False
     return not any_condition(spec.skip_if, evt)
+
+
+def scope_selectors(scope: Literal["session", "turn"]) -> str:
+    return TURN_SELECTORS if scope == "turn" else TRANSCRIPT_SELECTORS
+
+
+def deep_predicates(c: TCondition) -> Iterator[tuple[str, dict[str, object]]]:
+    match c:
+        case UsedSkill(names, True, scope):
+            yield scope_selectors(scope), list_predicate("has_skill_suffix", names, subagents=True)
+        case UsedTool(names, True, scope):
+            yield scope_selectors(scope), tool_predicate("has_tool", "|".join(names), subagents=True)
+        case RanCommand(subagents=True) as ran if ran.regex is None:
+            yield TRANSCRIPT_SELECTORS, list_predicate("has_command", ran.tokens, subagents=True)
+        case And(conditions):
+            yield from chain.from_iterable(map(deep_predicates, conditions))
+        case Not(condition):
+            yield from deep_predicates(condition)
+        case Or(conditions):
+            yield from alternative_predicates(conditions)
+
+
+def alternative_predicates(conditions: Sequence[TCondition]) -> Iterator[tuple[str, dict[str, object]]]:
+    return chain.from_iterable(deep_predicates(c) for c in conditions if not isinstance(c, RanCommand))
+
+
+def planned_predicates(spec: HookSpec) -> Iterator[tuple[str, str]]:
+    if spec.transcript_events:
+        return iter(())
+    return (
+        (selectors, canonical_json(query))
+        for selectors, query in chain(
+            chain.from_iterable(map(deep_predicates, spec.only_if)), alternative_predicates(spec.skip_if)
+        )
+    )

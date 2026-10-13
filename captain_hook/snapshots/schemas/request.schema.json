@@ -1143,6 +1143,40 @@
       "title": "PreparedErrorPredicate",
       "type": "object"
     },
+    "PreparedGlobPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "has_edit_to",
+            "has_read_glob"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values",
+        "subagents"
+      ],
+      "title": "PreparedGlobPredicate",
+      "type": "object"
+    },
     "PreparedInputs": {
       "additionalProperties": false,
       "properties": {
@@ -1170,10 +1204,8 @@
         "kind": {
           "enum": [
             "has_command",
-            "has_edit_to",
             "has_skill",
-            "has_skill_suffix",
-            "has_read_glob"
+            "has_skill_suffix"
           ],
           "title": "Kind",
           "type": "string"
@@ -1239,14 +1271,40 @@
       "title": "PreparedOverridePredicate",
       "type": "object"
     },
+    "PreparedRegexPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "has_command_regex",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pattern": {
+          "maxLength": 1048576,
+          "title": "Pattern",
+          "type": "string"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "pattern",
+        "subagents"
+      ],
+      "title": "PreparedRegexPredicate",
+      "type": "object"
+    },
     "PreparedToolPredicate": {
       "additionalProperties": false,
       "properties": {
         "kind": {
           "enum": [
             "has_tool",
-            "has_read",
-            "has_command_regex"
+            "has_read"
           ],
           "title": "Kind",
           "type": "string"
@@ -1404,6 +1462,49 @@
         "limits": {
           "$ref": "#/$defs/Limits"
         },
+        "observers": {
+          "anyOf": [
+            {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "has_command": "#/$defs/PreparedListPredicate",
+                    "has_edit": "#/$defs/PreparedErrorPredicate",
+                    "has_error": "#/$defs/PreparedErrorPredicate",
+                    "has_override": "#/$defs/PreparedOverridePredicate",
+                    "has_read": "#/$defs/PreparedToolPredicate",
+                    "has_skill": "#/$defs/PreparedListPredicate",
+                    "has_skill_suffix": "#/$defs/PreparedListPredicate",
+                    "has_tool": "#/$defs/PreparedToolPredicate"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/PreparedToolPredicate"
+                  },
+                  {
+                    "$ref": "#/$defs/PreparedListPredicate"
+                  },
+                  {
+                    "$ref": "#/$defs/PreparedOverridePredicate"
+                  },
+                  {
+                    "$ref": "#/$defs/PreparedErrorPredicate"
+                  }
+                ]
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observers"
+        },
         "operation": {
           "const": "query_graph",
           "title": "Operation",
@@ -1414,13 +1515,13 @@
             "mapping": {
               "deep_predicate_inputs": "#/$defs/PreparedInputs",
               "has_command": "#/$defs/PreparedListPredicate",
-              "has_command_regex": "#/$defs/PreparedToolPredicate",
+              "has_command_regex": "#/$defs/PreparedRegexPredicate",
               "has_edit": "#/$defs/PreparedErrorPredicate",
-              "has_edit_to": "#/$defs/PreparedListPredicate",
+              "has_edit_to": "#/$defs/PreparedGlobPredicate",
               "has_error": "#/$defs/PreparedErrorPredicate",
               "has_override": "#/$defs/PreparedOverridePredicate",
               "has_read": "#/$defs/PreparedToolPredicate",
-              "has_read_glob": "#/$defs/PreparedListPredicate",
+              "has_read_glob": "#/$defs/PreparedGlobPredicate",
               "has_skill": "#/$defs/PreparedListPredicate",
               "has_skill_suffix": "#/$defs/PreparedListPredicate",
               "has_tool": "#/$defs/PreparedToolPredicate"
@@ -1435,7 +1536,13 @@
               "$ref": "#/$defs/PreparedToolPredicate"
             },
             {
+              "$ref": "#/$defs/PreparedRegexPredicate"
+            },
+            {
               "$ref": "#/$defs/PreparedListPredicate"
+            },
+            {
+              "$ref": "#/$defs/PreparedGlobPredicate"
             },
             {
               "$ref": "#/$defs/PreparedOverridePredicate"

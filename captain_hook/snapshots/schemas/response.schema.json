@@ -89,6 +89,7 @@
               "hydrated": "#/$defs/Hydrated",
               "loading": "#/$defs/Loading",
               "located": "#/$defs/Located",
+              "observed_scalar": "#/$defs/ObservedScalarResult",
               "prepared_graph": "#/$defs/PreparedGraphResult",
               "records": "#/$defs/RecordsResult",
               "released": "#/$defs/Released",
@@ -142,6 +143,9 @@
             },
             {
               "$ref": "#/$defs/ScalarResult"
+            },
+            {
+              "$ref": "#/$defs/ObservedScalarResult"
             },
             {
               "$ref": "#/$defs/StringsResult"
@@ -732,6 +736,7 @@
                   "hydrated": "#/$defs/Hydrated",
                   "loading": "#/$defs/Loading",
                   "located": "#/$defs/Located",
+                  "observed_scalar": "#/$defs/ObservedScalarResult",
                   "prepared_graph": "#/$defs/PreparedGraphResult",
                   "records": "#/$defs/RecordsResult",
                   "released": "#/$defs/Released",
@@ -785,6 +790,9 @@
                 },
                 {
                   "$ref": "#/$defs/ScalarResult"
+                },
+                {
+                  "$ref": "#/$defs/ObservedScalarResult"
                 },
                 {
                   "$ref": "#/$defs/StringsResult"
@@ -943,6 +951,43 @@
         "revision"
       ],
       "title": "Location",
+      "type": "object"
+    },
+    "ObservedScalarResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "observed_scalar",
+          "title": "Kind",
+          "type": "string"
+        },
+        "observers": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Observers",
+          "type": "array"
+        },
+        "value": {
+          "title": "Value",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "value",
+        "observers"
+      ],
+      "title": "ObservedScalarResult",
       "type": "object"
     },
     "PreparedGraphResult": {

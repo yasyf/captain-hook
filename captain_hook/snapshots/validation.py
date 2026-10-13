@@ -19,6 +19,19 @@ def validate(name: str, value: object) -> None:
     validator(name).validate(value)
 
 
+def observers_schema() -> dict[str, Any]:
+    return next(
+        variant
+        for variant in validator("request").schema["$defs"]["QueryGraph"]["properties"]["observers"]["anyOf"]
+        if variant["type"] == "array"
+    )
+
+
+@lru_cache(maxsize=1)
+def observer_validator() -> Draft202012Validator:
+    return Draft202012Validator({"$defs": validator("request").schema["$defs"]} | observers_schema()["items"])
+
+
 def canonical_numbers(value: Any) -> Any:
     match value:
         case dict():

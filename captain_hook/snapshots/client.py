@@ -10,9 +10,11 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
+from itertools import accumulate, islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -53,6 +55,21 @@ WARM_STEP_BYTES = 8 * 1024 * 1024
 WARM_STEP_SECONDS = 3
 WARM_INTERVAL_SECONDS = 2
 WARM_IO_COUNTERS = ("source_bytes_read", "prepared_cache_bytes_read")
+OBSERVABLE_KINDS = frozenset(
+    {
+        "has_tool",
+        "has_read",
+        "has_command",
+        "has_skill",
+        "has_skill_suffix",
+        "has_override",
+        "has_error",
+        "has_edit",
+    }
+)
+OBSERVER_LIMIT = 32
+OBSERVER_BYTES = 16 * 1024
+OBSERVER_PLAN: contextvars.ContextVar[ObserverPlan | None] = contextvars.ContextVar("observer_plan", default=None)
 
 
 def monotonic_deadline(deadline_unix_ms: int) -> float:
@@ -86,6 +103,7 @@ SCALAR_MISS = object()
 type ScalarKey = tuple[
     str, tuple[tuple[str, str], ...], SnapshotClient, tuple[PreparedGraphEvidence, int] | None, str, str
 ]
+type ScalarValue = bool | int | str | None
 
 
 def graph_deadline(client: SnapshotClient) -> int:
@@ -128,6 +146,34 @@ def request_metadata(request: Mapping[str, object]) -> dict[str, object]:
         "request_id": request.get("id"),
         "deadline_unix_ms": request.get("deadline_unix_ms"),
     } | resource
+
+
+def canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def tool_predicate(kind: Literal["has_tool", "has_read"], pattern: str, *, subagents: bool) -> dict[str, object]:
+    return {"kind": kind, "pattern": pattern, "subagents": subagents}
+
+
+def list_predicate(
+    kind: Literal["has_command", "has_edit_to", "has_skill", "has_skill_suffix", "has_read_glob"],
+    values: Sequence[str],
+    *,
+    subagents: bool,
+) -> dict[str, object]:
+    return {"kind": kind, "values": list(values), "subagents": subagents}
+
+
+def override_predicate(token: str, invalidated_by: Sequence[str], *, subagents: bool) -> dict[str, object]:
+    return {"kind": "has_override", "token": token, "invalidated_by": list(invalidated_by), "subagents": subagents}
+
+
+@lru_cache(maxsize=1024)
+def observable(query: str) -> bool:
+    from captain_hook.snapshots.validation import observer_validator
+
+    return (predicate := json.loads(query))["kind"] in OBSERVABLE_KINDS and observer_validator().is_valid(predicate)
 
 
 class EvidenceIncomplete(RuntimeError):
@@ -924,7 +970,9 @@ class PreparedGraphEvidence:
                     raise failure from exc
             return self.outcome
 
-    def answer(self, session: RemoteSession, query: Mapping[str, object]) -> list[dict[str, Any]]:
+    def answer(
+        self, session: RemoteSession, query: Mapping[str, object], *, observers: Sequence[Mapping[str, object]] = ()
+    ) -> list[dict[str, Any]]:
         handle = self.require(session)
         try:
             return list(
@@ -935,6 +983,7 @@ class PreparedGraphEvidence:
                     query=dict(query),
                     deadline_unix_ms=graph_deadline(session.client),
                     limits=graph_limits(),
+                    **({"observers": [dict(observer) for observer in observers]} if observers else {}),
                 )
             )
         except EvidenceIncomplete as exc:
@@ -947,14 +996,16 @@ class PreparedGraphEvidence:
                         self.client._graphs.discard(self)
             raise
 
-    def query_pages(self, session: RemoteSession, query: Mapping[str, object]) -> Iterator[dict[str, Any]]:
+    def query_pages(
+        self, session: RemoteSession, query: Mapping[str, object], *, observers: Sequence[Mapping[str, object]] = ()
+    ) -> Iterator[dict[str, Any]]:
         try:
             try:
-                yield from self.answer(session, query)
+                yield from self.answer(session, query, observers=observers)
             except EvidenceIncomplete as exc:
                 if exc.status != "stale_handle":
                     raise
-                yield from self.answer(session, query)
+                yield from self.answer(session, query, observers=observers)
         except EvidenceIncomplete as exc:
             if exc.status in {"incomplete", "deadline"}:
                 session.client.schedule_graph_warm(self.sources)
@@ -990,6 +1041,28 @@ class PreparedGraphEvidence:
                 raise EvidenceIncomplete(str(result.get("status")), str(result.get("reason")))
             self.native_released = True
             client._graphs.discard(self)
+
+
+@dataclass(frozen=True)
+class ObserverPlan:
+    predicates: tuple[tuple[str, str], ...]
+    outcomes: dict[ScalarKey, ScalarValue] = field(default_factory=dict)
+
+    def observers(self, key: ScalarKey) -> tuple[str, ...]:
+        candidates = [
+            query
+            for selectors, query in self.predicates
+            if selectors == key[4]
+            and query != key[5]
+            and (*key[:5], query) not in self.outcomes
+            and len(query) <= OBSERVER_BYTES
+            and observable(query)
+        ]
+        return tuple(
+            query
+            for query, size in islice(zip(candidates, accumulate(map(len, candidates)), strict=True), OBSERVER_LIMIT)
+            if size <= OBSERVER_BYTES
+        )
 
 
 @dataclass(frozen=True)
@@ -1116,21 +1189,60 @@ class RemoteSession:
             tuple(sorted(self.classifier.items())),
             self.client,
             (self.graph, self.graph.lapses) if deep else None,
-            json.dumps(self.selectors, sort_keys=True, separators=(",", ":")),
-            json.dumps(query, sort_keys=True, separators=(",", ":")),
+            canonical_json(self.selectors),
+            canonical_json(query),
         )
         self.lease.require()
         if (cached := self.lease.scalar_results.get(key, SCALAR_MISS)) is not SCALAR_MISS:
             if deep:
                 self.graph.require(self)
             return cached
+        plan = OBSERVER_PLAN.get() if deep and str(query["kind"]).startswith("has_") else None
+        value = (
+            self._scalar(query, deep=deep)
+            if plan is None
+            else self._planned(plan, (self.evidence_ref, *key[1:]), query)
+        )
+        with self.lease.guard:
+            if not self.lease.closed:
+                self.lease.scalar_results[key] = value
+        return value
+
+    def _scalar(self, query: Mapping[str, object], *, deep: bool) -> ScalarValue:
         values = self._query(query, deep=deep)
         if len(values) != 1:
             raise SnapshotProtocolError("scalar query returned a non-scalar result")
-        with self.lease.guard:
-            if not self.lease.closed:
-                self.lease.scalar_results[key] = values[0]
         return values[0]
+
+    def _planned(self, plan: ObserverPlan, key: ScalarKey, query: Mapping[str, object]) -> ScalarValue:
+        if key in plan.outcomes:
+            self.graph.require(self)
+            return plan.outcomes[key]
+        value, observations = (
+            self._observed(key, query, observers)
+            if (observers := plan.observers(key))
+            else (self._scalar(query, deep=True), {})
+        )
+        if self.evidence_ref == key[0] and (self.graph, self.graph.lapses) == key[3]:
+            plan.outcomes.update(observations | ({key: value} if key[4:] in plan.predicates else {}))
+        return value
+
+    def _observed(
+        self, key: ScalarKey, query: Mapping[str, object], observers: tuple[str, ...]
+    ) -> tuple[ScalarValue, dict[ScalarKey, ScalarValue]]:
+        match list(self.graph.query_pages(self, query, observers=[json.loads(observer) for observer in observers])):
+            case [{"kind": "scalar", "value": value}]:
+                return value, {}
+            case [{"kind": "observed_scalar", "value": value, "observers": [*outcomes]}]:
+                if len(outcomes) != len(observers):
+                    raise SnapshotProtocolError("observed scalar query answered a different observer count")
+                return value, {
+                    (*key[:5], observer): outcome
+                    for observer, outcome in zip(observers, outcomes, strict=True)
+                    if isinstance(outcome, bool)
+                }
+            case _:
+                raise SnapshotProtocolError("observed scalar query returned an unexpected projection")
 
     def _query(self, query: Mapping[str, object], *, deep: bool) -> list[Any]:
         values: list[Any] = []
@@ -1231,7 +1343,7 @@ class RemoteSession:
 
     @property
     def subagents(self) -> RemoteSubagentIndex:
-        key = json.dumps(self.selectors, sort_keys=True, separators=(",", ":"))
+        key = canonical_json(self.selectors)
         with self.lease.subagent_guard:
             self.lease.require()
             if key in self.lease.subagent_views:
@@ -1340,26 +1452,24 @@ class RemoteSession:
         yield from self.query({"kind": "deep_predicate_inputs", "order": "forward"})
 
     def has_tool(self, name: str, *, subagents: bool = True) -> bool:
-        return self.query({"kind": "has_tool", "pattern": name, "subagents": subagents})
+        return self.query(tool_predicate("has_tool", name, subagents=subagents))
 
     def has_command(self, *argv: str, subagents: bool = True) -> bool:
-        return self.query({"kind": "has_command", "values": list(argv), "subagents": subagents})
+        return self.query(list_predicate("has_command", argv, subagents=subagents))
 
     def has_edit_to(self, *globs: str, subagents: bool = True) -> bool:
-        return self.query({"kind": "has_edit_to", "values": list(globs), "subagents": subagents})
+        return self.query(list_predicate("has_edit_to", globs, subagents=subagents))
 
     def has_read(self, pattern: str, *, subagents: bool = True) -> bool:
-        return self.query({"kind": "has_read", "pattern": pattern, "subagents": subagents})
+        return self.query(tool_predicate("has_read", pattern, subagents=subagents))
 
     def has_skill(self, *names: str, subagents: bool = True) -> bool:
-        return self.query({"kind": "has_skill", "values": list(names), "subagents": subagents})
+        return self.query(list_predicate("has_skill", names, subagents=subagents))
 
     def has_override(
         self, token: str, *, invalidated_by: Sequence[str] = ("Edit", "Write"), subagents: bool = True
     ) -> bool:
-        return self.query(
-            {"kind": "has_override", "token": token, "invalidated_by": list(invalidated_by), "subagents": subagents}
-        )
+        return self.query(override_predicate(token, invalidated_by, subagents=subagents))
 
 
 def skip_oversized(path: Path, exc: EvidenceIncomplete) -> None:
@@ -1475,6 +1585,18 @@ def foreground_evidence(seconds: float) -> Iterator[None]:
         return
     with client.foreground_at_least(seconds):
         yield
+
+
+@contextmanager
+def observing(predicates: Iterable[tuple[str, str]]) -> Iterator[ObserverPlan | None]:
+    if not (planned := tuple(dict.fromkeys(predicates))):
+        yield None
+        return
+    token = OBSERVER_PLAN.set(plan := ObserverPlan(planned))
+    try:
+        yield plan
+    finally:
+        OBSERVER_PLAN.reset(token)
 
 
 @contextmanager
