@@ -1,10 +1,11 @@
 """Where the owner's words live, and the bar for what counts as them.
 
 Only the owner's own words are evidence: the root session's prompts (a lane's own prompts are its
-brief and teammates' messages), messages the owner queued while the agent worked, and the owner's
-AskUserQuestion answers. Teammate messages, tool output, notifications, channel lines, and inbox
-lines are never collected. A cc-notes answer counts only if it was last written before the acting
-session started, so an agent cannot record a ruling and spend it.
+brief and teammates' messages), messages the owner queued while the agent worked, what the owner
+typed when rejecting a plan in the root session, and the owner's AskUserQuestion answers. Teammate
+messages, tool output, notifications, channel lines, and inbox lines are never collected. A cc-notes
+answer counts only if it was last written before the acting session started, so an agent cannot
+record a ruling and spend it.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from cc_transcript.filterspec import DENIAL_KIND_USER_REJECTED, USER_SAID_MARKER, USER_SAID_TRAILER
 from cc_transcript.models import AttachmentEvent, QueuedCommand
 from cc_transcript.tools import AskUserQuestionResult, parse_tool_result
 
@@ -33,6 +35,7 @@ OWNER_WINDOW = 60
 RULINGS_TIMEOUT = 5
 CCN_NOT_FOUND = 3
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
+PLAN_TOOL = "ExitPlanMode"
 MACHINE_ENVELOPES = (
     "<task-notification",
     "<teammate-message",
@@ -267,9 +270,22 @@ def queued_words(events: Iterable[Any]) -> list[tuple[str, Any]]:
     ]
 
 
+def plan_feedback(use: Any) -> str:
+    """What the owner typed when rejecting the plan *use* submitted, without the harness banner around it.
+
+    Only ``ExitPlanMode`` counts: the harness alone writes its result, while any other tool can return
+    an error that carries the banner text.
+    """
+    if use.call.name != PLAN_TOOL or use.result is None or use.result.denial_kind != DENIAL_KIND_USER_REJECTED:
+        return ""
+    return use.result.content.partition(USER_SAID_MARKER)[2].partition(USER_SAID_TRAILER)[0].strip()
+
+
 @dataclass(frozen=True, slots=True)
 class OwnerWords:
     """What the owner typed, pasted, or queued in the session tree, minus machine-written turns.
+
+    A plan the owner rejects in the root session carries what they typed as feedback; that counts too.
 
     Attributes:
         machine: Markers of a prompt a tool wrote on the owner's behalf; such a prompt is never their words.
@@ -288,6 +304,7 @@ class OwnerWords:
             for turn in session.recent_messages(self.window).turns:
                 said = [(turn.prompt, turn.started_at)] if prompts_are_owner else []
                 said += [(text, event.meta.timestamp) for text, event in queued_words(turn.events)]
+                said += [(plan_feedback(use), use.result_ts or use.ts) for use in turn.tool_uses if prompts_are_owner]
                 for text, at in said:
                     if text and not machine_written(text, self.machine):
                         item = words_evidence(text, at)

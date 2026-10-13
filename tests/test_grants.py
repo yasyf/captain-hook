@@ -43,7 +43,7 @@ from captain_hook.grants import orca as orca_module
 from captain_hook.grants.cli import grant as grant_cli
 from captain_hook.grants.judge import JEV_UNSETTLED
 from captain_hook.hook_lint import result_violations
-from captain_hook.snapshots.client import EvidenceIncomplete
+from captain_hook.snapshots.client import EvidenceIncomplete, RemoteSession
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from tests.helpers import make_ctx
@@ -52,6 +52,7 @@ TREE = "root-session"
 SCOPE = {"channel": "C1", "thread": "1.2"}
 STANDING = "reply in that thread without asking"
 APPROVAL = "ask:toolu_9#0"
+PLAN_FEEDBACK = "also create a thread in the sprint channel and add to it with each update"
 
 
 @pytest.fixture(autouse=True)
@@ -1325,3 +1326,73 @@ def test_owner_evidence_skips_one_event_over_the_record_bound_with_a_gap(tmp_pat
     assert answers == ["Post it"]
     assert request.evidence_gaps
     assert all(gap.startswith("transcript event: output_limit: ") for gap in request.evidence_gaps)
+
+
+def rejected(said: str, tool: str = "ExitPlanMode") -> list[dict[str, Any]]:
+    from captain_hook.testing.fixtures import T
+
+    banner = (
+        "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit,"
+        f" the new_string was NOT written to the file). To tell you how to proceed, the user said:\n{said}\n\n"
+        "Note: The user's next message may contain a correction or preference."
+    )
+    call = T.tool(tool, plan="post the rollout plan")
+    return [T.assistant(call), T.user(T.result(banner, of=call, is_error=True), toolUseResult=f"Error: {banner}")]
+
+
+def owner_words_of(tmp_path: Path, transcript: RemoteSession, root: RemoteSession | None = None) -> list[Evidence]:
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    ctx = HookContext(SessionStore(tmp_path), transcript, None, root_transcript=root)
+    return OwnerWords().collect(PreToolUseEvent(_raw={"session_id": TREE}, ctx=ctx), Proposal(scope={}))
+
+
+def test_plan_rejection_feedback_is_the_owners_words(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    words = owner_words_of(tmp_path, disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK)]))
+
+    assert [item.quote for item in words] == ["plan the rollout", PLAN_FEEDBACK]
+    assert evidence_module.verbatim(PLAN_FEEDBACK, words) == words[1]
+    assert evidence_module.verbatim("post an update in the sprint channel thread", words) is None
+
+
+@pytest.mark.parametrize("tool", ["Bash", "EnterPlanMode", "mcp__notes__save"])
+def test_another_tools_error_carrying_the_rejection_banner_is_not_the_owners_words(tmp_path: Path, tool: str) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    words = owner_words_of(tmp_path, disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK, tool)]))
+
+    assert [item.quote for item in words] == ["plan the rollout"]
+
+
+def test_a_plan_approved_or_rejected_without_feedback_adds_no_words(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    silent = "The user doesn't want to proceed with this tool use. The tool use was rejected."
+    approved, refused = T.tool("ExitPlanMode", plan="a"), T.tool("ExitPlanMode", plan="b")
+    transcript = disk_fixture_session(
+        [
+            T.user("plan the rollout"),
+            T.assistant(approved),
+            T.user(T.result(f"User has approved your plan. They said:\n{PLAN_FEEDBACK}", of=approved)),
+            T.assistant(refused),
+            T.user(T.result(silent, of=refused, is_error=True)),
+        ]
+    )
+
+    assert [item.quote for item in owner_words_of(tmp_path, transcript)] == ["plan the rollout"]
+
+
+def test_a_lanes_own_rejected_plan_is_not_the_owners_words(tmp_path: Path) -> None:
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    root = disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK)])
+    lane = disk_fixture_session([T.user("draft the plan"), *rejected("post it everywhere")])
+
+    assert [item.quote for item in owner_words_of(tmp_path, lane, root)] == ["plan the rollout", PLAN_FEEDBACK]

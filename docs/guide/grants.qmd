@@ -261,7 +261,7 @@ The evidence providers determine which words can authorize an action:
 | Provider | Collected evidence |
 |----------|--------------------|
 | `Asked()` | `AskUserQuestion` answers from stored `ask` grants and recent transcript calls |
-| `OwnerWords()` | Typed, pasted, and human-queued owner words; ordinary lane prompts are excluded |
+| `OwnerWords()` | Typed, pasted, and human-queued owner words, and the feedback typed when rejecting a plan in the root session; ordinary lane prompts are excluded |
 | `Rulings(search=...)` | cc-notes answers naming the proposal's search term as a whole name and last written before the acting session started |
 
 A declaration without a judge treats the first collected evidence item as the
@@ -289,6 +289,13 @@ judge only through the recorded `ask` and `words` records. Set
 `OwnerWords(machine=("<machine-message>",))` excludes prompts containing that marker.
 Tool output, teammate messages, and notifications are not owner evidence.
 Use `machine` for machine-written content delivered through ordinary prompt text.
+
+One tool result does carry the owner's words. When the owner rejects an `ExitPlanMode`
+plan in the root session and types feedback, the harness quotes that text in the result,
+and `OwnerWords` collects it without the banner around it. A rejection of any other tool
+is not read, because a tool can return the same banner as its own error, and neither is
+a lane's own rejected plan. This feedback is not recorded as a `words` grant, so it
+is read reliably only while the rejected plan is inside the window.
 
 To add durable rulings to the declaration, replace its `evidence` value with this
 tuple and import `Rulings`:
