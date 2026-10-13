@@ -290,7 +290,7 @@ class OwnerWords:
     Attributes:
         machine: Markers of a prompt a tool wrote on the owner's behalf; such a prompt is never their words.
         needles: Maps the event to text whose root-session mentions are read however far back they sit.
-        window: How many recent turns of each session to read.
+        window: How many recent messages of each session to read.
     """
 
     machine: tuple[str, ...] = ()

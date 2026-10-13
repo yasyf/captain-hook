@@ -276,12 +276,12 @@ from what was chosen. The builtin `general` pack records answers on
 `PostToolUse(AskUserQuestion)` as tree-bound `ask` grants with one use and a
 7-day expiry, and a root session's own prompts on `UserPromptSubmit` as `words`
 grants with the same expiry. On `Stop` and `UserPromptSubmit`, it also records
-human `queued_command` attachments from the root session's current turn as
-`words`. Teammates and sessions with a root transcript do not record those queued
-messages. These are evidence records; the declaration mints its own kind after
+human `queued_command` attachments and plan-rejection feedback from the root
+session's current turn as `words`. Teammates and sessions with a root transcript
+record neither. These are evidence records; the declaration mints its own kind after
 the judge allows.
 
-`Asked` and `OwnerWords` default to a window of 60 and accept a `needles` callback
+`Asked` and `OwnerWords` default to a window of 60 messages and accept a `needles` callback
 to include matching events from the last 16 MiB of the root transcript. Evidence
 reads never scan a whole transcript: owner words older than these windows reach the
 judge only through the recorded `ask` and `words` records. Set
@@ -294,8 +294,10 @@ One tool result does carry the owner's words. When the owner rejects an `ExitPla
 plan in the root session and types feedback, the harness quotes that text in the result,
 and `OwnerWords` collects it without the banner around it. A rejection of any other tool
 is not read, because a tool can return the same banner as its own error, and neither is
-a lane's own rejected plan. This feedback is not recorded as a `words` grant, so it
-is read reliably only while the rejected plan is inside the window.
+a lane's own rejected plan. The `general` pack records the feedback as a `words` grant
+when the turn stops or the next prompt arrives. Until then it is read only while the
+rejected plan is inside the window, so a hook that must reach further back in a long
+turn passes a larger `window`.
 
 To add durable rulings to the declaration, replace its `evidence` value with this
 tuple and import `Rulings`:

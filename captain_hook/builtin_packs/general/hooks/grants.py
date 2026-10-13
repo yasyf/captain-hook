@@ -9,6 +9,7 @@ from captain_hook.grants.evidence import (
     answer_evidence,
     machine_written,
     parse_answer,
+    plan_feedback,
     queued_words,
     shell_evidence,
     spawn_evidence,
@@ -76,6 +77,21 @@ def record_queued_words(evt: UserPromptSubmitEvent | StopEvent) -> HookResult | 
     for text, event in queued_words(evt.ctx.t.current_turn.events):
         if text and not machine_written(text):
             record(evt, "words", words_evidence(text, event.meta.timestamp))
+    return None
+
+
+@on(
+    Event.UserPromptSubmit | Event.Stop,
+    respect_gitignore=False,
+    skip_planning_agents=False,
+)
+def record_plan_feedback(evt: UserPromptSubmitEvent | StopEvent) -> HookResult | None:
+    if evt.ctx.root_path is not None or evt.agent_id is not None:
+        return None
+    for turn in evt.ctx.t.current_turn.turns:
+        for use in turn.tool_uses:
+            if (text := plan_feedback(use)) and not machine_written(text):
+                record(evt, "words", words_evidence(text, use.result_ts or use.ts))
     return None
 
 

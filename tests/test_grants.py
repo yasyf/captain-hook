@@ -17,7 +17,7 @@ from spawnllm import BinaryAnswer, DecideKeyMissing, Decision, LabelAnswer, Refu
 
 from captain_hook import Event, faults
 from captain_hook.dispatch import denies, execute_hook
-from captain_hook.events import PreToolUseEvent
+from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.grants import (
     Allowed,
     Asked,
@@ -1396,3 +1396,54 @@ def test_a_lanes_own_rejected_plan_is_not_the_owners_words(tmp_path: Path) -> No
     lane = disk_fixture_session([T.user("draft the plan"), *rejected("post it everywhere")])
 
     assert [item.quote for item in owner_words_of(tmp_path, lane, root)] == ["plan the rollout", PLAN_FEEDBACK]
+
+
+def stopping(tmp_path: Path, transcript: RemoteSession, **raw: str) -> StopEvent:
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+
+    return StopEvent(_raw={"session_id": TREE} | raw, ctx=HookContext(SessionStore(tmp_path), transcript, None))
+
+
+def test_plan_feedback_records_as_words_when_the_turn_ends(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    turn = [T.user("plan the rollout"), *rejected(PLAN_FEEDBACK), *rejected("post it everywhere", "Bash")]
+    transcript = disk_fixture_session(turn)
+    evt = stopping(tmp_path, transcript)
+
+    record_plan_feedback(evt)
+    record_plan_feedback(evt)
+
+    assert [item.quote for item in evidence_module.recorded(evt, "words")] == [PLAN_FEEDBACK]
+    assert sorted(item.quote for item in owner_words_of(tmp_path, transcript)) == [PLAN_FEEDBACK, "plan the rollout"]
+
+
+def test_recorded_plan_feedback_outlives_the_window(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    steps = [T.assistant(f"step {index}") for index in range(evidence_module.OWNER_WINDOW + 10)]
+    transcript = disk_fixture_session([T.user("plan the rollout"), *rejected(PLAN_FEEDBACK), *steps])
+    assert PLAN_FEEDBACK not in [item.quote for item in owner_words_of(tmp_path, transcript)]
+
+    record_plan_feedback(stopping(tmp_path, transcript))
+
+    assert [item.quote for item in owner_words_of(tmp_path, transcript)].count(PLAN_FEEDBACK) == 1
+
+
+def test_a_lane_records_no_plan_feedback(tmp_path: Path) -> None:
+    from captain_hook.builtin_packs.general.hooks.grants import record_plan_feedback
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    evt = stopping(
+        tmp_path, disk_fixture_session([T.user("draft the plan"), *rejected(PLAN_FEEDBACK)]), agent_id="a-lane"
+    )
+
+    record_plan_feedback(evt)
+
+    assert evidence_module.recorded(evt, "words") == []
