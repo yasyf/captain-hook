@@ -598,7 +598,7 @@ func TestHostFactProducerReadsTheHostEnvironment(t *testing.T) {
 	tests := []struct {
 		name, reuse, want string
 	}{
-		{"unset", "", "capt-hook/" + Build},
+		{"unset", "", ""},
 		{"off", "0", ""},
 		{"on", "1", "capt-hook/" + Build},
 	}

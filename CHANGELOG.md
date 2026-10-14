@@ -311,8 +311,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A restarted snapshot owner reads the prepared facts the last one left on disk.**
   Prepared facts on disk were private to the owner that wrote them, so every owner start
-  rebuilt the facts for every transcript. The host now names a prepared-fact producer in
-  its handshake, `capt-hook/<build>`, and the owner appends its cc-transcript version and
+  rebuilt the facts for every transcript. With `CAPT_HOOK_PREPARED_FACT_REUSE=1` in its
+  environment, the host names a prepared-fact producer in its handshake,
+  `capt-hook/<build>`, and the owner appends its cc-transcript version and
   the SHA-256 of the file its native extension was loaded from. An owner that starts
   under the same producer reads the facts for unchanged transcripts from disk and rebuilds
   only the ones that changed. A new capt-hook build, cc-transcript version, or extension
@@ -323,8 +324,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cc-transcript-prepared-reuse` under the temp directory. An owner that names a producer
   never reads or cleans `cc-transcript-prepared`, so what an earlier owner left there
   stays until an owner with reuse off cleans it or someone deletes it.
-  `CAPT_HOOK_PREPARED_FACT_REUSE=0` in the host's environment turns reuse off at the next
-  host start. A host that turns it off keeps up to `max_prepared_disk_bytes`, 2 GiB, in
+  Reuse is off without that variable. 12.93.6 shipped it on for every host; it is off
+  again until the store binds its own build identity in place of the file hash. A host
+  that ran with reuse on keeps up to `max_prepared_disk_bytes`, 2 GiB, in
   `cc-transcript-prepared-reuse` until that directory is deleted by hand.
 
 ### Fixed
