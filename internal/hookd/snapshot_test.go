@@ -68,7 +68,7 @@ func fakeSnapshotOwner(t *testing.T, frames chan<- wireproto.Frame) (*snapshotOw
 }
 
 func TestSnapshotServiceHandshakesTheHostBudgetsAndFactProducer(t *testing.T) {
-	t.Setenv("CAPT_HOOK_PREPARED_FACT_REUSE", "1")
+	t.Setenv("CAPT_HOOK_PREPARED_FACT_REUSE", "")
 	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {
 		t.Fatal(err)
