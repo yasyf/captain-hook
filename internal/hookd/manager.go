@@ -56,7 +56,7 @@ func workersPerRoot() int {
 }
 
 func hostFactProducer() string {
-	if os.Getenv("CAPT_HOOK_PREPARED_FACT_REUSE") != "1" {
+	if os.Getenv("CAPT_HOOK_PREPARED_FACT_REUSE") == "0" {
 		return ""
 	}
 	return "capt-hook/" + Build
