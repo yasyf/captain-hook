@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import gc
 import os
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -122,6 +126,156 @@ class TestUseRequest:
         with reqenv.use_request(overrides({})) as bound:
             assert reqenv.current() is bound
         assert reqenv.current() is None
+
+
+class TestShared:
+    def test_unbound_computes_on_every_call(self) -> None:
+        runs: list[str] = []
+
+        def compute() -> int:
+            runs.append("scan")
+            return len(runs)
+
+        assert [reqenv.shared("scan", compute), reqenv.shared("scan", compute)] == [1, 2]
+
+    def test_bound_computes_once_and_hands_every_caller_the_same_object(self) -> None:
+        first: list[str] = []
+        with reqenv.use_request(overrides({})):
+            held = reqenv.shared("scan", lambda: first)
+            again = reqenv.shared("scan", lambda: ["a later caller's compute never runs"])
+        assert (held is first, again is first) == (True, True)
+
+    def test_keys_are_computed_separately(self) -> None:
+        with reqenv.use_request(overrides({})):
+            lanes = reqenv.shared("lanes", lambda: 1)
+            other = reqenv.shared(("lanes", "other"), lambda: 2)
+            again = reqenv.shared("lanes", lambda: 3)
+        assert (lanes, other, again) == (1, 2, 1)
+
+    def test_each_request_computes_its_own(self) -> None:
+        runs: list[str] = []
+        results: list[int] = []
+
+        def compute() -> int:
+            runs.append("scan")
+            return len(runs)
+
+        for _ in range(2):
+            with reqenv.use_request(overrides({}, session_id="same")):
+                results += [reqenv.shared("scan", compute), reqenv.shared("scan", compute)]
+        assert results == [1, 1, 2, 2]
+
+    def test_a_failed_compute_is_not_kept(self) -> None:
+        attempts: list[str] = []
+
+        def flaky() -> str:
+            attempts.append("scan")
+            if len(attempts) == 1:
+                raise OSError("disk")
+            return "lanes"
+
+        with reqenv.use_request(overrides({})):
+            with pytest.raises(OSError, match="disk"):
+                reqenv.shared("scan", flaky)
+            kept = (reqenv.shared("scan", flaky), reqenv.shared("scan", flaky))
+        assert (kept, attempts) == (("lanes", "lanes"), ["scan", "scan"])
+
+    def test_a_finished_compute_is_released_while_its_result_is_kept(self) -> None:
+        class Scanned:
+            pass
+
+        def scan(scanned: Scanned) -> str:
+            return "lanes"
+
+        source = Scanned()
+        seen = weakref.ref(source)
+        with reqenv.use_request(overrides({})):
+            first = reqenv.shared("scan", partial(scan, source))
+            del source
+            gc.collect()
+            assert (first, seen(), reqenv.shared("scan", lambda: "rescanned")) == ("lanes", None, "lanes")
+
+    def test_a_failed_compute_keeps_what_it_needs_to_run_again(self) -> None:
+        class Scanned:
+            pass
+
+        attempts: list[str] = []
+
+        def scan(scanned: Scanned) -> str:
+            attempts.append("scan")
+            if len(attempts) == 1:
+                raise OSError("disk")
+            return "lanes"
+
+        source = Scanned()
+        seen = weakref.ref(source)
+        with reqenv.use_request(overrides({})):
+            with pytest.raises(OSError, match="disk"):
+                reqenv.shared("scan", partial(scan, source))
+            del source
+            gc.collect()
+            held = seen() is not None
+            again = reqenv.shared("scan", lambda: "another caller")
+            gc.collect()
+            assert (held, again, attempts, seen()) == (True, "lanes", ["scan", "scan"], None)
+
+    def test_concurrent_hooks_of_one_request_run_one_compute(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        runs: list[str] = []
+
+        def compute() -> tuple[str, ...]:
+            runs.append("scan")
+            entered.set()
+            assert release.wait(10)
+            return ("desk",)
+
+        with reqenv.use_request(overrides({})), ThreadPoolExecutor(max_workers=4) as pool:
+            hooks = [pool.submit(copy_context().run, reqenv.shared, "scan", compute) for _ in range(4)]
+            assert entered.wait(10)
+            release.set()
+            results = [hook.result(timeout=10) for hook in hooks]
+        assert (runs, [result is results[0] for result in results], results[0]) == (["scan"], [True] * 4, ("desk",))
+
+    def test_a_running_compute_does_not_hold_the_request_memo(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+
+        def slow() -> str:
+            entered.set()
+            assert release.wait(10)
+            return "slow"
+
+        with reqenv.use_request(overrides({})) as bound, ThreadPoolExecutor(max_workers=2) as pool:
+            scan = pool.submit(copy_context().run, reqenv.shared, "slow", slow)
+            assert entered.wait(10)
+            fast = pool.submit(copy_context().run, reqenv.shared, "fast", lambda: "fast")
+            during = (fast.result(timeout=10), bound.memo.lock.locked())
+            release.set()
+            assert (during, scan.result(timeout=10)) == (("fast", False), "slow")
+
+    def test_a_compute_may_ask_for_another_key(self) -> None:
+        with reqenv.use_request(overrides({})):
+            assert reqenv.shared("outer", lambda: reqenv.shared("inner", lambda: 1) + 1) == 2
+
+    def test_a_waiting_hook_runs_the_compute_after_the_first_one_fails(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        attempts: list[str] = []
+
+        def flaky() -> str:
+            attempts.append("scan")
+            if len(attempts) == 1:
+                entered.set()
+                assert release.wait(10)
+                raise OSError("disk")
+            return "lanes"
+
+        with reqenv.use_request(overrides({})), ThreadPoolExecutor(max_workers=2) as pool:
+            failing = pool.submit(copy_context().run, reqenv.shared, "scan", flaky)
+            assert entered.wait(10)
+            waiting = pool.submit(copy_context().run, reqenv.shared, "scan", flaky)
+            release.set()
+            with pytest.raises(OSError, match="disk"):
+                failing.result(timeout=10)
+            assert (waiting.result(timeout=10), attempts) == ("lanes", ["scan", "scan"])
 
 
 class TestCheckpoint:
