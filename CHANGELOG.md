@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`reqenv.shared` runs one computation per request for every hook that asks.**
+  The hooks of one request each get their own event copy, so a scan several of them need
+  ran once per hook. `captain_hook.util.reqenv.shared(key, compute)` runs the first
+  caller's `compute` once under a bound request and hands every other caller the same
+  object, across the fan-out's threads; a caller that arrives mid-run waits for it. A
+  `compute` that raises stores nothing, so the next caller runs it again. With no request
+  bound, `compute` runs on every call. The result is dropped with the request.
+
 - **A subagent's Bash commands export its `agent_id` as `CCI_AGENT_ID`.**
   Claude Code hands a subagent's `agent_id` to hooks only, so a lane's commands could not
   tell which agent ran them. A `PreToolUse` Bash call carrying an `agent_id` now runs with

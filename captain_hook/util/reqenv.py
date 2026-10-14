@@ -7,10 +7,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+from captain_hook.util.caching import once
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Mapping, Sequence
+    from collections.abc import Callable, Generator, Hashable, Mapping, Sequence
 
     from captain_hook.types import HookResult
 
@@ -44,6 +46,7 @@ class MandatoryPhase:
 class RequestMemo:
     lock: threading.Lock = field(default_factory=threading.Lock)
     claude_argv: tuple[str, ...] | None = None
+    shared: dict[Hashable, Callable[[], Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +155,34 @@ def use_request(overrides: RequestOverrides) -> Generator[RequestOverrides]:
         yield overrides
     finally:
         _OVERRIDES.reset(token)
+
+
+def shared[T](key: Hashable, compute: Callable[[], T]) -> T:
+    """Run *compute* at most once for the bound request and hand every caller its result.
+
+    The hooks of one request each get their own event copy, so a scan several of them need is
+    otherwise repeated per hook. Under a bound request the first caller of *key* runs its
+    *compute*; every other caller, on any thread of the fan-out, gets that same object back,
+    and one that arrives mid-run waits for it. A *compute* that raises stores nothing, so the
+    next caller runs it again. With no request bound, *compute* runs on every call.
+
+    Every caller shares the one result, so return something immutable. It is dropped with the
+    request. *compute* runs outside the request's memo lock and may itself ask for other keys.
+
+    Args:
+        key: Names the computation within the request, such as ``"my-pack.lanes"``.
+        compute: Produces the value. The first caller's *compute* is the one that runs.
+
+    Returns:
+        The request's one result for *key*.
+    """
+    if (ov := _OVERRIDES.get()) is None:
+        return compute()
+    with ov.memo.lock:
+        if key not in ov.memo.shared:
+            ov.memo.shared[key] = once(compute)
+        held = ov.memo.shared[key]
+    return held()
 
 
 def getenv[T](key: str, default: str | T | None = None) -> str | T | None:
