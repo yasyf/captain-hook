@@ -114,7 +114,7 @@ jobs:
     needs: [build, python-assets, helper-version]
     permissions:
       contents: read
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@41f8de6765b3b833ef333b0b98f5683f0e46685b
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@8cdf5df5fee84bb5a344028b25eccc96fae67c8f
     with:
       app_name: Captain Hook
       asset_name: captain-hook
@@ -286,7 +286,23 @@ jobs:
           app="unpacked/Captain Hook.app"
           test -d "$app"
           codesign --verify --strict --verbose=2 "$app"
-          xcrun stapler validate "$app"
+          # stapler(1) exits EX_NOHOST (68) when Apple's ticketing service drops the
+          # connection or answers unexpectedly. Retry only that status, up to 3x with
+          # backoff; any other status, or a third EX_NOHOST, is terminal.
+          attempt=1
+          while :; do
+            status=0
+            xcrun stapler validate "$app" || status=$?
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            if [ "$status" -ne 68 ] || [ "$attempt" -ge 3 ]; then
+              echo "::error::stapler validate failed for $app (exit $status, attempt $attempt/3)"; exit 1
+            fi
+            echo "::warning::stapler validate could not reach the ticketing service for $app (attempt $attempt/3); retrying in $((attempt * 30))s"
+            sleep "$((attempt * 30))"
+            attempt=$((attempt + 1))
+          done
           APP_PATH="$app" CAPT_HOOK_VERSION="${RELEASE_TAG#v}" bash helper/scripts/assert-signed-bridge.sh
 
   # PyPI Trusted Publishing must run in this repository's workflow so its OIDC

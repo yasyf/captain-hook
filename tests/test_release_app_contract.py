@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 FORMULA = ROOT / ".github/formula/captain-hook.rb.tmpl"
-RELEASE_APP_REF = "41f8de6765b3b833ef333b0b98f5683f0e46685b"
+RELEASE_APP_REF = "8cdf5df5fee84bb5a344028b25eccc96fae67c8f"
 STAGE_DRAFT_RELEASE_REF = "e4c3108e693681df1a3c666bae80e890bc44cf3e"
 PUBLISH_DRAFT_RELEASE_REF = "54e3e194bda69896894a82c17fcdb2822beefab5"
 HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
@@ -75,6 +75,8 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "path: released" in smoke
     assert "Smoke-test the final staged application bytes" in smoke
     assert "xcrun stapler validate" in smoke
+    assert 'xcrun stapler validate "$app" || status=$?' in smoke
+    assert 'if [ "$status" -ne 68 ] || [ "$attempt" -ge 3 ]; then' in smoke
     assert "bash helper/scripts/assert-signed-bridge.sh" in smoke
     assert "RELEASE_ID:" not in smoke
     assert "GH_TOKEN:" not in smoke
@@ -191,7 +193,7 @@ def test_formula_uses_authoritative_asset_and_bundled_application() -> None:
     assert 'libexec.install "Captain Hook.app"' in formula
     assert '"package-install"' not in formula
     assert "capt-hook helper install" in formula
-    assert '$HOME/Applications/Captain Hook.app' in formula
+    assert "$HOME/Applications/Captain Hook.app" in formula
     assert "\n  cask " not in formula
 
 
