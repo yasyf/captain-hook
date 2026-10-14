@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import gc
 import os
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -176,6 +179,45 @@ class TestShared:
                 reqenv.shared("scan", flaky)
             kept = (reqenv.shared("scan", flaky), reqenv.shared("scan", flaky))
         assert (kept, attempts) == (("lanes", "lanes"), ["scan", "scan"])
+
+    def test_a_finished_compute_is_released_while_its_result_is_kept(self) -> None:
+        class Scanned:
+            pass
+
+        def scan(scanned: Scanned) -> str:
+            return "lanes"
+
+        source = Scanned()
+        seen = weakref.ref(source)
+        with reqenv.use_request(overrides({})):
+            first = reqenv.shared("scan", partial(scan, source))
+            del source
+            gc.collect()
+            assert (first, seen(), reqenv.shared("scan", lambda: "rescanned")) == ("lanes", None, "lanes")
+
+    def test_a_failed_compute_keeps_what_it_needs_to_run_again(self) -> None:
+        class Scanned:
+            pass
+
+        attempts: list[str] = []
+
+        def scan(scanned: Scanned) -> str:
+            attempts.append("scan")
+            if len(attempts) == 1:
+                raise OSError("disk")
+            return "lanes"
+
+        source = Scanned()
+        seen = weakref.ref(source)
+        with reqenv.use_request(overrides({})):
+            with pytest.raises(OSError, match="disk"):
+                reqenv.shared("scan", partial(scan, source))
+            del source
+            gc.collect()
+            held = seen() is not None
+            again = reqenv.shared("scan", lambda: "another caller")
+            gc.collect()
+            assert (held, again, attempts, seen()) == (True, "lanes", ["scan", "scan"], None)
 
     def test_concurrent_hooks_of_one_request_run_one_compute(self) -> None:
         entered, release = threading.Event(), threading.Event()

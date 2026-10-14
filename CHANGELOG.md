@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's `compute` once under a bound request and hands every other caller the same
   object, across the fan-out's threads; a caller that arrives mid-run waits for it. A
   `compute` that raises stores nothing, so the next caller runs it again. With no request
-  bound, `compute` runs on every call. The result is dropped with the request.
+  bound, `compute` runs on every call. `compute` is dropped once it returns and the result
+  is dropped with the request.
 
 - **A subagent's Bash commands export its `agent_id` as `CCI_AGENT_ID`.**
   Claude Code hands a subagent's `agent_id` to hooks only, so a lane's commands could not

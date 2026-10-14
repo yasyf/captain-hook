@@ -157,6 +157,17 @@ def use_request(overrides: RequestOverrides) -> Generator[RequestOverrides]:
         _OVERRIDES.reset(token)
 
 
+def _released_on_return[T](compute: Callable[[], T]) -> Callable[[], T]:
+    pending = [compute]
+
+    def run() -> T:
+        value = pending[0]()
+        pending.clear()
+        return value
+
+    return run
+
+
 def shared[T](key: Hashable, compute: Callable[[], T]) -> T:
     """Run *compute* at most once for the bound request and hand every caller its result.
 
@@ -167,7 +178,8 @@ def shared[T](key: Hashable, compute: Callable[[], T]) -> T:
     next caller runs it again. With no request bound, *compute* runs on every call.
 
     Every caller shares the one result, so return something immutable. It is dropped with the
-    request. *compute* runs outside the request's memo lock and may itself ask for other keys.
+    request, and *compute* is dropped as soon as it has returned, so only the result outlives
+    the run. *compute* runs outside the request's memo lock and may itself ask for other keys.
 
     Args:
         key: Names the computation within the request, such as ``"my-pack.lanes"``.
@@ -180,7 +192,7 @@ def shared[T](key: Hashable, compute: Callable[[], T]) -> T:
         return compute()
     with ov.memo.lock:
         if key not in ov.memo.shared:
-            ov.memo.shared[key] = once(compute)
+            ov.memo.shared[key] = once(_released_on_return(compute))
         held = ov.memo.shared[key]
     return held()
 
