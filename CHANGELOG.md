@@ -333,7 +333,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host start. A host that turns it off keeps up to `max_prepared_disk_bytes`, 2 GiB, in
   `cc-transcript-prepared-reuse` until that directory is deleted by hand. 12.93.6 took
   the native build from a hash of the extension file, which could name a file replaced
-  while an owner was starting, and 12.93.7 turned reuse off for that reason. The native
+  while an owner was starting, and 12.94.0 turned reuse off for that reason. The native
   build now comes from the code that is loaded, and reuse is on again.
 
 ### Fixed
