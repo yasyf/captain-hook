@@ -129,6 +129,21 @@
       "title": "Max Source Bytes",
       "type": "integer"
     },
+    "prepared_fact_producer": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Exact identity of the build that produces prepared facts. Null keeps prepared facts private to this store and deletes them when it closes. A string lets this store adopt validated prepared facts left by earlier stores that named the same producer with the same max_source_bytes and max_entry_bytes, and leaves its own facts in place for the next one. Change it with every build whose fact extraction or in-memory fact layout could differ.",
+      "title": "Prepared Fact Producer"
+    },
     "reserved_hook_accounted_bytes": {
       "default": 536870912,
       "exclusiveMinimum": 0,

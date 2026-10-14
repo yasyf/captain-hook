@@ -286,7 +286,7 @@ type snapshotService struct {
 }
 
 func newSnapshotService(manager *workerManager) (*snapshotService, error) {
-	config, err := snapshots.HostConfig()
+	config, err := snapshots.HostConfig(hostFactProducer())
 	if err != nil {
 		return nil, err
 	}

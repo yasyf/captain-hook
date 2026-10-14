@@ -55,6 +55,13 @@ func workersPerRoot() int {
 	return max(1, min(maxWorkersPerRoot, runtime.NumCPU()/4))
 }
 
+func hostFactProducer() string {
+	if os.Getenv("CAPT_HOOK_PREPARED_FACT_REUSE") == "0" {
+		return ""
+	}
+	return "capt-hook/" + Build
+}
+
 var errWorkerManagerClosed = errors.New("captain: worker manager is closed")
 var errWorkerAdmissionPaused = errors.New("captain: worker admission is paused for restart")
 

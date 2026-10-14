@@ -472,6 +472,14 @@ def handshake(input_stream: BinaryIO, output_stream: BinaryIO, *, build: str) ->
     return config
 
 
+def fact_producer(host: str) -> str:
+    from cc_transcript import _native
+
+    with open(_native.__file__, "rb") as extension:
+        digest = hashlib.file_digest(extension, "sha256").hexdigest()
+    return f"{host} cc-transcript/{importlib.metadata.version('cc-transcript')} native/sha256:{digest}"
+
+
 def main() -> None:
     output = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
@@ -479,6 +487,8 @@ def main() -> None:
         config = handshake(sys.stdin.buffer, output, build=importlib.metadata.version("capt-hook"))
         if config is not None:
             os.environ.setdefault("CC_TRANSCRIPT_PARSE_THREADS", "4")
+            if (host := config.get("prepared_fact_producer")) is not None:
+                config["prepared_fact_producer"] = fact_producer(host)
             OwnerService(sys.stdin.buffer, output, Owner(config)).run()
     finally:
         output.close()

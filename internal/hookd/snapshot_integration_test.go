@@ -26,7 +26,7 @@ func pythonSnapshotOwner(t *testing.T) *snapshotOwner {
 	if python == "" {
 		t.Skip("requires the exact candidate Python environment in CI")
 	}
-	config, err := snapshots.HostConfig()
+	config, err := snapshots.HostConfig("")
 	if err != nil {
 		t.Fatal(err)
 	}
