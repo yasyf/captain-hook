@@ -43,7 +43,7 @@ from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
     from cc_transcript.command import Word
 
@@ -182,6 +182,8 @@ BACKGROUNDED = re.compile(r"(?<![&>|])&(?![&>])|\b(?:nohup|setsid|disown)\b")
 SCRATCH_PREFIX = "_scratch-"
 RECORDED_SINCE = datetime(2026, 10, 4, 2)
 LATER_SESSION = "name it in a cc-notes answer for a later session"
+KILL_RULING_TAGS = frozenset({"scope:durable", "sessions-guard"})
+SCRIPT_HOSTS = re.compile(r"(?:python|node|bun|deno|ruby|perl)[\d.]*")
 SETTLED = frozenset({"completed", "failed"})
 CLASS_RULINGS = ("c9b27c1", "6190a4a")
 SETTLED_CLOSE_RULES = (
@@ -247,9 +249,19 @@ INLINE_TRANSCRIPT = [{"type": "user", "message": {"role": "user", "content": "Sh
 INLINE_STARTED = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def inline_ruling(body: str, *, written: datetime = INLINE_STARTED - timedelta(days=1)) -> str:
+def inline_ruling(
+    body: str, *, written: datetime = INLINE_STARTED - timedelta(days=1), tags: Iterable[str] = ()
+) -> str:
     return json.dumps(
-        [{"id": "0207568aaaa", "title": "Close terminals", "body": body, "updated_at": written.isoformat()}]
+        [
+            {
+                "id": "0207568aaaa",
+                "title": "Close terminals",
+                "body": body,
+                "tags": list(tags),
+                "updated_at": written.isoformat(),
+            }
+        ]
     )
 
 
@@ -443,6 +455,13 @@ def hosts_agent(row: ProcessRow) -> bool:
 
 def describe(row: ProcessRow) -> str:
     return f"pid {row.pid} (`{clip(row.command, 40)}`)"
+
+
+def program(row: ProcessRow) -> str:
+    if SCRIPT_HOSTS.fullmatch(row.argv0.casefold()) is None:
+        return row.argv0
+    script = next((word for word in row.command.split()[1:] if not word.startswith("-")), None)
+    return row.argv0 if script is None else PurePath(script).name
 
 
 @dataclass(frozen=True, slots=True)
@@ -678,7 +697,13 @@ def describe_target(word: Word, value: Scalar | None) -> str:
             return f"target `{clip(word.raw, 40)}` is not a literal positive pid"
 
 
-def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str | None:
+def pid_verdict(
+    pid: int,
+    spelling: str,
+    facts: Facts,
+    fix: str,
+    lifted: Callable[[ProcessRow, str], Ungranted | None] | None = None,
+) -> str | Ungranted | None:
     ownership = facts.ownership
     if isinstance(ownership, Unreadable):
         return unresolvable(spelling, ownership.reason, fix)
@@ -703,15 +728,17 @@ def pid_verdict(pid: int, spelling: str, facts: Facts, fix: str) -> str | None:
         )
         return None
     if ownership.owner is None:
-        return (
+        message = (
             f"BLOCKED: ownership of {describe(row)} is unproven because the guard cannot resolve this session's own "
             f"agent process. {fix}"
         )
-    holder = f"under {agent.argv0} {agent.pid}" if agent is not None else "with no agent ancestor to vouch for it"
-    return (
-        f"BLOCKED: {describe(row)} runs {holder}, and no recorded per-task creation identity ties it to this task. "
-        "Let it finish, or ask the owner to end it."
-    )
+    else:
+        holder = f"under {agent.argv0} {agent.pid}" if agent is not None else "with no agent ancestor to vouch for it"
+        message = (
+            f"BLOCKED: {describe(row)} runs {holder}, and no recorded per-task creation identity ties it to this "
+            "task. Let it finish, or ask the owner to end it."
+        )
+    return message if lifted is None else lifted(row, message)
 
 
 def literal_head(call: Call) -> bool:
@@ -1274,8 +1301,8 @@ class OwnerNaming:
         ]
 
 
-def rulings_naming(key: str) -> Rulings:
-    return Rulings(search=lambda action: action.scope[key])
+def rulings_naming(key: str, tags: frozenset[str] = frozenset()) -> Rulings:
+    return Rulings(search=lambda action: action.scope[key], tags=tags)
 
 
 TERMINAL_CLOSE = Grants(
@@ -1302,6 +1329,16 @@ TASK_STOP = Grants(
     replay=RETRY_WINDOW,
     would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
     "this agent started, or have the owner name the task id in a cc-notes answer before the stopping session starts.",
+    hook="sessions",
+)
+
+KILL_PROCESS = Grants(
+    "sessions.kill",
+    ("program", "process"),
+    evidence=(rulings_naming("program", KILL_RULING_TAGS),),
+    replay=RETRY_WINDOW,
+    would_allow="Have the owner name the process's program, such as `desk-runner.py`, in a cc-notes answer tagged "
+    f"{' and '.join(sorted(KILL_RULING_TAGS))} before the acting session starts.",
     hook="sessions",
 )
 
@@ -1373,6 +1410,15 @@ def lift(evt: BaseHookEvent, grants: Grants, action: Proposal, message: str, *, 
         return None
     ungranted = refusal(message, grants.hook, verdict)
     return owner_lift(evt, grants, action, ungranted) if owner else ungranted
+
+
+def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | None:
+    name = program(row)
+    action = Proposal(
+        scope={"program": name, "process": f"{row.pid}@{row.started.isoformat()}"},
+        summary=f"kill {row.pid} ({name})",
+    )
+    return lift(evt, KILL_PROCESS, action, message, owner=False)
 
 
 def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:

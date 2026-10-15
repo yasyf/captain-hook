@@ -20,6 +20,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_SESSION,
     INLINE_STARTED,
     KILL_FIX,
+    KILL_RULING_TAGS,
     LATER_SESSION,
     LAUNCHD_STOP,
     LAUNCHERS,
@@ -54,6 +55,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_worker,
     inline_workers,
     is_agent,
+    kill_lift,
     lift,
     literal_pid,
     lone_pane,
@@ -211,6 +213,11 @@ PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
 TMUX_ENDINGS = frozenset({"kill-server", "kill-session", "kill-pane", "kill-window"})
 STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
 SERVE_RULING = inline_ruling("Owner: restart com.example.orca-serve once.")
+DESK_RULING = "Owner: end this drive's own desk-runner.py for a version restart."
+DESK_COMMANDS = {
+    **INLINE_COMMANDS,
+    "ccn answer search desk-runner.py": inline_ruling(DESK_RULING, tags=KILL_RULING_TAGS),
+}
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings(), **inline_run("term_root")}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
@@ -433,7 +440,7 @@ def probe_pid(call: Call, word: Word, value: Scalar | None) -> bool:
             return False
 
 
-def kill_verdict(call: Call, facts: Facts) -> str | None:
+def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungranted | None:
     if call.name != "kill":
         return None
     spelling = spell(call)
@@ -462,7 +469,7 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
                     "expand into a real signal. Pass the literal pid, or a variable the same line sets to one."
                 )
             return deny(describe_target(word, value))
-        if (verdict := pid_verdict(pid, spelling, facts, KILL_FIX)) is not None:
+        if (verdict := pid_verdict(pid, spelling, facts, KILL_FIX, partial(kill_lift, evt))) is not None:
             return verdict
     return None
 
@@ -561,6 +568,55 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
             pattern="ownership of pid 18100"
         ),
         guarded(command="kill 18200", session_id=INLINE_SESSION): Block(pattern="an ancestor of a protected process"),
+        guarded(command="kill 18100"): Block(pattern="ownership of pid 18100"),
+        guarded(command="kill 18100", commands=DESK_COMMANDS): Allow(),
+        guarded(command="kill -9 18100", commands=DESK_COMMANDS): Allow(),
+        guarded(
+            command="kill 18100",
+            commands={**INLINE_COMMANDS, "ccn answer search desk-runner.py": inline_ruling(DESK_RULING)},
+        ): Block(pattern="ownership of pid 18100"),
+        guarded(
+            command="kill 18100",
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search desk-runner.py": inline_ruling(DESK_RULING, tags=["sessions-guard"]),
+            },
+        ): Block(pattern="ownership of pid 18100"),
+        guarded(
+            command="kill 18100",
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search desk-runner.py": inline_ruling(
+                    DESK_RULING, tags=KILL_RULING_TAGS, written=INLINE_STARTED + timedelta(minutes=5)
+                ),
+            },
+        ): Block(pattern="ownership of pid 18100"),
+        guarded(
+            command="kill 18100",
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search desk-runner.py": inline_ruling(
+                    "Owner: end the old desk-runner.py.bak copy.", tags=KILL_RULING_TAGS
+                ),
+            },
+        ): Block(pattern="ownership of pid 18100"),
+        guarded(command="kill 18100 14575", commands=DESK_COMMANDS): Block(pattern="an agent session"),
+        guarded(
+            command="kill 18200",
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search serve-wrapper.py": inline_ruling(
+                    "Owner: end serve-wrapper.py.", tags=KILL_RULING_TAGS
+                ),
+            },
+        ): Block(pattern="an ancestor of a protected process"),
+        guarded(
+            command="kill 16002",
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search claude": inline_ruling("Owner: end claude.", tags=KILL_RULING_TAGS),
+            },
+        ): Block(pattern="an agent session"),
         guarded(command="kill -0 14575"): Allow(),
         guarded(command="PID=31337; kill -0 $PID"): Allow(),
         guarded(command='PID=31337; kill -0 "$PID" 2>/dev/null || break'): Allow(),
@@ -579,10 +635,10 @@ def kill_verdict(call: Call, facts: Facts) -> str | None:
 )
 def kill_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:
     scan = Scan.of(evt)
-    return block_first(evt, (kill_verdict(call, scan.facts) for call in scan.literal_calls))
+    return block_first(evt, (kill_verdict(call, scan.facts, evt) for call in scan.literal_calls))
 
 
-def renice_verdict(call: Call, facts: Facts) -> str | None:
+def renice_verdict(call: Call, facts: Facts) -> str | Ungranted | None:
     if call.name != "renice":
         return None
     spelling = spell(call)
