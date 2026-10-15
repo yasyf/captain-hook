@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An owner ruling lets `kill` end an unowned process by its program name.**
+  The sessions pack refused every `kill` of a process with no recorded per-task creation
+  identity, even one the owner had ruled a session may end. Terminal closes, `launchctl`
+  stops, and `TaskStop` already accepted a ruling naming their target. A `kill` of such a
+  process now goes ahead under a `sessions.kill` grant when a cc-notes answer names the
+  process's program as a whole word. The answer must carry the `scope:durable` and
+  `sessions-guard` tags and predate the acting session. The program is the script for a
+  `python`, `node`, `bun`, `deno`, `ruby`, or `perl` process, such as `desk-runner.py`, and
+  the executable otherwise. Each ruling covers one use per process. Agent sessions,
+  terminal hosts, the Orca app, its terminal daemon, and their ancestors stay protected
+  whatever a ruling says, and `renice` keeps its policy. `Rulings` gains `tags`, which
+  keeps only answers carrying every tag.
+
 - **`reqenv.shared` runs one computation per request for every hook that asks.**
   The hooks of one request each get their own event copy, so a scan several of them need
   ran once per hook. `captain_hook.util.reqenv.shared(key, compute)` runs a caller's

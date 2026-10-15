@@ -422,11 +422,12 @@ class Rulings:
     Only answers last written before the acting session started count, and only where the term
     stands as a whole name: ``term_a`` is not named by ``term_ab``, nor ``com.x`` by ``com.x.helper``.
     Each item is live and pinned to its revision, so a grant minted from it stops covering anything
-    once the answer is edited.
+    once the answer is edited. With *tags*, only answers carrying every one of them count.
     """
 
     search: Callable[[Proposal], str]
     started: Callable[[BaseHookEvent], datetime] = field(default=session_started)
+    tags: frozenset[str] = frozenset()
 
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
         if not (term := self.search(action)):
@@ -435,7 +436,9 @@ class Rulings:
         return [
             ruling_evidence(answer)
             for answer in ccn_answers(evt, term)
-            if names(answer.get("body", ""), term) and written_at(answer) < cutoff
+            if names(answer.get("body", ""), term)
+            and written_at(answer) < cutoff
+            and self.tags <= set(answer.get("tags", ()))
         ]
 
 
