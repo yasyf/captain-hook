@@ -110,17 +110,17 @@ class StampedCache[K, S, V]:
         return entry
 
 
-def once[R](fn: Callable[[], R]) -> Callable[[], R]:
+def once[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     guard = threading.Lock()
     held: list[R] = []
 
     @wraps(fn)
-    def wrapper() -> R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         if held:
             return held[0]
         with guard:
             if not held:
-                held.append(fn())
+                held.append(fn(*args, **kwargs))
             return held[0]
 
     wrapper.cache_clear = held.clear

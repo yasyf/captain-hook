@@ -10,12 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`reqenv.shared` runs one computation per request for every hook that asks.**
   The hooks of one request each get their own event copy, so a scan several of them need
-  ran once per hook. `captain_hook.util.reqenv.shared(key, compute)` runs the first
-  caller's `compute` once under a bound request and hands every other caller the same
+  ran once per hook. `captain_hook.util.reqenv.shared(key, compute)` runs a caller's
+  `compute` under a bound request until one succeeds and hands every other caller the same
   object, across the fan-out's threads; a caller that arrives mid-run waits for it. A
-  `compute` that raises stores nothing, so the next caller runs it again. With no request
-  bound, `compute` runs on every call. `compute` is dropped once it returns and the result
-  is dropped with the request.
+  `compute` that raises stores nothing and is not kept, so the next caller runs its own.
+  With no request bound, `compute` runs on every call. No `compute` outlives its own call,
+  and the result is dropped with the request.
 
 - **A subagent's Bash commands export its `agent_id` as `CCI_AGENT_ID`.**
   Claude Code hands a subagent's `agent_id` to hooks only, so a lane's commands could not
@@ -337,6 +337,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build now comes from the code that is loaded, and reuse is on again.
 
 ### Fixed
+
+- **A plugin update no longer runs a pack's new hooks against its old helper modules.**
+  When a pack's release directory changed, discovery dropped the pack's submodules from
+  `sys.modules` but left them as attributes of the retained pack package, so a new hook's
+  `from . import session_tree` bound the previous release's module. In a long-lived worker,
+  long-running 0.7.121's `lane_rotation` ran against 0.7.120's `session_tree` and failed
+  with `'Subagent' object has no attribute 'read_events'` until the worker was recycled.
+  Evicting a pack's submodules now also detaches them from the package, so the new release
+  imports its own helpers. Modules already loaded keep the helpers they bound, and module
+  names, state keys and pack routing are unchanged.
+
+- **`reqenv.shared` runs each caller's own `compute` after a failure.** A `compute` that
+  raised was kept and replayed for the next hook of the request, with the first hook's
+  event and its released transcript branch, so the next hook failed with
+  `stale_handle: transcript preparation branch is closed`. The request memo now keeps only
+  a successful result. A hook that arrives after a failure, or waits on one, runs its own
+  `compute` against its own event.
 
 - **`OwnerWords` reads what the owner typed when rejecting a plan.** An owner who rejects
   an `ExitPlanMode` plan and types feedback gave an instruction no evidence source could

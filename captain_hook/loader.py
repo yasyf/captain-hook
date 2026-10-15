@@ -54,6 +54,10 @@ def is_skip_marked(path: Path) -> bool:
 def evict_submodules(pkg: str) -> None:
     for fqn in [name for name in sys.modules if name.startswith(f"{pkg}.")]:
         del sys.modules[fqn]
+    if (package := sys.modules.get(pkg)) is not None:
+        for name, value in list(vars(package).items()):
+            if isinstance(value, ModuleType) and value.__name__ == f"{pkg}.{name}":
+                delattr(package, name)
 
 
 def discover_hooks(hooks_dir: str | Path) -> None:

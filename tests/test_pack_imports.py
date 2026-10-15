@@ -119,6 +119,42 @@ def test_rediscovery_loads_helpers_from_the_newest_release(tmp_path: Path, isola
     ]
 
 
+def _module_release(base: Path, version: str) -> Path:
+    base.mkdir(parents=True)
+    (base / "helper.py").write_text(
+        f"__capt_hook_skip__ = True\nVERSION = {version!r}\n\n\ndef stamp():\n    return VERSION\n"
+    )
+    (base / "alpha.py").write_text(
+        "from . import helper\n"
+        "from captain_hook import Event, hook\n\n\n"
+        "def lazy():\n    from . import helper as fresh\n\n    return fresh.VERSION\n\n\n"
+        "hook(Event.PreToolUse, message=helper.stamp())\n"
+    )
+    return base
+
+
+def test_rediscovery_rebinds_a_whole_helper_module_and_keeps_inflight_modules_whole(
+    tmp_path: Path, isolate_modules: None
+) -> None:
+    old = _module_release(tmp_path / "0.7.120" / "hooks", "old")
+    new = _module_release(tmp_path / "0.7.121" / "hooks", "new")
+
+    app.reset()
+    discover_pack("long-running", old)
+    inflight = sys.modules["captain_hook._packs.long_running.alpha"]
+    app.reset()
+    discover_pack("long-running", new)
+    current = sys.modules["captain_hook._packs.long_running.alpha"]
+
+    assert (
+        [h.spec.message for h in app._state.hooks],
+        current.helper is sys.modules["captain_hook._packs.long_running.helper"],
+        current.helper.__file__,
+        current.lazy(),
+        inflight.helper.stamp(),
+    ) == (["new"], True, str(new / "helper.py"), "new", "old")
+
+
 def _pack_root(base: Path, src: str = ON_HANDLER_SRC) -> Path:
     base.mkdir(parents=True)
     (base / "guard.py").write_text(src)
