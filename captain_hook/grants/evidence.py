@@ -37,7 +37,10 @@ RULINGS_TIMEOUT = 5
 CCN_NOT_FOUND = 3
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
 PLAN_TOOL = "ExitPlanMode"
-DIFF_HEADER = "word diff of the approved text against this action's text (- approved only, + this action only):"
+DIFF_HEADER = (
+    "word diff of the text the owner saw against this action's text, unchanged words omitted: the owner saw every"
+    " - line, and saw no + line where this action puts it:"
+)
 SAME_TEXT = "(the same text as this action)"
 MACHINE_ENVELOPES = (
     "<task-notification",
