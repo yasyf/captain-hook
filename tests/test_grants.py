@@ -42,7 +42,7 @@ from captain_hook.grants import cli as grant_cli_module
 from captain_hook.grants import evidence as evidence_module
 from captain_hook.grants import orca as orca_module
 from captain_hook.grants.cli import grant as grant_cli
-from captain_hook.grants.judge import JEV_UNSETTLED
+from captain_hook.grants.judge import JEV_UNSETTLED, quick_verdict
 from captain_hook.hook_lint import result_violations
 from captain_hook.snapshots.client import EvidenceIncomplete, RemoteSession
 from captain_hook.types import Action, HookResult, HookSpec, RegisteredHook
@@ -67,6 +67,7 @@ def jev(
     *,
     sure: float = 0.95,
     standing: float = 0.05,
+    open_standing: float = 0.05,
     outcome: BaseException | None = None,
 ) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
@@ -78,7 +79,10 @@ def jev(
         options = list(questions["permits"].options)
         probabilities = {option: sure if option == choice else (1 - sure) / (len(options) - 1) for option in options}
         permits = LabelAnswer(choice, probabilities, 0.9)
-        return Decision({"permits": permits, "standing": BinaryAnswer(standing, 0.9)}, "jev-1.13.0", 120, 95.0)
+        answers = {"permits": permits, "standing": BinaryAnswer(standing, 0.9)}
+        if "open_standing" in questions:
+            answers["open_standing"] = BinaryAnswer(open_standing, 0.9)
+        return Decision(answers, "jev-1.13.0", 120, 95.0)
 
     monkeypatch.setattr(spawnllm, "decide_sync", decide)
     return calls
@@ -517,6 +521,63 @@ def test_a_jev_only_judge_allows_what_jev_is_sure_of(tmp_path: Path, monkeypatch
     grants = declared(judge=Judge("rules", llm=False), evidence=(Fixed((owner("yes post it", ident=APPROVAL),)),))
     allowed = grants.check(evt)
     assert isinstance(allowed, Allowed) and "jev-1.13.0 read" in allowed.reason
+
+
+def sure_of(choice: str = APPROVAL, *, standing: float, open_standing: float | None = None) -> Decision:
+    permits = LabelAnswer(choice, {"none": 0.05, choice: 0.95}, 0.9)
+    answers = {"permits": permits, "standing": BinaryAnswer(standing, 0.9)}
+    if open_standing is not None:
+        answers["open_standing"] = BinaryAnswer(open_standing, 0.9)
+    return Decision(answers, "jev-1.13.0", 120, 95.0)
+
+
+def test_a_jev_only_verdict_carries_the_picked_words_as_standing_when_jev_is_sure_of_them() -> None:
+    items = [owner("post the summary", ident="words:0"), owner(STANDING, ident=APPROVAL)]
+    verdict = quick_verdict(sure_of(standing=0.95, open_standing=0.95), items, llm=False)
+    assert verdict is not None and verdict.allow and verdict.relied_on == [APPROVAL] and verdict.standing == STANDING
+
+
+@pytest.mark.parametrize(
+    ("standing", "open_standing", "llm"),
+    [(0.95, None, True), (0.95, 0.5, False), (0.95, 0.05, False), (0.5, 0.5, False), (0.5, None, True)],
+)
+def test_standing_jev_is_unsure_of_or_an_llm_could_word_is_left_unsettled(
+    standing: float, open_standing: float | None, llm: bool
+) -> None:
+    decision = sure_of(standing=standing, open_standing=open_standing)
+    assert quick_verdict(decision, [owner(STANDING, ident=APPROVAL)], llm=llm) is None
+
+
+@pytest.mark.parametrize("llm", [True, False])
+def test_jev_sure_of_a_one_off_approval_allows_it_without_standing(llm: bool) -> None:
+    decision = sure_of(standing=0.05, open_standing=None if llm else 0.05)
+    verdict = quick_verdict(decision, [owner("yes post it", ident=APPROVAL)], llm=llm)
+    assert verdict is not None and verdict.allow and verdict.relied_on == [APPROVAL] and verdict.standing is None
+
+
+def test_a_jev_only_judge_mints_a_standing_grant_that_covers_the_next_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = jev(monkeypatch, standing=0.95, open_standing=0.95)
+    said = owner(f"yes, {STANDING}", ident=APPROVAL)
+    grants = declared(
+        judge=Judge("rules", llm=False),
+        evidence=(Fixed((said,)),),
+        standing_ttl=timedelta(hours=1),
+        standing_rules=("no-edit",),
+    )
+    first = event(tmp_path, "first")
+    first.ctx.call_llm = MagicMock(side_effect=AssertionError("a Jev-only judge never asks the LLM"))  # type: ignore[method-assign]
+    allowed = grants.check(first)
+    assert isinstance(allowed, Allowed) and allowed.grant.standing and allowed.remaining is None
+    assert allowed.grant.scope == SCOPE and allowed.grant.rules == ["no-edit"] and allowed.grant.expires is not None
+    assert allowed.grant.evidence[0].quote == said.quote
+    second = event(tmp_path, "second", call="c2")
+    second.ctx.call_llm = MagicMock(side_effect=AssertionError("a covering grant needs no judge"))  # type: ignore[method-assign]
+    again = grants.check(second)
+    assert isinstance(again, Allowed) and again.grant.id == allowed.grant.id
+    assert len(calls) == 1
+    assert "open_standing" in calls[0]["questions"]
 
 
 def test_jev_never_judges_evidence_it_would_read_clipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1300,6 +1361,54 @@ def owner_evidence_of(transcript: Any, tmp_path: Path) -> tuple[list[str], list[
     return [item.quote for item in OwnerWords().collect(evt, action)], [
         item.quote for item in Asked().collect(evt, action)
     ]
+
+
+APPROVED_TEXT = "the deploy finished at noon and every check passed"
+
+
+def asked_about(tmp_path: Path, text: str, **fields: Any) -> list[Evidence]:
+    from captain_hook.context import HookContext
+    from captain_hook.session import SessionStore
+    from captain_hook.testing.fixtures import T
+    from captain_hook.testing.helpers import disk_fixture_session
+
+    question = f'Post this in #releases? "{APPROVED_TEXT}"'
+    options = [{"label": "Post it", "description": "", "preview": APPROVED_TEXT}, {"label": "Hold", "description": ""}]
+    questions = [{"question": question, "header": "Slack", "multiSelect": False, "options": options}]
+    ask = T.tool("AskUserQuestion", id="toolu_deploy_note", questions=questions)
+    answer = T.user(
+        T.result(f'User has answered your questions: "{question}"="Post it".', of=ask),
+        toolUseResult={
+            "questions": questions,
+            "answers": {question: "Post it"},
+            "annotations": {question: {"preview": APPROVED_TEXT}},
+        },
+    )
+    transcript = disk_fixture_session([T.user("post the deploy note"), T.assistant(ask), answer])
+    evt = PreToolUseEvent(_raw={"session_id": TREE}, ctx=HookContext(SessionStore(tmp_path), transcript, None))
+    return Asked(**fields).collect(evt, Proposal(scope={}, payload={"text": text}))
+
+
+def approval_of(items: list[Evidence]) -> list[tuple[str, str, str, str]]:
+    return [(item.quote, item.approves, item.key, item.asked) for item in items]
+
+
+def test_asked_shows_the_judge_only_the_diff_of_an_approved_text_against_the_action(tmp_path: Path) -> None:
+    pending = "the deploy finished at one and every check passed"
+    diffed = asked_about(tmp_path, pending, diff_against="text")
+    full = asked_about(tmp_path, pending)
+    (item,) = diffed
+    assert APPROVED_TEXT not in item.detail and APPROVED_TEXT in full[0].detail
+    assert item.detail.count(f"{evidence_module.DIFF_HEADER}\n- noon\n+ one") == 3
+    assert approval_of(diffed) == approval_of(full)
+
+
+def test_asked_marks_an_approved_text_the_action_sends_unchanged(tmp_path: Path) -> None:
+    diffed = asked_about(tmp_path, APPROVED_TEXT.replace(" ", "\n  "), diff_against="text")
+    (item,) = diffed
+    assert APPROVED_TEXT not in item.detail and evidence_module.DIFF_HEADER not in item.detail
+    assert item.detail.count(evidence_module.SAME_TEXT) == 3
+    assert approval_of(diffed) == approval_of(asked_about(tmp_path, APPROVED_TEXT))
 
 
 def test_owner_evidence_reads_a_recent_window_over_the_record_bound(tmp_path: Path) -> None:

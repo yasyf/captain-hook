@@ -26,6 +26,7 @@ from cc_transcript.models import AttachmentEvent, QueuedCommand
 from cc_transcript.tools import AskUserQuestionResult, parse_tool_result
 
 from captain_hook.grants.records import Evidence, Proposal
+from captain_hook.grants.rules import word_diff
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
@@ -36,6 +37,8 @@ RULINGS_TIMEOUT = 5
 CCN_NOT_FOUND = 3
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
 PLAN_TOOL = "ExitPlanMode"
+DIFF_HEADER = "word diff of the approved text against this action's text (- approved only, + this action only):"
+SAME_TEXT = "(the same text as this action)"
 MACHINE_ENVELOPES = (
     "<task-notification",
     "<teammate-message",
@@ -124,19 +127,36 @@ def chosen_option(payload: dict[str, Any], question: str, label: str) -> dict[st
     return {}
 
 
-def answer_detail(payload: dict[str, Any], question: str, label: str, answer: AskUserQuestionResult) -> str:
+def against(approved: str, pending: str | None) -> str:
+    if pending is None:
+        return approved
+    if squeezed(approved) == squeezed(pending):
+        return SAME_TEXT
+    return f"{DIFF_HEADER}\n{word_diff(approved, pending)}"
+
+
+def quoted_against(question: str, pending: str | None) -> str:
+    first, last = question.find('"'), question.rfind('"')
+    if pending is None or first == last:
+        return question
+    return f"{question[:first]}{against(question[first + 1 : last], pending)}{question[last + 1 :]}"
+
+
+def answer_detail(
+    payload: dict[str, Any], question: str, label: str, answer: AskUserQuestionResult, pending: str | None = None
+) -> str:
     picked = chosen_option(payload, question, label)
     annotation = answer.annotations.get(question)
-    lines = [f"question: {question}"]
+    lines = [f"question: {quoted_against(question, pending)}"]
     for option in asked_options(payload, question):
         mark = "chosen" if option is picked else "shown"
         lines.append(f"option ({mark}) {option.get('label', '')}: {option.get('description', '')}")
         if isinstance(preview := option.get("preview"), str):
-            lines.append(f"  preview: {preview}")
+            lines.append(f"  preview: {against(preview, pending)}")
     if picked.get("label") != label:
         lines.append(f'typed: "{label}"')
     if annotation is not None and annotation.preview:
-        lines.append(f"selected preview: {annotation.preview}")
+        lines.append(f"selected preview: {against(annotation.preview, pending)}")
     if annotation is not None and annotation.notes:
         lines.append(f"notes: {annotation.notes}")
     return "\n".join(lines)
@@ -157,7 +177,9 @@ def answer_approves(payload: dict[str, Any], question: str, label: str, answer: 
     return "\n".join([label, picked.get("description", ""), *(text for text in previews if isinstance(text, str))])
 
 
-def answer_evidence(ref: str, payload: dict[str, Any], answer: AskUserQuestionResult, at: datetime) -> list[Evidence]:
+def answer_evidence(
+    ref: str, payload: dict[str, Any], answer: AskUserQuestionResult, at: datetime, pending: str | None = None
+) -> list[Evidence]:
     """One evidence item per question the owner answered in the AskUserQuestion call *ref*."""
     return [
         Evidence(
@@ -165,7 +187,7 @@ def answer_evidence(ref: str, payload: dict[str, Any], answer: AskUserQuestionRe
             source="ask",
             quote=answer_words(answer, question, label),
             said_at=at,
-            detail=answer_detail(payload, question, label, answer),
+            detail=answer_detail(payload, question, label, answer, pending),
             approves=answer_approves(payload, question, label, answer),
             asked=question,
             key=f"ask:{ref}#{index}",
@@ -174,10 +196,10 @@ def answer_evidence(ref: str, payload: dict[str, Any], answer: AskUserQuestionRe
     ]
 
 
-def ask_evidence(use: Any) -> list[Evidence]:
+def ask_evidence(use: Any, pending: str | None = None) -> list[Evidence]:
     if (result := answered(use)) is None:
         return []
-    return answer_evidence(use.ref.tool_use_id or f"{use.ts:%s}", *result, use.result_ts or use.ts)
+    return answer_evidence(use.ref.tool_use_id or f"{use.ts:%s}", *result, use.result_ts or use.ts, pending)
 
 
 def recorded(evt: BaseHookEvent, kind: str) -> list[Evidence]:
@@ -194,14 +216,26 @@ def recorded(evt: BaseHookEvent, kind: str) -> list[Evidence]:
 
 @dataclass(frozen=True, slots=True)
 class Asked:
-    """The owner's AskUserQuestion answers in the session tree, with every option and preview they saw."""
+    """The owner's AskUserQuestion answers in the session tree, with every option and preview they saw.
+
+    Attributes:
+        needles: Maps the event to text whose root-session mentions are read however far back they sit.
+        window: How many recent messages of each session to read.
+        diff_against: The action payload key holding the text the action sends. When the payload carries it
+            as a string, the judge sees each preview, and the double-quoted span of each question, only as a
+            word diff against that text, or as a marker when the two match; what an answer approves word for
+            word is unchanged.
+    """
 
     needles: Callable[[BaseHookEvent], Sequence[str]] | None = None
     window: int = OWNER_WINDOW
+    diff_against: str | None = None
 
     def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
         needles = self.needles(evt) if self.needles else ()
-        read = {item.id: item for use in owner_uses(evt, needles, self.window) for item in ask_evidence(use)}
+        text = action.payload.get(self.diff_against) if self.diff_against else None
+        pending = text if isinstance(text, str) else None
+        read = {item.id: item for use in owner_uses(evt, needles, self.window) for item in ask_evidence(use, pending)}
         merged = {item.id: item for item in recorded(evt, "ask")} | read
         return sorted(merged.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
