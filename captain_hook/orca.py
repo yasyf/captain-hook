@@ -14,7 +14,8 @@ PANE_STATUS = Path("agent-hooks", "last-status.json")
 
 def coordinator_transcript(session_id: str | None) -> Path | None:
     handle, data = reqenv.getenv("ORCA_TERMINAL_HANDLE"), reqenv.getenv("ORCA_USER_DATA_PATH")
-    return dispatched_coordinator(handle, session_id, Path(data)) if handle and data and session_id else None
+    path = dispatched_coordinator(handle, session_id, Path(data)) if handle and data and session_id else None
+    return path if path is not None and path.is_file() else None
 
 
 @ttl_cache(DISPATCH_TTL)

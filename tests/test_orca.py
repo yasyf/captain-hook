@@ -80,8 +80,14 @@ def user_data(tmp_path: Path) -> Path:
 
 
 def test_a_live_worker_resolves_its_coordinators_transcript(tmp_path: Path, user_data: Path) -> None:
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
     with in_worker(user_data), stubbed_commands(orca_commands()):
         assert coordinator_transcript(WORKER) == tmp_path / f"{COORDINATOR}.jsonl"
+
+
+def test_a_coordinator_whose_transcript_is_gone_resolves_nothing(user_data: Path) -> None:
+    with in_worker(user_data), stubbed_commands(orca_commands()):
+        assert coordinator_transcript(WORKER) is None
 
 
 @pytest.mark.parametrize(
