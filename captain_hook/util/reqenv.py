@@ -46,7 +46,7 @@ class MandatoryPhase:
 class RequestMemo:
     lock: threading.Lock = field(default_factory=threading.Lock)
     claude_argv: tuple[str, ...] | None = None
-    shared: dict[Hashable, Callable[[], Any]] = field(default_factory=dict)
+    shared: dict[Hashable, Callable[[Callable[[], Any]], Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,33 +157,28 @@ def use_request(overrides: RequestOverrides) -> Generator[RequestOverrides]:
         _OVERRIDES.reset(token)
 
 
-def _released_on_return[T](compute: Callable[[], T]) -> Callable[[], T]:
-    pending = [compute]
-
-    def run() -> T:
-        value = pending[0]()
-        pending.clear()
-        return value
-
-    return run
+def _run[T](compute: Callable[[], T]) -> T:
+    return compute()
 
 
 def shared[T](key: Hashable, compute: Callable[[], T]) -> T:
-    """Run *compute* at most once for the bound request and hand every caller its result.
+    """Run a *compute* for *key* until one succeeds in the bound request, and hand every caller that result.
 
     The hooks of one request each get their own event copy, so a scan several of them need is
-    otherwise repeated per hook. Under a bound request the first caller of *key* runs its
-    *compute*; every other caller, on any thread of the fan-out, gets that same object back,
-    and one that arrives mid-run waits for it. A *compute* that raises stores nothing, so the
-    next caller runs it again. With no request bound, *compute* runs on every call.
+    otherwise repeated per hook. Under a bound request a caller of *key* runs its own *compute*
+    unless one has already succeeded; every other caller, on any thread of the fan-out, gets
+    that same object back, and one that arrives mid-run waits for it. A *compute* that raises
+    stores nothing and is not kept, so the next caller, waiting or later, runs its own *compute*
+    against its own event. With no request bound, *compute* runs on every call.
 
     Every caller shares the one result, so return something immutable. It is dropped with the
-    request, and *compute* is dropped as soon as it has returned, so only the result outlives
-    the run. *compute* runs outside the request's memo lock and may itself ask for other keys.
+    request, and no *compute* outlives its own call, so only the result outlives the run.
+    *compute* runs outside the request's memo lock and may itself ask for other keys.
 
     Args:
         key: Names the computation within the request, such as ``"my-pack.lanes"``.
-        compute: Produces the value. The first caller's *compute* is the one that runs.
+        compute: Produces the value from the calling hook's own inputs. It runs only when no
+            earlier *compute* for *key* has succeeded.
 
     Returns:
         The request's one result for *key*.
@@ -192,9 +187,9 @@ def shared[T](key: Hashable, compute: Callable[[], T]) -> T:
         return compute()
     with ov.memo.lock:
         if key not in ov.memo.shared:
-            ov.memo.shared[key] = once(_released_on_return(compute))
+            ov.memo.shared[key] = once(_run)
         held = ov.memo.shared[key]
-    return held()
+    return held(compute)
 
 
 def getenv[T](key: str, default: str | T | None = None) -> str | T | None:

@@ -195,7 +195,7 @@ class TestShared:
             gc.collect()
             assert (first, seen(), reqenv.shared("scan", lambda: "rescanned")) == ("lanes", None, "lanes")
 
-    def test_a_failed_compute_keeps_what_it_needs_to_run_again(self) -> None:
+    def test_a_failed_compute_is_released_and_the_next_caller_runs_its_own(self) -> None:
         class Scanned:
             pass
 
@@ -203,9 +203,7 @@ class TestShared:
 
         def scan(scanned: Scanned) -> str:
             attempts.append("scan")
-            if len(attempts) == 1:
-                raise OSError("disk")
-            return "lanes"
+            raise OSError("disk")
 
         source = Scanned()
         seen = weakref.ref(source)
@@ -214,10 +212,32 @@ class TestShared:
                 reqenv.shared("scan", partial(scan, source))
             del source
             gc.collect()
-            held = seen() is not None
-            again = reqenv.shared("scan", lambda: "another caller")
-            gc.collect()
-            assert (held, again, attempts, seen()) == (True, "lanes", ["scan", "scan"], None)
+            assert (seen(), reqenv.shared("scan", lambda: "another caller"), attempts) == (
+                None,
+                "another caller",
+                ["scan"],
+            )
+
+    def test_a_later_hook_reads_its_own_live_branch_after_the_first_hook_released_its_branch(self) -> None:
+        from captain_hook.transcripts import TranscriptPins
+
+        pins = TranscriptPins(lambda: "transcript")
+        first, second = pins.branch(), pins.branch()
+
+        def failing() -> str:
+            try:
+                first.resolve()
+                raise ValueError("scan failed")
+            finally:
+                first.release()
+
+        with reqenv.use_request(overrides({})):
+            with pytest.raises(ValueError, match="scan failed"):
+                reqenv.shared("lanes", failing)
+            assert (
+                reqenv.shared("lanes", lambda: f"{second.resolve()} on the live branch")
+                == "transcript on the live branch"
+            )
 
     def test_concurrent_hooks_of_one_request_run_one_compute(self) -> None:
         entered, release = threading.Event(), threading.Event()
@@ -256,26 +276,43 @@ class TestShared:
         with reqenv.use_request(overrides({})):
             assert reqenv.shared("outer", lambda: reqenv.shared("inner", lambda: 1) + 1) == 2
 
-    def test_a_waiting_hook_runs_the_compute_after_the_first_one_fails(self) -> None:
+    def test_waiting_hooks_run_their_own_compute_after_the_first_one_fails_and_share_one_success(self) -> None:
         entered, release = threading.Event(), threading.Event()
-        attempts: list[str] = []
+        ran: list[str] = []
 
-        def flaky() -> str:
-            attempts.append("scan")
-            if len(attempts) == 1:
-                entered.set()
-                assert release.wait(10)
-                raise OSError("disk")
-            return "lanes"
+        def failing() -> tuple[str, ...]:
+            ran.append("first")
+            entered.set()
+            assert release.wait(10)
+            raise OSError("disk")
 
-        with reqenv.use_request(overrides({})), ThreadPoolExecutor(max_workers=2) as pool:
-            failing = pool.submit(copy_context().run, reqenv.shared, "scan", flaky)
+        def waiter(name: str) -> tuple[str, ...]:
+            ran.append(name)
+            return (name,)
+
+        with reqenv.use_request(overrides({})), ThreadPoolExecutor(max_workers=4) as pool:
+            first = pool.submit(copy_context().run, reqenv.shared, "scan", failing)
             assert entered.wait(10)
-            waiting = pool.submit(copy_context().run, reqenv.shared, "scan", flaky)
+            waiting = [
+                pool.submit(copy_context().run, reqenv.shared, "scan", partial(waiter, f"waiter-{n}")) for n in range(3)
+            ]
             release.set()
             with pytest.raises(OSError, match="disk"):
-                failing.result(timeout=10)
-            assert (waiting.result(timeout=10), attempts) == ("lanes", ["scan", "scan"])
+                first.result(timeout=10)
+            results = [hook.result(timeout=10) for hook in waiting]
+        assert (
+            len(ran),
+            ran[0],
+            ran[1] in {"waiter-0", "waiter-1", "waiter-2"},
+            results[0],
+            [result is results[0] for result in results],
+        ) == (
+            2,
+            "first",
+            True,
+            (ran[1],),
+            [True] * 3,
+        )
 
 
 class TestCheckpoint:
