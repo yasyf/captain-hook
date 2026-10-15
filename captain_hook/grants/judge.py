@@ -61,6 +61,15 @@ STANDING_QUESTION = Binary(
     yes="Some evidence item permits more than this one action.",
     no="No evidence item permits anything beyond this one action.",
 )
+OPEN_STANDING_QUESTION = Binary(
+    "Do the owner's words in the one <evidence> item that permits exactly <proposed_action> themselves give "
+    "standing permission for its kind of action at its destination: repeated actions from now on without asking "
+    'again and with no stated number, such as "reply in that thread without asking" or "keep #releases posted"? '
+    'Words that name how many actions they permit ("send these three replies"), words in any other item, and '
+    "one-off actions are not.",
+    yes="That item's words permit repeated actions here with no stated number.",
+    no="That item's words permit a one-off action, a counted number of actions, or nothing beyond this one.",
+)
 
 
 class GrantVerdict(BaseModel):
@@ -115,11 +124,20 @@ def permits_question(items: Sequence[Evidence]) -> Label:
     )
 
 
+def open_standing(decision: Decision) -> float:
+    match decision.answers["open_standing"]:
+        case BinaryAnswer(p_yes=p_yes):
+            return p_yes
+        case _:
+            return 0.0
+
+
 def quick_verdict(decision: Decision, items: Sequence[Evidence], *, llm: bool) -> GrantVerdict | None:
     """An allow citing the item Jev picked when it is sure that item permits this action, else ``None``.
 
-    Sure the owner's words permit only this action, the allow is one-off. With no LLM to write standing
-    words, sure they give standing permission too, the allow carries the picked item's words as standing.
+    Sure no item's words reach past this action, the allow is one-off. With no LLM to write standing words,
+    sure the picked item's own words permit repeated actions here with no stated number, the allow carries
+    them as standing.
     """
     match decision.answers["permits"], decision.answers["standing"]:
         case LabelAnswer(choice=choice, probabilities=probabilities), BinaryAnswer(p_yes=standing) if (
@@ -131,7 +149,7 @@ def quick_verdict(decision: Decision, items: Sequence[Evidence], *, llm: bool) -
                     allow=True,
                     relied_on=[choice],
                 )
-            if not llm and standing >= 1 - STANDING:
+            if not llm and open_standing(decision) >= 1 - STANDING:
                 return GrantVerdict(
                     reason=f"{decision.model} read {choice} as standing permission for this kind of action",
                     allow=True,
@@ -151,9 +169,9 @@ class Judge:
     sure of that item, no grant covering this action's scope rests on it yet, and no item's words give
     standing permission, the action goes ahead on that citation. Any other answer, a refusal, or a Jev
     failure asks the LLM, which writes the citations, standing words, scope, and refusal, and may still
-    allow. With ``llm`` off, Jev alone judges: sure of the item and sure some item's words give standing
-    permission, it allows with that item's words as standing, so they mint a standing grant at this action's
-    scope; any other answer refuses, and a Jev failure raises :class:`JudgeFailed`.
+    allow. With ``llm`` off, Jev alone judges: sure of the item and sure its own words permit repeated actions
+    here with no stated number, it allows with those words as standing, so they mint a standing grant at this
+    action's scope; any other answer refuses, and a Jev failure raises :class:`JudgeFailed`.
 
     Attributes:
         rules: The hook's rules for this kind of action, in prose.
@@ -267,7 +285,11 @@ class Judge:
             )
             decision = evt.ctx.decide(
                 state,
-                {"permits": permits_question(fresh), "standing": STANDING_QUESTION},
+                {
+                    "permits": permits_question(fresh),
+                    "standing": STANDING_QUESTION,
+                    **({} if self.llm else {"open_standing": OPEN_STANDING_QUESTION}),
+                },
                 provider=JEV,
                 timeout=VERDICT_TIMEOUT_SECONDS,
             )

@@ -245,11 +245,15 @@ every refusal therefore come from the LLM.
 
 `Judge(rules, llm=False)` makes Jev the only judge. With no LLM to write
 standing words, Jev settles one more case. It puts at least 0.8 on a fresh item
-and at least 0.8 on some item's words reaching past this one action. The verdict then
+and at least 0.8 on that item's own words permitting repeated actions at this
+destination with no stated number. Words that name a count, such as "send these
+three replies", do not qualify. The verdict then
 cites that item and carries its words as `standing`, so the declaration mints a
 standing grant at the action's own scope with `standing_ttl` and
 `standing_rules`. Approving a reply in a thread therefore covers the follow-ups
-in that thread. Standing between 0.2 and 0.8, any other answer Jev does not
+in that thread.
+
+With `llm=False`, a less certain standing answer, any other answer Jev does not
 settle, and no fresh evidence item all refuse the action with no LLM call. A Jev
 timeout, rejection, or missing key raises `JudgeFailed`, so the declaration's
 `judge_fails_open` decides the action.
@@ -291,7 +295,8 @@ text. Each preview, and the double-quoted span of the question, appears only as 
 word diff against the action's `text` payload, or as a marker when the two match.
 The judge then decides whether a reworded message is close enough to the approved
 one without reading both in full. Verbatim approval and grant keys still compare
-against the full approved text.
+against the full approved text. An answer older than the transcript window comes
+from its stored `ask` record, which keeps the full text.
 
 `Asked` and `OwnerWords` default to a window of 60 messages and accept a `needles` callback
 to include matching events from the last 16 MiB of the root transcript. Evidence

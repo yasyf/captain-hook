@@ -67,6 +67,7 @@ def jev(
     *,
     sure: float = 0.95,
     standing: float = 0.05,
+    open_standing: float = 0.05,
     outcome: BaseException | None = None,
 ) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
@@ -78,7 +79,10 @@ def jev(
         options = list(questions["permits"].options)
         probabilities = {option: sure if option == choice else (1 - sure) / (len(options) - 1) for option in options}
         permits = LabelAnswer(choice, probabilities, 0.9)
-        return Decision({"permits": permits, "standing": BinaryAnswer(standing, 0.9)}, "jev-1.13.0", 120, 95.0)
+        answers = {"permits": permits, "standing": BinaryAnswer(standing, 0.9)}
+        if "open_standing" in questions:
+            answers["open_standing"] = BinaryAnswer(open_standing, 0.9)
+        return Decision(answers, "jev-1.13.0", 120, 95.0)
 
     monkeypatch.setattr(spawnllm, "decide_sync", decide)
     return calls
@@ -519,32 +523,42 @@ def test_a_jev_only_judge_allows_what_jev_is_sure_of(tmp_path: Path, monkeypatch
     assert isinstance(allowed, Allowed) and "jev-1.13.0 read" in allowed.reason
 
 
-def sure_of(choice: str = APPROVAL, *, standing: float) -> Decision:
+def sure_of(choice: str = APPROVAL, *, standing: float, open_standing: float | None = None) -> Decision:
     permits = LabelAnswer(choice, {"none": 0.05, choice: 0.95}, 0.9)
-    return Decision({"permits": permits, "standing": BinaryAnswer(standing, 0.9)}, "jev-1.13.0", 120, 95.0)
+    answers = {"permits": permits, "standing": BinaryAnswer(standing, 0.9)}
+    if open_standing is not None:
+        answers["open_standing"] = BinaryAnswer(open_standing, 0.9)
+    return Decision(answers, "jev-1.13.0", 120, 95.0)
 
 
 def test_a_jev_only_verdict_carries_the_picked_words_as_standing_when_jev_is_sure_of_them() -> None:
     items = [owner("post the summary", ident="words:0"), owner(STANDING, ident=APPROVAL)]
-    verdict = quick_verdict(sure_of(standing=0.95), items, llm=False)
+    verdict = quick_verdict(sure_of(standing=0.95, open_standing=0.95), items, llm=False)
     assert verdict is not None and verdict.allow and verdict.relied_on == [APPROVAL] and verdict.standing == STANDING
 
 
-@pytest.mark.parametrize(("standing", "llm"), [(0.95, True), (0.5, False), (0.5, True)])
-def test_standing_jev_is_unsure_of_or_an_llm_could_word_is_left_unsettled(standing: float, llm: bool) -> None:
-    assert quick_verdict(sure_of(standing=standing), [owner(STANDING, ident=APPROVAL)], llm=llm) is None
+@pytest.mark.parametrize(
+    ("standing", "open_standing", "llm"),
+    [(0.95, None, True), (0.95, 0.5, False), (0.95, 0.05, False), (0.5, 0.5, False), (0.5, None, True)],
+)
+def test_standing_jev_is_unsure_of_or_an_llm_could_word_is_left_unsettled(
+    standing: float, open_standing: float | None, llm: bool
+) -> None:
+    decision = sure_of(standing=standing, open_standing=open_standing)
+    assert quick_verdict(decision, [owner(STANDING, ident=APPROVAL)], llm=llm) is None
 
 
 @pytest.mark.parametrize("llm", [True, False])
 def test_jev_sure_of_a_one_off_approval_allows_it_without_standing(llm: bool) -> None:
-    verdict = quick_verdict(sure_of(standing=0.05), [owner("yes post it", ident=APPROVAL)], llm=llm)
+    decision = sure_of(standing=0.05, open_standing=None if llm else 0.05)
+    verdict = quick_verdict(decision, [owner("yes post it", ident=APPROVAL)], llm=llm)
     assert verdict is not None and verdict.allow and verdict.relied_on == [APPROVAL] and verdict.standing is None
 
 
 def test_a_jev_only_judge_mints_a_standing_grant_that_covers_the_next_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = jev(monkeypatch, standing=0.95)
+    calls = jev(monkeypatch, standing=0.95, open_standing=0.95)
     said = owner(f"yes, {STANDING}", ident=APPROVAL)
     grants = declared(
         judge=Judge("rules", llm=False),
@@ -563,6 +577,7 @@ def test_a_jev_only_judge_mints_a_standing_grant_that_covers_the_next_reply(
     again = grants.check(second)
     assert isinstance(again, Allowed) and again.grant.id == allowed.grant.id
     assert len(calls) == 1
+    assert "open_standing" in calls[0]["questions"]
 
 
 def test_jev_never_judges_evidence_it_would_read_clipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1360,7 +1375,7 @@ def asked_about(tmp_path: Path, text: str, **fields: Any) -> list[Evidence]:
     question = f'Post this in #releases? "{APPROVED_TEXT}"'
     options = [{"label": "Post it", "description": "", "preview": APPROVED_TEXT}, {"label": "Hold", "description": ""}]
     questions = [{"question": question, "header": "Slack", "multiSelect": False, "options": options}]
-    ask = T.tool("AskUserQuestion", questions=questions)
+    ask = T.tool("AskUserQuestion", id="toolu_deploy_note", questions=questions)
     answer = T.user(
         T.result(f'User has answered your questions: "{question}"="Post it".', of=ask),
         toolUseResult={
