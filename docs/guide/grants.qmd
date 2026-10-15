@@ -243,11 +243,16 @@ a refused question, a timeout, or a missing key goes to the LLM, which returns t
 full `GrantVerdict` above. Standing words, counted approvals, widened scope, and
 every refusal therefore come from the LLM.
 
-`Judge(rules, llm=False)` makes Jev the only judge. An answer Jev does not settle,
-including no fresh evidence item, refuses the action with no LLM call. A Jev
+`Judge(rules, llm=False)` makes Jev the only judge. With no LLM to write
+standing words, Jev settles one more case. It puts at least 0.8 on a fresh item
+and at least 0.8 on some item's words reaching past this one action. The verdict then
+cites that item and carries its words as `standing`, so the declaration mints a
+standing grant at the action's own scope with `standing_ttl` and
+`standing_rules`. Approving a reply in a thread therefore covers the follow-ups
+in that thread. Standing between 0.2 and 0.8, any other answer Jev does not
+settle, and no fresh evidence item all refuse the action with no LLM call. A Jev
 timeout, rejection, or missing key raises `JudgeFailed`, so the declaration's
-`judge_fails_open` decides the action. Such a declaration mints standing grants
-only through `Grants.request`, from the owner's verbatim words.
+`judge_fails_open` decides the action.
 
 The defaults are `model="small"`, `specialty="review"`, and `deadline=20` seconds.
 `contexts` accepts the same prompt contexts as other LLM hooks.
@@ -280,6 +285,13 @@ human `queued_command` attachments and plan-rejection feedback from the root
 session's current turn as `words`. Teammates and sessions with a root transcript
 record neither. These are evidence records; the declaration mints its own kind after
 the judge allows.
+
+`Asked(diff_against="text")` shortens what the judge reads when the action sends
+text. Each preview, and the double-quoted span of the question, appears only as a
+word diff against the action's `text` payload, or as a marker when the two match.
+The judge then decides whether a reworded message is close enough to the approved
+one without reading both in full. Verbatim approval and grant keys still compare
+against the full approved text.
 
 `Asked` and `OwnerWords` default to a window of 60 messages and accept a `needles` callback
 to include matching events from the last 16 MiB of the root transcript. Evidence

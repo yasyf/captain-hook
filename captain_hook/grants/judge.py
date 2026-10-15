@@ -115,17 +115,30 @@ def permits_question(items: Sequence[Evidence]) -> Label:
     )
 
 
-def quick_verdict(decision: Decision) -> GrantVerdict | None:
-    """An allow citing the item Jev picked when it is sure that item permits only this action, else ``None``."""
+def quick_verdict(decision: Decision, items: Sequence[Evidence], *, llm: bool) -> GrantVerdict | None:
+    """An allow citing the item Jev picked when it is sure that item permits this action, else ``None``.
+
+    Sure the owner's words permit only this action, the allow is one-off. With no LLM to write standing
+    words, sure they give standing permission too, the allow carries the picked item's words as standing.
+    """
     match decision.answers["permits"], decision.answers["standing"]:
         case LabelAnswer(choice=choice, probabilities=probabilities), BinaryAnswer(p_yes=standing) if (
-            choice != UNPERMITTED and probabilities[choice] >= PERMITTED and standing < STANDING
+            choice != UNPERMITTED and probabilities[choice] >= PERMITTED
         ):
-            return GrantVerdict(
-                reason=f"{decision.model} read {choice} as permitting exactly this action",
-                allow=True,
-                relied_on=[choice],
-            )
+            if standing < STANDING:
+                return GrantVerdict(
+                    reason=f"{decision.model} read {choice} as permitting exactly this action",
+                    allow=True,
+                    relied_on=[choice],
+                )
+            if not llm and standing >= 1 - STANDING:
+                return GrantVerdict(
+                    reason=f"{decision.model} read {choice} as standing permission for this kind of action",
+                    allow=True,
+                    relied_on=[choice],
+                    standing=next(item.quote for item in items if item.id == choice),
+                )
+            return None
         case _:
             return None
 
@@ -138,8 +151,9 @@ class Judge:
     sure of that item, no grant covering this action's scope rests on it yet, and no item's words give
     standing permission, the action goes ahead on that citation. Any other answer, a refusal, or a Jev
     failure asks the LLM, which writes the citations, standing words, scope, and refusal, and may still
-    allow. With ``llm`` off, Jev alone judges: any other answer refuses, and a Jev failure raises
-    :class:`JudgeFailed`.
+    allow. With ``llm`` off, Jev alone judges: sure of the item and sure some item's words give standing
+    permission, it allows with that item's words as standing, so they mint a standing grant at this action's
+    scope; any other answer refuses, and a Jev failure raises :class:`JudgeFailed`.
 
     Attributes:
         rules: The hook's rules for this kind of action, in prose.
@@ -269,4 +283,4 @@ class Judge:
                 raise
             logger.opt(exception=True).warning("jev gave no grant verdict; asking the llm")
             return None
-        return quick_verdict(decision)
+        return quick_verdict(decision, fresh, llm=self.llm)
