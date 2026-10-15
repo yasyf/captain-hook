@@ -1343,6 +1343,23 @@ class TestRecordedChildren:
         assert decide_input(lane_stop({"task_id": "b166f8m04"}, agent_id="lane-2"), tmp_path) is not None
         assert spends("sessions.task-stop") == [("committed", "stop task b166f8m04", ["shell:b166f8m04"])]
 
+    def test_a_monitor_stops_after_its_lane_moves_to_another_coordinator(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        monitor = Input(
+            tool="Monitor",
+            tool_input={"command": "cci watch", "description": "bus"},
+            session_id="s1",
+            cwd="/w",
+            root_transcript=INLINE_TRANSCRIPT,
+        )
+        finished(monitor, {"taskId": "bxaw18znb", "timeoutMs": 1800000, "persistent": False}, tmp_path)
+        moved = stop({"task_id": "bxaw18znb"}, root_transcript=INLINE_TRANSCRIPT)
+        assert decide_input(moved, tmp_path) is None
+        foreign = stop({"task_id": "bxaw18znb"}, session_id="s2", root_transcript=INLINE_TRANSCRIPT)
+        assert decide_input(foreign, tmp_path) is not None
+        assert spends("sessions.task-stop") == [("committed", "stop task bxaw18znb", ["shell:bxaw18znb"])]
+
     def test_an_agent_payload_naming_a_task_id_records_no_shell(self, general_pack: None, tmp_path: Path) -> None:
         spawn = Input(
             tool="Agent", tool_input={"name": "lane", "prompt": "plan"}, session_id="s1", cwd="/w", agent_id="lane-1"

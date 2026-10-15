@@ -238,13 +238,17 @@ def shell_evidence(payload: dict[str, Any], agent: str, tool: str) -> Evidence |
 
 
 def children(evt: BaseHookEvent, kind: str, task: str) -> list[Evidence]:
-    """The recorded *kind* children of *evt*'s own agent named *task*: spawns and shells it started."""
+    """The recorded *kind* children of *evt*'s own agent named *task*: spawns and shells it started.
+
+    Read across every tree: the key names the creating session and agent, while a lane's tree follows its
+    coordinator and moves when the lane is redispatched.
+    """
     from captain_hook.grants import store
 
     owned = f":{evt.session_id}/{evt.agent_id or 'main'}/{task}"
     return [
         item
-        for grant in store.grants(kind, tree_of(evt))
+        for grant in store.grants(kind)
         for item in grant.evidence
         if item.quote == task and item.key.endswith(owned)
     ]
