@@ -14,12 +14,14 @@ from captain_hook.grants.evidence import (
 )
 from captain_hook.grants.judge import GrantVerdict, Judge, JudgeFailed
 from captain_hook.grants.records import ANY, Allowed, Denied, Evidence, Grant, Proposal, Spend, covers
-from captain_hook.grants.rules import ContentMatches, Never, Rule, Ruling, word_diff
+from captain_hook.grants.rules import Approval, Approved, ContentMatches, Judged, Never, Reach, Rule, Ruling, word_diff
 
 __all__ = [
     "ANY",
     "Proposal",
     "Allowed",
+    "Approval",
+    "Approved",
     "Asked",
     "ContentMatches",
     "Denied",
@@ -30,8 +32,10 @@ __all__ = [
     "Grants",
     "Judge",
     "JudgeFailed",
+    "Judged",
     "Never",
     "OwnerWords",
+    "Reach",
     "Rule",
     "Ruling",
     "Rulings",

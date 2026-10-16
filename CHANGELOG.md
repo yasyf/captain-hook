@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A grant declaration lists the rules that approve an action, in order.**
+  `Grants(approvals=(...))` takes `Approval` rules that each look at an action no stored grant
+  covers and either approve it or pass. The first that approves mints the grant it spends: `reach="scope"`
+  mints a standing grant for every later action at that scope, `reach="once"` a one-use grant bound to
+  the payload. Its `source_key` starts with the rule's name. `Judged()` places the declaration's judge
+  among the rules, so deterministic rules settle a call before the judge is asked.
+
 - **An owner ruling lets `kill` end an unowned process by its program name.**
   The sessions pack refused every `kill` of a process with no recorded per-task creation
   identity, even one the owner had ruled a session may end. Terminal closes, `launchctl`
