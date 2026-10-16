@@ -22,6 +22,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_OWNER_TERMINAL,
     INLINE_STARTED,
     INLINE_TRANSCRIPT,
+    KILL_RULING_TAGS,
     RECORDED_SINCE,
     Scan,
     inline_class_rulings,
@@ -31,6 +32,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_spawn,
     inline_tab,
     inline_worker,
+    programs,
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
@@ -281,7 +283,7 @@ class TestUnprovenChildren:
         assert message is not None
         assert "pid 31337 (`sleep 60`) runs under claude 14575" in message
         assert "no recorded per-task creation identity ties it to this task" in message
-        assert message.endswith("Let it finish, or ask the owner to end it.")
+        assert "Let it finish, or ask the owner to end it; only the long-running drive" in message
 
     @pytest.mark.parametrize(
         ("command", "holder"),
@@ -302,7 +304,7 @@ class TestUnprovenChildren:
         message = decide(command, tmp_path)
         assert message is not None
         assert f"runs {holder}, and no recorded per-task creation identity ties it to this task" in message
-        assert message.endswith("Let it finish, or ask the owner to end it.")
+        assert "Let it finish, or ask the owner to end it; only the long-running drive" in message
 
     def test_a_protected_process_inside_this_session_stays_protected(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
@@ -674,6 +676,192 @@ class TestScratchOrphans:
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
         assert "no agent ancestor to vouch for it" in (decide("kill 7777", tmp_path) or "")
+
+
+DRIVE_LEFTOVERS = table(
+    *TERMINALS.rows.values(),
+    row(52000, 1, "python3 desk-runner.py run --config desk.json --desk orca", started="2026-09-30T07:00:00"),
+    row(52001, 52000, "python3 ledger.py report --ledger b29c27a", started="2026-09-30T07:00:05"),
+    row(52002, 1, "git -C /w fetch origin", started="2026-09-30T07:01:00"),
+    row(52003, 15001, "node buildDashboard.js --watch", started="2026-09-30T07:02:00"),
+    row(52004, 1, "cc-slack serve", started="2026-09-30T07:03:00"),
+    row(
+        52005,
+        1,
+        "node /opt/node/bin/yarn tsx ./scripts/buildDashboard.ts --watch --serve",
+        started="2026-09-30T07:04:00",
+    ),
+)
+
+
+class TestDriveLeftovers:
+    @pytest.fixture(autouse=True)
+    def leftovers(self, fake_table: dict[str, ProcessTable | None]) -> None:
+        fake_table["table"] = DRIVE_LEFTOVERS
+
+    @pytest.fixture
+    def registry(self, home: Path) -> Path:
+        drives = home / ".claude" / "long-running" / "drives"
+        drives.mkdir(parents=True)
+        entries = {
+            "d0": {"sessions": ["r-old"], "ledger": "b29c27ad096098168db057c70e8a6681d79c5763"},
+            "d1": {"sessions": ["r0", "s1"], "ledger": "b29c27a"},
+            "d2": {"sessions": ["r9"], "ledger": "829f980d0bb4bdc308a2d0cc217dc9bb6ef0cddd"},
+        }
+        for drive, entry in entries.items():
+            (drives / f"{drive}.json").write_text(json.dumps({"drive": drive, **entry, "state_dir": f"/s/{drive}"}))
+        return drives
+
+    @pytest.mark.parametrize(
+        ("pid", "shown"),
+        [
+            pytest.param(52000, " CLAUDE_CODE_SESSION_ID=r0", id="desk_runner_from_an_earlier_root"),
+            pytest.param(52001, " CLAUDE_CODE_SESSION_ID=r0", id="live_desk_runner_child"),
+            pytest.param(52002, " CLAUDE_CODE_SESSION_ID=w7 CLAUDE_LONG_RUNNING_DRIVE=d1", id="orca_worker_orphan"),
+            pytest.param(52003, " CLAUDE_LONG_RUNNING_DRIVE=d1", id="dev_server_in_an_ended_lanes_terminal"),
+            pytest.param(52005, " CLAUDE_CODE_SESSION_ID=r-old", id="earlier_run_sharing_the_ledger"),
+            pytest.param(52005, " CLAUDE_LONG_RUNNING_DRIVE=d0", id="earlier_run_drive_id"),
+        ],
+    )
+    def test_a_leftover_the_drive_started_may_be_ended(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path, pid: int, shown: str
+    ) -> None:
+        environs[pid] = shown
+        assert decide(f"kill {pid}", tmp_path) is None
+        assert decide(f"kill -9 {pid}", tmp_path, client_ppid=424242) is None
+        assert decide(f"renice -n 5 -p {pid}", tmp_path) is None
+
+    @pytest.mark.parametrize("broken", ["{", "{}", '{"drive": "d3", "sessions": "s1", "ledger": "b29c27a"}'])
+    def test_an_unreadable_registry_entry_is_skipped_and_never_opens_the_guard(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path, broken: str
+    ) -> None:
+        (registry / "a-broken.json").write_text(broken)
+        environs[52002] = " CLAUDE_CODE_SESSION_ID=r0"
+        assert decide("kill 52002", tmp_path) is None
+        assert "is an agent session" in (decide("kill 52002 14575", tmp_path) or "")
+
+    def test_an_orca_worker_of_the_drive_ends_its_leftovers(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path
+    ) -> None:
+        environs[52002] = " CLAUDE_CODE_SESSION_ID=r0"
+        worker = Input(command="kill 52002", cwd="/w", session_id="w7", transcript=INLINE_TRANSCRIPT)
+        assert decide_input(worker, tmp_path, env={"CLAUDE_LONG_RUNNING_DRIVE": "d1"}) is None
+        assert "only the long-running drive that started it" in (decide_input(worker, tmp_path) or "")
+
+    @pytest.mark.parametrize(
+        "shown",
+        [
+            pytest.param(" CLAUDE_CODE_SESSION_ID=r9", id="another_drives_root"),
+            pytest.param(" CLAUDE_LONG_RUNNING_DRIVE=d2", id="another_drive"),
+            pytest.param(" CLAUDE_CODE_SESSION_ID=r0 CLAUDE_LONG_RUNNING_DRIVE=d2", id="mixed"),
+            pytest.param(" CLAUDE_CODE_SESSION_ID=r0 CLAUDE_CODE_SESSION_ID=r9", id="two_sessions"),
+            pytest.param("", id="no_identity"),
+        ],
+    )
+    def test_a_process_the_drive_did_not_start_stays_blocked(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path, shown: str
+    ) -> None:
+        environs[52002] = shown
+        message = decide("kill 52002", tmp_path)
+        assert message is not None
+        assert "with no agent ancestor to vouch for it" in message
+        assert message.endswith(
+            "Let it finish, or ask the owner to end it; a drive ends only a leftover whose environment names the drive."
+        )
+
+    def test_a_session_in_no_drive_claims_no_leftover(
+        self, general_pack: None, environs: dict[int, str], home: Path, tmp_path: Path
+    ) -> None:
+        environs[52002] = " CLAUDE_CODE_SESSION_ID=r0"
+        message = decide("kill 52002", tmp_path) or ""
+        assert message.endswith(
+            "ask the owner to end it; only the long-running drive that started it may end it unasked."
+        )
+
+    def test_a_process_a_live_agent_holds_is_no_leftover(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path
+    ) -> None:
+        environs[4242] = " CLAUDE_LONG_RUNNING_DRIVE=d1"
+        message = decide("kill 4242", tmp_path)
+        assert message is not None
+        assert "runs under claude 14462" in message
+        assert "a drive ends only a leftover no live agent holds" in message
+
+    @pytest.mark.parametrize(
+        ("pid", "refusal"),
+        [
+            pytest.param(
+                15001, "never ends an agent host or a direct child of a protected process", id="terminal_shell"
+            ),
+            pytest.param(52004, "never ends an agent host or a direct child of a protected process", id="agent_shim"),
+            pytest.param(14575, "is an agent session, which no session may signal", id="agent"),
+            pytest.param(15000, "is a terminal host, which no session may signal", id="terminal_host"),
+            pytest.param(900, "is the Captain Hook host, which no session may signal", id="capt_hookd"),
+        ],
+    )
+    def test_protected_processes_and_their_shells_stay_blocked(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path, pid: int, refusal: str
+    ) -> None:
+        environs[pid] = " CLAUDE_CODE_SESSION_ID=r0 CLAUDE_LONG_RUNNING_DRIVE=d1"
+        assert refusal in (decide(f"kill {pid}", tmp_path) or "")
+
+
+class TestKillRulingPrograms:
+    @pytest.mark.parametrize(
+        ("command", "names"),
+        [
+            pytest.param(
+                "node /opt/node/bin/yarn tsx ./scripts/buildDashboard.ts --watch --serve",
+                ("buildDashboard", "buildDashboard.ts", "tsx", "yarn", "node"),
+                id="yarn_tsx",
+            ),
+            pytest.param(
+                "npm exec tsx ./scripts/buildDashboard.ts --serve",
+                ("buildDashboard", "buildDashboard.ts", "tsx", "npm"),
+                id="npm_exec",
+            ),
+            pytest.param(
+                "/opt/node/bin/node --require /w/tsx/dist/preflight.cjs --import file:///w/tsx/dist/loader.mjs "
+                "./scripts/buildDashboard.ts --serve",
+                ("buildDashboard", "buildDashboard.ts", "loader.mjs", "preflight.cjs", "node"),
+                id="loaders",
+            ),
+            pytest.param(
+                "python3 desk-runner.py run --config runner.json",
+                ("desk-runner", "desk-runner.py", "python3"),
+                id="script_arguments",
+            ),
+            pytest.param("git -C /w fetch origin", ("git",), id="subcommand"),
+            pytest.param("sleep 60", ("sleep",), id="plain"),
+        ],
+    )
+    def test_every_name_in_the_host_chain_is_a_program(self, command: str, names: tuple[str, ...]) -> None:
+        assert programs(row(1, 1, command)) == names
+
+    @pytest.mark.parametrize("named", ["buildDashboard", "buildDashboard.ts", "tsx", "yarn", "node"])
+    def test_a_ruling_naming_any_program_in_the_chain_lifts_the_kill(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        rulings: dict[str, list[dict[str, Any]]],
+        tmp_path: Path,
+        named: str,
+    ) -> None:
+        fake_table["table"] = DRIVE_LEFTOVERS
+        rulings[named] = json.loads(inline_ruling(f"Owner: end leftover {named} dev servers.", tags=KILL_RULING_TAGS))
+        assert decide("kill 52005", tmp_path) is None
+
+    def test_a_ruling_naming_a_script_argument_keeps_the_block(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        rulings: dict[str, list[dict[str, Any]]],
+        tmp_path: Path,
+    ) -> None:
+        fake_table["table"] = DRIVE_LEFTOVERS
+        rulings["--serve"] = json.loads(inline_ruling("Owner: end --serve.", tags=KILL_RULING_TAGS))
+        rulings["buildDashboard"] = json.loads(inline_ruling("Owner: end buildDashboard.tsx.", tags=KILL_RULING_TAGS))
+        assert "no agent ancestor to vouch for it" in (decide("kill 52005", tmp_path) or "")
 
 
 OBSERVED_LANE = "aig-no-delete-plan@session-67c0e5da"
