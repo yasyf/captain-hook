@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A judge citation that copies a whole evidence header line names the item it heads, and the
+  words typed while rejecting any tool call reach the judge without the harness banner.**
+  12.101.2 matched a citation copied whole, the id after its first colon, or the text after the
+  id's last colon. In a replay of 145 Slack hook cases the judge cited
+  `[words:af44184de654] prompt said 2026-10-03 5:16 PM` instead of the id. Its tail is `16 PM`, so
+  nothing matched, the allow became `decide: nothing found`, and the write was refused with no log
+  line. A citation that carries an item's id anywhere inside it now names that item.
+
+  Context stripped the rejection banner only from `ExitPlanMode` results. A rejected Slack send kept
+  "The user doesn't want to proceed with this tool use" as the user's words, and the judge refused
+  an instruction to go ahead as a decline. Every rejected call and any prompt carrying the banner
+  now yields an `instruction` item holding only the typed words, labeled as replacing the rejected
+  call. `PLAN_TOOL` and `plan_feedback()` are gone; `instruction_words` is public.
+
 - **Words typed beyond a pick's number decide the answer, a last option that reads as a go approves, a question to the user no longer counts as a touch, a session with no transcript yet reads as starting now, and the judge's citations match the evidence they name.**
   `UserAnswered(..., approved=True)` read a pick of the last option shown as a hold even when the
   user typed instructions after its number. On a three-option question, `3, DM him and ask if he

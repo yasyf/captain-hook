@@ -42,7 +42,7 @@ REPLIED_SHOWN = 400
 RULINGS_TIMEOUT = 5
 CCN_NOT_FOUND = 3
 PRESENT = "cc-present"
-PLAN_TOOL = "ExitPlanMode"
+REPLACED = "an instruction the user typed while rejecting the agent's call"
 QUESTION_TOOL = "AskUserQuestion"
 VERDICTS = {"approved": "", "rejected": ""}
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
@@ -128,17 +128,24 @@ def queued_words(events: Iterable[Any]) -> list[tuple[str, Any]]:
     ]
 
 
-def plan_feedback(use: ToolUse) -> str:
-    """What the user typed when rejecting the plan *use* submitted, without the harness banner around it.
+def instruction_words(text: str) -> tuple[str, bool]:
+    """The user's own words in *text*, and whether they arrived as the instruction replacing a rejected call.
 
-    Only ``ExitPlanMode`` counts: the harness alone writes its result, while any other tool can return
-    an error that carries the banner text.
+    A rejection the harness writes wraps what the user typed in a banner and a memory note; the judge reads
+    only the words between them.
     """
-    if use.call.name != PLAN_TOOL or use.result is None or use.result.denial_kind != DENIAL_KIND_USER_REJECTED:
-        return ""
-    said = use.result.content.partition(USER_SAID_MARKER)[2]
+    banner, marker, said = text.partition(USER_SAID_MARKER)
+    if not marker:
+        return text, False
     typed, trailer, _ = said.rpartition(USER_SAID_TRAILER)
-    return (typed if trailer else said).strip()
+    return (typed if trailer else said).strip(), True
+
+
+def rejection_words(use: ToolUse) -> str:
+    """What the user typed when rejecting *use*, without the harness banner around it."""
+    if use.result is None or use.result.denial_kind != DENIAL_KIND_USER_REJECTED:
+        return ""
+    return instruction_words(use.result.content)[0]
 
 
 def agent_before(turns: Sequence[Turn]) -> dict[str, str]:
@@ -431,14 +438,25 @@ class TranscriptSources:
             turns = session.recent_messages(self.window).turns
             offered = agent_before(turns) if prompts_are_user else {}
             for turn in turns:
-                said = [(turn.prompt, turn.started_at, "prompt")] if prompts_are_user else []
-                said += [(text, event.meta.timestamp, "queued") for text, event in queued_words(turn.events)]
+                said: list[tuple[str, datetime | None, str, str]] = []
+                if prompts_are_user:
+                    words, instructed = instruction_words(turn.prompt)
+                    said.append((words, turn.started_at, "instruction" if instructed else "prompt", REPLACED))
+                said += [(text, event.meta.timestamp, "queued", "") for text, event in queued_words(turn.events)]
                 said += [
-                    (plan_feedback(use), use.result_ts or use.ts, "plan") for use in turn.tool_uses if prompts_are_user
+                    (rejection_words(use), use.result_ts or use.ts, "instruction", f"{REPLACED} to {use.call.name}")
+                    for use in turn.tool_uses
+                    if prompts_are_user
                 ]
-                for text, at, source in said:
+                for text, at, source, replaced in said:
                     if text and not machine_written(text, self.machine):
-                        detail = f"the agent's message it answers ends: {offered[text]}" if text in offered else ""
+                        detail = (
+                            f"the agent's message it answers ends: {offered[text]}"
+                            if text in offered
+                            else replaced
+                            if source == "instruction"
+                            else ""
+                        )
                         item = said_evidence(text, at, source, detail)
                         items[item.id] = item
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)

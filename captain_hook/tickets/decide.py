@@ -105,10 +105,15 @@ def tail(ident: str) -> str:
 
 
 def cited(items: Sequence[Evidence], ids: Sequence[str]) -> list[Evidence]:
-    """The items *ids* name: an id copied whole, or one whose tail after the last colon survived a mangled prefix."""
+    """The items *ids* name: an id copied whole or inside a longer line, or one whose tail after the last colon
+    survived a mangled prefix."""
     named = {ident.strip().strip("[]") for ident in ids}
     tails = {tail(ident) for ident in named}
-    return [item for item in items if item.id in named or item.id.partition(":")[2] in named or tail(item.id) in tails]
+    return [
+        item
+        for item in items
+        if any(item.id in ident for ident in named) or item.id.partition(":")[2] in named or tail(item.id) in tails
+    ]
 
 
 @dataclass(frozen=True, slots=True)
