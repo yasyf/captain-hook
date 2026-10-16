@@ -323,6 +323,20 @@ class TestBoard:
         assert [item.id for item in ctx.answers] == ["ask:toolu_ask#0"]
         assert ctx.touches == ()
 
+    def test_a_session_with_no_transcript_yet_started_now(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+
+        from captain_hook.context import HookContext
+        from captain_hook.session import SessionStore
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tickets.context import session_started
+
+        evt = PreToolUseEvent(
+            _raw={"session_id": TREE, "tool_name": "slack_reply", "tool_use_id": "toolu_1", "tool_input": {}},
+            ctx=HookContext(session=SessionStore(tmp_path), transcript=fixture_session([]), settings=None),
+        )
+        assert abs((session_started(evt) - datetime.now(UTC)).total_seconds()) < 5
+
 
 class TestStore:
     def test_a_downstream_spender_records_one_use_per_call(self) -> None:
