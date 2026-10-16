@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import spawnllm
 from click.testing import CliRunner
-from spawnllm import Decision, LabelAnswer
+from spawnllm import BackendCallError, Decision, LabelAnswer
 
 from captain_hook.conditions import UserSaid
 from captain_hook.dispatch import execute_hook
@@ -536,12 +536,37 @@ class TestDecide:
             object.__setattr__(ctx, "evt", evt)
             assert found(Decide("permit"), ctx) == [feedback]
 
+    def test_a_citation_that_quotes_the_users_words_names_their_item(self, tmp_path: Path) -> None:
+        said = Evidence(id="words:9f8e7d6c5b4a", source="prompt", quote="post it in the alerts thread")
+        for cite, named in (("user's words: post it in the alerts thread", [said]), ("x", [])):
+            evt = event(tmp_path, verdict=Verdict(allow=True, reason="asked for it", relied_on=[cite]))
+            ctx = Context.fake("test.write", PLACE, said=[said], tree=TREE)
+            object.__setattr__(ctx, "evt", evt)
+            assert (found(Decide("permit"), ctx) or []) == named
+
     def test_an_llm_refusal_or_an_uncited_allow_finds_nothing(self, tmp_path: Path) -> None:
         refused = Verdict(allow=False, reason="no", refusal="The user never asked.")
         for verdict in (refused, Verdict(allow=True, reason="sure")):
             ctx = Context.fake("test.write", PLACE, said=["post it"], tree=TREE)
-            object.__setattr__(ctx, "evt", event(tmp_path, verdict=verdict))
+            evt = event(tmp_path, verdict=verdict)
+            object.__setattr__(ctx, "evt", evt)
             assert found(Decide("permit"), ctx) is None
+            assert cast(MagicMock, evt.ctx.call_llm).call_count == (2 if verdict is refused else 1)
+
+    def test_one_refusal_is_asked_again_and_a_second_allow_counts(self, tmp_path: Path) -> None:
+        said = Evidence(id="words:1a2b3c4d5e6f", source="prompt", quote="post it")
+        refused = Verdict(allow=False, reason="no", refusal="The user never asked.")
+        evt = event(tmp_path)
+        evt.ctx.call_llm = MagicMock(  # type: ignore[method-assign]
+            side_effect=[refused, Verdict(allow=True, reason="asked for it", relied_on=[said.id])]
+        )
+        ctx = Context.fake("test.write", PLACE, said=[said], tree=TREE)
+        object.__setattr__(ctx, "evt", evt)
+        assert found(Decide("permit"), ctx) == [said]
+        once = Context.fake("test.write", PLACE, said=[said], tree=TREE)
+        object.__setattr__(once, "evt", event(tmp_path, verdict=refused))
+        assert found(Decide("permit", second_opinion=False), once) is None
+        assert cast(MagicMock, once.evt.ctx.call_llm).call_count == 1
 
     def test_a_judge_with_nothing_to_read_asks_nothing(self, tmp_path: Path) -> None:
         ctx = Context.fake("test.write", PLACE, tree=TREE)
@@ -557,6 +582,29 @@ class TestDecide:
         object.__setattr__(ctx, "evt", evt)
         with pytest.raises(Undecided, match="TimeoutError: slow"):
             found(Decide("permit"), ctx)
+
+    def test_a_judge_that_overflows_its_window_is_asked_again_without_the_transcript(self, tmp_path: Path) -> None:
+        evt = event(tmp_path)
+        overflow = BackendCallError(
+            "apple generation failed (ExceededContextWindowSizeError): the prompt exceeded the model's context window"
+        )
+        said = Evidence(id="words:1a2b3c4d5e6f", source="prompt", quote="post it")
+        evt.ctx.call_llm = MagicMock(  # type: ignore[method-assign]
+            side_effect=[overflow, Verdict(allow=True, reason="asked for it", relied_on=[said.id])]
+        )
+        windows: list[tuple[Any, Any]] = []
+        assemble = evt.ctx.assemble_prompt
+
+        def spying(*args: Any, **kwargs: Any) -> str:
+            windows.append((kwargs["transcript"], kwargs["root_transcript"]))
+            return assemble(*args, **kwargs)
+
+        evt.ctx.assemble_prompt = spying  # type: ignore[method-assign]
+        ctx = Context.fake("test.write", PLACE, said=[said], tree=TREE)
+        object.__setattr__(ctx, "evt", evt)
+        assert found(Decide("permit", transcript=12), ctx) == [said]
+        assert cast(MagicMock, evt.ctx.call_llm).call_count == 2
+        assert windows == [(12, False), (False, False)]
 
     def test_the_judge_reads_only_what_over_names(self, tmp_path: Path) -> None:
         yes = answer("Post in C1, thread 1.2?", {"Yes": "", "No": ""}, chosen="Yes")

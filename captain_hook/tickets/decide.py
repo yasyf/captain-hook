@@ -40,6 +40,8 @@ FRAME = """
 UNPERMITTED = "none"
 PERMITTED = 0.8
 JEV_UNSETTLED = "Jev found no single user approval that permits exactly this action."
+DETAIL_SHOWN = 600
+RETRY_DETAIL_SHOWN = 200
 
 
 class Verdict(BaseModel):
@@ -63,11 +65,11 @@ class Undecided(Exception):
         self.cause = cause
 
 
-def render_evidence(items: Sequence[Evidence]) -> str | None:
+def render_evidence(items: Sequence[Evidence], shown: int = DETAIL_SHOWN) -> str | None:
     blocks: list[str] = []
     for item in items:
         said = f" said {store.stamp(item.said_at)}" if item.said_at else ""
-        detail = f"\n{item.detail}" if item.detail else ""
+        detail = f"\n{item.detail[:shown]}" if item.detail else ""
         blocks.append(f"[{item.id}] {item.source}{said}{detail}\nuser's words: {item.quote}")
     return "\n\n".join(blocks) or None
 
@@ -104,15 +106,25 @@ def tail(ident: str) -> str:
     return ident.rpartition(":")[2]
 
 
+QUOTED_RUN = 20
+
+
+def quotes(ident: str, item: Evidence) -> bool:
+    """Whether the citation *ident* carries the item's words, or is a long run of them, instead of its id."""
+    return bool(item.quote) and (item.quote in ident or (len(ident) >= QUOTED_RUN and ident in item.quote))
+
+
 def cited(items: Sequence[Evidence], ids: Sequence[str]) -> list[Evidence]:
-    """The items *ids* name: an id copied whole or inside a longer line, or one whose tail after the last colon
-    survived a mangled prefix."""
+    """The items *ids* name: an id copied whole or inside a longer line, one whose tail after the last colon
+    survived a mangled prefix, or one whose words the citation quotes."""
     named = {ident.strip().strip("[]") for ident in ids}
     tails = {tail(ident) for ident in named}
     return [
         item
         for item in items
-        if any(item.id in ident for ident in named) or item.id.partition(":")[2] in named or tail(item.id) in tails
+        if any(item.id in ident or quotes(ident, item) for ident in named)
+        or item.id.partition(":")[2] in named
+        or tail(item.id) in tails
     ]
 
 
@@ -122,7 +134,9 @@ class Decide(CustomTicketCondition):
 
     TypeSafe Jev judges first, citing the one evidence item that permits exactly this action; sure of it,
     the action goes ahead on that citation. Any other answer, a refusal, or a Jev failure asks the LLM,
-    which cites and may still allow. With ``llm`` off, Jev alone judges, and an unsettled answer refuses.
+    which cites and may still allow; one LLM refusal is asked again on the evidence alone, and the action
+    is refused only when both askings refuse. With ``llm`` off, Jev alone judges, and an unsettled answer
+    refuses.
     A judge that gives no verdict in time raises :class:`Undecided`, which the declaration reports as a
     rule that found nothing.
 
@@ -137,6 +151,8 @@ class Decide(CustomTicketCondition):
         root_transcript: The spawning session's window, for a lane.
         tool_results: Whether the transcript windows carry tool output.
         llm: Whether an action Jev does not settle goes to the LLM; off, it is refused.
+        second_opinion: Whether one LLM refusal is asked again, on the evidence alone; the action is refused
+            only when both askings refuse.
     """
 
     rules: str
@@ -149,6 +165,7 @@ class Decide(CustomTicketCondition):
     root_transcript: bool | int | Literal["recent", "full"] = False
     tool_results: bool = False
     llm: bool = True
+    second_opinion: bool = True
 
     def items(self, ctx: Context) -> list[Evidence]:
         return [item for condition in self.over if (part := found(condition, ctx)) for item in part]
@@ -165,17 +182,11 @@ class Decide(CustomTicketCondition):
         return cited(items, verdict.relied_on) or None
 
     def verdict(self, ctx: Context, items: Sequence[Evidence]) -> Verdict:
-        from captain_hook.primitives.llm import llm_evaluate
+        from captain_hook.context import is_context_overflow
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         assert ctx.evt is not None
-        prompt = (
-            Prompt()
-            .system(dedent_text(FRAME))
-            .context("rules", self.rules)
-            .context("evidence", render_evidence(items))
-            .context("action", render_action(ctx.action))
-        )
+        prompt = self.framed(ctx, items, DETAIL_SHOWN)
         left = reqenv.seconds_left()
         try:
             with reqenv.deadline_in(self.deadline if left is None else min(self.deadline, left)):
@@ -183,21 +194,17 @@ class Decide(CustomTicketCondition):
                     return quick
                 if not self.llm:
                     return Verdict(reason=JEV_UNSETTLED, allow=False)
-                verdict = llm_evaluate(
-                    ctx.evt,
-                    prompt,
-                    Verdict,
-                    hook=f"tickets:{ctx.kind}",
-                    contexts=self.contexts,
-                    specialty=self.specialty,
-                    model=self.model,
-                    transcript=self.transcript,
-                    root_transcript=self.root_transcript,
-                    tool_results=self.tool_results,
-                    once_per_turn=False,
-                    evidence=False,
-                    backend="llm",
-                )
+                try:
+                    verdict = self.ask(ctx, prompt, transcript=self.transcript, root_transcript=self.root_transcript)
+                except Exception as exc:
+                    if not is_context_overflow(exc):
+                        raise
+                    logger.info("the judge's window overflowed; asking again without the transcript")
+                    prompt = self.framed(ctx, items, RETRY_DETAIL_SHOWN)
+                    verdict = self.ask(ctx, prompt, transcript=False, root_transcript=False)
+                if isinstance(verdict, Verdict) and not verdict.allow and self.second_opinion:
+                    logger.bind(reason=verdict.reason).info("the judge refused once; asking a second time")
+                    verdict = self.ask(ctx, prompt, transcript=False, root_transcript=False)
         except EvidenceIncomplete:
             raise
         except Exception as exc:
@@ -206,6 +213,42 @@ class Decide(CustomTicketCondition):
         if not isinstance(verdict, Verdict):
             raise Undecided(f"{type(verdict).__name__} instead of a verdict")
         return verdict
+
+    def framed(self, ctx: Context, items: Sequence[Evidence], shown: int) -> Prompt:
+        return (
+            Prompt()
+            .system(dedent_text(FRAME))
+            .context("rules", self.rules)
+            .context("evidence", render_evidence(items, shown))
+            .context("action", render_action(ctx.action))
+        )
+
+    def ask(
+        self,
+        ctx: Context,
+        prompt: Prompt,
+        *,
+        transcript: bool | int | Literal["recent", "full"],
+        root_transcript: bool | int | Literal["recent", "full"],
+    ) -> object:
+        from captain_hook.primitives.llm import llm_evaluate
+
+        assert ctx.evt is not None
+        return llm_evaluate(
+            ctx.evt,
+            prompt,
+            Verdict,
+            hook=f"tickets:{ctx.kind}",
+            contexts=self.contexts,
+            specialty=self.specialty,
+            model=self.model,
+            transcript=transcript,
+            root_transcript=root_transcript,
+            tool_results=self.tool_results,
+            once_per_turn=False,
+            evidence=False,
+            backend="llm",
+        )
 
     def quick(self, ctx: Context, prompt: Prompt, items: Sequence[Evidence]) -> Verdict | None:
         """Jev's allow on one evidence item, else ``None`` for the LLM."""

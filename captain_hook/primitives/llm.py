@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from captain_hook.app import on
-from captain_hook.context import decision_prompt, is_unsupported_model
+from captain_hook.context import decision_prompt, is_context_overflow, is_unsupported_model
 from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt, render_template
@@ -313,7 +313,7 @@ def llm_evaluate[M: BaseModel](
             except EvidenceIncomplete:
                 raise
             except Exception as e:
-                if attempt >= retries or is_unsupported_model(e) or not retry_affordable():
+                if attempt >= retries or is_unsupported_model(e) or is_context_overflow(e) or not retry_affordable():
                     raise
                 logger.bind(attempt=attempt).opt(exception=True).warning("llm call failed; retrying")
 
