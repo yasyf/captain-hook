@@ -41,6 +41,16 @@ type warmUsage struct {
 	EventsParsed           int64 `json:"events_parsed"`
 }
 
+func (u *warmUsage) add(step warmUsage) {
+	u.SourceBytesRead += step.SourceBytesRead
+	u.PreparedCacheBytesRead += step.PreparedCacheBytesRead
+	u.EventsParsed += step.EventsParsed
+}
+
+func (u warmUsage) String() string {
+	return fmt.Sprintf("source_bytes_read=%d prepared_cache_bytes_read=%d events_parsed=%d", u.SourceBytesRead, u.PreparedCacheBytesRead, u.EventsParsed)
+}
+
 type warmProgress struct {
 	Kind               string `json:"kind"`
 	OwnerEpoch         string `json:"owner_epoch"`
@@ -110,6 +120,7 @@ type warmJob struct {
 	served      uint64
 	steps       int
 	stalled     int
+	usage       warmUsage
 
 	startIndex         int64
 	sourceOffset       int64
@@ -301,7 +312,7 @@ func (c *warmCoordinator) evict() {
 
 func (c *warmCoordinator) stop(job *warmJob, why string) {
 	delete(c.jobs, job.key)
-	fmt.Fprintf(c.log, "captain: snapshot warm %s %.16s stopped after %d steps: %s\n", job.operation, job.key, job.steps, why)
+	fmt.Fprintf(c.log, "captain: snapshot warm %s %.16s stopped after %d steps: %s %s\n", job.operation, job.key, job.steps, why, job.usage)
 }
 
 func (c *warmCoordinator) runnable(now time.Time) *warmJob {
@@ -348,6 +359,9 @@ func (c *warmCoordinator) drive() {
 		reply := decodeWarmReply(body, err)
 		c.charge(reply)
 		c.mu.Lock()
+		if reply != nil {
+			job.usage.add(reply.Usage)
+		}
 		if c.jobs[job.key] == job {
 			c.settle(job, reply)
 		}
@@ -373,7 +387,7 @@ func (c *warmCoordinator) settle(job *warmJob, reply *warmReply) {
 		c.stop(job, stopped)
 	case complete:
 		delete(c.jobs, job.key)
-		fmt.Fprintf(c.log, "captain: snapshot warm %s %.16s complete after %d steps\n", job.operation, job.key, job.steps)
+		fmt.Fprintf(c.log, "captain: snapshot warm %s %.16s complete after %d steps %s\n", job.operation, job.key, job.steps, job.usage)
 	}
 }
 

@@ -310,7 +310,7 @@ func TestWarmDemandsForOneScopeShareOneJobAndCursor(t *testing.T) {
 	if jobs := h.jobs(); jobs != 0 {
 		t.Fatalf("jobs=%d, want the complete job removed", jobs)
 	}
-	if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s complete after 3 steps\n", key); h.logged() != want {
+	if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s complete after 3 steps source_bytes_read=0 prepared_cache_bytes_read=0 events_parsed=0\n", key); h.logged() != want {
 		t.Fatalf("log=%q, want %q", h.logged(), want)
 	}
 	if pauses := h.paused(); len(pauses) != 0 {
@@ -504,7 +504,7 @@ func TestWarmJobStopsAfterTwoStepsWithoutProgress(t *testing.T) {
 			if job := h.job(key); job != nil {
 				t.Fatalf("stalled job=%+v, want it removed", job)
 			}
-			if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s stopped after 3 steps: no progress\n", key); h.logged() != want {
+			if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s stopped after 3 steps: no progress source_bytes_read=0 prepared_cache_bytes_read=0 events_parsed=0\n", key); h.logged() != want {
 				t.Fatalf("log=%q, want %q", h.logged(), want)
 			}
 			h.demand(registeredDemand(), 1)
@@ -551,7 +551,44 @@ func TestWarmJobStopsOnAHardFailure(t *testing.T) {
 			if job := h.job(key); job != nil {
 				t.Fatalf("failed job=%+v, want it removed", job)
 			}
-			if want := fmt.Sprintf("captain: snapshot warm %s %.16s stopped after 1 steps: %s\n", demand["request"].(map[string]any)["operation"], key, tc.why); h.logged() != want {
+			if want := fmt.Sprintf("captain: snapshot warm %s %.16s stopped after 1 steps: %s source_bytes_read=0 prepared_cache_bytes_read=0 events_parsed=0\n", demand["request"].(map[string]any)["operation"], key, tc.why); h.logged() != want {
+				t.Fatalf("log=%q, want %q", h.logged(), want)
+			}
+		})
+	}
+}
+
+func TestWarmJobLogsItsCumulativeUsage(t *testing.T) {
+	usage := func(source, prepared, events int64) map[string]int64 {
+		return map[string]int64{"source_bytes_read": source, "prepared_cache_bytes_read": prepared, "events_parsed": events}
+	}
+	for _, tc := range []struct {
+		name    string
+		results []warmResult
+		ending  string
+	}{
+		{"complete across a changed restart", []warmResult{
+			{status: "ok", data: registryProgress(8, false, "epoch-1", "rev-1", 0), usage: usage(1000, 20, 3)},
+			{status: "changed", usage: usage(400, 0, 50)},
+			{status: "ok", data: registryProgress(20, true, "epoch-1", "rev-1", 0), usage: usage(0, 6000, 700)},
+		}, "complete after 3 steps source_bytes_read=1400 prepared_cache_bytes_read=6020 events_parsed=753"},
+		{"stopped after an unanswered step", []warmResult{
+			{status: "ok", data: registryProgress(8, false, "epoch-1", "rev-1", 0), usage: usage(2000, 30, 4)},
+			{err: errors.New("fixture")},
+			{status: "permission_denied", usage: usage(500, 70, 0)},
+		}, "stopped after 3 steps: permission_denied: fixture source_bytes_read=2500 prepared_cache_bytes_read=100 events_parsed=4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newWarmHarness(t)
+			key := h.demand(registeredDemand(), 0)
+			for _, result := range tc.results {
+				h.answer(result)
+			}
+			h.settled()
+			if jobs := h.jobs(); jobs != 0 {
+				t.Fatalf("jobs=%d, want the job ended", jobs)
+			}
+			if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s %s\n", key, tc.ending); h.logged() != want {
 				t.Fatalf("log=%q, want %q", h.logged(), want)
 			}
 		})
@@ -577,7 +614,7 @@ func TestWarmRootJobCompletesOnlyWithItsFacts(t *testing.T) {
 	if jobs := h.jobs(); jobs != 0 {
 		t.Fatalf("jobs=%d, want the root job complete", jobs)
 	}
-	if want := fmt.Sprintf("captain: snapshot warm warm_root %.16s complete after 3 steps\n", key); h.logged() != want {
+	if want := fmt.Sprintf("captain: snapshot warm warm_root %.16s complete after 3 steps source_bytes_read=0 prepared_cache_bytes_read=0 events_parsed=0\n", key); h.logged() != want {
 		t.Fatalf("log=%q, want %q", h.logged(), want)
 	}
 }
@@ -617,7 +654,7 @@ func TestWarmCapacityEvictsTheLeastRecentlyDemandedJob(t *testing.T) {
 			if h.job(keys[tc.victim]) != nil || h.job(keys[tc.survivor]) == nil || h.job(added) == nil {
 				t.Fatalf("victim kept=%t survivor kept=%t added kept=%t", h.job(keys[tc.victim]) != nil, h.job(keys[tc.survivor]) != nil, h.job(added) != nil)
 			}
-			if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s stopped after %d steps: evicted\n", keys[tc.victim], tc.steps); h.logged() != want {
+			if want := fmt.Sprintf("captain: snapshot warm warm_registered %.16s stopped after %d steps: evicted source_bytes_read=0 prepared_cache_bytes_read=0 events_parsed=0\n", keys[tc.victim], tc.steps); h.logged() != want {
 				t.Fatalf("log=%q, want %q", h.logged(), want)
 			}
 		})
