@@ -48,7 +48,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   database clients and migrators, and anything protected are never signaled, and neither are their
   ancestors. Protected means agent sessions, terminal hosts, PTY daemons, Orca, launchd, and the Captain
   Hook host. Jev cannot override those exclusions. See [Tune the subprocess resource monitor](#tune-the-subprocess-resource-monitor) to
-  change the thresholds or turn the monitor off.
+  change the thresholds or turn the monitor off. The pack also refuses a new local Go or Cargo build or
+  test while the host is saturated; see [Defer local builds on a saturated host](#defer-local-builds-on-a-saturated-host).
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo.
   Every hook checks for `.git/.graphite_repo_config` across worktrees and honors `ccx.nogt`.
   That git-config key opts a repo out of the gt lane, so a stale marker cannot activate the pack.
@@ -91,7 +92,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 Two more activate by language, detected from the repo's build manifests:
 
 - `go` — a go-test-before-commit gate and a `go.mod` nudge — active when a recursive, non-ignored
-  `go.mod` or `go.work` exists anywhere in the repo.
+  `go.mod` or `go.work` exists anywhere in the repo. The gate and both test nudges stand down while the
+  host is saturated, so they never ask for a test the `performance` pack refuses to start.
 - `python` — a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge —
   active when a recursive, non-ignored `pyproject.toml` exists.
 
@@ -528,6 +530,40 @@ The host runs the escalation stage once per child.
   registration and still descend from the session.
 - **A calm child keeps its warning.** A child that drops below the thresholds is not warned a second time
   for the same run.
+
+### Defer local builds on a saturated host {#defer-local-builds-on-a-saturated-host}
+
+The host counts as saturated when its 1-minute load average is at or above `HOOKS_ADMISSION_LOAD_PER_CORE`
+times its core count. The default is `1`, so a 32-core host is saturated at a load of 32. The worker reads
+the key from each hook run's environment.
+
+While the host is saturated, the `performance` pack refuses a Bash call that starts any of these on the
+local machine:
+
+- `go build`, `go test`, `go vet`, including `go -C <dir> <verb>`
+- `go run golang.org/x/tools/cmd/deadcode`
+- `cargo build`, `cargo check`, `cargo test`, including `cargo +<toolchain> <verb>`
+
+The check walks the parsed command line. It finds these calls by an absolute executable path, behind
+`env`, `timeout`, `nice`, `time`, `command`, `exec`, or `xargs`, inside a `sh -c` or `eval` payload,
+and in a command substitution. A command `ssh` sends to another host is not parsed as a call, so
+`ssh forge go build ./...` and `remote-builder exec --lane go -- go test ./...` both run.
+`ssh forge true && go build ./...` is still refused, because its `go build` runs locally. The refusal
+names the load and core count and tells the agent to let CI grade the commit. Remote work the task
+already has approval for stays possible when written explicitly.
+
+The `go` pack's test-before-commit gate and its two test nudges skip under the same condition.
+
+#### Limits
+
+- **It sees only the command line.** A build started by `make`, a script, `mise exec`, `uv run`,
+  `gtimeout`, or `docker run` is not recognized. Neither is one whose executable name comes from a variable.
+- **A routing shim reads as local.** A plain `go test` or `cargo build` that a wrapper on `PATH` forwards
+  to a remote builder is refused like any local one. Write the remote form explicitly instead.
+- **It is a threshold, not a lease.** Several calls admitted in the same moment can all start, and a
+  build already running is not stopped.
+- **Cargo global options hide the verb.** `cargo --locked check` is not recognized, because only a
+  `+<toolchain>` argument may come before the verb.
 
 ## See also
 

@@ -7,6 +7,7 @@ from captain_hook import (
     Event,
     FilePath,
     Input,
+    LambdaCondition,
     RanCommand,
     Runs,
     Tool,
@@ -15,12 +16,19 @@ from captain_hook import (
     nudge,
 )
 from captain_hook.conditions import AllEditsUnder, UserSaid
+from captain_hook.util.builds import LOAD_PER_CORE, HostLoad
+
+SATURATED = {LOAD_PER_CORE: "0"}
+HEALTHY = {LOAD_PER_CORE: "1000000"}
+HOST_SATURATED = LambdaCondition(lambda _: HostLoad.sample().saturated)
 
 nudge(
     "Verify test edits with the narrowest run, not the whole suite. Run `go test -run TestName ./path/to/pkg`.",
     only_if=[Tool("Edit|Write"), FilePath("*_test.go")],
+    skip_if=[HOST_SATURATED],
     tests={
-        Input(file="internal/cli/root_test.go", content="package cli"): Warn(),
+        Input(file="internal/cli/root_test.go", content="package cli", env=HEALTHY): Warn(),
+        Input(file="internal/cli/root_test.go", content="package cli", env=SATURATED): Allow(),
         Input(file="internal/cli/root.go", content="package cli"): Allow(),
     },
 )
@@ -34,11 +42,13 @@ hook(
         RanCommand("go", "test"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
+        HOST_SATURATED,
     ],
     block=True,
     tests={
         Input(command="git status"): Allow(),
-        Input(command="git commit internal/cli/root.go"): Block(),
+        Input(command="git commit internal/cli/root.go", env=HEALTHY): Block(),
+        Input(command="git commit internal/cli/root.go", env=SATURATED): Allow(),
     },
 )
 
@@ -51,10 +61,12 @@ nudge(
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
         Commits(".go"),
+        HOST_SATURATED,
     ],
     events=Event.PreToolUse,
     tests={
         Input(command="git status"): Allow(),
-        Input(command="git commit -m wip"): Warn(),
+        Input(command="git commit -m wip", env=HEALTHY): Warn(),
+        Input(command="git commit -m wip", env=SATURATED): Allow(),
     },
 )
