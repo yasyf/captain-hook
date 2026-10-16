@@ -211,8 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pack's terminal-close, `launchctl`, `TaskStop`, and `kill` guards lift through tickets. A
   ruling covers its target while it stands instead of granting one use, a once ticket covers
   an identical retry for two minutes, and a spawned teammate or background shell mints a
-  `sessions.task-stop` ticket for its spawning agent on `PostToolUse`. The guide moves from
-  `grants.qmd` to `tickets.qmd`.
+  `sessions.task-stop` ticket for its spawning agent on `PostToolUse`. A hook whose own check
+  cannot finish can let the action through with `Tickets.unchecked(ctx, cause)`, which mints
+  a rule-less once ticket, rule `unchecked`, that records the cause and lives ten minutes.
+  The guide moves from `grants.qmd` to `tickets.qmd`.
 
 - **Transcript warming runs as one job per evidence scope on the host, not one per worker.**
   Every product worker ran its own background warmer, so the workers serving one root

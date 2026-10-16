@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from captain_hook.types import HookResult, TCondition
 
 DECLARED: dict[str, Tickets] = {}
+UNCHECKED = "unchecked"
+UNCHECKED_TTL = timedelta(minutes=10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +104,39 @@ class Tickets:
                 expires=None if self.ttl is None else created + self.ttl,
             )
         )
+
+    def unchecked(self, ctx: Context, cause: str) -> Ticket:
+        """Mint the once ticket that lets *ctx*'s action go ahead when the check itself could not finish.
+
+        It records *cause* as its evidence and covers this one action for :data:`UNCHECKED_TTL`, so the
+        store says why nothing checked the action and a later action at the place still gets checked.
+        """
+        created = store.now()
+        ticket = store.mint(
+            Ticket(
+                id=store.new_id(),
+                kind=self.kind,
+                tree=ctx.tree,
+                place=ctx.place,
+                reach=Reach.ONCE,
+                rule=UNCHECKED,
+                evidence=[
+                    Evidence(
+                        id=f"{UNCHECKED}:{ctx.call}",
+                        source="hook",
+                        quote=cause,
+                        said_at=created,
+                        detail="the check did not finish, so the action went ahead unchecked",
+                    )
+                ],
+                fingerprint=ctx.action.fingerprint,
+                author=f"hook:{self.hook}@{ctx.session}/{ctx.agent}",
+                created=created,
+                expires=created + UNCHECKED_TTL,
+            )
+        )
+        logger.bind(hook=self.hook, kind=self.kind, ticket=ticket.id, cause=cause).warning("unchecked ticket minted")
+        return ticket
 
     def decide(self, ctx: Context) -> Allow | Deny:
         """Find the live ticket covering *ctx*'s action, else mint one from the first rule that holds, else deny."""

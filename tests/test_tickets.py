@@ -122,6 +122,17 @@ class TestReach:
         minted(expires=store.now() - timedelta(seconds=1))
         assert isinstance(declared().decide(context()), Deny)
 
+    def test_an_unchecked_ticket_covers_this_action_once_and_records_the_cause(self) -> None:
+        tickets = declared(Rule("said", UserSaid("post it")))
+        ctx = context("hi")
+        ticket = tickets.unchecked(ctx, "TimeoutExpired: cc-slack dm-peer")
+        assert (ticket.reach, ticket.rule, ticket.fingerprint) == (Reach.ONCE, "unchecked", ctx.action.fingerprint)
+        assert [(item.source, item.quote) for item in ticket.evidence] == [("hook", "TimeoutExpired: cc-slack dm-peer")]
+        assert ticket.expires is not None and ticket.expires - ticket.created == timedelta(minutes=10)
+        again = tickets.decide(context("hi", call="toolu_2"))
+        assert isinstance(again, Allow) and not again.minted and again.ticket.id == ticket.id
+        assert isinstance(tickets.decide(context("other words", call="toolu_3")), Deny)
+
     def test_a_ticket_never_crosses_session_trees(self) -> None:
         minted()
         assert isinstance(declared().decide(context()), Allow)
