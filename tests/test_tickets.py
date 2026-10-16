@@ -506,10 +506,11 @@ class TestDecide:
 
     def test_a_citation_with_a_mangled_prefix_still_names_its_item(self, tmp_path: Path) -> None:
         feedback = Evidence(id="board:feedback:app-perm:4d39f078", source="board", quote="share the url with josh")
-        evt = event(tmp_path, verdict=Verdict(allow=True, reason="asked for it", relied_on=["words:4d39f078"]))
-        ctx = Context.fake("test.write", PLACE, said=[feedback], tree=TREE)
-        object.__setattr__(ctx, "evt", evt)
-        assert found(Decide("permit"), ctx) == [feedback]
+        for cite in ("words:4d39f078", "[board:feedback:app-perm:4d39f078] board said 2026-10-03 5:16 PM"):
+            evt = event(tmp_path, verdict=Verdict(allow=True, reason="asked for it", relied_on=[cite]))
+            ctx = Context.fake("test.write", PLACE, said=[feedback], tree=TREE)
+            object.__setattr__(ctx, "evt", evt)
+            assert found(Decide("permit"), ctx) == [feedback]
 
     def test_an_llm_refusal_or_an_uncited_allow_finds_nothing(self, tmp_path: Path) -> None:
         refused = Verdict(allow=False, reason="no", refusal="The user never asked.")
