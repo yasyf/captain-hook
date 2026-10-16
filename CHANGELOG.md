@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A saturated host refuses new local Go and Cargo builds and tests.**
+  The `performance` pack blocks a Bash call that starts `go build`, `go test`, `go vet`, the
+  `deadcode` tool through `go run`, `cargo build`, `cargo check`, or `cargo test` on the local
+  machine. It blocks only while the 1-minute load average is at or above the core count times
+  `HOOKS_ADMISSION_LOAD_PER_CORE` (default `1`). Calls are found structurally: behind
+  `env`/`timeout`/`nice` wrappers, by absolute path, and inside `sh -c` payloads. A command `ssh` or
+  `remote-builder exec` runs elsewhere still goes ahead, and the refusal names that explicit
+  remote path. The `go` pack's test-before-commit gate and its test nudges stand down under the same
+  condition, so neither pack asks for a test the other refuses.
+
 - **A grant declaration lists the rules that approve an action, in order.**
   `Grants(approvals=(...))` takes `Approval` rules that each look at an action no stored grant
   covers and either approve it or pass. The first that approves mints the grant it spends: `reach="scope"`
