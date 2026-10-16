@@ -86,6 +86,14 @@ def is_unsupported_model(exc: BaseException) -> bool:
     )
 
 
+def is_context_overflow(exc: BaseException) -> bool:
+    """Whether ``exc`` is a backend refusing a prompt longer than its model's context window, which the same
+    prompt can never pass."""
+    from spawnllm import BackendCallError
+
+    return isinstance(exc, BackendCallError) and "context window" in str(exc)
+
+
 def ready_backend(specialty: TSpecialty | None, model: TModel | str) -> LlmBackend:
     """The backend spawnllm would select, probed at most once per :data:`READY_BACKEND_TTL_SECONDS`.
 

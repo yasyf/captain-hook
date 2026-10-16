@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A judge that overflows its context window or refuses once is asked again, and a citation that
+  quotes the user's words names their item.** `Decide.verdict` turned every judge exception into
+  `Undecided`. A prompt too long for the `small` tier's on-device model therefore refused the write
+  as "the judge gave no verdict". A cc-present board session's 12 answers plus the 12-turn
+  transcript window hit that limit. When `is_context_overflow` sees a `BackendCallError` naming the
+  context window, the judge is asked once more with `transcript=False` and `root_transcript=False`,
+  keeping the rules, evidence, action, and contexts. The evidence alone still overflowed on those
+  cases, so `render_evidence` caps each item's detail at 600 characters on the first ask and 200 on
+  the retry, and never cuts the user's own words. `llm_evaluate` raises an overflow at once, as it
+  does an unsupported model, instead of retrying the same oversized prompt. Any other error, or a
+  second overflow, is still `Undecided`. The small judge's refusals were also noisy: across five
+  replays of 144 Slack cases, a few refusals moved from run to run with no change in evidence or
+  rules. `Decide` gains `second_opinion: bool = True`, which asks a refusing LLM judge once more on
+  the evidence alone, without the transcript, and refuses only when both askings refuse; an allow
+  from either is citation-checked as before, and `second_opinion=False` keeps one asking. Separately,
+  `cited()` matched a citation only by an evidence item's id, so an allow that cited the item's own
+  words, such as `user's words: post it in the alerts thread`, found nothing, and the write was refused.
+  A citation now also names an item when it contains the item's quote or is a run of 20 characters
+  or more from it; the id matches are unchanged.
+
 - **The words a user types while rejecting any tool call reach the judge without the harness
   banner.**
   Context stripped the rejection banner only from `ExitPlanMode` results. A rejected Slack send kept
@@ -15,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an instruction to go ahead as a decline. Every rejected call and any prompt carrying the banner
   now yields an `instruction` item holding only the typed words, labeled as replacing the rejected
   call. `PLAN_TOOL` and `plan_feedback()` are gone; `instruction_words` is public.
+||||||| parent of e749b5bf (tickets: 🐛 a refusing or overflowing judge is asked again, and a quoted citation names its item)
 
 - **A judge citation that copies a whole evidence header line names the item it heads.**
   12.101.2 matched a citation copied whole, the id after its first colon, or the text after the
