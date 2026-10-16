@@ -278,9 +278,6 @@ def mandatory_skip(event: Event, output: Envelope | None, unfinished: Sequence[R
     )
     if denies(output):
         return with_warning(event, output, message)
-    unchecked = reqenv.mandatory_phase().unchecked
-    if unchecked is not None and (result := unchecked(names, cause)) is not None:
-        return with_warning(event, format_output(event, result), message)
     return fail_open_envelope(event, message)
 
 

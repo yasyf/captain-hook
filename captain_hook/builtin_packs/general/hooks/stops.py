@@ -4,7 +4,7 @@ from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, Block, Event, Input, LambdaCondition, on
+from captain_hook import Allow, Block, Event, Input, LambdaCondition, Tool, on
 from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_COMMANDS,
     INLINE_STARTED,
@@ -12,16 +12,18 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     LATER_SESSION,
     TASK_STOP,
     block_first,
+    child_place,
     clip,
     inline_ruling,
     inline_spawn,
     lift,
+    record_child,
     spawning_root,
 )
-from captain_hook.grants import Proposal
+from captain_hook.tickets import Proposal
 
 if TYPE_CHECKING:
-    from captain_hook import BaseHookEvent, HookResult, ToolRewriteEvent
+    from captain_hook import BaseHookEvent, HookResult, PostToolUseEvent, ToolRewriteEvent
 
 STOP_TOOLS = frozenset({"TaskStop"})
 OWN_LANE = "lane-2@session-67c0e5da"
@@ -120,5 +122,16 @@ def stop_unverified_task(evt: ToolRewriteEvent) -> HookResult | None:
     )
     if target is None:
         return evt.block(message)
-    action = Proposal(scope={"task": target[1]}, summary=f"stop {target[0]} {target[1]}")
+    action = Proposal(place=child_place(evt, target[1]), summary=f"stop {target[0]} {target[1]}")
     return block_first(evt, (lift(evt, TASK_STOP, action, message),))
+
+
+@on(
+    Event.PostToolUse,
+    only_if=[Tool("Agent", "Task", "Bash", "Monitor")],
+    respect_gitignore=False,
+    skip_planning_agents=False,
+)
+def record_children(evt: PostToolUseEvent) -> HookResult | None:
+    record_child(evt)
+    return None

@@ -17,14 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remote-builder exec` runs elsewhere still goes ahead, and the refusal names that explicit
   remote path. The `go` pack's test-before-commit gate and its test nudges stand down under the same
   condition, so neither pack asks for a test the other refuses.
-
-- **A grant declaration lists the rules that approve an action, in order.**
-  `Grants(approvals=(...))` takes `Approval` rules that each look at an action no stored grant
-  covers and either approve it or pass. The first that approves mints the grant it spends: `reach="scope"`
-  mints a standing grant for every later action at that scope, `reach="once"` a one-use grant bound to
-  the payload. Its `source_key` starts with the rule's name. `Judged()` places the declaration's judge
-  among the rules, so deterministic rules settle a call before the judge is asked.
-
 - **An owner ruling lets `kill` end an unowned process by its program name.**
   The sessions pack refused every `kill` of a process with no recorded per-task creation
   identity, even one the owner had ruled a session may end. Terminal closes, `launchctl`
@@ -199,6 +191,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tickets replace grants, and only a hook's rules mint them, from the user's own words, answers, or rulings.**
+  `captain_hook.tickets` replaces `captain_hook.grants`, and `Tickets`, `Decide`, `UserAnswered`,
+  `UserSaid`, and `UserRuled` take the place of `Grants`, `Judge`, `Asked`, `OwnerWords`, and
+  `Rulings`. A `Tickets` declaration names a kind, its place keys, a reach, and
+  `Rule(name, when)` entries, and `hook(..., block=True, tickets=...)` lifts the hook's block
+  when a ticket covers the call. `decide` finds the newest live ticket in the session tree, or
+  its Orca coordinator's, that covers the action. Otherwise, the first rule whose condition
+  holds mints one. With no rule holding, it denies with the declaration's `deny` sentence
+  and tells the user what each rule found. A `Reach.ONCE` ticket covers the action whose
+  fingerprint it records, and a `Reach.PLACE` ticket covers every later action at its exact
+  place. Rules compose `UserSaid` with the `Names` and `Holds` matchers, `UserAnswered`,
+  `UserRuled`, `Touched`, and the `Decide` judge through `And`, `Or`, and `Not`. `Decide` asks
+  TypeSafe Jev first and the LLM only when Jev is unsure; an allow counts only for the
+  evidence it cites, and a judge that gives no verdict makes its rule find nothing. A check
+  that fails for any reason denies. Tickets live in `~/.claude/state/hooks/tickets.db`, and
+  `capt-hook ticket list`, `show`, `revoke`, `spend`, and `release` manage them. `Context.fake`
+  builds a context for unit tests, and `Input(tickets=[...])` seeds inline tests. The general
+  pack's terminal-close, `launchctl`, `TaskStop`, and `kill` guards lift through tickets. A
+  ruling covers its target while it stands instead of granting one use, a once ticket covers
+  an identical retry for two minutes, and a spawned teammate or background shell mints a
+  `sessions.task-stop` ticket for its spawning agent on `PostToolUse`. A hook whose own check
+  cannot finish can let the action through with `Tickets.unchecked(ctx, cause)`, which mints
+  a rule-less once ticket, rule `unchecked`, that records the cause and lives ten minutes.
+  The guide moves from `grants.qmd` to `tickets.qmd`.
+
 - **Transcript warming runs as one job per evidence scope on the host, not one per worker.**
   Every product worker ran its own background warmer, so the workers serving one root
   warmed the same registered transcripts independently. A worker that hit a deadline or a
@@ -365,6 +382,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the native build from a hash of the extension file, which could name a file replaced
   while an owner was starting, and 12.94.0 turned reuse off for that reason. The native
   build now comes from the code that is loaded, and reuse is on again.
+
+### Removed
+
+- **Grant budgets, scope patterns, adoption, and the grant CLI are gone with grants.**
+  A ticket has no use budget, no `*` or set scope, no scope widening, and no cross-tree
+  adoption. No command mints one, so `capt-hook grant add`, `import`, and `adopt` have no
+  ticket counterpart. Per-call reservations and their settle step, `Grants.request`,
+  `judge_fails_open`, and the `ContentMatches` and `Never` rules are removed. When a ticket
+  hook's check runs out of time, the call blocks with "Retry the call; a ticket lifts this
+  block only once its check runs." It used to go through on an unchecked grant. The
+  sessions pack's spawn, shell, ask, and words record tables are gone, since a spawn now
+  mints a ticket.
 
 ### Fixed
 

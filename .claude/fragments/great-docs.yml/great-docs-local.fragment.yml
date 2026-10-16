@@ -95,15 +95,17 @@ reference:
       - llm_nudge
       - prompt_check
       - Confirm
-      - Grants
-      - Judge
+      - Tickets
+      - Rule
+      - Reach
+      - Decide
       - Proposal
-      - Grant
-      - Asked
-      - OwnerWords
-      - Rulings
-      - ContentMatches
-      - Never
+      - Ticket
+      - Context
+      - Names
+      - Touched
+      - UserAnswered
+      - UserRuled
       - approve
       - deny
       - llm_approve

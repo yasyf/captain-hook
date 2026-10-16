@@ -286,7 +286,7 @@ def nlp_scan(clauses: Sequence[Clause], text: str) -> list[str]:
     return [sent.text.strip() for sent in parse(text).sents if any(match_clause(clause, sent) for clause in clauses)]
 
 
-def scan_text(text: str, patterns: Sequence[str | Clause]) -> bool:
+def scan_text(text: str, patterns: Sequence[object]) -> bool:
     clauses = [p for p in patterns if isinstance(p, Clause)]
     return any(isinstance(p, str) and re.search(p, text, re.IGNORECASE) for p in patterns) or bool(
         clauses and nlp_scan(clauses, text)

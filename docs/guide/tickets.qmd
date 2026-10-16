@@ -1,0 +1,471 @@
+---
+title: "Tickets"
+description: "Lift a blocked tool call on the user's own words, answers, or rulings, and keep a record of it."
+aliases: [grants.html]
+---
+
+A ticket records that one action, or every later action at one place, may go ahead.
+A hook that blocks a tool call declares the tickets that lift its block and the
+rules that mint one. Rules read the user's own words, their answers to the agent's
+questions, and their cc-notes rulings, or a fact the hook's own condition proves.
+No command mints a ticket. `capt-hook ticket` lists, shows, and revokes tickets that
+rules minted, and records their uses.
+
+## Declare the action that needs a ticket
+
+Declare a `Tickets` instance, then attach it to a blocking tool hook with `tickets=`.
+Its `action` function maps the event to a `Proposal`, which carries the values of the
+declaration's place keys, every field that changes the action's effect as `payload`,
+and a one-line `summary` for logs and messages.
+
+For a messaging tool named `slack_reply` whose calls carry `channel`, `thread`,
+`text`, and `broadcast`, save this hook as `.claude/hooks/slack_replies.py`:
+
+```python
+from captain_hook import (
+    BaseHookEvent,
+    Decide,
+    Event,
+    Names,
+    Proposal,
+    Reach,
+    Rule,
+    Tickets,
+    Tool,
+    UserAnswered,
+    UserRuled,
+    UserSaid,
+    hook,
+)
+from captain_hook.tickets import Holds
+
+
+def reply_action(evt: BaseHookEvent) -> Proposal:
+    raw = evt.input.raw
+    return Proposal(
+        place={"channel": raw["channel"], "thread": raw["thread"]},
+        payload={"text": raw["text"], "broadcast": raw.get("broadcast", False)},
+        summary=f"reply in {raw['channel']}/{raw['thread']}",
+    )
+
+
+SLACK_REPLIES = Tickets(
+    "slack.reply",
+    ("channel", "thread"),
+    Reach.ONCE,
+    rules=(
+        Rule("verbatim", UserSaid(Holds("text"))),
+        Rule("answered", UserAnswered(Names())),
+        Rule("ruled", UserRuled("channel")),
+        Rule(
+            "judged",
+            Decide(
+                "Allow only when the user's own words ask for a reply in this thread, "
+                "or approve this text. Words about another thread permit nothing."
+            ),
+        ),
+    ),
+    deny="Ask the user to approve this reply, its thread, and its text.",
+    action=reply_action,
+    hook="slack_replies",
+)
+
+hook(
+    Event.PreToolUse,
+    "Replies need the user's permission.",
+    only_if=[Tool("slack_reply")],
+    block=True,
+    tickets=SLACK_REPLIES,
+)
+```
+
+The ticket check runs only after the hook matches and blocks. When a ticket covers
+the call, the block lifts and the hook returns the context note
+``<hook>: allowed by ticket `<id>` (<rule>).`` When none does, the agent gets the
+declaration's `deny` sentence in place of the hook's own message. The user gets a
+system message, `<hook>: <detail>`, saying what each rule found. Other hooks still
+decide the event, and Claude Code's permission flow still applies.
+
+`tickets=` requires `block=True`, a tool event, and a declaration with an `action`
+function, and it rejects `max_fires`; registration raises `ValueError` otherwise.
+The attachment fails closed. When the hook matches but its check does not finish
+in time, the call blocks with "Retry the call; a ticket lifts this block only once
+its check runs."
+
+`Tickets` takes these fields:
+
+| Field | Meaning |
+|-------|---------|
+| `kind` | The ticket kind this declaration finds and mints, such as `slack.reply` |
+| `place` | The place keys every action and ticket carries |
+| `reach` | `Reach.ONCE` or `Reach.PLACE`, for every ticket the declaration mints |
+| `rules` | `Rule(name, when)` entries, tried in order |
+| `deny` | The sentence the agent gets when no ticket covers the call |
+| `action` | Maps the event to its `Proposal`; required for `tickets=` |
+| `ttl` | How long a minted ticket lives; 7 days by default, `None` for no expiry |
+| `window` | How many recent messages of each session the context reads; 60 by default |
+| `machine` | Markers of a prompt a tool wrote for the user, which never counts as their words |
+| `hook` | The hook name used in logs and the user's system message |
+
+## Read a ticket record
+
+A `Ticket` has these fields:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Twelve hex characters, named in every allow |
+| `kind` | The declaration that minted it |
+| `tree` | The root session id of the session tree it was minted in |
+| `place` | The exact value of each of the declaration's place keys |
+| `reach` | `once` covers the action whose fingerprint it records; `place` covers every later action at its place |
+| `rule` | The name of the rule that minted it |
+| `evidence` | What that rule found |
+| `fingerprint` | The digest of the action a once ticket covers; `None` for a place ticket |
+| `author` | `hook:<hook>@<session>/<agent>` for a ticket a hook minted |
+| `created`, `expires`, `revoked` | When it was minted, when it stops covering anything, and when it was revoked |
+
+Each evidence item has an `id` the judge cites, such as `words:1a2b3c4d5e6f` or
+`ask:toolu_01#0`. Its `source` names where it came from: `prompt`, `queued`, `plan`,
+`ask`, `board`, `ccn`, `touch`, or a hook's own. `quote` holds the words themselves,
+`said_at` the time when the source records one, and `detail` the context read beside
+the quote, such as the agent message it answers.
+
+A ticket has no use budget. The hook that finds or mints it records no use; a
+downstream system that enforces the action records one per call with
+[`capt-hook ticket spend`](#manage-tickets-from-the-cli).
+
+## Choose the place and the reach {#choose-the-place-and-reach}
+
+The place keys name where an action lands, and each ticket holds one exact value
+per key, with no patterns or wildcards. A proposal must carry exactly the declaration's
+place keys. Any other set raises `ValueError`, which the check turns into a deny.
+An empty value is a value, so a top-level post with `thread=""` gets its own tickets.
+
+`Reach.ONCE` binds a minted ticket to the action's fingerprint, a digest of the
+place and the payload, so it covers the same action again and nothing else. Put
+every effect-bearing field in `payload`, or a once ticket covers actions that differ
+in it. `Reach.PLACE` leaves the fingerprint out, so the ticket covers every later
+action at its place, whatever the payload.
+
+A ticket belongs to the session tree it was minted in, which is the root session and
+every subagent it spawns. An Orca lane also reads the tickets of the Run coordinator it
+answers to, once the general pack has recorded the coordinator's terminal; tickets
+the lane mints stay in its own tree. No other tree sees them.
+
+A ticket stops covering anything when it expires or is revoked. Pick `ttl` for how
+long the permission should last. A once ticket with a short `ttl` covers an
+identical retry, and a place ticket with a long one covers a standing permission.
+
+## Write rules from conditions
+
+`Rule(name, when)` mints a ticket when its condition holds. `decide` tries the rules
+in order, and the first that holds mints the ticket with the evidence the condition
+found. The name lands on the ticket as `rule` and in each deny's detail.
+
+Import these conditions from `captain_hook`:
+
+| Condition | Holds when | Evidence |
+|-----------|------------|----------|
+| `UserSaid(*patterns)` | The user's words across the session tree match any pattern; with none, any words | The matching words |
+| `UserAnswered(*patterns, approved=True)` | An answer's question and options match any pattern; with `approved`, only approving answers count | The matching answers |
+| `UserRuled(key, ids=(), tags=frozenset())` | A cc-notes ruling names the action's `key` value whole and carries every tag, or a ruling in `ids` stands | The rulings |
+| `Touched(*patterns)` | An earlier tool call in the tree matches, by its input or result; with no patterns, it names the place | The calls |
+| `Decide(rules, ...)` | The judge allows, citing evidence | The cited items |
+
+A pattern is a regex string, a `Clause`, or a `Matcher`. `Names(*keys)` matches text
+that names every non-empty place value of `keys` as a whole name, every place key
+when none are given; `Names()` matches neither `C0123` inside `C01234` nor
+`com.x` inside `com.x.helper`. `Holds(key)` matches text that holds the payload
+field `key` verbatim, whitespace folded, as whole words.
+
+`UserAnswered` reads `AskUserQuestion` answers and cc-present board picks, typed
+inputs, feedback, and decisions. An approving answer picks an option other than the
+last one shown, or types words with no hold, such as `no`, `wait`, `not yet`, or
+`cancel`.
+
+`UserRuled` reads only cc-notes answers last written before the acting session
+started, so an agent cannot record a ruling and act on it in the same session.
+With `key`, it searches answers whose body names that place value. With `ids`, it
+reads those answers by id, whatever action they cover.
+
+`And`, `Or`, and `Not` compose these like any other condition. `And` holds when
+every part holds and gathers every part's evidence; `Or` takes the first part that
+holds; `Not` holds with no evidence. A plain condition such as `Tool` holds in a
+rule too, and contributes no evidence.
+
+Inside a rule, `UserSaid` ignores its `scope`.
+
+A condition of your own subclasses `CustomTicketCondition` and implements
+`evidence(ctx)`, returning a list of `Evidence` or `None` when it does not hold.
+`Holds`, `Matcher`, `CustomTicketCondition`, and `Evidence` come from
+`captain_hook.tickets`.
+
+## Let the judge decide {#let-the-judge-decide}
+
+`Decide(rules)` reads the evidence of the conditions in `over`. By default that is
+every word of the user's, through `UserSaid()`, and every answer, through
+`UserAnswered(approved=False)`. It asks whether one item permits exactly this action under the `rules` prose. With
+no evidence it finds nothing and calls no model.
+
+TypeSafe Jev answers first, picking the one item that permits the action. When it
+puts 0.8 or more on one item, the action goes ahead on that citation with no LLM
+call. Any other answer, or a Jev failure, goes to the LLM, which returns a `Verdict`
+with `allow`, `reason`, `relied_on`, and `refusal`. An allow counts only for the
+items it cites in `relied_on`; an allow that cites none, and a refusal, find
+nothing. With `llm=False`, Jev alone judges, and an answer it does not settle finds
+nothing.
+
+A judge that gives no verdict within `deadline`, 20 seconds capped by the time left
+in the request, or whose backend fails raises `Undecided`. The declaration reports
+that rule as `<rule>: the judge gave no verdict (...)` and tries the next one, so
+a judge failure never lets an action through.
+
+Narrow `over` to read less. The general pack's owner-named lifts pass
+`over=(UserSaid(Names(key)), UserAnswered(Names(key), approved=False))`, so the
+judge reads only words and answers that name the target. `model` defaults to
+`"small"`; `contexts`, `transcript`, `root_transcript`, and `tool_results` add what
+`llm_evaluate` reads.
+
+## Know what counts as the user's words
+
+`Context` holds the action and what the session tree knows about what the user wants.
+`Tickets.context(evt, action)` builds the live one; conditions read it.
+
+| Attribute | Holds |
+|-----------|-------|
+| `kind`, `action` | The declaration's kind and the `Proposal` to cover; `place` is the action's place |
+| `tree`, `trees` | The acting tree's root session id, and every tree whose tickets cover the action |
+| `session`, `agent`, `call` | The acting session, the acting agent or `main`, and the pending call id |
+| `said` | The user's words, oldest first |
+| `answers` | `Answer` items with `question`, `options`, `chosen`, and `typed` |
+| `touches` | The tree's tool calls with their input and result |
+| `rulings(term, tags)`, `ruling(id)` | cc-notes rulings written before the session started |
+| `fact(Type, default)` | A lookup the hook injects, built once per context |
+
+Only the user's own words count as `said`. Those are the root session's prompts,
+messages the user queued while the agent worked, and what they typed when rejecting a plan in the
+root session. A lane's own prompts are its brief and its teammates' messages, never
+the user's. Teammate messages, tool output, notifications, channel lines, harness
+envelopes, and prompts carrying a `machine` marker never count. Each prompt carries
+the end of the agent message it answers in its `detail`.
+
+The sources read the last `window` messages of each session. A lane also reads the
+root session's earlier mentions of the place values, however far back they sit.
+`said`, `answers`, and `touches` are read once per context, on first use.
+
+`ctx.fact(Type, default)` returns the value of type `Type` a hook injected, or builds
+it with `default(ctx)` and keeps it, such as a thread a condition reads from a chat
+system.
+
+## Follow the check order
+
+`Tickets.decide(ctx)` stops at the first allow:
+
+1. Find the newest live ticket of this kind in the context's trees that covers the
+   action, with the same place and, for a once ticket, the same fingerprint. It
+   allows with no rule run.
+2. Otherwise, try each rule in order. The first whose condition finds evidence mints
+   a ticket with the declaration's reach and `ttl` and allows.
+3. A rule whose judge raises `Undecided` finds nothing, and the next rule runs.
+4. When no rule holds, deny with `deny` as the message and a detail such as
+   `verbatim: nothing found; answered: nothing found`.
+
+`Tickets.check(evt, action=None)` builds the context and runs `decide`, failing
+closed. A store, source, or judge error denies with the detail
+`The ticket check failed (<error>).`
+
+A hook that lets the action through when its own check cannot finish, after an
+exception or a lookup that times out, calls `Tickets.unchecked(ctx, cause)`. It
+mints a once ticket at the action's place with rule `unchecked`, one evidence item
+from source `hook` quoting the cause, and a ten-minute lifetime, so the record says
+why nothing checked the action. Its fingerprint binds it to this action, so it
+covers no later one.
+
+Pass a `Proposal` to check an action other
+than the one `action` maps the event to, such as each of several calls in one
+event; a declaration used only this way may omit `action`.
+
+`check` and `decide` return a truthy `Allow(ticket, minted)` or a falsy
+`Deny(message, detail)`. `Allow.reason` reads `ticket <id> minted by rule <name>`,
+or `found for rule <name>` for a ticket that already covered the action.
+
+## Manage tickets from the CLI
+
+| Command | Does |
+|---------|------|
+| `capt-hook ticket list [--kind K] [--tree T] [--all]` | Lists live tickets; `--all` adds expired and revoked ones |
+| `capt-hook ticket show <id>` | Prints the record as JSON and every use recorded against it |
+| `capt-hook ticket revoke <id>` | Revokes the ticket; it covers nothing from then on |
+| `capt-hook ticket spend <id> ...` | Records a use for a downstream system |
+| `capt-hook ticket release <id> --call <call>` | Hands back the use recorded for a call that never took effect |
+
+Tickets live in `~/.claude/state/hooks/tickets.db`, one SQLite file every session on
+the machine reads. `CAPTAIN_HOOK_STATE_DIR` moves the state directory and the file
+with it.
+
+A system that enforces the action itself, such as the cc-slack daemon, records each
+use with `spend`. Replace the uppercase placeholders:
+
+```bash
+uvx capt-hook ticket spend TICKET_ID \
+  --place channel=C0123 --place thread=1712345678.000100 \
+  --tree ROOT_SESSION_ID --session SESSION_ID --agent main \
+  --call CALL_ID --fingerprint ACTION_FINGERPRINT \
+  --summary 'reply in C0123/1712345678.000100'
+```
+
+Repeat `--place` for every place key. Every option is required except `--agent`,
+which defaults to `main`. `--fingerprint` is the action's `Proposal.fingerprint`;
+a once ticket covers only its own. `spend` prints `{"ticket": ...}` and records one
+use per call, so a repeat for the same call adds nothing. It exits non-zero with the
+reason when the ticket does not exist, has expired or been revoked, belongs to
+another tree, or covers another place or action.
+
+Run `release` only when the action did not happen, such as a write the
+remote system refused. It prints the ticket and the number of uses released.
+
+## Test tickets
+
+Unit-test a declaration's rules with `Context.fake`, which takes the action and its
+sources outright as `said`, `answers`, `touches`, `rulings`, and `facts`. A plain
+string in `said` is one of the user's prompts. `decide` mints into the real store, so point
+`CAPTAIN_HOOK_STATE_DIR` at a temporary directory:
+
+```python
+from captain_hook import Context
+from captain_hook.tickets import Allow
+
+from slack_replies import SLACK_REPLIES
+
+
+def test_a_verbatim_request_mints_a_once_ticket(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+    ctx = Context.fake(
+        "slack.reply",
+        {"channel": "C0123", "thread": "1712345678.000100"},
+        payload={"text": "Deploy finished.", "broadcast": False},
+        said=['Reply "Deploy finished." in that thread.'],
+    )
+    first = SLACK_REPLIES.decide(ctx)
+    assert isinstance(first, Allow) and first.minted and first.ticket.rule == "verbatim"
+    again = SLACK_REPLIES.decide(ctx)
+    assert isinstance(again, Allow) and not again.minted and again.ticket.id == first.ticket.id
+```
+
+A fake context has no event. `Decide` and plain conditions such as `Tool` read the
+event, so a fake context that reaches one raises `TypeError`; cover those rules in
+the hook's inline tests. A fake context's rulings match by name and ignore `tags`.
+
+Inline tests seed the store with `Input(tickets=[...])`. Each test starts from an
+empty store holding only its seeds. Match the input's `session_id` to the ticket's
+`tree`, and stub `ccn` and `cc-present` so the rules read no real records. In
+`slack_replies.py`, give the `hook(...)` call its tests:
+
+```python
+from datetime import UTC, datetime
+
+from captain_hook import Block, Input, Reach, Ticket, Warn
+
+SEEDED = Ticket(
+    id="0123456789ab",
+    kind="slack.reply",
+    tree="example-root",
+    place={"channel": "C0123", "thread": "1712345678.000100"},
+    reach=Reach.PLACE,
+    rule="seed",
+    author="test",
+    created=datetime(2026, 1, 1, tzinfo=UTC),
+)
+STUBS = {"ccn answer search": "[]", "cc-present outcomes": "{}"}
+
+
+def reply(thread: str) -> dict[str, str]:
+    return {"channel": "C0123", "thread": thread, "text": "Deploy finished."}
+
+
+hook(
+    Event.PreToolUse,
+    "Replies need the user's permission.",
+    only_if=[Tool("slack_reply")],
+    block=True,
+    tickets=SLACK_REPLIES,
+    tests={
+        Input(
+            tool="slack_reply", tool_input=reply("1712345678.000100"),
+            session_id="example-root", tickets=[SEEDED], commands=STUBS,
+        ): Warn(pattern="allowed by ticket `0123456789ab`"),
+        Input(
+            tool="slack_reply", tool_input=reply("1712345678.000200"),
+            session_id="example-root", tickets=[SEEDED], commands=STUBS,
+        ): Block(pattern="Ask the user to approve this reply"),
+    },
+)
+```
+
+A lifted block returns a context note, so its inline expectation is `Warn`.
+
+## Lift a session guard block {#lift-a-session-guard-block}
+
+The `general` pack's session guards block a terminal close, a launchd service stop,
+a lane's `TaskStop`, and a `kill`, and lift each through these ticket kinds:
+
+| Kind | Place | Reach, lifetime | Rules, in order |
+|------|-------|-----------------|-----------------|
+| `sessions.close` | `terminal` | once, 2 minutes | `ruling`, a cc-notes answer naming the handle; `created-here`, this session created the terminal |
+| `sessions.close-settled` | none | place, no expiry | `class-ruling`, the judge reads standing rulings `c9b27c1` and `6190a4a` |
+| `sessions.close.owner` | `terminal` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the handle |
+| `sessions.launchctl` | `service` | once, 2 minutes | `ruling`, a cc-notes answer naming the service label |
+| `sessions.launchctl.owner` | `service` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the label |
+| `sessions.task-stop` | `agent`, `task` | place, 7 days | `spawned-here`, then `ruling`; minted on spawn as `teammate` or `shell` |
+| `sessions.kill` | `program`, `process` | once, 2 minutes | `ruling`, an answer tagged `scope:durable` and `sessions-guard` naming the program |
+
+A ruling covers its target while it stands. Every check reads it again, so each new
+call on that target mints its own once ticket, and the ticket's two minutes cover
+an identical retry without reading the rules. A ruling counts only when its body
+names the value as a whole name and it was last written before the acting session
+started; editing it during the session takes it out of that session.
+
+The terminal close tries `sessions.close`, then `sessions.close-settled`, then the
+owner-named lift. `created-here` holds when this session's transcript records
+creating the terminal, through a lone, bare `orca terminal create` call or an
+`orca-launch.sh` call whose receipt names it, no Orca dispatch names the terminal,
+and its agent idles at a prompt with no pending question.
+
+`sessions.close-settled` applies only to the root session coordinating the Run
+whose dispatch holds the terminal, when Orca records that dispatch as `completed`
+or `failed` and its agent idles. The judge decides whether the standing rulings
+cover the terminal's Orca record. Its first allow mints a place ticket with no
+expiry, so later settled closes in that tree skip the judge; the guard still checks
+the dispatch, the idle prompt, and the caller before each close. After the lift, it
+reads the dispatch and the screen again. If either changed, it blocks the close
+and tells the user
+`sessions: the terminal's dispatch or idle prompt changed while the judge decided.`
+
+The `.owner` kinds serve only the spawning root: the main thread of a session with
+no root session above it. They run after the other lifts deny, and their judge reads only the
+user's words and answers that name the exact handle or label. A description, a
+general cleanup request, or words naming another target permit nothing.
+
+`sessions.task-stop` covers one task for the agent that started it. On
+`PostToolUse`, the pack mints a ticket at place `{agent: "<session>/<agent>", task}`
+for a teammate an `Agent` or `Task` call spawned and for a background task a `Bash`
+or `Monitor` call started, so the ticket outlives compaction. `spawned-here` holds
+when the agent's own transcript records spawning a `<name>@session-<8 hex>`
+teammate. The root session's `TaskStop` is never guarded.
+
+`sessions.kill` names the process as `<pid>@<start time>`, so a ticket never covers
+a recycled pid. The program is the script for a `python`, `node`, `bun`, `deno`,
+`ruby`, or `perl` process, such as `desk-runner.py`, and the executable otherwise.
+
+A lifted terminal close or `launchctl` command must run once. It comes first at top
+level, at the start of the Bash payload, with only pipe successors. Loops, `&&` or `;`
+chains, background calls, wrappers, substitutions, and respelled variables keep
+the block. The `launchctl` payload carries its verb, so a ticket for `kickstart`
+does not cover `bootout` of the same service.
+
+## See also
+
+[Writing hooks](primitives.qmd) covers conditions and blocking hooks.
+[LLM hooks](llm-hooks.qmd) covers prompt contexts and model calls.
+[Test hooks inline](testing.qmd) covers transcript fixtures and stubbed commands.
+[Packs](packs.qmd) lists the `general` pack's session guards.
