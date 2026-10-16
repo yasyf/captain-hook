@@ -4,9 +4,9 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, TypeAdapter
 
 from captain_hook import (
     CONFIRMED,
@@ -31,9 +31,11 @@ from captain_hook import (
     on,
     workflow_state,
 )
+from captain_hook.builtin_packs.general.hooks._sessions import Unreadable, probe
+from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from captain_hook import BaseHookEvent
     from captain_hook.cmd import Call
@@ -48,6 +50,12 @@ REPEATS = 3
 SCOPE = "tooling_nudge"
 EVIDENCE_CHARS = 240
 RESET = re.compile(r"rate-limited until (?P<at>\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))")
+LOW_QUOTA = 0.02
+AUTH_PROBE_SECONDS = 5.0
+GH_READ_VERBS = frozenset({"view", "list", "status", "checks", "diff", "watch"})
+GH_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
+GH_REPO_FLAGS = ("-R", "--repo")
+REPO_ENDPOINT = re.compile(r"\A/?repos/(?P<repo>[\w.-]+/[\w.-]+)")
 
 PROMPT = """You are a senior engineer watching another engineer ("the agent") mid-task. A
 deterministic scan flagged the tool call that just ran as a possible TOOLING DEFECT or
@@ -140,6 +148,7 @@ class Signature:
     lane_name: re.Pattern[str]
     window: timedelta | None = None
     failures_only: bool = False
+    quota: Callable[[BaseHookEvent, Verb], Quota | Unreadable] | None = None
 
     def source(self, evt: BaseHookEvent) -> Verb | None:
         return next((verb for verb in self.verbs if verb.ran(evt)), None)
@@ -158,6 +167,76 @@ class Signature:
         if found := RESET.search(text):
             return datetime.fromisoformat(found["at"])
         return datetime.now(UTC) + self.window if self.window else None
+
+
+class Quota(BaseModel):
+    limit: int
+    remaining: int
+    reset_at: datetime = Field(alias="resetAt")
+
+    @property
+    def low(self) -> bool:
+        return self.remaining <= self.limit * LOW_QUOTA
+
+
+class Identity(BaseModel):
+    quota: Quota
+
+
+class AuthStatus(BaseModel):
+    reads: Identity
+    writes: Identity
+
+
+AUTH_STATUSES = TypeAdapter(list[AuthStatus])
+
+
+def flag_value(args: tuple[str, ...], names: tuple[str, ...]) -> str | None:
+    for index, token in enumerate(args):
+        for name in names:
+            if token == name:
+                return next(iter(args[index + 1 :]), None)
+            if token.startswith(f"{name}=") or (len(name) == 2 and token.startswith(name)):
+                return token.removeprefix(name).removeprefix("=")
+    return None
+
+
+def gh_api_reads(args: tuple[str, ...]) -> bool:
+    if "graphql" in args:
+        return False
+    if method := flag_value(args, ("-X", "--method")):
+        return method.upper() == "GET"
+    return not any(token.startswith(GH_FIELD_FLAGS) for token in args)
+
+
+def token_side(words: tuple[str, ...]) -> Literal["reads", "writes"]:
+    match words:
+        case ("ccx", "vcs", *_):
+            return "reads"
+        case ("gh", "api", *rest):
+            return "reads" if gh_api_reads(tuple(rest)) else "writes"
+        case ("gh", _, verb, *_) if verb in GH_READ_VERBS:
+            return "reads"
+    return "writes"
+
+
+def named_repo(words: tuple[str, ...]) -> tuple[str, ...]:
+    if repo := flag_value(words, GH_REPO_FLAGS):
+        return (repo,)
+    return next(((found["repo"],) for word in words if (found := REPO_ENDPOINT.match(word))), ())
+
+
+def github_quota(evt: BaseHookEvent, verb: Verb) -> Quota | Unreadable:
+    words = next(words for call in evt.command.calls() if (words := argv(call))[: len(verb.words)] == verb.words)
+    shown = probe(
+        ("ccx", "vcs", "auth", "status", "--json", *named_repo(words)),
+        AUTH_PROBE_SECONDS,
+        cwd=evt.cwd or reqenv.cwd(),
+    )
+    if isinstance(shown, Unreadable):
+        return shown
+    status = AUTH_STATUSES.validate_json(shown)[0]
+    return (status.reads if token_side(words) == "reads" else status.writes).quota
 
 
 CC_SLACK_VERBS = (
@@ -198,6 +277,7 @@ SIGNATURES = (
         re.compile(r"(?<![\w])(?:gh|github|graphql)-(?:quota|rate-limit)"),
         timedelta(hours=1),
         failures_only=True,
+        quota=github_quota,
     ),
 )
 
@@ -265,16 +345,36 @@ def excerpt(text: str, match: re.Match[str]) -> str:
     return text[start : end if end >= 0 else None].strip()[:EVIDENCE_CHARS]
 
 
-def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
+@dataclass(frozen=True, slots=True)
+class Match:
+    signature: Signature
+    ran: Verb
+    text: str
+    found: re.Match[str]
+
+
+def matched(evt: BaseHookEvent) -> Match | None:
     for signature in SIGNATURES:
         if (ran := signature.source(evt)) and (found := signature.text.search(text := signature.refused_text(evt))):
-            return signature.key, Refusal(
-                tool=ran.text,
-                verbs=tuple(verb.text for verb in signature.verbs),
-                evidence=excerpt(text, found),
-                expires=signature.expires(text),
-            )
+            return Match(signature, ran, text, found)
     return None
+
+
+def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
+    if (hit := matched(evt)) is None:
+        return None
+    signature = hit.signature
+    expires = signature.expires(hit.text)
+    if signature.quota and not isinstance(quota := signature.quota(evt, hit.ran), Unreadable):
+        if not quota.low:
+            return None
+        expires = quota.reset_at
+    return signature.key, Refusal(
+        tool=hit.ran.text,
+        verbs=tuple(verb.text for verb in signature.verbs),
+        evidence=excerpt(hit.text, hit.found),
+        expires=expires,
+    )
 
 
 def dispatch_text(evt: BaseHookEvent) -> str:
@@ -347,7 +447,7 @@ def detect(evt: BaseHookEvent) -> Detection | None:
 
 
 def claim(evt: BaseHookEvent) -> bool:
-    return refusal(evt) is None and (found := detect(evt)) is not None and evt.ctx.s.once(found.key, scope=SCOPE)
+    return matched(evt) is None and (found := detect(evt)) is not None and evt.ctx.s.once(found.key, scope=SCOPE)
 
 
 @dataclass(frozen=True, slots=True)
