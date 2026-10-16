@@ -235,6 +235,45 @@ class TestConditions:
         wait = answer("Post in C1, thread 1.2?", {"Yes": "", "No": ""}, typed="not yet", ident="ask:q#1")
         assert [item.id for item in found(UserAnswered(), context(answers=[go, wait])) or []] == ["ask:q#0"]
 
+    def test_words_typed_beyond_a_pick_decide_over_the_pick(self) -> None:
+        options = {"Restack and merge": "", "Wait for Sikan": "", "Leave it to Sikan": ""}
+        rider = answer(
+            "Sikan's fix is approved. What now?",
+            options,
+            chosen="Leave it to Sikan",
+            typed="3, DM him and ask if he needs help",
+        )
+        bare = answer(
+            "Sikan's fix is approved. What now?", options, chosen="Leave it to Sikan", typed="3", ident="ask:q#1"
+        )
+        held = answer(
+            "Sikan's fix is approved. What now?",
+            options,
+            chosen="Restack and merge",
+            typed="1, but wait for CI",
+            ident="ask:q#2",
+        )
+        assert [item.id for item in found(UserAnswered(), context(answers=[rider, bare, held])) or []] == ["ask:q#0"]
+
+    def test_a_last_option_that_reads_as_a_go_approves(self) -> None:
+        options = {"Post both as shown (Recommended)": "", "Post without the prevention sentence": ""}
+        trimmed = answer(
+            "Approve these two exact thread replies?", options, chosen="Post without the prevention sentence"
+        )
+        only = answer(
+            "Reply in alert threads?",
+            {"Yes: reply in any alert thread": ""},
+            chosen="Yes: reply in any alert thread",
+            ident="ask:q#1",
+        )
+        edit = answer(
+            "Approve this text?", {"Approve as shown": "", "Edit first": ""}, chosen="Edit first", ident="ask:q#2"
+        )
+        assert [item.id for item in found(UserAnswered(), context(answers=[trimmed, only, edit])) or []] == [
+            "ask:q#0",
+            "ask:q#1",
+        ]
+
     def test_user_answered_reads_the_question_not_the_place_of_another(self) -> None:
         other = answer("Post in C1, thread 9.9?", {"Yes": "", "No": ""}, chosen="Yes")
         assert found(UserAnswered(Names()), context(answers=[other])) is None
@@ -322,6 +361,22 @@ class TestBoard:
         ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=20)
         assert [item.id for item in ctx.answers] == ["ask:toolu_ask#0"]
         assert ctx.touches == ()
+        wide = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=200)
+        assert [touch.tool for touch in wide.touches] == ["slack_thread"]
+
+    def test_a_session_with_no_transcript_yet_started_now(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+
+        from captain_hook.context import HookContext
+        from captain_hook.session import SessionStore
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tickets.context import session_started
+
+        evt = PreToolUseEvent(
+            _raw={"session_id": TREE, "tool_name": "slack_reply", "tool_use_id": "toolu_1", "tool_input": {}},
+            ctx=HookContext(session=SessionStore(tmp_path), transcript=fixture_session([]), settings=None),
+        )
+        assert abs((session_started(evt) - datetime.now(UTC)).total_seconds()) < 5
 
 
 class TestStore:
@@ -448,6 +503,14 @@ class TestDecide:
         )
         object.__setattr__(ctx, "evt", evt)
         assert [item.id for item in found(Decide("permit"), ctx) or []] == ["words:1a2b3c4d5e6f"]
+
+    def test_a_citation_with_a_mangled_prefix_still_names_its_item(self, tmp_path: Path) -> None:
+        feedback = Evidence(id="board:feedback:app-perm:4d39f078", source="board", quote="share the url with josh")
+        for cite in ("words:4d39f078", "[board:feedback:app-perm:4d39f078] board said 2026-10-03 5:16 PM"):
+            evt = event(tmp_path, verdict=Verdict(allow=True, reason="asked for it", relied_on=[cite]))
+            ctx = Context.fake("test.write", PLACE, said=[feedback], tree=TREE)
+            object.__setattr__(ctx, "evt", evt)
+            assert found(Decide("permit"), ctx) == [feedback]
 
     def test_an_llm_refusal_or_an_uncited_allow_finds_nothing(self, tmp_path: Path) -> None:
         refused = Verdict(allow=False, reason="no", refusal="The user never asked.")

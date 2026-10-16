@@ -31,8 +31,8 @@ FRAME = """
     user's words that may permit it, each under an id, with the agent message each answers: only those
     count as the user speaking. <action> is the action.
 
-    Cite in relied_on the ids of every evidence item your verdict rests on, copied exactly as they
-    appear in square brackets (for example "words:1a2b3c4d5e6f"); an allow that cites none is refused.
+    Cite in relied_on the ids of every evidence item your verdict rests on, copied exactly from the
+    square brackets in <evidence>; an allow that cites none of them is refused.
     When you refuse, set refusal to one plain sentence for the agent, under 150 characters, with no
     quotation marks, ids, dates, or times: what the user's words permit and what this action does
     beyond them. Reason first, quoting the user words you relied on, then set allow.
@@ -100,9 +100,20 @@ def quick_verdict(decision: Decision) -> Verdict | None:
             return None
 
 
+def tail(ident: str) -> str:
+    return ident.rpartition(":")[2]
+
+
 def cited(items: Sequence[Evidence], ids: Sequence[str]) -> list[Evidence]:
+    """The items *ids* name: an id copied whole or inside a longer line, or one whose tail after the last colon
+    survived a mangled prefix."""
     named = {ident.strip().strip("[]") for ident in ids}
-    return [item for item in items if item.id in named or item.id.partition(":")[2] in named]
+    tails = {tail(ident) for ident in named}
+    return [
+        item
+        for item in items
+        if any(item.id in ident for ident in named) or item.id.partition(":")[2] in named or tail(item.id) in tails
+    ]
 
 
 @dataclass(frozen=True, slots=True)
