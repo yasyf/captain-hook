@@ -297,7 +297,7 @@ def test_stop_tools_are_the_stop_guards_names_and_flag_exactly_the_rows_naming_t
     _state.hooks.clear()
     importlib.reload(stops)
     assert set(DEFINITION["tools"]) == set(stops.STOP_TOOLS)
-    [stop_guard] = _state.hooks
+    [stop_guard] = [hook for hook in _state.hooks if hook.spec.mandatory]
     assert stop_guard.spec.mandatory
     rows = [(row, expected) for row, expected in (stop_guard.spec.tests or {}).items() if not isinstance(row, str)]
     assert len(rows) > 8

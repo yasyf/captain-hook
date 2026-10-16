@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
     from captain_hook.confirm import Confirm
     from captain_hook.events import BaseHookEvent
-    from captain_hook.grants import Grants
     from captain_hook.settings import HooksSettings
+    from captain_hook.tickets import Tickets
     from captain_hook.types import HookResult
 
 HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
@@ -80,19 +80,19 @@ def reject_confirm_misuse(events: Event, block: bool, confirm: Confirm | None) -
         raise ValueError("confirm judges a tool call, so it runs only on tool events.")
 
 
-GRANTS_INCOMPLETE = "Retry the call; a grant lifts this block only once its check runs."
+TICKETS_INCOMPLETE = "Retry the call; a ticket lifts this block only once its check runs."
 
 
-def reject_grants_misuse(events: Event, block: bool, grants: Grants | None, max_fires: int | None) -> None:
-    """Reject ``grants`` with no block to lift, off tool events, under a fire cap, or with no action to cover."""
-    if grants is not None and max_fires is not None:
-        raise ValueError("grants cannot take max_fires: a capped gate would stop checking and let calls through.")
-    if grants is not None and not block:
-        raise ValueError("grants needs block=True: a grant lifts a block, and a warn has nothing to lift.")
-    if grants is not None and events & ~TOOL_EVENTS:
-        raise ValueError("grants cover a tool call, so they run only on tool events.")
-    if grants is not None and grants.action is None:
-        raise ValueError("grants needs a declaration with an action: the attachment maps each event to one.")
+def reject_tickets_misuse(events: Event, block: bool, tickets: Tickets | None, max_fires: int | None) -> None:
+    """Reject ``tickets`` with no block to lift, off tool events, under a fire cap, or with no action to cover."""
+    if tickets is not None and max_fires is not None:
+        raise ValueError("tickets cannot take max_fires: a capped gate would stop checking and let calls through.")
+    if tickets is not None and not block:
+        raise ValueError("tickets needs block=True: a ticket lifts a block, and a warn has nothing to lift.")
+    if tickets is not None and events & ~TOOL_EVENTS:
+        raise ValueError("tickets cover a tool call, so they run only on tool events.")
+    if tickets is not None and tickets.action is None:
+        raise ValueError("tickets needs a declaration with an action: the attachment maps each event to one.")
 
 
 def reject_transcript_events(transcript_events: int | None) -> None:
@@ -243,7 +243,7 @@ def hook(
     skip_if: Sequence[TCondition] = (),
     block: bool = False,
     confirm: Confirm | None = None,
-    grants: Grants | None = None,
+    tickets: Tickets | None = None,
     advisory_on_deny: bool = False,
     respect_gitignore: bool = True,
     max_fires: int | None = None,
@@ -256,7 +256,7 @@ def hook(
     reject_async_decision(events, async_)
     reject_mandatory_misuse(events, async_, mandatory)
     reject_confirm_misuse(events, block, confirm)
-    reject_grants_misuse(events, block, grants, max_fires)
+    reject_tickets_misuse(events, block, tickets, max_fires)
     reject_transcript_events(transcript_events)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
@@ -269,8 +269,8 @@ def hook(
                 message=message,
                 block=block,
                 confirm=confirm,
-                grants=grants,
-                on_incomplete=GRANTS_INCOMPLETE if grants is not None else None,
+                tickets=tickets,
+                on_incomplete=TICKETS_INCOMPLETE if tickets is not None else None,
                 advisory_on_deny=advisory_on_deny,
                 respect_gitignore=respect_gitignore,
                 max_fires=max_fires,

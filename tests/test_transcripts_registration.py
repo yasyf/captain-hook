@@ -1127,7 +1127,6 @@ def probe() -> list[int]:
 def test_first_prompt_reads_unborn_root_transcript_as_empty_history(
     tmp_path, first_prompt_hooks, model_calls, snapshot_owner, prompt, envelope, fired
 ):
-    from captain_hook.grants import store
     from captain_hook.state import PrimitiveState
 
     start_session(tmp_path, "startup")
@@ -1150,7 +1149,6 @@ def test_first_prompt_reads_unborn_root_transcript_as_empty_history(
     assert not first_root(tmp_path).exists()
     assert unborn_allowance() == UnbornTranscript()
     assert model_calls == []
-    assert store.grants("words", FIRST_SESSION) == []
 
 
 @pytest.mark.parametrize(
@@ -1160,8 +1158,6 @@ def test_first_prompt_reads_unborn_root_transcript_as_empty_history(
 def test_first_prompt_keeps_a_written_root_transcripts_history(
     tmp_path, first_prompt_hooks, model_calls, snapshot_owner, source, allowance
 ):
-    from captain_hook.grants import store
-
     queued = {
         "type": "attachment",
         "attachment": {
@@ -1185,7 +1181,6 @@ def test_first_prompt_keeps_a_written_root_transcripts_history(
     assert history == [3]
     assert model_calls
     assert all("Option 1 — refactor now" in call for call in model_calls)
-    assert [item.quote for grant in store.grants("words", FIRST_SESSION) for item in grant.evidence] == [QUEUED_WORDS]
     assert unborn_allowance() == allowance
     assert submit_prompt(tmp_path, FIRST_PROMPT) == (TASKS_WARNING, [])
     assert history == [3, 3]

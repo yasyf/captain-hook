@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import Clause
+    from captain_hook.tickets.conditions import Matcher
     from captain_hook.types import HookSpec
 
 # Prose and config file extensions that shouldn't, on their own, demand a code-review pass.
@@ -205,14 +206,16 @@ class UserSaid(CustomCondition):
     substring behavior; a :class:`~captain_hook.Clause` runs the dependency-clause
     scan against each prompt. The default scans only what the user said in the
     current turn — the idiom for reacting to a directive the user just gave;
-    ``scope="session"`` widens the scan to every prompt in the session.
+    ``scope="session"`` widens the scan to every prompt in the session. Inside a
+    ticket rule it reads the user's words across the session tree, and a
+    :class:`~captain_hook.tickets.Matcher` pattern reads the action too.
 
     Example:
         >>> UserSaid(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt")))
         >>> UserSaid("just commit", Clause(noun=Phrase("test"), verb=Phrase("skip")), scope="session")
     """
 
-    def __init__(self, *patterns: str | Clause, scope: Literal["session", "turn"] = "turn") -> None:
+    def __init__(self, *patterns: str | Clause | Matcher, scope: Literal["session", "turn"] = "turn") -> None:
         self.patterns = patterns
         self.scope = scope
 

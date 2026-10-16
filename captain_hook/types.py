@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
     from captain_hook.confirm import Confirm
     from captain_hook.events import BaseHookEvent
-    from captain_hook.grants import Grants
     from captain_hook.signals.nlp import NlpSignal
+    from captain_hook.tickets import Tickets
 
 T = TypeVar("T", bound="ToolCallBase")
 
@@ -1038,7 +1038,7 @@ class HookSpec:
     message: str | None = None
     block: bool = False
     confirm: Confirm | None = None
-    grants: Grants | None = None
+    tickets: Tickets | None = None
     advisory_on_deny: bool = False
     respect_gitignore: bool = True
     max_fires: int | None = None

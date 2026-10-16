@@ -16,6 +16,7 @@ from math import prod
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from cc_transcript.activity import ToolUse
 from cc_transcript.tools import BashCall
 from loguru import logger
 from pydantic import BaseModel
@@ -24,20 +25,24 @@ from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, workf
 from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
-from captain_hook.grants import (
-    Allowed,
-    Asked,
-    Denied,
-    Evidence,
-    Grants,
-    Judge,
-    OwnerWords,
-    Proposal,
-    Rulings,
-    StandingRulings,
-)
-from captain_hook.grants.evidence import EvidenceSource, children, names
+from captain_hook.conditions import UserSaid
 from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
+from captain_hook.tickets import (
+    Allow,
+    Context,
+    CustomTicketCondition,
+    Decide,
+    Deny,
+    Evidence,
+    Names,
+    Proposal,
+    Reach,
+    Rule,
+    Tickets,
+    UserAnswered,
+    UserRuled,
+    store,
+)
 from captain_hook.util import proc, reqenv
 from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
@@ -50,6 +55,7 @@ if TYPE_CHECKING:
     from captain_hook import BaseHookEvent, HookResult, ToolRewriteEvent
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Arguments, Scalar
+    from captain_hook.events import PostToolUseEvent
     from captain_hook.util.proc import ProcessRow, ProcessTable
 
 GUARDED_PROGRAMS = (
@@ -207,6 +213,7 @@ OWNER_NAMED_RULES = (
 OWNER_NAMED_TTL = timedelta(hours=1)
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
+SHELL_TASK_IDS = {"Bash": "backgroundTaskId", "Monitor": "taskId"}
 INLINE_LOGIN = "/usr/bin/login -flpq dev /bin/bash --noprofile --norc -p -c orca-tcc-login"
 INLINE_ORCA_CLI = (
     "/Applications/Orca.app/Contents/MacOS/Orca /Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/cli/"
@@ -1172,9 +1179,13 @@ def lone_pane(handle: str) -> bool | Unreadable:
 
 
 @dataclass(frozen=True, slots=True)
-class CreatedHere:
-    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
-        handle = action.scope["terminal"]
+class CreatedHere(CustomTicketCondition):
+    """This session created the terminal, no dispatch names it, and its agent idles at a prompt."""
+
+    def evidence(self, ctx: Context) -> list[Evidence] | None:
+        handle = ctx.place["terminal"]
+        if (evt := ctx.evt) is None:
+            return None
         found = next(
             (
                 (use, bash)
@@ -1185,14 +1196,14 @@ class CreatedHere:
             None,
         )
         if found is None:
-            return []
+            return None
         use, bash = found
         holder = worker_of(handle)
         ready = idle(handle) if holder is None else False
         if holder is not None or ready is not True:
             dispatch = holder.get("dispatchId") if isinstance(holder, dict) else holder
             logger.bind(terminal=handle, dispatch=dispatch, idle=ready).info("a terminal this session created is busy")
-            return []
+            return None
         return [
             Evidence(
                 id=f"created:{handle}",
@@ -1200,8 +1211,6 @@ class CreatedHere:
                 quote=clip(bash.command, 200),
                 said_at=use.result_ts or use.ts,
                 detail=f"this session created {handle}; no dispatch names it and its agent idles at a prompt",
-                key=f"created:{evt.session_id}/{evt.agent_id or 'main'}/{handle}",
-                live=True,
             )
         ]
 
@@ -1227,7 +1236,7 @@ def settled_close(evt: BaseHookEvent, handle: str, tab: bool) -> Proposal | None
     dispatch, status = worker["dispatchId"], worker["dispatchStatus"]
     stage = ((worker.get("projection") or {}).get("stage") or {}).get("detail")
     return Proposal(
-        scope={},
+        place={},
         payload={"terminal": handle, "tab": tab, "dispatch": dispatch, "run": run, "status": status},
         summary=f"the coordinator of run {run} closes terminal {handle}, whose dispatch {dispatch} is {status} "
         f"({stage}) and whose agent idles at a prompt",
@@ -1250,7 +1259,7 @@ def still_settled(action: Proposal) -> bool:
     return worker is not None and worker["dispatchId"] == action.payload["dispatch"]
 
 
-def spawned(use: Any, task: str) -> bool:
+def spawned(use: ToolUse, task: str) -> bool:
     if use.call.name not in SPAWN_TOOLS or use.result is None:
         return False
     result = use.result.tool_use_result
@@ -1258,104 +1267,105 @@ def spawned(use: Any, task: str) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
-class OwnTeammate:
-    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
-        task = action.scope["task"]
-        if TEAMMATE_TASK.fullmatch(task) is None:
-            return []
-        if recorded := children(evt, "spawn", task):
-            return recorded
-        found = next((use for turn in evt.ctx.t.turns for use in turn.tool_uses if spawned(use, task)), None)
+class SpawnedHere(CustomTicketCondition):
+    """This agent's own transcript records spawning the task as its teammate."""
+
+    def evidence(self, ctx: Context) -> list[Evidence] | None:
+        task = ctx.place["task"]
+        if TEAMMATE_TASK.fullmatch(task) is None or ctx.evt is None:
+            return None
+        found = next((use for turn in ctx.evt.ctx.t.turns for use in turn.tool_uses if spawned(use, task)), None)
         if found is None:
-            return []
+            return None
         return [
             Evidence(
                 id=f"teammate:{task}",
                 source="teammate",
                 quote=task,
                 said_at=found.result_ts or found.ts,
-                detail=f"this agent's own transcript records spawning {task} as its teammate",
-                key=f"teammate:{evt.session_id}/{evt.agent_id or 'main'}/{task}",
-                live=True,
+                detail="this agent's own transcript records spawning it as its teammate",
             )
         ]
 
 
-@dataclass(frozen=True, slots=True)
-class OwnShell:
-    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
-        return children(evt, "shell", action.scope["task"])
+def child_of(payload: dict[str, Any], tool: str) -> tuple[str, str] | None:
+    """The teammate or background shell a finished spawn, ``Bash``, or ``Monitor`` call reports starting."""
+    if tool in SPAWN_TOOLS:
+        task = payload.get("teammate_id") if payload.get("status") == "teammate_spawned" else None
+        return ("teammate", task) if isinstance(task, str) else None
+    task = payload.get(SHELL_TASK_IDS.get(tool, ""))
+    return ("shell", task) if isinstance(task, str) and task else None
 
 
-@dataclass(frozen=True, slots=True)
-class OwnerNaming:
-    """The owner's words and answers that name the action's *key* target."""
-
-    key: str
-    sources: tuple[EvidenceSource, ...] = (Asked(), OwnerWords())
-
-    def collect(self, evt: BaseHookEvent, action: Proposal) -> list[Evidence]:
-        target = action.scope[self.key]
-        return [
-            item
-            for source in self.sources
-            for item in source.collect(evt, action)
-            if names(f"{item.quote}\n{item.detail}", target)
-        ]
+def child_place(evt: BaseHookEvent, task: str) -> dict[str, str]:
+    return {"agent": f"{evt._raw.get('session_id', '')}/{evt.agent_id or 'main'}", "task": task}
 
 
-def rulings_naming(key: str, tags: frozenset[str] = frozenset()) -> Rulings:
-    return Rulings(search=lambda action: action.scope[key], tags=tags)
+def record_child(evt: PostToolUseEvent) -> None:
+    """Mint the ticket that lets this agent stop the teammate or shell its finished call started."""
+    if not isinstance(payload := evt.tool_response, dict) or (child := child_of(payload, evt.tool_name)) is None:
+        return
+    source, task = child
+    ctx = TASK_STOP.context(evt, Proposal(place=child_place(evt, task), summary=f"stop {source} {task}"))
+    detail = f"this agent's own {evt.tool_name} call started {task}"
+    TASK_STOP.mint(
+        ctx, source, [Evidence(id=f"{source}:{task}", source=source, quote=task, said_at=store.now(), detail=detail)]
+    )
 
 
-TERMINAL_CLOSE = Grants(
+def user_named(key: str) -> Decide:
+    return Decide(OWNER_NAMED_RULES, over=(UserSaid(Names(key)), UserAnswered(Names(key), approved=False)))
+
+
+TERMINAL_CLOSE = Tickets(
     "sessions.close",
     ("terminal",),
-    evidence=(rulings_naming("terminal"), CreatedHere()),
-    replay=RETRY_WINDOW,
-    would_allow="Close an idle terminal this session created, or have the owner name the terminal id in a "
+    Reach.ONCE,
+    rules=(Rule("ruling", UserRuled("terminal")), Rule("created-here", CreatedHere())),
+    deny="Close an idle terminal this session created, or have the owner name the terminal id in a "
     "cc-notes answer before the closing session starts.",
+    ttl=RETRY_WINDOW,
     hook="sessions",
 )
-LAUNCHD_STOP = Grants(
+LAUNCHD_STOP = Tickets(
     "sessions.launchctl",
     ("service",),
-    evidence=(rulings_naming("service"),),
-    replay=RETRY_WINDOW,
-    would_allow="Have the owner name the service label in a cc-notes answer before the acting session starts.",
+    Reach.ONCE,
+    rules=(Rule("ruling", UserRuled("service")),),
+    deny="Have the owner name the service label in a cc-notes answer before the acting session starts.",
+    ttl=RETRY_WINDOW,
     hook="sessions",
 )
-TASK_STOP = Grants(
+TASK_STOP = Tickets(
     "sessions.task-stop",
-    ("task",),
-    evidence=(OwnTeammate(), OwnShell(), rulings_naming("task")),
-    replay=RETRY_WINDOW,
-    would_allow="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
+    ("agent", "task"),
+    Reach.PLACE,
+    rules=(Rule("spawned-here", SpawnedHere()), Rule("ruling", UserRuled("task"))),
+    deny="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
     "this agent started, or have the owner name the task id in a cc-notes answer before the stopping session starts.",
     hook="sessions",
 )
-
-KILL_PROCESS = Grants(
+KILL_PROCESS = Tickets(
     "sessions.kill",
     ("program", "process"),
-    evidence=(rulings_naming("program", KILL_RULING_TAGS),),
-    replay=RETRY_WINDOW,
-    would_allow="Have the owner name the process's program, such as `desk-runner.py`, in a cc-notes answer tagged "
+    Reach.ONCE,
+    rules=(Rule("ruling", UserRuled("program", tags=KILL_RULING_TAGS)),),
+    deny="Have the owner name the process's program, such as `desk-runner.py`, in a cc-notes answer tagged "
     f"{' and '.join(sorted(KILL_RULING_TAGS))} before the acting session starts.",
+    ttl=RETRY_WINDOW,
     hook="sessions",
 )
 
 
-def owner_named(kind: str, key: str, target: str) -> Grants:
-    return Grants(
+def owner_named(kind: str, key: str, target: str) -> Tickets:
+    return Tickets(
         f"{kind}.owner",
         (key,),
-        judge=Judge(rules=OWNER_NAMED_RULES),
-        evidence=(OwnerNaming(key),),
+        Reach.ONCE,
+        rules=(Rule("user-named", user_named(key)),),
+        deny=f"Ask the owner to name the {target} and say to end it; their answer lifts this block once.",
         ttl=OWNER_NAMED_TTL,
-        replay=RETRY_WINDOW,
-        would_allow=f"Ask the owner to name the {target} and say to end it; their answer lifts this block once.",
-        hook="sessions",
+        hook=f"{kind}.owner",
     )
 
 
@@ -1365,15 +1375,14 @@ OWNER_NAMED = {
     TERMINAL_CLOSE.kind: TERMINAL_CLOSE_NAMED,
     LAUNCHD_STOP.kind: LAUNCHD_STOP_NAMED,
 }
-SETTLED_CLOSE = Grants(
+SETTLED_CLOSE = Tickets(
     "sessions.close-settled",
     (),
-    judge=Judge(rules=SETTLED_CLOSE_RULES),
-    evidence=(StandingRulings(CLASS_RULINGS),),
-    mint=None,
-    ttl=None,
-    would_allow="Close only an idle terminal whose dispatch Orca records as settled, under a standing owner decision "
+    Reach.PLACE,
+    rules=(Rule("class-ruling", Decide(SETTLED_CLOSE_RULES, over=(UserRuled(ids=CLASS_RULINGS),))),),
+    deny="Close only an idle terminal whose dispatch Orca records as settled, under a standing owner decision "
     "recorded in cc-notes before the closing session.",
+    ttl=None,
     hook="sessions",
 )
 
@@ -1381,7 +1390,6 @@ SETTLED_CLOSE = Grants(
 @dataclass(frozen=True, slots=True)
 class Ungranted:
     message: str
-    reason: str
     detail: str = ""
 
 
@@ -1389,36 +1397,36 @@ def spawning_root(evt: BaseHookEvent) -> bool:
     return evt.agent_id is None and evt.ctx.root_path is None
 
 
-def refusal(message: str, hook: str, refused: Denied) -> Ungranted:
-    return Ungranted(message, refused.message if refused.reason else "", f"{hook}: {refused.explained}")
+def refusal(message: str, hook: str, refused: Deny) -> Ungranted:
+    return Ungranted(message, f"{hook}: {refused.detail}" if refused.detail else "")
 
 
-def owner_lift(evt: BaseHookEvent, grants: Grants, action: Proposal, ungranted: Ungranted) -> Ungranted | None:
+def owner_lift(evt: BaseHookEvent, tickets: Tickets, action: Proposal, ungranted: Ungranted) -> Ungranted | None:
     """``None`` when the owner named *action*'s target in their own words, for the spawning root only, once."""
-    if (named := OWNER_NAMED.get(grants.kind)) is None or not spawning_root(evt):
+    if (named := OWNER_NAMED.get(tickets.kind)) is None or not spawning_root(evt):
         return ungranted
-    if isinstance(verdict := named.decide(evt, action), Allowed):
+    if isinstance(verdict := named.check(evt, action), Allow):
         return None
-    if not verdict.reason:
-        return ungranted
-    return Ungranted(ungranted.message, verdict.message, f"{ungranted.detail} {verdict.explained}".strip())
+    return Ungranted(ungranted.message, f"{ungranted.detail} {named.hook}: {verdict.detail}".strip())
 
 
-def lift(evt: BaseHookEvent, grants: Grants, action: Proposal, message: str, *, owner: bool = True) -> Ungranted | None:
-    """``None`` when a grant lifts the block, else the block with why nothing covered it.
+def lift(
+    evt: BaseHookEvent, tickets: Tickets, action: Proposal, message: str, *, owner: bool = True
+) -> Ungranted | None:
+    """``None`` when a ticket lifts the block, else the block with why nothing covered it.
 
-    With *owner*, a kind with an owner-named lift tries it after its own evidence.
+    With *owner*, a kind with an owner-named lift tries it after its own rules.
     """
-    if isinstance(verdict := grants.decide(evt, action), Allowed):
+    if isinstance(verdict := tickets.check(evt, action), Allow):
         return None
-    ungranted = refusal(message, grants.hook, verdict)
-    return owner_lift(evt, grants, action, ungranted) if owner else ungranted
+    ungranted = refusal(message, tickets.hook, verdict)
+    return owner_lift(evt, tickets, action, ungranted) if owner else ungranted
 
 
 def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | None:
     name = program(row)
     action = Proposal(
-        scope={"program": name, "process": f"{row.pid}@{row.started.isoformat()}"},
+        place={"program": name, "process": f"{row.pid}@{row.started.isoformat()}"},
         summary=f"kill {row.pid} ({name})",
     )
     return lift(evt, KILL_PROCESS, action, message, owner=False)
@@ -1426,8 +1434,8 @@ def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | 
 
 def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:
     match next((message for message in messages if message is not None), None):
-        case Ungranted(message, reason, detail):
-            return evt.block(reason or message, system_message=detail or None)
+        case Ungranted(message, detail):
+            return evt.block(message, system_message=detail or None)
         case str() as message:
             return evt.block(message)
         case _:

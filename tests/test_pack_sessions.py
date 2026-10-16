@@ -35,16 +35,15 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
 from captain_hook.events import PreToolUseEvent
-from captain_hook.grants import evidence as evidence_module
-from captain_hook.grants import orca as orca_grants
-from captain_hook.grants import store
-from captain_hook.grants.evidence import words_evidence
-from captain_hook.hook_lint import copy_violations
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete
-from captain_hook.testing.helpers import input_to_event, stubbed_commands
+from captain_hook.testing.helpers import fixture_file, input_to_event, stubbed_commands
 from captain_hook.testing.types import Input
+from captain_hook.tickets import Reach, store
+from captain_hook.tickets import context as context_module
+from captain_hook.tickets import orca as orca_tickets
+from captain_hook.tickets.context import said_evidence
 from captain_hook.transcripts import lazy_transcript
 from captain_hook.types import CustomCondition, Event
 from captain_hook.util import proc, reqenv
@@ -144,7 +143,7 @@ CLOSE_FIX = (
     "Close only an idle orphan this session created, or ask the owner to name it in a cc-notes answer for a later "
     "session."
 )
-REAL_CCN_ANSWERS = evidence_module.ccn_answers
+REAL_CCN_ANSWERS = context_module.ccn_answers
 
 
 def overrides(client_ppid: int = HOOK_SHELL, env: dict[str, str] | None = None) -> reqenv.RequestOverrides:
@@ -181,7 +180,7 @@ def home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def rulings(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, Any]]]:
     answers: dict[str, list[dict[str, Any]]] = {}
-    monkeypatch.setattr(evidence_module, "ccn_answers", lambda evt, term: answers.get(term, []))
+    monkeypatch.setattr(context_module, "ccn_answers", lambda evt, term: answers.get(term, []))
     return answers
 
 
@@ -189,12 +188,8 @@ def ruling(body: str, *, written: Any = INLINE_STARTED - timedelta(days=1)) -> l
     return json.loads(inline_ruling(body, written=written))
 
 
-def spends(kind: str) -> list[tuple[str, str, list[str]]]:
-    return [
-        (spend.state, spend.summary, spend.relied_on)
-        for grant in store.grants(kind)
-        for spend in store.spends(grant.id)
-    ]
+def minted(kind: str) -> list[tuple[str, list[str]]]:
+    return [(ticket.rule, [item.id for item in ticket.evidence]) for ticket in store.tickets(kind)]
 
 
 @pytest.fixture
@@ -711,7 +706,7 @@ class TestStopTool:
     ) -> None:
         assert decide_input(stop(tool_input), tmp_path) is None
         assert decide_input(stop(tool_input), tmp_path, event=Event.PermissionRequest) is None
-        assert spends("sessions.task-stop") == []
+        assert minted("sessions.task-stop") == []
 
     def test_an_orca_lane_session_is_no_root(self, general_pack: None, tmp_path: Path) -> None:
         lane = stop({"task_id": "wcn64vfub"}, root_transcript=INLINE_TRANSCRIPT)
@@ -760,7 +755,7 @@ class TestStopTool:
     ) -> None:
         rulings["wcn64vfub"] = ruling("Stop wcn64vfub; it hung on a dead socket.")
         assert decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path) is None
-        assert spends("sessions.task-stop") == [("committed", "stop task wcn64vfub", ["ccn:0207568"])]
+        assert minted("sessions.task-stop") == [("ruling", ["ccn:0207568"])]
         denied = decide_input(lane_stop({"task_id": "b1a2c3d4"}), tmp_path)
         assert denied == STOP_DENIED.replace("wcn64vfub", "b1a2c3d4")
 
@@ -769,7 +764,7 @@ class TestStopTool:
     ) -> None:
         rulings["wcn64vfub"] = ruling("Stop wcn64vfub.", written=INLINE_STARTED + timedelta(seconds=1))
         assert decide_input(lane_stop({"task_id": "wcn64vfub"}), tmp_path) == STOP_DENIED
-        assert spends("sessions.task-stop") == []
+        assert minted("sessions.task-stop") == []
 
     def test_a_lane_stops_the_teammate_it_spawned_and_records_its_spend(
         self, general_pack: None, tmp_path: Path
@@ -777,9 +772,7 @@ class TestStopTool:
         own = lane_stop({"task_id": OBSERVED_LANE}, session_id=RESUMED_SESSION, transcript=inline_spawn(OBSERVED_LANE))
         assert decide_input(own, tmp_path) is None
         assert decide_input(own, tmp_path, event=Event.PermissionRequest) is None
-        assert spends("sessions.task-stop") == [
-            ("committed", f"stop task {OBSERVED_LANE}", [f"teammate:{OBSERVED_LANE}"])
-        ]
+        assert minted("sessions.task-stop") == [("spawned-here", [f"teammate:{OBSERVED_LANE}"])]
 
     @pytest.mark.parametrize(
         ("task_id", "fields"),
@@ -807,11 +800,11 @@ class TestStopTool:
     ) -> None:
         denied = decide_input(lane_stop({"task_id": task_id}, session_id=RESUMED_SESSION, **fields), tmp_path)
         assert denied == STOP_DENIED.replace("wcn64vfub", task_id)
-        assert spends("sessions.task-stop") == []
+        assert minted("sessions.task-stop") == []
 
 
 class TestTerminalClose:
-    def test_an_owner_ruling_closes_the_terminal_it_names_once(
+    def test_an_owner_ruling_closes_the_terminal_it_names(
         self,
         general_pack: None,
         agent_table: None,
@@ -822,10 +815,8 @@ class TestTerminalClose:
         with stubbed_commands(INLINE_COMMANDS | inline_tab(INLINE_OWNER_TERMINAL, INLINE_OWNER_TERMINAL)):
             assert decide(OWNER_CLOSE, tmp_path) is None
             again = envelope_of(bash(f"{OWNER_CLOSE} --tab"), tmp_path)
-        assert spends("sessions.close") == [("committed", f"close terminal {INLINE_OWNER_TERMINAL}", ["ccn:0207568"])]
-        assert again is not None
-        assert "already used on close terminal" in (reason(again) or "")
-        assert "was spent" in again["systemMessage"]
+        assert minted("sessions.close") == [("ruling", ["ccn:0207568"]), ("ruling", ["ccn:0207568"])]
+        assert again is None
 
     def test_a_ruling_naming_another_terminal_keeps_the_block(
         self,
@@ -853,7 +844,7 @@ class TestTerminalClose:
             message = decide(AGENT_CLOSE, tmp_path)
         assert message is not None
         assert CLOSE_FIX in message
-        assert spends("sessions.close") == []
+        assert minted("sessions.close") == []
 
     def test_an_unreadable_ruling_keeps_the_block_and_tells_the_user(
         self,
@@ -862,14 +853,14 @@ class TestTerminalClose:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(evidence_module, "ccn_answers", REAL_CCN_ANSWERS)
+        monkeypatch.setattr(context_module, "ccn_answers", REAL_CCN_ANSWERS)
         monkeypatch.setenv("PATH", str(tmp_path / "bin"))
         orca = {argv: stdout for argv, stdout in INLINE_COMMANDS.items() if not argv.startswith("ccn")}
         with stubbed_commands(orca):
             envelope = envelope_of(bash(AGENT_CLOSE), tmp_path)
         assert envelope is not None
         assert CLOSE_FIX in (reason(envelope) or "")
-        assert "sessions: The grant check failed (FileNotFoundError" in envelope["systemMessage"]
+        assert "sessions: The ticket check failed (FileNotFoundError" in envelope["systemMessage"]
 
     def test_a_batch_of_closes_stays_blocked_when_a_ruling_names_both(
         self,
@@ -886,12 +877,12 @@ class TestTerminalClose:
             assert decide(AGENT_CLOSE, tmp_path) is None
         assert message is not None
         assert "leave ending them to the owner" in message
-        assert [summary for _, summary, _ in spends("sessions.close")] == [
-            f"close terminal {INLINE_OWNER_TERMINAL}",
-            "close terminal term_agent",
+        assert [ticket.place["terminal"] for ticket in store.tickets("sessions.close")] == [
+            INLINE_OWNER_TERMINAL,
+            "term_agent",
         ]
 
-    def test_a_class_ruling_closes_every_settled_dispatchs_idle_terminal_from_one_grant(
+    def test_a_class_ruling_closes_every_settled_dispatchs_idle_terminal_from_one_ticket(
         self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
     ) -> None:
         fake_table["table"] = TWO_AGENT_TERMINALS
@@ -902,13 +893,10 @@ class TestTerminalClose:
             with stubbed_commands(SETTLED | {"orca orchestration worker-list": inline_worker(handle, status, stage)}):
                 close = bash(f"orca terminal close --terminal {handle} --json", llm=CLASS_ALLOW)
                 assert decide_input(close, tmp_path, env=ROOT) is None
-        [grant] = store.grants("sessions.close-settled")
-        assert grant.uses is None and grant.scope == {}
-        assert [(spend.state, spend.relied_on) for spend in store.spends(grant.id)] == [
-            ("committed", ["ccn:c9b27c1"]),
-            ("committed", ["ccn:c9b27c1"]),
-        ]
-        assert spends("sessions.close") == []
+        [ticket] = store.tickets("sessions.close-settled")
+        assert ticket.reach is Reach.PLACE and ticket.place == {}
+        assert [item.id for item in ticket.evidence] == ["ccn:c9b27c1"]
+        assert minted("sessions.close") == []
 
     @pytest.mark.parametrize(
         ("commands", "llm", "env", "fields"),
@@ -952,8 +940,8 @@ class TestTerminalClose:
         with stubbed_commands(SETTLED | settled | commands):
             message = decide_input(bash(AGENT_CLOSE, llm=llm, **fields), tmp_path, env=env)
         assert message is not None
-        assert "where pid 16002" in message or _sessions.SETTLED_CLOSE.would_allow in message
-        assert [spend for grant in store.grants("sessions.close-settled") for spend in store.spends(grant.id)] == []
+        assert "where pid 16002" in message or _sessions.SETTLED_CLOSE.deny in message
+        assert store.tickets("sessions.close-settled") == []
 
     @pytest.mark.parametrize(
         ("idles", "workers"),
@@ -980,15 +968,13 @@ class TestTerminalClose:
     ) -> None:
         monkeypatch.setattr(_sessions, "idle", lambda handle, seen=iter(idles): next(seen))
         monkeypatch.setattr(_sessions, "worker_of", lambda handle, seen=iter(workers): next(seen))
-        monkeypatch.setattr(orca_grants, "resolve", lambda handle: (None, None))
+        monkeypatch.setattr(orca_tickets, "resolve", lambda handle: (None, None))
         with stubbed_commands(SETTLED):
             envelope = envelope_of(bash(AGENT_CLOSE, llm=CLASS_ALLOW), tmp_path, env=ROOT)
         assert envelope is not None
         assert "where pid 16002" in (reason(envelope) or "")
         assert "changed while the judge decided" in envelope["systemMessage"]
-        assert [
-            spend.state for grant in store.grants("sessions.close-settled") for spend in store.spends(grant.id)
-        ] == ["released"]
+        assert [ticket.rule for ticket in store.tickets("sessions.close-settled")] == ["class-ruling"]
 
     @pytest.mark.parametrize(
         "command",
@@ -1010,7 +996,7 @@ class TestTerminalClose:
     ) -> None:
         with stubbed_commands(INLINE_COMMANDS):
             assert decide_input(bash(AGENT_CLOSE, transcript=inline_create("term_agent")), tmp_path) is None
-        assert spends("sessions.close") == [("committed", "close terminal term_agent", ["created:term_agent"])]
+        assert minted("sessions.close") == [("created-here", ["created:term_agent"])]
 
     @pytest.mark.parametrize(
         ("transcript", "commands"),
@@ -1042,7 +1028,7 @@ class TestTerminalClose:
             message = decide_input(bash(AGENT_CLOSE, transcript=transcript), tmp_path)
         assert message is not None
         assert "where pid 16002" in message
-        assert spends("sessions.close") == []
+        assert minted("sessions.close") == []
 
     @pytest.mark.parametrize(("offset", "allowed"), [(60, True), (600, False)], ids=["during", "after"])
     def test_an_orca_launch_receipt_written_during_the_call_proves_creation(
@@ -1250,25 +1236,22 @@ def owner_turn(text: str) -> list[dict[str, Any]]:
 
 
 def owner_allows(text: str) -> dict[str, Any]:
-    return {"allow": True, "reason": "The owner named it.", "relied_on": [words_evidence(text, OWNER_AT).id]}
+    return {"allow": True, "reason": "The owner named it.", "relied_on": [said_evidence(text, OWNER_AT, "prompt").id]}
 
 
 class TestOwnerNamedLifts:
-    def test_the_root_restarts_a_service_the_owner_named_once(self, general_pack: None, tmp_path: Path) -> None:
-        said = words_evidence(SERVE_WEDGED, OWNER_AT).id
+    def test_the_root_restarts_a_service_the_owner_named(self, general_pack: None, tmp_path: Path) -> None:
+        said = said_evidence(SERVE_WEDGED, OWNER_AT, "prompt").id
         kick = bash(SERVE_KICK, transcript=owner_turn(SERVE_WEDGED), llm=owner_allows(SERVE_WEDGED))
         assert decide_input(kick, tmp_path) is None
-        assert spends("sessions.launchctl.owner") == [
-            ("committed", "launchctl kickstart com.example.orca-serve", [said])
-        ]
+        assert minted("sessions.launchctl.owner") == [("user-named", [said])]
         bootout = bash(
             "launchctl bootout system/com.example.orca-serve",
             transcript=owner_turn(SERVE_WEDGED),
             llm=owner_allows(SERVE_WEDGED),
         )
-        refused = decide_input(bootout, tmp_path)
-        assert refused is not None and "already used on launchctl kickstart" in refused
-        assert not copy_violations(refused)
+        assert decide_input(bootout, tmp_path) is None
+        assert minted("sessions.launchctl.owner") == [("user-named", [said]), ("user-named", [said])]
 
     def test_a_lane_never_takes_the_owner_named_lift(self, general_pack: None, tmp_path: Path) -> None:
         lane = bash(
@@ -1279,26 +1262,24 @@ class TestOwnerNamedLifts:
             llm=owner_allows(SERVE_WEDGED),
         )
         assert decide_input(lane, tmp_path) is not None
-        assert spends("sessions.launchctl.owner") == []
+        assert minted("sessions.launchctl.owner") == []
 
     def test_words_naming_another_service_lift_nothing(self, general_pack: None, tmp_path: Path) -> None:
         other = "kickstart com.example.orca-serve-2"
         kick = bash(SERVE_KICK, transcript=owner_turn(other), llm=owner_allows(other))
         assert decide_input(kick, tmp_path) is not None
-        assert spends("sessions.launchctl.owner") == []
+        assert minted("sessions.launchctl.owner") == []
 
-    def test_a_judge_refusal_reaches_the_agent_in_the_block(self, general_pack: None, tmp_path: Path) -> None:
+    def test_a_judge_refusal_reaches_the_user(self, general_pack: None, tmp_path: Path) -> None:
         verdict = {
             "allow": False,
             "reason": "describes",
             "refusal": "The owner described the service but never asked to restart it.",
         }
         kick = bash(SERVE_KICK, transcript=owner_turn(f"{SERVE_WEDGED}?"), llm=verdict)
-        message = decide_input(kick, tmp_path)
-        assert message is not None and message.startswith(
-            "The owner described the service but never asked to restart it."
-        )
-        assert not copy_violations(message)
+        envelope = envelope_of(kick, tmp_path)
+        assert envelope is not None and "may host sessions" in (reason(envelope) or "")
+        assert "sessions.launchctl.owner: user-named: nothing found" in envelope["systemMessage"]
 
 
 def finished(inp: Input, response: dict[str, Any], tmp_path: Path) -> None:
@@ -1328,7 +1309,7 @@ class TestRecordedChildren:
         finished(shell, {"stdout": "", "backgroundTaskId": "blmtrzuxz"}, tmp_path)
         assert decide_input(lane_stop({"task_id": "blmtrzuxz"}), tmp_path) is None
         assert decide_input(lane_stop({"task_id": "blmtrzuxz"}, agent_id="lane-2"), tmp_path) is not None
-        assert spends("sessions.task-stop") == [("committed", "stop task blmtrzuxz", ["shell:blmtrzuxz"])]
+        assert minted("sessions.task-stop") == [("shell", ["shell:blmtrzuxz"])]
 
     def test_a_monitor_this_lane_armed_stops(self, general_pack: None, tmp_path: Path) -> None:
         monitor = Input(
@@ -1341,24 +1322,25 @@ class TestRecordedChildren:
         finished(monitor, {"taskId": "b166f8m04", "timeoutMs": 1800000, "persistent": False}, tmp_path)
         assert decide_input(lane_stop({"task_id": "b166f8m04"}), tmp_path) is None
         assert decide_input(lane_stop({"task_id": "b166f8m04"}, agent_id="lane-2"), tmp_path) is not None
-        assert spends("sessions.task-stop") == [("committed", "stop task b166f8m04", ["shell:b166f8m04"])]
+        assert minted("sessions.task-stop") == [("shell", ["shell:b166f8m04"])]
 
     def test_a_monitor_stops_after_its_lane_moves_to_another_coordinator(
         self, general_pack: None, tmp_path: Path
     ) -> None:
+        root = fixture_file(INLINE_TRANSCRIPT)
         monitor = Input(
             tool="Monitor",
             tool_input={"command": "cci watch", "description": "bus"},
             session_id="s1",
             cwd="/w",
-            root_transcript=INLINE_TRANSCRIPT,
+            root_transcript=root,
         )
         finished(monitor, {"taskId": "bxaw18znb", "timeoutMs": 1800000, "persistent": False}, tmp_path)
-        moved = stop({"task_id": "bxaw18znb"}, root_transcript=INLINE_TRANSCRIPT)
+        moved = stop({"task_id": "bxaw18znb"}, root_transcript=root)
         assert decide_input(moved, tmp_path) is None
-        foreign = stop({"task_id": "bxaw18znb"}, session_id="s2", root_transcript=INLINE_TRANSCRIPT)
+        foreign = stop({"task_id": "bxaw18znb"}, session_id="s2", root_transcript=root)
         assert decide_input(foreign, tmp_path) is not None
-        assert spends("sessions.task-stop") == [("committed", "stop task bxaw18znb", ["shell:bxaw18znb"])]
+        assert minted("sessions.task-stop") == [("shell", ["shell:bxaw18znb"])]
 
     def test_an_agent_payload_naming_a_task_id_records_no_shell(self, general_pack: None, tmp_path: Path) -> None:
         spawn = Input(
@@ -1366,26 +1348,3 @@ class TestRecordedChildren:
         )
         finished(spawn, {"status": "async_launched", "taskId": "b166f8m04"}, tmp_path)
         assert decide_input(lane_stop({"task_id": "b166f8m04"}), tmp_path) is not None
-
-
-class TestRecordedOwnerWords:
-    def test_a_message_the_owner_queued_is_recorded_when_the_turn_ends(
-        self, general_pack: None, tmp_path: Path
-    ) -> None:
-        queued = {
-            "type": "attachment",
-            "timestamp": OWNER_AT.isoformat().replace("+00:00", "Z"),
-            "attachment": {
-                "type": "queued_command",
-                "prompt": "post the fix in the alert thread",
-                "commandMode": "prompt",
-                "origin": {"kind": "human"},
-            },
-        }
-        turn = Input(session_id="s1", cwd="/w", transcript=[*INLINE_TRANSCRIPT, queued])
-        envelope_of(turn, tmp_path, event=Event.Stop)
-        recorded = [item.quote for grant in store.grants("words", "s1") for item in grant.evidence]
-        assert recorded == ["post the fix in the alert thread"]
-        lane = Input(session_id="s1", cwd="/w", agent_id="lane-1", transcript=[*INLINE_TRANSCRIPT, queued])
-        envelope_of(lane, tmp_path, event=Event.Stop)
-        assert len(store.grants("words", "s1")) == 1

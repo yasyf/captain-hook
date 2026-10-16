@@ -10,12 +10,12 @@ from cc_transcript.ids import SessionId
 
 from captain_hook.app import on
 from captain_hook.cli import dispatch_event
-from captain_hook.grants.evidence import tree_of
 from captain_hook.orca import coordinator_transcript
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT
 from captain_hook.testing.helpers import stubbed_commands
 from captain_hook.testing.snapshots import FixtureOwner
+from captain_hook.tickets import tree_of
 from captain_hook.types import Event
 from captain_hook.util import reqenv
 from tests.helpers import raw_text

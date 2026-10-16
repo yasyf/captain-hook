@@ -1,4 +1,4 @@
-"""An Orca lane reads its Run coordinator's grants, bound through Orca's own orchestration record."""
+"""An Orca lane reads its Run coordinator's tickets, bound through Orca's own orchestration record."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from captain_hook.grants import store
-from captain_hook.grants.evidence import tree_of
+from captain_hook.tickets import store
+from captain_hook.tickets.context import tree_of
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
@@ -65,10 +65,16 @@ def bound_run(evt: BaseHookEvent, handle: str) -> OrcaRun:
     return found
 
 
-def coordinator_tree(binding: OrcaRun) -> str | None:
+def coordinator_tree(evt: BaseHookEvent) -> str | None:
+    """The session tree of the Orca Run coordinator this lane answers to, when it is another tree."""
+    if (handle := terminal()) is None:
+        return None
+    binding = bound_run(evt, handle)
     if binding.coordinator is None or (pinned := binding.pinned.get(pin(binding.run, binding.coordinator))) is None:
         return None
-    return pinned if store.terminal_tree(binding.coordinator) == pinned else None
+    if store.terminal_tree(binding.coordinator) != pinned or pinned == tree_of(evt):
+        return None
+    return pinned
 
 
 def record_terminal(evt: BaseHookEvent) -> None:
@@ -76,17 +82,3 @@ def record_terminal(evt: BaseHookEvent) -> None:
         return
     if store.record_terminal(handle, tree_of(evt)):
         logger.bind(terminal=handle, tree=tree_of(evt)).info("recorded the orca terminal's session tree")
-
-
-def adopt_coordinator(evt: BaseHookEvent) -> None:
-    if (handle := terminal()) is None:
-        return
-    binding = bound_run(evt, handle)
-    tree = tree_of(evt)
-    if (coordinator := coordinator_tree(binding)) is None or coordinator == tree:
-        return
-    agent = f"orca:{binding.run}"
-    if adopted := store.adopt_tree(coordinator, tree=tree, session=evt.session_id, agent=agent):
-        logger.bind(run=binding.run, coordinator=coordinator, tree=tree, adopted=adopted).info(
-            "adopted the orca coordinator's grants"
-        )

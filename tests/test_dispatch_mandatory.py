@@ -27,11 +27,11 @@ from captain_hook.dispatch import (
     dispatch,
 )
 from captain_hook.events import PreToolUseEvent
-from captain_hook.grants import Grant, Grants, Proposal, store
-from captain_hook.grants import declare as grant_declare
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import CURRENT_CLIENT, MANDATORY_WORK_SECONDS, EvidenceIncomplete, SnapshotClient
+from captain_hook.tickets import Allow, Proposal, Reach, Ticket, Tickets, store
+from captain_hook.tickets import declare as ticket_declare
 from captain_hook.transcripts import lazy_transcript
 from captain_hook.types import CustomCondition, Event, SkipPermissions
 from captain_hook.util import proc, reqenv
@@ -1199,22 +1199,6 @@ GRANTED_SLACK = json.dumps(
 )
 
 
-def declare_slack_grants(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(grant_declare, "DECLARED", {})
-    Grants(
-        "test.slack",
-        ("channel",),
-        lambda evt: Proposal(scope={"channel": evt.input.raw["channel"]}, payload={"text": evt.input.raw["text"]}),
-        spent_by="test",
-        attach=lambda evt, grant, note: evt.rewrite(dict(evt.input.raw) | {"grant_id": grant.id}, note=note),
-        hook="slack_policy",
-    )
-
-
-def unchecked_grant(envelope: dict[str, Any]) -> Grant:
-    return store.load(envelope["hookSpecificOutput"]["updatedInput"]["grant_id"])
-
-
 @pytest.mark.usefixtures("frozen_clock")
 class TestMandatorySkip:
     def respond(self, *, event: str = "PreToolUse", deadline_unix_ms: int = 0, payload: str = SLACK) -> Any:
@@ -1398,82 +1382,10 @@ class TestMandatorySkip:
         assert "permission denied" in reason(envelope)
         assert "slack_audit did not complete (RuntimeError: audit backend down)" in note(envelope)
 
-    def test_a_grant_hook_ignoring_its_budget_goes_ahead_on_an_unchecked_grant(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        declare_slack_grants(monkeypatch)
-        pool = ThreadPoolExecutor(max_workers=1)
-        monkeypatch.setattr(dispatch_module, "mandatory_pool", lambda: pool)
-
-        @on(Event.PreToolUse, mandatory=True)
-        def slack_policy(evt: Any) -> None:
-            time.sleep(0.6)
-
-        response = self.respond(deadline_unix_ms=int((FROZEN_NOW + 0.3) * 1000), payload=GRANTED_SLACK)
-        pool.shutdown(wait=True)
-        envelope = replied(response)
-        grant = unchecked_grant(envelope)
-        assert envelope["hookSpecificOutput"]["updatedInput"] == {
-            "channel": "C1",
-            "text": "hello",
-            "grant_id": grant.id,
-        }
-        assert (grant.kind, grant.scope, grant.uses, grant.approved) == (
-            "test.slack",
-            {"channel": "C1"},
-            1,
-            {"text": "hello"},
-        )
-        assert [(item.source, item.quote) for item in grant.evidence] == [
-            ("unchecked", "MandatoryDeadlinePassed: slack_policy: still running at the caller's deadline")
-        ]
-        assert (
-            "so it goes ahead on a one-use test.slack grant that records why"
-            in envelope["hookSpecificOutput"]["additionalContext"]
-        )
-        assert "slack_policy did not complete (MandatoryDeadlinePassed" in note(envelope)
-
-    def test_a_raising_grant_hook_goes_ahead_on_an_unchecked_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        declare_slack_grants(monkeypatch)
-
-        @on(Event.PreToolUse, mandatory=True)
-        def slack_policy(evt: Any) -> None:
-            raise RuntimeError("policy backend down")
-
-        envelope = replied(self.respond(payload=GRANTED_SLACK))
-        assert [item.quote for item in unchecked_grant(envelope).evidence] == ["RuntimeError: policy backend down"]
-        assert "slack_policy did not complete (RuntimeError: policy backend down)" in note(envelope)
-
-    def test_a_grant_hook_left_unrun_goes_ahead_on_an_unchecked_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        declare_slack_grants(monkeypatch)
-
-        @on(Event.PreToolUse, only_if=[Exhausted()], mandatory=True)
-        def slack_policy(evt: Any) -> None:
-            raise AssertionError("handler must not run")
-
-        envelope = replied(self.respond(payload=GRANTED_SLACK))
-        assert [item.quote for item in unchecked_grant(envelope).evidence] == ["left unrun"]
-
-    def test_a_completed_block_mints_no_unchecked_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        declare_slack_grants(monkeypatch)
-
-        @on(Event.PreToolUse, mandatory=True)
-        def slack_audit(evt: Any) -> Any:
-            return evt.block("permission denied")
-
-        @on(Event.PreToolUse, mandatory=True)
-        def slack_policy(evt: Any) -> None:
-            raise RuntimeError("policy backend down")
-
-        envelope = replied(self.respond(payload=GRANTED_SLACK))
-        assert decision(envelope) == "deny"
-        assert "updatedInput" not in envelope["hookSpecificOutput"]
-        assert store.grants("test.slack", "s1") == []
-
-    def test_a_completed_grant_rewrite_stands_when_an_advisory_hook_then_fails(self) -> None:
+    def test_a_completed_ticket_rewrite_stands_when_an_advisory_hook_then_fails(self) -> None:
         @on(Event.PreToolUse, mandatory=True)
         def slack_policy(evt: Any) -> Any:
-            return evt.rewrite(dict(evt.input.raw) | {"grant_id": "2c810ca88b5d"})
+            return evt.rewrite(dict(evt.input.raw) | {"ticket_id": "2c810ca88b5d"})
 
         @on(Event.PreToolUse)
         def advisory(evt: Any) -> None:
@@ -1485,25 +1397,31 @@ class TestMandatorySkip:
         assert envelope["hookSpecificOutput"]["updatedInput"] == {
             "channel": "C1",
             "text": "hello",
-            "grant_id": "2c810ca88b5d",
+            "ticket_id": "2c810ca88b5d",
         }
         assert "lease does not belong to this claimant or generation" in response.stderr
 
-    def test_a_recovered_grant_rewrite_commits_its_reserved_use(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(grant_declare, "DECLARED", {})
-        grants = Grants(
+    def test_a_recovered_ticket_rewrite_stands_on_the_ticket_it_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ticket_declare, "DECLARED", {})
+        tickets = Tickets(
             "test.counted",
             ("channel",),
-            lambda evt: Proposal(scope={"channel": evt.input.raw["channel"]}, payload={"text": evt.input.raw["text"]}),
+            Reach.PLACE,
+            rules=(),
+            deny="Ask the user.",
+            action=lambda evt: Proposal(
+                place={"channel": evt.input.raw["channel"]}, payload={"text": evt.input.raw["text"]}
+            ),
             hook="slack_policy",
         )
-        grant = store.mint(
-            Grant(
+        ticket = store.mint(
+            Ticket(
                 id=store.new_id(),
                 kind="test.counted",
                 tree="s1",
-                scope={"channel": "C1"},
-                uses=2,
+                place={"channel": "C1"},
+                reach=Reach.PLACE,
+                rule="test",
                 author="test",
                 created=store.now(),
             )
@@ -1511,28 +1429,15 @@ class TestMandatorySkip:
 
         @on(Event.PreToolUse, mandatory=True)
         def slack_policy(evt: Any) -> Any:
-            assert grants.check(evt)
-            return evt.rewrite(dict(evt.input.raw) | {"grant_id": grant.id})
+            assert isinstance(tickets.check(evt), Allow)
+            return evt.rewrite(dict(evt.input.raw) | {"ticket_id": ticket.id})
 
         @on(Event.PreToolUse)
         def advisory(evt: Any) -> None:
             raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
 
         envelope = replied(self.respond(payload=GRANTED_SLACK))
-        assert envelope["hookSpecificOutput"]["updatedInput"]["grant_id"] == grant.id
-        assert [spend.state for spend in store.spends(grant.id)] == ["committed"]
-
-    def test_an_unmintable_unchecked_grant_still_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        declare_slack_grants(monkeypatch)
-
-        @on(Event.PreToolUse, mandatory=True)
-        def slack_policy(evt: Any) -> None:
-            raise RuntimeError("policy backend down")
-
-        envelope = replied(self.respond())
-        assert decision(envelope) is None
-        assert "updatedInput" not in envelope["hookSpecificOutput"]
-        assert "slack_policy did not complete (RuntimeError: policy backend down)" in note(envelope)
+        assert envelope["hookSpecificOutput"]["updatedInput"]["ticket_id"] == ticket.id
 
     def test_an_accepted_block_stands_when_a_sibling_holds_the_closure_past_the_deadline(
         self, monkeypatch: pytest.MonkeyPatch

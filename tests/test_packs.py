@@ -33,7 +33,7 @@ GENERAL_HOOKS = {
     "deletions",
     "detours",
     "docs",
-    "grants",
+    "tickets",
     "hook_files",
     "models",
     "plain_english",
