@@ -314,9 +314,7 @@ def dispatch_event(
     )
     parent = raw.get("transcript_path")
     in_lane = bool(parent) and resolved_path != parent
-    lane_root = (coordinator_transcript(raw.get("session_id")) if provider == "claude" else None) or (
-        Path(parent) if in_lane else None
-    )
+    lane_root = (coordinator_transcript() if provider == "claude" else None) or (Path(parent) if in_lane else None)
     root_session = bool(parent) and not in_lane and not raw.get("agent_id") and provider == "claude"
     if root_session and event is Event.SessionStart and raw.get("source") == "startup":
         record_unborn(session_dir, parent)
