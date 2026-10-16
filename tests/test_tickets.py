@@ -364,6 +364,30 @@ class TestBoard:
         wide = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=200)
         assert [touch.tool for touch in wide.touches] == ["slack_thread"]
 
+    def test_a_rejected_call_hands_the_judge_only_the_users_words(self, tmp_path: Path) -> None:
+        from cc_transcript.filterspec import USER_SAID_MARKER, USER_SAID_TRAILER
+
+        from captain_hook import T
+        from captain_hook.context import HookContext
+        from captain_hook.session import SessionStore
+        from captain_hook.testing.helpers import fixture_session
+
+        typed = "also need to create a thread in epd-sprint1 and update anubhav there"
+        banner = "The user doesn't want to proceed with this tool use. The tool use was rejected. "
+        wrapper = f"{banner}{USER_SAID_MARKER}{typed}\n\n{USER_SAID_TRAILER} may contain a correction."
+        send = T.tool("slack_send", id="toolu_send", channel_id="C1", text="hi")
+        transcript = fixture_session(
+            [T.user("post it"), T.assistant(send), T.user(T.result(wrapper, of=send, is_error=True)), T.user(wrapper)]
+        )
+        evt = PreToolUseEvent(
+            _raw={"session_id": TREE, "tool_name": "slack_reply", "tool_use_id": "toolu_1", "tool_input": {}},
+            ctx=HookContext(session=SessionStore(tmp_path), transcript=transcript, settings=None),
+        )
+        ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}))
+        assert [(item.source, item.quote) for item in ctx.said] == [("prompt", "post it"), ("instruction", typed)]
+        assert all("rejecting" in item.detail for item in ctx.said if item.source == "instruction")
+        assert not any(USER_SAID_MARKER in item.quote for item in ctx.said)
+
     def test_a_session_with_no_transcript_yet_started_now(self, tmp_path: Path) -> None:
         from datetime import UTC, datetime
 
