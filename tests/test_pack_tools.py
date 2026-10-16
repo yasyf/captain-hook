@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -12,7 +14,7 @@ from captain_hook import Event, cli
 from captain_hook.builtin_packs.general.hooks.comments import VerboseComment
 from captain_hook.cli import CliState
 from captain_hook.dispatch import execute_hook
-from captain_hook.events import PostToolUseEvent, PreToolUseEvent
+from captain_hook.events import PostToolUseEvent, PostToolUseFailureEvent, PreToolUseEvent
 from captain_hook.packs import manager
 from captain_hook.types import Action, HookSpec, RegisteredHook
 from tests.helpers import make_ctx, plant_roster
@@ -276,6 +278,45 @@ def test_tooling_refusal_reads_structured_tool_responses(tmp_path: Path) -> None
     assert record.evidence == "cc-slack: no cc-slack session for this Claude window"
 
 
+@pytest.fixture
+def auth_probe(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from captain_hook.builtin_packs.general.hooks._sessions import Unreadable
+
+    fake = MagicMock(return_value=Unreadable("`ccx` is not installed on the hook's PATH"))
+    monkeypatch.setattr("captain_hook.builtin_packs.general.hooks.tooling.probe", fake)
+    return fake
+
+
+READS_RESET = datetime(2099, 1, 1, 4, 3, tzinfo=UTC)
+WRITES_RESET = datetime(2099, 1, 1, 3, 57, tzinfo=UTC)
+
+
+def auth_status(*, reads: int, writes: int) -> str:
+    return json.dumps(
+        [
+            {
+                "repo": "forge-ai/monorepo",
+                "reads": {
+                    "kind": "app",
+                    "quota": {"limit": 10000, "remaining": reads, "resetAt": READS_RESET.isoformat()},
+                },
+                "writes": {
+                    "kind": "user",
+                    "quota": {"limit": 5000, "remaining": writes, "resetAt": WRITES_RESET.isoformat()},
+                },
+            }
+        ]
+    )
+
+
+def quota_failure(tmp_path: Path, command: str, error: str) -> PostToolUseFailureEvent:
+    return PostToolUseFailureEvent(
+        _raw={"tool_name": "Bash", "tool_input": {"command": command}, "error": error, "cwd": str(tmp_path)},
+        ctx=make_ctx(tmp_path),
+    )
+
+
+@pytest.mark.usefixtures("auth_probe")
 def test_tooling_refusal_names_the_command_github_refused(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import refusal
     from captain_hook.context import HookContext
@@ -321,6 +362,7 @@ def test_tooling_refusal_drops_a_pre_expiry_record_and_spares_unrelated_dispatch
     assert block_repeated_dispatch(evt) is None
 
 
+@pytest.mark.usefixtures("auth_probe")
 def test_tooling_lane_spawned_before_the_refusal_silences_it(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import block_repeated_dispatch, record_lane, record_refusal
     from captain_hook.context import HookContext
@@ -469,6 +511,7 @@ def test_a_quota_phrase_in_printed_prose_records_no_refusal(tmp_path: Path) -> N
         ("gh pr view 12 --json state", "Exit code 1\nGraphQL: API rate limit exceeded for user ID 1"),
     ],
 )
+@pytest.mark.usefixtures("auth_probe")
 def test_a_failed_github_call_records_the_quota_refusal(tmp_path: Path, command: str, error: str) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
     from captain_hook.events import PostToolUseFailureEvent
@@ -484,6 +527,7 @@ def test_a_failed_github_call_records_the_quota_refusal(tmp_path: Path, command:
     assert set(ToolingRefusals.load(evt).refusals) == {"github-quota"}
 
 
+@pytest.mark.usefixtures("auth_probe")
 def test_a_failed_github_call_under_a_live_lane_stays_quiet(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
     from captain_hook.events import PostToolUseFailureEvent
@@ -528,6 +572,7 @@ def test_a_real_raw_comment_records_and_arms_nothing(tmp_path: Path, command: st
     ctx.decide.assert_not_called()
 
 
+@pytest.mark.usefixtures("auth_probe")
 def test_a_failed_ccx_refusal_blocks_a_confident_repeat_dispatch(tmp_path: Path) -> None:
     from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
     from captain_hook.events import PostToolUseFailureEvent
@@ -548,3 +593,57 @@ def test_a_failed_ccx_refusal_blocks_a_confident_repeat_dispatch(tmp_path: Path)
     assert result is not None
     assert result.action is Action.block
     assert "`ccx: tooling-lane=github-quota`" in (result.message or "")
+
+
+def test_a_quota_error_with_the_write_token_spent_blocks_until_its_reset(tmp_path: Path, auth_probe: MagicMock) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+
+    auth_probe.return_value = auth_status(reads=9808, writes=0)
+    evt = quota_failure(
+        tmp_path,
+        "gh pr edit 36700 --repo forge-ai/monorepo --body-file body.md",
+        "Exit code 1\nGraphQL: API rate limit already exceeded for user ID 709645.",
+    )
+
+    result = record_refusal(evt)
+
+    assert result is not None
+    assert "`ccx: tooling-lane=github-quota`" in (result.message or "")
+    assert ToolingRefusals.load(evt).refusals["github-quota"].expires == WRITES_RESET
+    assert auth_probe.call_args.args[0] == ("ccx", "vcs", "auth", "status", "--json", "forge-ai/monorepo")
+    assert auth_probe.call_args.kwargs["cwd"] == tmp_path
+
+
+@pytest.mark.parametrize(
+    ("command", "reads", "writes"),
+    [
+        ("gh pr edit 36700 --body-file body.md", 0, 4900),
+        ("gh api -X POST repos/forge-ai/monorepo/issues/1/labels -f labels[]=merge", 0, 4900),
+        ("gh pr view 36700 --json state", 9808, 0),
+        ("ccx vcs pr status 36700", 9808, 0),
+    ],
+)
+def test_a_quota_error_with_the_failing_token_still_funded_records_nothing(
+    tmp_path: Path, auth_probe: MagicMock, command: str, reads: int, writes: int
+) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+
+    auth_probe.return_value = auth_status(reads=reads, writes=writes)
+    evt = quota_failure(tmp_path, command, "Exit code 1\nGraphQL: API rate limit already exceeded for user ID 709645.")
+
+    assert record_refusal(evt) is None
+    assert ToolingRefusals.load(evt).refusals == {}
+
+
+def test_a_quota_error_on_a_spent_read_token_expires_at_the_read_reset(tmp_path: Path, auth_probe: MagicMock) -> None:
+    from captain_hook.builtin_packs.general.hooks.tooling import ToolingRefusals, record_refusal
+
+    auth_probe.return_value = auth_status(reads=40, writes=4900)
+    evt = quota_failure(
+        tmp_path,
+        "ccx vcs pr status 36700",
+        "Exit code 1\nccx: GitHub GraphQL quota exhausted; rate-limited until 2099-06-01T00:00:00Z",
+    )
+
+    assert record_refusal(evt) is not None
+    assert ToolingRefusals.load(evt).refusals["github-quota"].expires == READS_RESET

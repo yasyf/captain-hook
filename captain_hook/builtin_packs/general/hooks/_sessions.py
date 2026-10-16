@@ -500,13 +500,16 @@ def probe_timeout(reason: str, ceiling: float = PROBE_TIMEOUT) -> float | Unread
     return min(ceiling, budget - 0.25)
 
 
-def probe(argv: tuple[str, ...], ceiling: float = PROBE_TIMEOUT, *, unset: tuple[str, ...] = ()) -> str | Unreadable:
+def probe(
+    argv: tuple[str, ...], ceiling: float = PROBE_TIMEOUT, *, unset: tuple[str, ...] = (), cwd: Path | None = None
+) -> str | Unreadable:
     if isinstance(timeout := probe_timeout(f"run `{argv[0]}`", ceiling), Unreadable):
         return timeout
     env = {key: value for key, value in os.environ.items() if key not in unset}
     try:
         done = subprocess.run(
             argv,
+            cwd=cwd,
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
