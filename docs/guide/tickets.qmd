@@ -274,6 +274,13 @@ system.
 closed. A store, source, or judge error denies with the detail
 `The ticket check failed (<error>).`
 
+A hook that lets the action through when its own check cannot finish, after an
+exception or a lookup that times out, calls `Tickets.unchecked(ctx, cause)`. It
+mints a once ticket at the action's place with rule `unchecked`, one evidence item
+from source `hook` quoting the cause, and a ten-minute lifetime, so the record says
+why nothing checked the action. Its fingerprint binds it to this action, so it
+covers no later one.
+
 Pass a `Proposal` to check an action other
 than the one `action` maps the event to, such as each of several calls in one
 event; a declaration used only this way may omit `action`.
