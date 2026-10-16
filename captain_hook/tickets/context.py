@@ -454,7 +454,8 @@ class TranscriptSources:
         return [*asked.values(), *board.values()]
 
     def touches(self) -> list[Touch]:
-        return [touch_of(use) for use in self.uses(self.window)]
+        """The tree's tool calls inside the window; a question put to the user is an answer, never a touch."""
+        return [touch_of(use) for use in self.uses(self.window) if use.call.name != QUESTION_TOOL]
 
     def rulings(self, term: str, tags: frozenset[str]) -> list[Evidence]:
         cutoff = session_started(self.evt)

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from captain_hook.types import TCondition
 
 HOLD = re.compile(r"\b(?:no|don['’]?t|do not|not yet|never|hold|wait|skip|cancel)\b", re.IGNORECASE)
+OPTION_NUMBER = re.compile(r"^\s*\d+\b[\s,;:.-]*")
 
 
 @runtime_checkable
@@ -93,10 +94,15 @@ class CustomTicketCondition(CustomCondition):
 
 
 def approving(answer: Answer) -> bool:
-    """Whether the user approved: picked an option other than the last one shown, or typed no hold."""
-    if answer.chosen:
-        return answer.chosen[-1] != list(answer.options)[-1] if answer.options else True
-    return bool(answer.typed) and HOLD.search(answer.typed) is None
+    """Whether the user approved: picked an option other than the last one shown, or typed no hold.
+
+    Words typed beyond a pick's number decide over the pick, so ``3, DM him`` on a three-option
+    question approves while a bare ``3`` holds.
+    """
+    words = OPTION_NUMBER.sub("", answer.typed, count=1) if answer.chosen else answer.typed
+    if words:
+        return HOLD.search(words) is None
+    return bool(answer.chosen) and (answer.chosen[-1] != list(answer.options)[-1] if answer.options else True)
 
 
 @dataclass(frozen=True, slots=True)
