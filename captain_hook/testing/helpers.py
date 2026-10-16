@@ -157,7 +157,7 @@ def seeded_session_dir(seen: dict[str, list[str]] | None, state: list[BaseModel]
 
 
 @contextmanager
-def stubbed_commands(commands: dict[str, str] | None) -> Iterator[None]:
+def stubbed_commands(commands: dict[str, str | tuple[int, str]] | None) -> Iterator[None]:
     if not commands:
         yield
         return
@@ -169,10 +169,16 @@ def stubbed_commands(commands: dict[str, str] | None) -> Iterator[None]:
     ) -> subprocess.CompletedProcess[Any]:
         argv = tuple(str(args).split()) if isinstance(args, str) else tuple(str(arg) for arg in args)
         text_mode = any(kwargs.get(key) for key in ("text", "universal_newlines", "encoding", "errors"))
-        for prefix, stdout in prefixes:
+        for prefix, outcome in prefixes:
             if argv[: len(prefix)] == prefix:
+                returncode, stdout, stderr = (
+                    (0, outcome, "") if isinstance(outcome, str) else (outcome[0], "", outcome[1])
+                )
                 return subprocess.CompletedProcess(
-                    args, 0, stdout=stdout if text_mode else stdout.encode(), stderr="" if text_mode else b""
+                    args,
+                    returncode,
+                    stdout=stdout if text_mode else stdout.encode(),
+                    stderr=stderr if text_mode else stderr.encode(),
                 )
         return real_run(args, *pargs, **kwargs)
 

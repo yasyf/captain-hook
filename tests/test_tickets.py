@@ -44,6 +44,33 @@ TREE = "root-session"
 PLACE = {"channel": "C1", "thread": "1.2"}
 ELSEWHERE = {"channel": "C1", "thread": "9.9"}
 ASK = "Ask the user for permission for exactly this action."
+DRAFT = "_(Yasyf's Claude)_ Hi Michael, the box has been live since Sep 23."
+BOARD = {
+    "doc": {
+        "blocks": [
+            {
+                "id": "card-gap",
+                "type": "card",
+                "title": "5. Reply to Michael in #reco-gap",
+                "summary": "The bot is not in that channel, so this posts through your account.",
+                "children": [
+                    {"id": "gap-draft", "type": "markdown", "md": DRAFT},
+                    {"id": "gap-approval", "type": "approval", "prompt": "Post this reply in his thread?"},
+                ],
+            },
+            {
+                "id": "card-perm",
+                "type": "card",
+                "title": "3. Grant the app actions: read",
+                "children": [{"id": "perm-approval", "type": "approval", "prompt": "Will you grant it?"}],
+            },
+        ]
+    },
+    "interactions": {
+        "decisions": {"gap-approval": {"verdict": "approved"}, "perm-approval": {"verdict": "rejected"}},
+        "feedback": {"perm-approval": [{"id": "f1", "text": "you'll have to DM josh L on slack"}]},
+    },
+}
 
 
 @pytest.fixture(autouse=True)
@@ -234,6 +261,67 @@ class TestConditions:
         assert found(Not(UserSaid("never")), ctx) == []
         assert found(Not(UserSaid("post")), ctx) is None
         assert found(And(Not(UserSaid("never")), UserSaid("post")), ctx) == [ctx.said[0]]
+
+
+class TestBoard:
+    def test_a_decision_approves_only_when_its_verdict_is_approved(self) -> None:
+        from captain_hook.tickets.conditions import approving
+        from captain_hook.tickets.context import board_answers
+
+        by_id = {item.id: item for item in board_answers(BOARD)}
+        assert approving(by_id["board:decision:gap-approval"])
+        assert not approving(by_id["board:decision:perm-approval"])
+        assert approving(by_id["board:feedback:perm-approval:f1"])
+        assert by_id["board:decision:perm-approval"].options == {"approved": "", "rejected": ""}
+
+    def test_an_answer_carries_the_card_the_user_read(self) -> None:
+        from captain_hook.tickets.context import board_answers
+
+        approval = next(item for item in board_answers(BOARD) if item.id == "board:decision:gap-approval")
+        assert approval.detail.startswith(
+            "board card: 5. Reply to Michael in #reco-gap\n"
+            "The bot is not in that channel, so this posts through your account.\n"
+            f"{DRAFT}\n"
+            "question: Post this reply in his thread?"
+        )
+        ctx = context(DRAFT, answers=[approval])
+        assert found(UserAnswered(Holds("text")), ctx) == [approval]
+        assert found(UserAnswered(Names()), ctx) is None
+
+    def test_answers_are_read_past_the_window_and_touches_within_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook import T
+        from captain_hook.context import HookContext
+        from captain_hook.session import SessionStore
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tickets import context as sources
+
+        monkeypatch.setattr(sources, "board_state", lambda tree, cwd: {})
+
+        question = "Post in C1, thread 1.2?"
+        questions = [{"question": question, "options": [{"label": "Yes"}, {"label": "No"}]}]
+        ask = T.tool("AskUserQuestion", id="toolu_ask", questions=questions)
+        read = T.tool("slack_thread", id="toolu_read", channel_id="C1", thread_ts="1.2")
+        transcript = fixture_session(
+            [
+                T.assistant(ask),
+                T.user(
+                    T.result(f'User has answered your questions: "{question}"="Yes".', of=ask),
+                    toolUseResult={"questions": questions, "answers": {question: "Yes"}, "annotations": {}},
+                ),
+                T.assistant(read),
+                T.user(T.result('{"messages": []}', of=read)),
+                *(turn for i in range(40) for turn in (T.user(f"status {i}"), T.assistant("still going"))),
+            ]
+        )
+        evt = PreToolUseEvent(
+            _raw={"session_id": TREE, "tool_name": "slack_reply", "tool_use_id": "toolu_1", "tool_input": {}},
+            ctx=HookContext(session=SessionStore(tmp_path), transcript=transcript, settings=None),
+        )
+        ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=20)
+        assert [item.id for item in ctx.answers] == ["ask:toolu_ask#0"]
+        assert ctx.touches == ()
 
 
 class TestStore:
