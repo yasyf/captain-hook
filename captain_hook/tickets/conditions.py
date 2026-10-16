@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from captain_hook.types import TCondition
 
 HOLD = re.compile(r"\b(?:no|don['’]?t|do not|not yet|never|hold|wait|skip|cancel)\b", re.IGNORECASE)
+OPTION_NUMBER = re.compile(r"^\s*\d+\b[\s,;:.-]*")
+GO = re.compile(r"^\W*(?:yes|ok|okay|sure|go|approve|post|send|reply|dm|share)\b", re.IGNORECASE)
 
 
 @runtime_checkable
@@ -93,10 +95,19 @@ class CustomTicketCondition(CustomCondition):
 
 
 def approving(answer: Answer) -> bool:
-    """Whether the user approved: picked an option other than the last one shown, or typed no hold."""
-    if answer.chosen:
-        return answer.chosen[-1] != list(answer.options)[-1] if answer.options else True
-    return bool(answer.typed) and HOLD.search(answer.typed) is None
+    """Whether the user approved: picked an option other than the last one shown, or typed no hold.
+
+    Words typed beyond a pick's number decide over the pick, so ``3, DM him`` on a three-option
+    question approves while a bare ``3`` holds. A last option that itself reads as a go, such as
+    ``Post without the prevention sentence``, approves too.
+    """
+    words = OPTION_NUMBER.sub("", answer.typed, count=1) if answer.chosen else answer.typed
+    if words:
+        return HOLD.search(words) is None
+    if not answer.chosen:
+        return False
+    pick = answer.chosen[-1]
+    return GO.search(pick) is not None or not answer.options or pick != list(answer.options)[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +115,8 @@ class UserAnswered(CustomTicketCondition):
     """The user's answers to questions matching any of *patterns*, on ``AskUserQuestion`` or the cc-present board.
 
     A pattern reads the question with its options. With *approved*, only an approving answer counts: one that
-    picks an option other than the last shown, or types words that hold nothing back.
+    picks an option other than the last shown, picks a last option that reads as a go, or types words that hold
+    nothing back.
 
     Example:
         >>> UserAnswered(Names(), approved=True)
