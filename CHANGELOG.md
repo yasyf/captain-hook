@@ -30,6 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatever a ruling says, and `renice` keeps its policy. `Rulings` gains `tags`, which
   keeps only answers carrying every tag.
 
+- **A long-running drive ends the leftover processes its own lanes and desks started.**
+  `kill` and `renice` refused a desk runner's orphaned children, a lane's dev server that
+  outlived its lane, and every other process no live agent held. Each one needed its own
+  per-program ruling. The sessions pack now treats such a process as the drive's when three
+  things hold. The acting session belongs to a drive in
+  `~/.claude/long-running/drives`, as a root session or through `CLAUDE_LONG_RUNNING_DRIVE`.
+  The process has no live agent ancestor. Its environment carries the drive's
+  `CLAUDE_LONG_RUNNING_DRIVE` or the `CLAUDE_CODE_SESSION_ID` of one of its root sessions.
+  Registry entries that share the drive's ledger are earlier runs of the same drive, and their
+  drive ids and root sessions count too. The environment survives reparenting to `launchd`,
+  so an orphan still names the session that started it. Agent sessions, agent hosts, terminal
+  hosts, the Orca app and daemon, Captain Hook, their ancestors, and a terminal's own shell
+  stay refused. A refusal now names the drive check it failed.
+
+- **A `kill` ruling matches any program in the process's host chain.**
+  The `sessions.kill` lift matched one name: the first argument after a script host, so
+  `node yarn tsx ./scripts/buildDashboard.ts` was `yarn` and a ruling naming `node` or
+  `buildDashboard` never matched. A ruling may now name the executable, each runner it
+  passes (`yarn`, `npm exec`, `tsx`, `uv run`, a shell), each loader a flag names, or the
+  script by file name or stem. Arguments after the script never count.
+
 - **`reqenv.shared` runs one computation per request for every hook that asks.**
   The hooks of one request each get their own event copy, so a scan several of them need
   ran once per hook. `captain_hook.util.reqenv.shared(key, compute)` runs a caller's

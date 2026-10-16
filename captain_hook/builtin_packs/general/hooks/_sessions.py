@@ -10,7 +10,7 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from functools import partial, reduce
+from functools import cached_property, partial, reduce
 from itertools import product
 from math import prod
 from pathlib import Path, PurePath
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from cc_transcript.activity import ToolUse
 from cc_transcript.tools import BashCall
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, workflow_state
 from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
@@ -44,6 +44,7 @@ from captain_hook.tickets import (
     store,
 )
 from captain_hook.util import proc, reqenv
+from captain_hook.util.paths import resolve_claude_config_dir
 from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
 
@@ -168,6 +169,9 @@ KILL_FIX = f"{VERIFY} and run `kill <pid>` alone."
 RENICE_FIX = f"{VERIFY} and run `renice -n <priority> -p <pid>` alone."
 SPELLING_LIMIT = 60
 SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
+DRIVE_VAR = "CLAUDE_LONG_RUNNING_DRIVE"
+DRIVE_ENV = re.compile(rf"(?<!\S){DRIVE_VAR}=(\S*)")
+LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 SCAN_CACHE_LIMIT = 16
@@ -190,6 +194,11 @@ RECORDED_SINCE = datetime(2026, 10, 4, 2)
 LATER_SESSION = "name it in a cc-notes answer for a later session"
 KILL_RULING_TAGS = frozenset({"scope:durable", "sessions-guard"})
 SCRIPT_HOSTS = re.compile(r"(?:python|node|bun|deno|ruby|perl)[\d.]*")
+SCRIPT_RUNNERS = frozenset(
+    {"yarn", "npm", "npx", "pnpm", "pnpx", "bunx", "tsx", "ts-node", "uv", "uvx", "sh", "bash", "zsh"}
+)
+RUNNER_VERBS = frozenset({"exec", "run", "x", "dlx"})
+SCRIPT_SUFFIXES = frozenset({".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".rb", ".pl", ".sh"})
 SETTLED = frozenset({"completed", "failed"})
 CLASS_RULINGS = ("c9b27c1", "6190a4a")
 SETTLED_CLOSE_RULES = (
@@ -464,11 +473,29 @@ def describe(row: ProcessRow) -> str:
     return f"pid {row.pid} (`{clip(row.command, 40)}`)"
 
 
-def program(row: ProcessRow) -> str:
-    if SCRIPT_HOSTS.fullmatch(row.argv0.casefold()) is None:
-        return row.argv0
-    script = next((word for word in row.command.split()[1:] if not word.startswith("-")), None)
-    return row.argv0 if script is None else PurePath(script).name
+def runs_scripts(name: str) -> bool:
+    return SCRIPT_HOSTS.fullmatch(name.casefold()) is not None or name in SCRIPT_RUNNERS
+
+
+def programs(row: ProcessRow) -> tuple[str, ...]:
+    """Every name *row* runs as, script first: its executable, each runner and loader it passes, and the script."""
+    names: list[str] = []
+    previous = ""
+    for word in row.command.split():
+        flag_value, previous = previous.startswith("-") and "=" not in previous, word
+        if word.startswith("-"):
+            continue
+        path = PurePath(word)
+        if path.suffix in SCRIPT_SUFFIXES and flag_value:
+            names.append(path.name)
+        elif path.suffix in SCRIPT_SUFFIXES:
+            names += [path.name, path.stem]
+            break
+        elif not names or runs_scripts(path.name):
+            names.append(path.name)
+        elif not flag_value and path.name not in RUNNER_VERBS:
+            break
+    return tuple(dict.fromkeys(reversed(names)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -635,18 +662,94 @@ def scratch_orphan(row: ProcessRow) -> bool:
     )
 
 
+def same_ledger(left: str, right: str) -> bool:
+    return left.startswith(right) or right.startswith(left)
+
+
+class DriveEntry(BaseModel):
+    drive: str
+    ledger: str
+    sessions: list[str]
+
+
+def drive_entries() -> list[DriveEntry]:
+    entries: list[DriveEntry] = []
+    for path in sorted((resolve_claude_config_dir() / "long-running" / "drives").glob("*.json")):
+        try:
+            entries.append(DriveEntry.model_validate_json(path.read_bytes()))
+        except (OSError, ValidationError) as exc:
+            logger.bind(path=str(path), error=str(exc)).warning("skipping an unreadable drive registry entry")
+    return entries
+
+
+@dataclass(frozen=True, slots=True)
+class Drive:
+    """A long-running drive and every registry entry sharing its ledger, which an earlier run of it left behind."""
+
+    name: str
+    names: frozenset[str]
+    sessions: frozenset[str]
+
+    @classmethod
+    def of(cls, session: str | None) -> Drive | None:
+        named = reqenv.getenv(DRIVE_VAR)
+        entries = drive_entries()
+        own = next((e for e in entries if e.drive == named or (not named and session in e.sessions)), None)
+        if own is None:
+            return None
+        runs = [entry for entry in entries if same_ledger(entry.ledger, own.ledger)]
+        return cls(
+            own.drive,
+            frozenset(entry.drive for entry in runs),
+            frozenset(member for entry in runs for member in entry.sessions),
+        )
+
+    def started(self, environment: str) -> bool:
+        if drives := set(DRIVE_ENV.findall(environment)):
+            return drives <= self.names
+        return bool(sessions := set(SESSION_ENV.findall(environment))) and sessions <= self.sessions
+
+
 class Facts:
     def __init__(self, session: str | None = None, spawns: Iterable[SpawnRecord] = ()) -> None:
         self.session = session
         self.spawns = tuple(spawns)
         self._guard = threading.Lock()
         self._ownership: Ownership | Unreadable | None = None
+        self._environments: dict[ProcessRow, str | None] = {}
+
+    def environment(self, row: ProcessRow) -> str | None:
+        if row in self._environments:
+            return self._environments[row]
+        if isinstance(timeout := probe_timeout("read a process environment"), Unreadable):
+            return None
+        shown = self._environments[row] = proc.environment(row, timeout=timeout)
+        return shown
 
     def started_here(self, row: ProcessRow) -> bool:
-        if self.session is None or isinstance(timeout := probe_timeout("read a process environment"), Unreadable):
+        if self.session is None:
             return False
-        shown = proc.environment(row, timeout=timeout)
+        shown = self.environment(row)
         return shown is not None and set(SESSION_ENV.findall(shown)) == {self.session}
+
+    @cached_property
+    def drive(self) -> Drive | None:
+        return Drive.of(self.session)
+
+    def drive_gap(self, row: ProcessRow, agent: ProcessRow | None, ownership: Ownership) -> str | None:
+        """``None`` when *row* is a leftover this session's drive started, else what kept it from being one."""
+        if (drive := self.drive) is None:
+            return "only the long-running drive that started it may end it unasked"
+        if agent is not None:
+            return "a drive ends only a leftover no live agent holds"
+        if hosts_agent(row) or (row.ppid != LAUNCHD_PID and row.ppid in ownership.protected):
+            return "a drive never ends an agent host or a direct child of a protected process"
+        if (shown := self.environment(row)) is None or not drive.started(shown):
+            return "a drive ends only a leftover whose environment names the drive"
+        logger.bind(pid=row.pid, command=row.command, started=row.started, drive=drive.name).info(
+            "allowing a leftover this session's drive started"
+        )
+        return None
 
     def spawned_here(self, row: ProcessRow) -> bool:
         return any(record.matches(row) for record in self.spawns)
@@ -737,6 +840,8 @@ def pid_verdict(
             "allowing a scratch orphan that predates spawn records"
         )
         return None
+    if (gap := facts.drive_gap(row, agent, ownership)) is None:
+        return None
     if ownership.owner is None:
         message = (
             f"BLOCKED: ownership of {describe(row)} is unproven because the guard cannot resolve this session's own "
@@ -746,7 +851,7 @@ def pid_verdict(
         holder = f"under {agent.argv0} {agent.pid}" if agent is not None else "with no agent ancestor to vouch for it"
         message = (
             f"BLOCKED: {describe(row)} runs {holder}, and no recorded per-task creation identity ties it to this "
-            "task. Let it finish, or ask the owner to end it."
+            f"task. Let it finish, or ask the owner to end it; {gap}."
         )
     return message if lifted is None else lifted(row, message)
 
@@ -1424,12 +1529,16 @@ def lift(
 
 
 def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | None:
-    name = program(row)
-    action = Proposal(
-        place={"program": name, "process": f"{row.pid}@{row.started.isoformat()}"},
-        summary=f"kill {row.pid} ({name})",
-    )
-    return lift(evt, KILL_PROCESS, action, message, owner=False)
+    refusals: list[Ungranted] = []
+    for name in programs(row):
+        action = Proposal(
+            place={"program": name, "process": f"{row.pid}@{row.started.isoformat()}"},
+            summary=f"kill {row.pid} ({name})",
+        )
+        if (ungranted := lift(evt, KILL_PROCESS, action, message, owner=False)) is None:
+            return None
+        refusals.append(ungranted)
+    return refusals[0] if refusals else Ungranted(message)
 
 
 def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:
