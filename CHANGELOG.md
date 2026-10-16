@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Words typed beyond a pick's number decide the answer, a last option that reads as a go approves, a question to the user no longer counts as a touch, a session with no transcript yet reads as starting now, and the judge's citations match the evidence they name.**
+  `UserAnswered(..., approved=True)` read a pick of the last option shown as a hold even when the
+  user typed instructions after its number. On a three-option question, `3, DM him and ask if he
+  needs help` held the direct message the user asked for. Any words after the number now decide,
+  approving unless they carry a hold word, so `1, but wait for CI` holds. A bare `3` still reads as
+  the pick.
+
+  With nothing typed, the last option shown still held whatever it said. The owner picked `Post
+  without the prevention sentence`, the second of two options, and the hook refused that post; a
+  one-option question's only option, `Yes: reply in any alert thread`, held too. A `GO` pattern now
+  reads the picked label, and a last option that opens with a go word such as `yes`, `post`,
+  `send`, `reply`, or `dm` approves. `Edit first` or `Don't post` as the last option still holds.
+  Hold words are not read against labels, so `Post #alerts-api now, hold #acc-silk for the retro
+  link` stays a go.
+
+  `TranscriptSources.touches` counted an `AskUserQuestion` call as a touch of every place its text
+  named, so asking about a thread marked that thread as touched even when the user answered No. A
+  question is only an answer. A tool call such as a `slack_thread` read inside the window still
+  counts.
+
+  `UserRuled` dates its cutoff from the acting session's first transcript event and raised
+  `IndexError` on an in-memory session with no events. Such a session starts at the current time,
+  so no cc-notes ruling predates it.
+
+  The judge's system prompt gave `words:1a2b3c4d5e6f` as an example evidence id, and the judge
+  model copied it, allowing a write on evidence whose only id was `ask:toolu_01...#0`. The model
+  also kept an id's unique tail but swapped its kind prefix, citing `words:4d39f078-...` for
+  `board:feedback:app-perm-approval:4d39f078-...`. Either citation matched nothing, so the allow
+  became `decide: nothing found` and the write was refused with no log line. The prompt now asks
+  for ids copied exactly from the square brackets in `<evidence>` and gives no example. A citation
+  now names an evidence item when the text after its last colon matches the item's.
+
 - **A cc-present board answer carries the card the user read, and only an `approved` decision approves.**
   A board answer's `detail` held only the card title and the question. A `Holds("text")` pattern
   never matched a draft the user approved on a board, and `Names()` never saw a channel named in the

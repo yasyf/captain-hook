@@ -15,7 +15,7 @@ import re
 import subprocess
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import cache, cached_property
 from hashlib import sha256
 from itertools import pairwise
@@ -349,10 +349,14 @@ def first_timestamp(path: Path) -> datetime:
 
 
 def session_started(evt: BaseHookEvent) -> datetime:
-    """When the acting session wrote its first transcript line: read from its file, or from an in-memory session."""
+    """When the acting session wrote its first transcript line: read from its file, or from an in-memory session.
+
+    A session with no transcript yet is starting now, so no ruling predates it.
+    """
     if (path := evt.ctx.transcript_path) is not None:
         return first_timestamp(Path(path))
-    return evt.ctx.transcript.events[0].meta.timestamp
+    events = evt.ctx.transcript.events
+    return events[0].meta.timestamp if events else datetime.now(UTC)
 
 
 def ccn_answers(evt: BaseHookEvent, term: str) -> list[dict[str, Any]]:
@@ -450,7 +454,8 @@ class TranscriptSources:
         return [*asked.values(), *board.values()]
 
     def touches(self) -> list[Touch]:
-        return [touch_of(use) for use in self.uses(self.window)]
+        """The tree's tool calls inside the window; a question put to the user is an answer, never a touch."""
+        return [touch_of(use) for use in self.uses(self.window) if use.call.name != QUESTION_TOOL]
 
     def rulings(self, term: str, tags: frozenset[str]) -> list[Evidence]:
         cutoff = session_started(self.evt)
