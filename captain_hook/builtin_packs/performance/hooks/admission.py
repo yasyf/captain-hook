@@ -35,9 +35,7 @@ def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
     if not (host := HostLoad.sample()).saturated:
         return None
     return evt.block(
-        f"The host is saturated: its 1-minute load average is {host.load:.0f} on {host.cores} cores, so a new local "
-        "Go or Cargo build or test slows every session on it. Defer it and let CI grade the pushed commit. Remote work "
-        "this task already has approval for stays available when written explicitly, as `ssh <host> '<command>'` or "
-        "`remote-builder exec --lane go|cargo -- <command>`. Run it here only once the load is back under the core "
-        "count, and never retry it on a timer."
+        f"The host is saturated at load {host.load:.0f} on {host.cores} cores, so local Go and Cargo builds and tests "
+        "wait for CI. Run already-approved remote work explicitly with `ssh <host> '<command>'` or "
+        "`remote-builder exec --lane go|cargo -- <command>`, and never retry on a timer."
     )
