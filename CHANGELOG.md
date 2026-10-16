@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The words a user types while rejecting any tool call reach the judge without the harness
+  banner.**
+  Context stripped the rejection banner only from `ExitPlanMode` results. A rejected Slack send kept
+  "The user doesn't want to proceed with this tool use" as the user's words, and the judge refused
+  an instruction to go ahead as a decline. Every rejected call and any prompt carrying the banner
+  now yields an `instruction` item holding only the typed words, labeled as replacing the rejected
+  call. `PLAN_TOOL` and `plan_feedback()` are gone; `instruction_words` is public.
+
 - **A judge citation that copies a whole evidence header line names the item it heads.**
   12.101.2 matched a citation copied whole, the id after its first colon, or the text after the
   id's last colon. In a replay of 145 Slack hook cases the judge cited
