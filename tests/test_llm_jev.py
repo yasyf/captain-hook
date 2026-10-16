@@ -22,7 +22,6 @@ from spawnllm import (
 
 from captain_hook import faults
 from captain_hook.dispatch import dispatch
-from captain_hook.grants.judge import GrantVerdict
 from captain_hook.primitives.llm import (
     GateVerdict,
     IntAnswer,
@@ -36,6 +35,7 @@ from captain_hook.primitives.llm import (
     verdict_questions,
 )
 from captain_hook.testing.helpers import fixture_session
+from captain_hook.tickets.decide import Verdict
 from captain_hook.types import Event
 from tests.helpers import build_ctx, make_post_tool_event, make_stop_event, raw_text
 
@@ -146,7 +146,7 @@ def test_several_categorical_fields_ask_one_question_each() -> None:
     [
         pytest.param(None, id="free-text-reply"),
         pytest.param(IntAnswer, id="unbounded-int"),
-        pytest.param(GrantVerdict, id="citations-and-scope"),
+        pytest.param(Verdict, id="citations"),
         pytest.param(ShortReason, id="constrained-text"),
         pytest.param(OneKind, id="single-option-label"),
         pytest.param(EvenRisk, id="constrained-score"),
@@ -311,7 +311,7 @@ def test_a_passing_jev_verdict_never_asks_the_llm(tmp_path: Path, monkeypatch: p
 def test_defaults_let_a_two_stage_model_keep_its_other_fields() -> None:
     assert verdict_questions("Permitted?", Permit) is None
     assert set(verdict_questions("Permitted?", Permit, defaults=True) or {}) == {"allow"}
-    assert set(verdict_questions("Permitted?", GrantVerdict, defaults=True) or {}) == {"allow"}
+    assert set(verdict_questions("Permitted?", Verdict, defaults=True) or {}) == {"allow"}
     assert verdict_questions("Permitted?", Uncited, defaults=True) is None
 
 

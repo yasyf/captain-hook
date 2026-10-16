@@ -19,8 +19,6 @@ from loguru import logger
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
 from captain_hook.conditions import matches_conditions, planned_predicates
 from captain_hook.confirm import confirmed
-from captain_hook.grants import declare as grant_declare
-from captain_hook.grants.declare import lifted
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import (
     MANDATORY_WORK_SECONDS,
@@ -30,6 +28,7 @@ from captain_hook.snapshots.client import (
     observing,
 )
 from captain_hook.state import HookState
+from captain_hook.tickets.declare import lifted
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from captain_hook.util.caching import once
@@ -158,8 +157,8 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
 
     try:
         result = entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
-        if result is not None and result.action is Action.block and (grants := entry.spec.grants) is not None:
-            return lifted(evt, entry.name, result, grants)
+        if result is not None and result.action is Action.block and (tickets := entry.spec.tickets) is not None:
+            return lifted(evt, entry.name, result, tickets)
         if result is not None and (confirm := result.confirm) is not None:
             return confirmed(evt, entry.name, result, confirm)
         return result
@@ -937,34 +936,8 @@ def dispatch(
     claim on the deny's reason. ``advisory=False`` stops after them, so a caller already inside the
     deadline margin still completes the guard while skipping the hooks the margin exists for; a
     fail-closed hook (``on_incomplete``) that matches then blocks, since it never got to judge.
-
-    Every grant use a hook reserves during the event commits when the envelope lets the call
-    through and is released when any hook denies it, so a chained command whose second half is
-    refused never spends the grant its first half matched. When dispatch fails after every mandatory
-    hook settled, the uses commit if their verdict lets the call through, since the worker replies
-    with that verdict.
     """
-    reqenv.mandatory_phase().unchecked = partial(grant_declare.fail_open, evt)
-    with grant_declare.reservations() as reserved:
-        try:
-            envelope = dispatch_hooks(event, evt, session_dir, advisory=advisory)
-        except BaseException:
-            phase = reqenv.mandatory_phase()
-            verdict = phase.verdict if phase.outcome == "settled" else None
-            grant_declare.settle(reserved, allowed=verdict is not None and verdict.action is not Action.block)
-            raise
-        if not reserved or denies(envelope):
-            grant_declare.settle(reserved, allowed=False)
-            return envelope
-        try:
-            kept = grant_declare.settle(reserved, allowed=True)
-        except Exception:
-            logger.opt(exception=True).warning("grant settle failed; refusing the call")
-            kept = False
-        return envelope if kept else format_output(event, HookResult(action=Action.block, message=UNSETTLED))
-
-
-UNSETTLED = "A grant use for this call could not be recorded, so the call does not go ahead. Retry it."
+    return dispatch_hooks(event, evt, session_dir, advisory=advisory)
 
 
 def denies(envelope: Envelope | None) -> bool:

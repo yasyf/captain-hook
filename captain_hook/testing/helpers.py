@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
     from spawnllm import Decision
 
-    from captain_hook.grants import Grant
+    from captain_hook.tickets import Ticket
 
 STUB_FIELD_VALUES: dict[str, Any] = {
     "block": True,
@@ -844,14 +844,14 @@ def hermetic_request(
         yield
 
 
-def fresh_grants(seeds: list[Grant] | None) -> None:
-    """Empty the grant store, then mint *seeds*, so each inline test sees only the grants it declares."""
-    from captain_hook.grants import store
+def fresh_tickets(seeds: list[Ticket] | None) -> None:
+    """Empty the ticket store, then mint *seeds*, so each inline test sees only the tickets it declares."""
+    from captain_hook.tickets import store
 
     for suffix in ("", "-wal", "-shm"):
-        Path(f"{store.grants_path()}{suffix}").unlink(missing_ok=True)
-    for grant in seeds or ():
-        store.mint(grant)
+        Path(f"{store.tickets_path()}{suffix}").unlink(missing_ok=True)
+    for ticket in seeds or ():
+        store.mint(ticket)
 
 
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
@@ -872,7 +872,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                         # named tool, else pins the first named tool (families infer_tool can't
                         # shape, e.g. WebFetch/WebSearch). No Tool condition => pure inference.
                         spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
-                        fresh_grants(key.grants)
+                        fresh_tickets(key.tickets)
                         with hermetic_request(key.env, key.cwd, key.session_id):
                             evt = input_to_event(
                                 next(iter(entry.spec.events)),

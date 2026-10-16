@@ -74,8 +74,8 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     unresolvable,
 )
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
-from captain_hook.grants import Grant, Proposal
 from captain_hook.guard_literal import QUOTING_CHARS
+from captain_hook.tickets import Proposal, Reach, Ticket
 from captain_hook.util.shell import SHELLS
 
 if TYPE_CHECKING:
@@ -933,15 +933,15 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     denied = terminal_close_denied(spelling, handle, detail)
     if not runs_once(call, scan):
         return denied
-    action = Proposal(scope={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
+    action = Proposal(place={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
     if (ungranted := lift(evt, TERMINAL_CLOSE, action, denied, owner=False)) is None:
         return None
     if agent is not None and (settled := settled_close(evt, handle, tab)) is not None:
-        if (ungranted := lift(evt, SETTLED_CLOSE, settled, denied, owner=False)) is None:
+        if (ungranted := lift(evt, SETTLED_CLOSE, settled, SETTLED_CLOSE.deny, owner=False)) is None:
             if still_settled(settled):
                 return None
             changed = "sessions: the terminal's dispatch or idle prompt changed while the judge decided."
-            return Ungranted(denied, "", changed)
+            return Ungranted(denied, changed)
     return owner_lift(evt, TERMINAL_CLOSE, action, ungranted)
 
 
@@ -1038,12 +1038,14 @@ def orca_vm_run_flag(call: Call) -> str | None:
         guarded(command=f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json"): Allow(),
         guarded(
             command=f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json",
-            grants=[
-                Grant(
+            tickets=[
+                Ticket(
                     id="c105e0000001",
                     kind=TERMINAL_CLOSE.kind,
                     tree=INLINE_SESSION,
-                    scope={"terminal": INLINE_OWNER_TERMINAL},
+                    place={"terminal": INLINE_OWNER_TERMINAL},
+                    reach=Reach.PLACE,
+                    rule="owner-cli",
                     author="owner-cli",
                     created=INLINE_STARTED,
                 )
@@ -1164,7 +1166,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
                 "orca orchestration worker-list": inline_worker("term_agent", "completed"),
             },
             llm=CLASS_ALLOW,
-        ): Block(pattern="where pid 16002"),
+        ): Block(pattern="under a standing owner decision"),
         settling(
             command=AGENT_CLOSE,
             commands={**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker("term_agent", "completed")},
@@ -1618,7 +1620,7 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
     arguments = LAUNCHCTL.bind(call)
     if (service := launchd_service(call, arguments, scan)) is not None:
         verb, label = service
-        action = Proposal(scope={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
+        action = Proposal(place={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
         message = (
             f"BLOCKED: `{spelling}` stops, unloads, or restarts launchd service `{clip(label, 40)}`, which may host "
             f"sessions. Inspect it with `launchctl print`, or ask the owner to {LATER_SESSION}."

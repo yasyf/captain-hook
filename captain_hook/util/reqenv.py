@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from captain_hook.util.caching import once
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Hashable, Mapping, Sequence
+    from collections.abc import Callable, Generator, Hashable, Mapping
 
     from captain_hook.types import HookResult
 
@@ -24,14 +24,11 @@ class MandatoryPhase:
     Concluded exactly once, after the phase's cutoff closed, so the worker reads the phase's own
     verdict rather than inferring one from the completions a racing hook may still publish. It
     keeps the verdict the settled hooks reached, the first block, else the first rewrite, else the
-    first allow, so a failure after the verdict cannot drop it or the grant a rewrite carries, and
-    ``unchecked``, which maps the hooks that never decided and why to the result letting the call
-    through without them.
+    first allow, so a failure after the verdict cannot drop it or the ticket a rewrite carries.
     """
 
     outcome: Literal["", "settled", "failed"] = ""
     verdict: HookResult | None = None
-    unchecked: Callable[[Sequence[str], str], HookResult | None] | None = None
 
     @property
     def failed(self) -> bool:

@@ -28,7 +28,6 @@ from captain_hook.dispatch import (
     dispatch_async,
     envelope_text,
 )
-from captain_hook.grants.cli import grant
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -45,6 +44,7 @@ from captain_hook.pause import pause, resume
 from captain_hook.review.cli import review
 from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
+from captain_hook.tickets.cli import ticket
 from captain_hook.types import HOST_EVENTS, TOOL_EVENTS, Event
 from captain_hook.update.cli import update
 from captain_hook.update.launchers import dispatch_launcher_check
@@ -1098,7 +1098,7 @@ cli.add_command(helper)
 cli.add_command(update)
 cli.add_command(pause)
 cli.add_command(resume)
-cli.add_command(grant)
+cli.add_command(ticket)
 
 
 main = cli
