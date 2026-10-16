@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A cc-present board answer carries the card the user read, and only an `approved` decision approves.**
+  A board answer's `detail` held only the card title and the question. A `Holds("text")` pattern
+  never matched a draft the user approved on a board, and `Names()` never saw a channel named in the
+  card's summary. The detail now lists the card title, its summary, and every markdown child, where a
+  drafted post lives, before the question and options. A decision had no options, so any verdict,
+  `rejected` included, counted as approval. It now shows `approved` and `rejected` as its options, and
+  `UserAnswered(..., approved=True)` reads a pick of the last option shown as a hold, so a rejected
+  card no longer approves. A note typed on the card stays its own answer, which the judge reads as the
+  user's words. `UserAnswered` also reads `AskUserQuestion` answers from every session of the tree,
+  where it saw only the declaration's window; words and tool calls stay inside that window. An inline
+  test's `commands` stub may map an argv prefix to a `(returncode, stderr)` pair, which fails the
+  command with that exit code and stderr and no stdout, so a hook's failure path for a shell-out gets
+  an inline test. A `str` still means exit 0 with that stdout.
+
 ### Added
 
 - **A saturated host refuses new local Go and Cargo builds and tests.**

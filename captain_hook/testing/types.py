@@ -206,7 +206,8 @@ class Input:
         commands: Subprocess stubs keyed by argv prefix (``commands={"gh pr view": "DRAFT"}``);
             a ``subprocess.run`` whose argv starts with a key returns that text as stdout with
             exit 0, the way ``llm`` stubs the model call, so a hook that shells out to ``gh``
-            or ``git`` can reach its fire path. Unmatched argv runs for real.
+            or ``git`` can reach its fire path. A ``(returncode, stderr)`` pair makes the command
+            fail with that exit code and stderr and no stdout. Unmatched argv runs for real.
         env: The request environment, exactly: every key :func:`captain_hook.util.reqenv.getenv`
             forwards per request (``CLAUDE_*``, ``ORCA_*``, ``CAPT_HOOK_*``, ...) resolves from this
             mapping alone, never the runner's own environment, as it does for a real request's env.
@@ -246,7 +247,7 @@ class Input:
     llm: dict[str, Any] | None = None
     decide: dict[str, Any] | None = None
     seen: dict[str, list[str]] | None = None
-    commands: dict[str, str] | None = None
+    commands: dict[str, str | tuple[int, str]] | None = None
     state: list[BaseModel] | None = None
     env: dict[str, str] | None = None
     tickets: list[Ticket] | None = None
@@ -284,8 +285,17 @@ class Input:
             if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
                 raise TypeError(f"Input field 'seen' scope {scope!r} must map to a list of str keys")
         for argv, stdout in (self.commands or {}).items():
-            if not argv.split() or not isinstance(stdout, str):
-                raise TypeError(f"Input field 'commands' entry {argv!r} must map a non-empty argv prefix to str stdout")
+            failed = (
+                isinstance(stdout, tuple)
+                and len(stdout) == 2
+                and isinstance(stdout[0], int)
+                and isinstance(stdout[1], str)
+            )
+            if not argv.split() or not (isinstance(stdout, str) or failed):
+                raise TypeError(
+                    f"Input field 'commands' entry {argv!r} must map a non-empty argv prefix to str stdout"
+                    " or a (returncode, stderr) pair"
+                )
 
     def __repr__(self) -> str:
         set_fields = ", ".join(

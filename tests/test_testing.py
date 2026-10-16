@@ -1321,8 +1321,29 @@ class TestCommandsStubSubprocess:
             assert subprocess.run(["printf", "real"], capture_output=True, text=True).stdout == "real"
         assert subprocess.run(["printf", "restored"], capture_output=True, text=True).stdout == "restored"
 
+    def test_a_returncode_stderr_pair_fails_the_command(self):
+        import subprocess
+
+        from captain_hook.testing.helpers import stubbed_commands
+
+        with stubbed_commands({"cc-slack thread": (1, "cc-slack can't read this conversation (ratelimited)")}):
+            done = subprocess.run(["cc-slack", "thread", "--channel", "C1"], capture_output=True, text=True)
+            assert (done.returncode, done.stdout, done.stderr) == (
+                1,
+                "",
+                "cc-slack can't read this conversation (ratelimited)",
+            )
+            raw = subprocess.run(["cc-slack", "thread"], capture_output=True)
+            assert (raw.returncode, raw.stdout, raw.stderr) == (
+                1,
+                b"",
+                b"cc-slack can't read this conversation (ratelimited)",
+            )
+
     def test_commands_rejects_empty_prefixes(self):
         from captain_hook.testing.types import Input
 
         with pytest.raises(TypeError, match="non-empty argv prefix"):
             Input(command="x", commands={"  ": "out"})
+        with pytest.raises(TypeError, match="returncode, stderr"):
+            Input(command="x", commands={"gh": (1,)})  # type: ignore[dict-item]

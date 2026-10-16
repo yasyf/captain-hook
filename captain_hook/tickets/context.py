@@ -44,6 +44,7 @@ CCN_NOT_FOUND = 3
 PRESENT = "cc-present"
 PLAN_TOOL = "ExitPlanMode"
 QUESTION_TOOL = "AskUserQuestion"
+VERDICTS = {"approved": "", "rejected": ""}
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
 MACHINE_ENVELOPES = (
     "<task-notification",
@@ -234,35 +235,57 @@ def use_answers(use: ToolUse) -> list[Answer]:
     return question_answers(use.ref.tool_use_id or f"{use.ts:%s}", *result, use.result_ts or use.ts)
 
 
-def board_blocks(blocks: list[dict[str, Any]], card: str = "") -> Iterator[tuple[dict[str, Any], str]]:
+def board_blocks(
+    blocks: list[dict[str, Any]], card: dict[str, Any] | None = None
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
     for block in blocks:
-        yield block, card
-        yield from board_blocks(block.get("children", []), block.get("title") or card)
+        yield block, card or {}
+        yield from board_blocks(block.get("children", []), block if block.get("type") == "card" else card)
 
 
-def board_answer(ref: str, block: dict[str, Any], card: str, chosen: Sequence[str], typed: str) -> Answer:
-    question = block.get("prompt") or block.get("title") or card
-    options = {option["label"]: option.get("hint", "") for option in block.get("options", [])}
+def card_lines(card: dict[str, Any]) -> list[str]:
+    """The card as the user read it: its title, summary, and every markdown child, drafts included."""
+    children = card.get("children", [])
+    drafts = [child["md"] for child in children if child.get("type") == "markdown" and child.get("md")]
+    return [f"board card: {card.get('title', '')}", *([card["summary"]] if card.get("summary") else []), *drafts]
+
+
+def board_answer(
+    ref: str,
+    block: dict[str, Any],
+    card: dict[str, Any],
+    chosen: Sequence[str],
+    typed: str,
+    options: dict[str, str] | None = None,
+) -> Answer:
+    question = block.get("prompt") or block.get("title") or card.get("title", "")
+    shown = (
+        {option["label"]: option.get("hint", "") for option in block.get("options", [])} if options is None else options
+    )
     quote = "\n".join([*chosen, *([typed] if typed else [])])
     return Answer(
         id=f"board:{ref}",
         source="board",
         quote=quote,
-        detail="\n".join([f"board card: {card}", render_answer(question, options, chosen, typed, "")]),
+        detail="\n".join([*card_lines(card), render_answer(question, shown, chosen, typed, "")]),
         question=question,
-        options=options,
+        options=shown,
         chosen=tuple(chosen),
         typed=typed,
     )
 
 
 def board_answers(state: dict[str, Any]) -> list[Answer]:
-    """The user's picks, typed inputs, feedback, and decisions on the cc-present board *state*."""
+    """The user's picks, typed inputs, feedback, and decisions on the cc-present board *state*.
+
+    A decision is shown as its two verdicts, so only ``approved`` approves: a rejected card's
+    decision reads as the last option shown, and its note as words beside that pick.
+    """
     seen = {block["id"]: (block, card) for block, card in board_blocks(state.get("doc", {}).get("blocks", []))}
     interactions = state.get("interactions", {})
 
-    def block_of(block_id: str) -> tuple[dict[str, Any], str]:
-        return seen.get(block_id, ({}, ""))
+    def block_of(block_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        return seen.get(block_id, ({}, {}))
 
     found: list[Answer] = []
     for block_id, choice in interactions.get("choices", {}).items():
@@ -280,7 +303,11 @@ def board_answers(state: dict[str, Any]) -> list[Answer]:
         if decided["verdict"] != "cleared":
             found.append(
                 board_answer(
-                    f"decision:{block_id}", *block_of(block_id), (decided["verdict"],), decided.get("note") or ""
+                    f"decision:{block_id}",
+                    *block_of(block_id),
+                    (decided["verdict"],),
+                    decided.get("note") or "",
+                    options=VERDICTS,
                 )
             )
     return found
@@ -387,11 +414,11 @@ class TranscriptSources:
         excerpt = ctx.root_excerpt(self.needles) if self.needles else None
         return [*([(excerpt, True)] if excerpt is not None else []), (resolved(root), True), (ctx.t, False)]
 
-    def turns(self) -> list[tuple[Turn, bool]]:
+    def turns(self, window: int | None) -> list[tuple[Turn, bool]]:
         return [
             (turn, prompts_are_user)
             for session, prompts_are_user in self.sessions()
-            for turn in session.recent_messages(self.window).turns
+            for turn in (session if window is None else session.recent_messages(window)).turns
         ]
 
     def said(self) -> list[Evidence]:
@@ -412,17 +439,18 @@ class TranscriptSources:
                         items[item.id] = item
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
-    def uses(self) -> list[ToolUse]:
-        found = {use.ref.tool_use_id or f"{use.ts}": use for turn, _ in self.turns() for use in turn.tool_uses}
+    def uses(self, window: int | None) -> list[ToolUse]:
+        found = {use.ref.tool_use_id or f"{use.ts}": use for turn, _ in self.turns(window) for use in turn.tool_uses}
         return sorted(found.values(), key=lambda use: use.result_ts or use.ts)
 
     def answers(self) -> list[Answer]:
-        asked = {item.id: item for use in self.uses() for item in use_answers(use)}
+        """Every answer across the tree's sessions, however far back; the window bounds words and touches only."""
+        asked = {item.id: item for use in self.uses(None) for item in use_answers(use)}
         board = {item.id: item for item in board_answers(board_state(tree_of(self.evt), self.evt.cwd))}
         return [*asked.values(), *board.values()]
 
     def touches(self) -> list[Touch]:
-        return [touch_of(use) for use in self.uses()]
+        return [touch_of(use) for use in self.uses(self.window)]
 
     def rulings(self, term: str, tags: frozenset[str]) -> list[Evidence]:
         cutoff = session_started(self.evt)
