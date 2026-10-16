@@ -5,11 +5,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from captain_hook.grants.records import Grant, Proposal
+from captain_hook.grants.records import Evidence, Grant, Proposal
+
+if TYPE_CHECKING:
+    from captain_hook.events import BaseHookEvent
 
 RulingVerdict = Literal["allow", "deny", "defer"]
+Reach = Literal["scope", "once"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,3 +95,37 @@ class Never:
 
     def evaluate(self, grant: Grant, action: Proposal) -> Ruling:
         return Ruling(self.name, "deny", self.message) if self.test(action) else Ruling(self.name, "defer", "holds")
+
+
+@dataclass(frozen=True, slots=True)
+class Approved:
+    """One approval rule's allow: the evidence it rests on, how far the minted grant reaches, and why.
+
+    ``scope`` mints a standing grant on the action's scope that every later action there spends;
+    ``once`` mints a one-use grant bound to this action's payload.
+    """
+
+    relied_on: list[Evidence]
+    reach: Reach
+    note: str
+
+
+class Approval(Protocol):
+    """A rule that approves an action no stored grant covers, minting the grant it then spends.
+
+    A declaration's approvals run in order after its stored grants; the first that returns
+    :class:`Approved` settles the call, and *evidence* collects the declaration's sources once on demand.
+    """
+
+    name: str
+
+    def approve(
+        self, evt: BaseHookEvent, action: Proposal, evidence: Callable[[], list[Evidence]]
+    ) -> Approved | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Judged:
+    """The approval the declaration's judge gives over its evidence, in its place among the approvals."""
+
+    name: str = "judged"

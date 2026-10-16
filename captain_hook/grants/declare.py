@@ -28,11 +28,12 @@ from captain_hook.grants.records import (
     covers,
     render_scope,
 )
+from captain_hook.grants.rules import Approved, Judged
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
     from captain_hook.grants.evidence import EvidenceSource
-    from captain_hook.grants.rules import Rule
+    from captain_hook.grants.rules import Approval, Rule
     from captain_hook.types import HookResult
 
 OWNER_SOURCES = frozenset({"ask", "words"})
@@ -132,6 +133,9 @@ class Grants:
             per scope across every session tree, so a judge-less declaration reads only sources that
             name the action, such as ``Rulings``.
         evidence: Where the owner's words live, read when no stored grant covers the action.
+        approvals: The rules that approve an action no stored grant covers, run in order; the first
+            that approves mints the grant it spends, and :class:`~captain_hook.grants.rules.Judged`
+            places the judge among them. Declaring none leaves the judge as the only approval.
         mint: Uses of a grant minted from session evidence; ``None`` mints a grant every later action may spend.
         ttl: How long a grant minted from session evidence lives.
         standing_ttl: How long a standing grant minted from the owner's verbatim words lives.
@@ -159,6 +163,7 @@ class Grants:
     rules: Sequence[Rule] = ()
     judge: Judge | None = None
     evidence: Sequence[EvidenceSource] = ()
+    approvals: Sequence[Approval | Judged] = ()
     mint: int | None = 1
     ttl: timedelta | None = timedelta(days=1)
     standing_ttl: timedelta | None = None
@@ -174,6 +179,8 @@ class Grants:
     def __post_init__(self) -> None:
         if self.judge is None and any(isinstance(source, Asked | OwnerWords) for source in self.evidence):
             raise ValueError(f"{self.kind}: the owner's words and answers need a judge to read them")
+        if self.judge is None and any(isinstance(approval, Judged) for approval in self.approvals):
+            raise ValueError(f"{self.kind}: a judged approval needs a judge")
         DECLARED[self.kind] = self
 
     def canonical(self, scope: dict[str, str] | Proposal) -> dict[str, str]:
@@ -336,11 +343,71 @@ class Grants:
                 )
             except store.SpentError as exc:
                 refusals.append(unusable_refusal(exc.why))
+        if self.approvals:
+            return self.approved(evt, action, session, refusals)
         if not self.evidence:
             if not refusals:
                 return Denied(f"No {self.kind} grant covers {action.summary}.", self.would_allow)
             return Denied(refusals[-1].agent, self.would_allow, detail=" ".join(why.detail for why in refusals))
         return self.from_evidence(evt, action, session(), refusals, fails_open=self.judge_fails_open)
+
+    def approved(
+        self,
+        evt: BaseHookEvent,
+        action: Proposal,
+        session: Callable[[], list[Evidence]],
+        refusals: list[Refusal],
+    ) -> Allowed | Denied:
+        """Spend the grant the first approval that approves *action* mints, else say why none did."""
+
+        def denied(*why: Refusal) -> Denied:
+            reasons = [*refusals, *why]
+            if not reasons:
+                return Denied(
+                    f"No approval rule covers {action.summary or render_scope(action.scope)}.", self.would_allow
+                )
+            return Denied(reasons[-1].agent, self.would_allow, detail=" ".join(reason.detail for reason in reasons))
+
+        for approval in self.approvals:
+            if isinstance(approval, Judged):
+                if not (items := session()):
+                    continue
+                judged = self.from_evidence(evt, action, items, [], fails_open=self.judge_fails_open)
+                if isinstance(judged, Allowed):
+                    return judged
+                refusals.append(Refusal(judged.reason, judged.detail or judged.reason))
+                continue
+            if (found := approval.approve(evt, action, session)) is None:
+                continue
+            settled = self.settled(
+                evt,
+                self.minted_by(evt, approval.name, action, found),
+                action,
+                GrantVerdict(
+                    reason=f"{approval.name}: {found.note}", allow=True, relied_on=[item.id for item in found.relied_on]
+                ),
+                denied,
+            )
+            if isinstance(settled, Allowed):
+                logger.bind(hook=self.hook, kind=self.kind, approval=approval.name).info("approval rule allowed")
+                return settled
+            refusals.append(Refusal(settled.reason, settled.detail or settled.reason))
+        return denied()
+
+    def minted_by(self, evt: BaseHookEvent, name: str, action: Proposal, found: Approved) -> Grant:
+        scope = self.canonical(action)
+        basis = found.relied_on[0].key or found.relied_on[0].id if found.relied_on else call_id(evt)
+        standing = found.reach == "scope"
+        return self.grant(
+            evt,
+            scope=dict(scope),
+            evidence=found.relied_on,
+            uses=None if standing else 1,
+            ttl=self.standing_ttl if standing else self.ttl,
+            approved=None if standing else dict(action.payload) or None,
+            rules=self.standing_rules if standing else (),
+            source_key=f"{name}:{basis}{scope_key(dict(scope))}{'' if standing else f'@{call_id(evt)}'}",
+        )
 
     def from_evidence(
         self,

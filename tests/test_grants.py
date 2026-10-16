@@ -21,6 +21,7 @@ from captain_hook.dispatch import denies, execute_hook
 from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.grants import (
     Allowed,
+    Approved,
     Asked,
     ContentMatches,
     Denied,
@@ -29,9 +30,11 @@ from captain_hook.grants import (
     Grants,
     GrantVerdict,
     Judge,
+    Judged,
     Never,
     OwnerWords,
     Proposal,
+    Reach,
     Rulings,
     StandingRulings,
     reservations,
@@ -1577,3 +1580,73 @@ def test_a_lane_records_no_plan_feedback(tmp_path: Path) -> None:
     record_plan_feedback(evt)
 
     assert evidence_module.recorded(evt, "words") == []
+
+
+@dataclass(frozen=True)
+class Approves:
+    name: str
+    item: Evidence | None
+    reach: Reach = "scope"
+    seen: list[str] | None = None
+
+    def approve(self, evt: Any, action: Proposal, evidence: Any) -> Approved | None:
+        if self.seen is not None:
+            self.seen.append(self.name)
+        return None if self.item is None else Approved(relied_on=[self.item], reach=self.reach, note="it approves")
+
+
+def test_the_first_approval_that_approves_mints_a_standing_grant_later_actions_spend(tmp_path: Path) -> None:
+    seen: list[str] = []
+    linked = owner("https://x.slack.com/archives/C1/p12", ident="words:link")
+    grants = declared(approvals=(Approves("none", None, seen=seen), Approves("linked", linked, seen=seen)))
+    first = grants.check(event(tmp_path, "one"))
+    assert isinstance(first, Allowed) and first.grant.uses is None and first.grant.approved is None
+    assert first.grant.source_key is not None and first.grant.source_key.startswith("linked:words:link#")
+    assert seen == ["none", "linked"]
+    later = grants.check(event(tmp_path, "different text", call="c2"))
+    assert isinstance(later, Allowed) and later.grant.id == first.grant.id and seen == ["none", "linked"]
+
+
+def test_a_once_approval_binds_the_payload_it_approved(tmp_path: Path) -> None:
+    grants = declared(approvals=(Approves("asked", owner("yes"), reach="once"),), rules=(ContentMatches(),))
+    allowed = grants.check(event(tmp_path, "one"))
+    assert isinstance(allowed, Allowed) and allowed.grant.uses == 1 and allowed.grant.approved == {"text": "one"}
+
+
+def test_no_approval_approving_denies_with_what_would_allow(tmp_path: Path) -> None:
+    grants = declared(approvals=(Approves("none", None),), would_allow="Ask the owner.")
+    denied = grants.check(event(tmp_path, "one"))
+    assert (
+        isinstance(denied, Denied)
+        and denied.would_allow == "Ask the owner."
+        and "No approval rule covers" in denied.reason
+    )
+
+
+def test_a_rule_that_refuses_an_approval_falls_through_to_the_next(tmp_path: Path) -> None:
+    never = Never("no-broadcast", lambda action: action.payload["text"] == "everyone", "never a broadcast", always=True)
+    grants = declared(approvals=(Approves("linked", owner("link", ident="words:a")),), rules=(never,))
+    denied = grants.check(event(tmp_path, "everyone"))
+    assert isinstance(denied, Denied) and "never a broadcast" in denied.reason
+
+
+def test_the_judge_runs_only_where_judged_sits_among_the_approvals(tmp_path: Path) -> None:
+    said = owner("post it")
+    seen: list[str] = []
+    grants = declared(
+        judge=Judge("rules"),
+        evidence=(Fixed((said,)),),
+        approvals=(
+            Approves("first", None, seen=seen),
+            Judged(),
+            Approves("last", owner("ok", ident="words:2"), seen=seen),
+        ),
+    )
+    allowed = grants.check(event(tmp_path, "one", allow=False, reason="the owner never asked for this"))
+    assert isinstance(allowed, Allowed) and allowed.grant.source_key is not None
+    assert allowed.grant.source_key.startswith("last:") and seen == ["first", "last"]
+
+
+def test_a_judged_approval_needs_a_judge() -> None:
+    with pytest.raises(ValueError, match="judged approval needs a judge"):
+        declared(approvals=(Judged(),))
