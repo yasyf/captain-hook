@@ -148,9 +148,12 @@ in it. `Reach.PLACE` leaves the fingerprint out, so the ticket covers every late
 action at its place, whatever the payload.
 
 A ticket belongs to the session tree it was minted in, which is the root session and
-every subagent it spawns. An Orca lane also reads the tickets of the Run coordinator it
-answers to, once the general pack has recorded the coordinator's terminal; tickets
-the lane mints stay in its own tree. No other tree sees them.
+every subagent it spawns. An attended Claude session in the terminal of a live Orca
+dispatch joins the tree of its Run's coordinator, the Claude session in the terminal
+Orca names as the Run's `coordinator_handle`. Like a subagent, it reads that session as
+its root. The coordinator's prompts and answers are the user's, the lane's own prompts
+are its brief, and the tickets the lane mints belong to the coordinator's tree. No other
+tree sees them.
 
 A ticket stops covering anything when it expires or is revoked. Pick `ttl` for how
 long the permission should last. A once ticket with a short `ttl` covers an

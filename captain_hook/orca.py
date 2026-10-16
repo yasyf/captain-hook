@@ -1,4 +1,4 @@
-"""An Orca worker's dispatching coordinator, read through Orca's own dispatch record."""
+"""An Orca worker's Run coordinator, read through Orca's own orchestration record."""
 
 from __future__ import annotations
 
@@ -12,41 +12,43 @@ DISPATCH_TTL = 60.0
 PANE_STATUS = Path("agent-hooks", "last-status.json")
 
 
-def coordinator_transcript(session_id: str | None) -> Path | None:
+def coordinator_transcript() -> Path | None:
     handle, data = reqenv.getenv("ORCA_TERMINAL_HANDLE"), reqenv.getenv("ORCA_USER_DATA_PATH")
-    path = dispatched_coordinator(handle, session_id, Path(data)) if handle and data and session_id else None
+    attended = reqenv.getenv("CLAUDE_CODE_SESSION_ATTENDED") == "1"
+    path = run_coordinator(handle, Path(data)) if attended and handle and data else None
     return path if path is not None and path.is_file() else None
 
 
 @ttl_cache(DISPATCH_TTL)
-def dispatched_coordinator(handle: str, session_id: str, user_data: Path) -> Path | None:
-    if (panes := dispatch_panes(handle)) is None:
+def run_coordinator(handle: str, user_data: Path) -> Path | None:
+    if (coordinator := coordinator_handle(handle)) is None or (pane := terminal_pane(coordinator)) is None:
         return None
-    worker, creator = panes
-    entries = pane_entries(user_data)
-    if (own := claude_session(entries.get(worker))) is None or own[0] != session_id:
-        return None
-    return None if (coordinator := claude_session(entries.get(creator))) is None else coordinator[1]
+    return None if (found := claude_session(pane_entries(user_data).get(pane))) is None else found[1]
 
 
-def dispatch_panes(handle: str) -> tuple[str, str] | None:
+def coordinator_handle(handle: str) -> str | None:
+    """The terminal of the Run coordinator that *handle*'s live dispatch answers to."""
     from captain_hook.builtin_packs.general.hooks._sessions import orca_json
 
     checked = ("orca", "orchestration", "check", "--terminal", handle, "--peek", "--json")
     if not isinstance(dispatch := orca_json(checked, "result", "dispatchId"), str):
         return None
-    shown = ("orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json")
-    if not isinstance(task := orca_json(shown, "result", "dispatch", "taskId"), str):
-        return None
-    match orca_json(("orca", "orchestration", "dispatch-show", "--task", task, "--json"), "result", "dispatch"):
-        case {
-            "id": found,
-            "assignee_handle": assignee,
-            "status": "dispatched",
-            "assignee_pane_key": str() as worker,
-            "creator_pane_key": str() as creator,
-        } if found == dispatch and assignee == handle:
-            return worker, creator
+    match orca_json(("orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json"), "result", "dispatch"):
+        case {"id": found, "assigneeHandle": assignee, "status": "dispatched", "runId": str() as run} if (
+            found == dispatch and assignee == handle
+        ):
+            shown = ("orca", "orchestration", "run-show", "--id", run, "--json")
+            coordinator = orca_json(shown, "result", "run", "coordinator_handle")
+            return coordinator if isinstance(coordinator, str) else None
+    return None
+
+
+def terminal_pane(handle: str) -> str | None:
+    from captain_hook.builtin_packs.general.hooks._sessions import orca_json
+
+    match orca_json(("orca", "terminal", "show", "--terminal", handle, "--json"), "result", "terminal"):
+        case {"tabId": str() as tab, "leafId": str() as leaf}:
+            return f"{tab}:{leaf}"
     return None
 
 

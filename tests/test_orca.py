@@ -21,30 +21,32 @@ from captain_hook.util import reqenv
 from tests.helpers import raw_text
 
 HANDLE = "term_lane"
+COORDINATOR_HANDLE = "term_root"
 DISPATCH = "ctx_lane"
-TASK = "task_lane"
+RUN = "run_1"
 WORKER_PANE = "tab-w:pane-w"
 COORDINATOR_PANE = "tab-c:pane-c"
 WORKER = "worker-session"
 COORDINATOR = "coordinator-session"
 
 
-def orca_commands(*, dispatch: str | None = DISPATCH, **record: object) -> dict[str, str]:
-    checked = {"runId": "run_1", "messages": [], "count": 0} | ({"dispatchId": dispatch} if dispatch else {})
-    shown = {
-        "id": DISPATCH,
-        "assignee_handle": HANDLE,
-        "status": "dispatched",
-        "assignee_pane_key": WORKER_PANE,
-        "creator_pane_key": COORDINATOR_PANE,
-    } | record
+def orca_commands(
+    *, dispatch: str | None = DISPATCH, terminal: dict[str, object] | None = None, **record: object
+) -> dict[str, str]:
+    checked = {"runId": RUN, "messages": [], "count": 0} | ({"dispatchId": dispatch} if dispatch else {})
+    shown = {"id": DISPATCH, "runId": RUN, "assigneeHandle": HANDLE, "status": "dispatched"} | record
+    tab, leaf = COORDINATOR_PANE.split(":")
+    shown_terminal = {"handle": COORDINATOR_HANDLE, "tabId": tab, "leafId": leaf} if terminal is None else terminal
     return {
         f"orca orchestration check --terminal {HANDLE} --peek --json": json.dumps({"ok": True, "result": checked}),
         f"orca orchestration worker-show --dispatch {DISPATCH} --json": json.dumps(
-            {"ok": True, "result": {"dispatch": {"id": DISPATCH, "taskId": TASK}}}
-        ),
-        f"orca orchestration dispatch-show --task {TASK} --json": json.dumps(
             {"ok": True, "result": {"dispatch": shown}}
+        ),
+        f"orca orchestration run-show --id {RUN} --json": json.dumps(
+            {"ok": True, "result": {"run": {"id": RUN, "coordinator_handle": COORDINATOR_HANDLE}}}
+        ),
+        f"orca terminal show --terminal {COORDINATOR_HANDLE} --json": json.dumps(
+            {"ok": True, "result": {"terminal": shown_terminal}}
         ),
     }
 
@@ -60,8 +62,10 @@ def write_panes(user_data: Path, entries: dict[str, object]) -> None:
 
 
 @contextmanager
-def in_worker(user_data: Path, session: str = WORKER) -> Iterator[None]:
+def in_worker(user_data: Path, session: str = WORKER, *, attended: bool = True) -> Iterator[None]:
     env = {"ORCA_TERMINAL_HANDLE": HANDLE, "ORCA_USER_DATA_PATH": str(user_data)}
+    if attended:
+        env["CLAUDE_CODE_SESSION_ATTENDED"] = "1"
     with reqenv.use_request(reqenv.RequestOverrides(env, str(user_data), 0, session)):
         yield
 
@@ -82,12 +86,12 @@ def user_data(tmp_path: Path) -> Path:
 def test_a_live_worker_resolves_its_coordinators_transcript(tmp_path: Path, user_data: Path) -> None:
     (tmp_path / f"{COORDINATOR}.jsonl").touch()
     with in_worker(user_data), stubbed_commands(orca_commands()):
-        assert coordinator_transcript(WORKER) == tmp_path / f"{COORDINATOR}.jsonl"
+        assert coordinator_transcript() == tmp_path / f"{COORDINATOR}.jsonl"
 
 
 def test_a_coordinator_whose_transcript_is_gone_resolves_nothing(user_data: Path) -> None:
     with in_worker(user_data), stubbed_commands(orca_commands()):
-        assert coordinator_transcript(WORKER) is None
+        assert coordinator_transcript() is None
 
 
 @pytest.mark.parametrize(
@@ -95,58 +99,75 @@ def test_a_coordinator_whose_transcript_is_gone_resolves_nothing(user_data: Path
     [
         pytest.param(orca_commands(dispatch=None), id="not-a-worker"),
         pytest.param(orca_commands(status="completed"), id="settled"),
-        pytest.param(orca_commands(assignee_handle="term_other"), id="another-assignee"),
+        pytest.param(orca_commands(assigneeHandle="term_other"), id="another-assignee"),
         pytest.param(orca_commands(id="ctx_retry"), id="redispatched"),
-        pytest.param(orca_commands(creator_pane_key="tab-x:pane-x"), id="unknown-coordinator-pane"),
-    ],
-)
-def test_a_terminal_without_a_live_dispatch_of_its_own_resolves_nothing(
-    user_data: Path, commands: dict[str, str]
-) -> None:
-    with in_worker(user_data), stubbed_commands(commands):
-        assert coordinator_transcript(WORKER) is None
-
-
-def test_another_session_in_the_worker_terminal_resolves_nothing(user_data: Path) -> None:
-    with in_worker(user_data, "nested-print"), stubbed_commands(orca_commands()):
-        assert coordinator_transcript("nested-print") is None
-
-
-@pytest.mark.parametrize(
-    "entries",
-    [
-        pytest.param(None, id="no-status-file"),
-        pytest.param({}, id="no-panes"),
-        pytest.param({WORKER_PANE: claude_pane(WORKER, Path("/w.jsonl"))}, id="no-coordinator-pane"),
+        pytest.param(orca_commands(terminal={"handle": COORDINATOR_HANDLE}), id="coordinator-terminal-without-pane"),
         pytest.param(
-            {
-                WORKER_PANE: claude_pane(WORKER, Path("/w.jsonl")),
-                COORDINATOR_PANE: claude_pane(COORDINATOR, Path("/c.jsonl"), source="codex"),
-            },
-            id="codex-coordinator",
+            orca_commands(terminal={"handle": COORDINATOR_HANDLE, "tabId": "tab-x", "leafId": "pane-x"}),
+            id="unknown-coordinator-pane",
         ),
     ],
 )
-def test_a_coordinator_pane_without_a_claude_session_resolves_nothing(
-    tmp_path: Path, entries: dict[str, object] | None
+def test_a_terminal_without_a_live_dispatch_of_its_own_resolves_nothing(
+    tmp_path: Path, user_data: Path, commands: dict[str, str]
 ) -> None:
-    if entries is not None:
-        write_panes(tmp_path / "orca", entries)
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
+    with in_worker(user_data), stubbed_commands(commands):
+        assert coordinator_transcript() is None
+
+
+def test_an_unattended_session_in_the_worker_terminal_resolves_nothing(tmp_path: Path, user_data: Path) -> None:
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
+    with in_worker(user_data, "nested-print", attended=False), stubbed_commands(orca_commands()):
+        assert coordinator_transcript() is None
+
+
+def test_a_desk_launched_lane_resolves_its_run_coordinator(tmp_path: Path) -> None:
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
+    write_panes(
+        tmp_path / "orca",
+        {
+            WORKER_PANE: claude_pane("codex-child", tmp_path / "rollout.jsonl", source="codex"),
+            "tab-d:pane-d": claude_pane("desk-runner", tmp_path / "desk-runner.jsonl"),
+            COORDINATOR_PANE: claude_pane(COORDINATOR, tmp_path / f"{COORDINATOR}.jsonl"),
+        },
+    )
     with in_worker(tmp_path / "orca"), stubbed_commands(orca_commands()):
-        assert coordinator_transcript(WORKER) is None
+        assert coordinator_transcript() == tmp_path / f"{COORDINATOR}.jsonl"
+
+
+@pytest.mark.parametrize("coordinator", [None, "claude-elsewhere", "codex"])
+def test_a_coordinator_pane_without_a_claude_session_resolves_nothing(tmp_path: Path, coordinator: str | None) -> None:
+    transcript = tmp_path / f"{COORDINATOR}.jsonl"
+    transcript.touch()
+    entries: dict[str, object] = {WORKER_PANE: claude_pane(WORKER, tmp_path / f"{WORKER}.jsonl")}
+    if coordinator == "claude-elsewhere":
+        entries["tab-x:pane-x"] = claude_pane(COORDINATOR, transcript)
+    elif coordinator == "codex":
+        entries[COORDINATOR_PANE] = claude_pane(COORDINATOR, transcript, source="codex")
+    write_panes(tmp_path / "orca", entries)
+    with in_worker(tmp_path / "orca"), stubbed_commands(orca_commands()):
+        assert coordinator_transcript() is None
+
+
+def test_a_missing_pane_status_resolves_nothing(tmp_path: Path) -> None:
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
+    with in_worker(tmp_path / "orca"), stubbed_commands(orca_commands()):
+        assert coordinator_transcript() is None
 
 
 @pytest.mark.parametrize("status", ["[]", '{"entries": []}', "{"], ids=["list", "entries-list", "truncated"])
 def test_a_malformed_pane_status_resolves_nothing(tmp_path: Path, status: str) -> None:
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
     path = tmp_path / "orca" / "agent-hooks" / "last-status.json"
     path.parent.mkdir(parents=True)
     path.write_text(status)
     with in_worker(tmp_path / "orca"), stubbed_commands(orca_commands()):
-        assert coordinator_transcript(WORKER) is None
+        assert coordinator_transcript() is None
 
 
 def test_outside_orca_resolves_nothing() -> None:
-    assert coordinator_transcript(WORKER) is None
+    assert coordinator_transcript() is None
 
 
 def test_a_worker_event_reads_its_coordinator_as_its_root(tmp_path: Path, user_data: Path) -> None:
