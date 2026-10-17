@@ -523,6 +523,32 @@ class TestFailClosed:
         )
 
 
+class TestRunTimeCommandNames:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'P="cci post --drive $D --lane root"; $P --kind decision --resolves 88115 --topic heal; ls ~/.orca',
+            '"$CMD" --kind decision; ls ~/.orca',
+            "read p; $p sleep; ls ~/.orca",
+            "B=$(command -v biome) && $B check src; ls ~/.orca",
+            'eval "$CMD"; ls ~/.orca',
+            'bash -c "$CMD"; ls ~/.orca',
+            'read -r K <<< kill; caffeinate "$K" 14575',
+            "read -r K <<< kill; find /tmp -exec \"$K\" 14575 ';'",
+        ],
+    )
+    def test_an_unreadable_command_name_passes_through(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path, command: str
+    ) -> None:
+        assert decide(command, tmp_path) is None
+
+    @pytest.mark.parametrize("command", ["P=pkill; $P -x sleep", "eval 'pkill -x sleep'"])
+    def test_a_name_that_resolves_to_pkill_still_blocks(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path, command: str
+    ) -> None:
+        assert "`pkill` signals every process matching a name" in (decide(command, tmp_path) or "")
+
+
 LAUNCH = "nohup /w/_scratch-watch/watch.sh >/dev/null 2>&1 & echo $! > /w/watch.pid"
 WATCH = "/bin/zsh /w/_scratch-watch/watch.sh"
 
