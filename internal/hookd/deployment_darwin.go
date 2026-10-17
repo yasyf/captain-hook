@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"time"
 
 	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/deploy"
+	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/launchd"
 )
 
@@ -28,6 +31,12 @@ const (
 	// generation to terminate, waits five seconds, force-terminates what stayed,
 	// and proves quiet absence after that.
 	appStopTimeout = 20 * time.Second
+
+	// deployMetadataDir is daemonkit deploy's record directory beside the app,
+	// holding the swap, activation, and services records its verbs resume from.
+	deployMetadataDir = ".daemonkit-deploy"
+
+	launchctlNoService = 113
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -126,6 +135,50 @@ func exactAgents(appPath string) ([]launchd.Agent, error) {
 	}, nil
 }
 
+// incumbentProbes covers every way a host can be serving, starting, or owed a
+// resume here: the installed app, deploy's records beside it, the LaunchAgent
+// plists daemonkit writes under the account's home, the host's owner record, a
+// job launchd still holds, and a live control lane. The filesystem probes run
+// first, so an installed machine refuses without contacting its host.
+func incumbentProbes() ([]incumbentProbe, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve user home: %w", err)
+	}
+	account, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("resolve account home: %w", err)
+	}
+	applications := filepath.Join(home, "Applications")
+	agents := filepath.Join(account.HomeDir, "Library", "LaunchAgents")
+	return []incumbentProbe{
+		pathProbe(filepath.Join(applications, helperApplicationLeaf)),
+		pathProbe(filepath.Join(applications, deployMetadataDir, helperApplicationName)),
+		pathProbe(filepath.Join(agents, helperServiceLabel+".plist")),
+		pathProbe(filepath.Join(agents, hostServiceLabel+".plist")),
+		pathProbe(hostDaemon().RecordPath()),
+		launchdJobProbe(helperServiceLabel),
+		launchdJobProbe(hostServiceLabel),
+		controlProbe,
+	}, nil
+}
+
+func launchdJobProbe(label string) incumbentProbe {
+	return func(ctx context.Context) (string, error) {
+		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+		err := exec.CommandContext(ctx, "/bin/launchctl", "print", target).Run()
+		var exit *exec.ExitError
+		switch {
+		case err == nil:
+			return fmt.Sprintf("launchd holds %s", target), nil
+		case errors.As(err, &exit) && exit.ExitCode() == launchctlNoService:
+			return "", nil
+		default:
+			return "", fmt.Errorf("launchctl print %s: %w", target, err)
+		}
+	}
+}
+
 func openDeployment(appPath string) (*deploy.Deployment, error) {
 	agents, err := exactAgents(appPath)
 	if err != nil {
@@ -159,21 +212,19 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	lock, err := installLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := proveNoIncumbent(ctx); err != nil {
+		return err
+	}
 	deployment, err := openDeployment(targetPath)
 	if err != nil {
 		return fmt.Errorf("captain package: open deployment: %w", err)
 	}
-	candidate := deploy.Candidate{Source: source, Version: version, Digest: digest}
-	land := deployment.Install
-	if _, err := os.Lstat(targetPath); err == nil {
-		land = deployment.Supersede
-		if err := quiesceInstalledApplication(ctx, source, targetPath); err != nil {
-			return fmt.Errorf("%w; nothing was applied and %s still serves the previous generation", err, targetPath)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("captain package: inspect %q: %w", targetPath, err)
-	}
-	if _, err := land(ctx, candidate); err != nil {
+	if _, err := deployment.Install(ctx, deploy.Candidate{Source: source, Version: version, Digest: digest}); err != nil {
 		return fmt.Errorf("captain package: land delivered app: %w", err)
 	}
 	activation, err := deployment.Activate(ctx)
@@ -184,6 +235,23 @@ func applyPackagedApplication(ctx context.Context) error {
 		return err
 	}
 	return pingBridge(ctx, targetPath)
+}
+
+// installLock serializes every guarded install on this account, so one that
+// proves absence under it cannot interleave with another one landing.
+func installLock(ctx context.Context) (*durable.Lock, error) {
+	resolved, err := resolvePaths()
+	if err != nil {
+		return nil, err
+	}
+	if err := resolved.ensure(); err != nil {
+		return nil, err
+	}
+	lock, err := durable.AcquireLock(ctx, filepath.Join(resolved.dir, installLockName))
+	if err != nil {
+		return nil, fmt.Errorf("captain package: take %s: %w", installLockName, err)
+	}
+	return lock, nil
 }
 
 func uninstallPackagedApplication(ctx context.Context) error {

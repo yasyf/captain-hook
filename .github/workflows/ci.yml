@@ -128,27 +128,23 @@ jobs:
           captain_hook/bin/capt-hook --help > /dev/null
           uv run --no-sync pytest tests/test_linux_host.py tests/test_formula_deployment_contract.py
 
-      - name: Upgrade the supervised host in place
+      - name: Refuse to replace the supervised host
         env:
           UV_FIND_LINKS: ${{ runner.temp }}/wheelhouse-next
         run: |
           set -euo pipefail
           before="$(captain_hook/bin/hook status | jq -r .pid)"
-          "$RUNNER_TEMP/capt-hookd-next" package-install
-          test "$(cat ~/.local/share/captain-hook/host/version.json)" = '{"schema":1,"build":"0.0.1"}'
+          code=0
+          "$RUNNER_TEMP/capt-hookd-next" package-install 2> "$RUNNER_TEMP/refusal.err" || code=$?
+          cat "$RUNNER_TEMP/refusal.err"
+          test "$code" = 75
+          grep -q "package-install refused" "$RUNNER_TEMP/refusal.err"
+          test "$(cat ~/.local/share/captain-hook/host/version.json)" = '{"schema":1,"build":"0.0.0"}'
           status="$(captain_hook/bin/hook status)"
-          test "$(jq -r .build <<< "$status")" = 0.0.1
-          test "$(jq -r .pid <<< "$status")" != "$before"
-          test "$(realpath ~/.local/bin/capt-hook)" = "$(realpath ~/.daemonkit/tools/capt-hook/0.0.1/capt-hook/bin/capt-hook)"
-          ~/.local/bin/capt-hook --help > /dev/null
-
-      - name: Dispatch through the upgraded host
-        env:
-          CAPTAIN_TEST_LINUX_HOST_MISMATCH: ${{ runner.temp }}/capt-hookd
-        run: |
-          set -euo pipefail
-          captain_hook/bin/capt-hook --help > /dev/null
-          uv run --no-sync pytest tests/test_linux_host.py
+          test "$(jq -r .build <<< "$status")" = 0.0.0
+          test "$(jq -r .pid <<< "$status")" = "$before"
+          test ! -e ~/.daemonkit/tools/capt-hook/0.0.1
+          test "$(realpath ~/.local/bin/capt-hook)" = "$(realpath ~/.daemonkit/tools/capt-hook/0.0.0/capt-hook/bin/capt-hook)"
 
       - name: Uninstall the host
         run: |

@@ -8,6 +8,7 @@ when the command is invoked, never at import.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import click
@@ -40,7 +41,12 @@ def install() -> None:
         "up to 15 minutes while uv installs the tool env, then up to 3 minutes to restart the host...",
         err=True,
     )
-    if (host := deploy(cellar, stream=True)) is None:
+    if (deployment := deploy(cellar, stream=True)).returncode == os.EX_TEMPFAIL:
+        raise click.ClickException(
+            f"Deferred: package-install found a Captain Hook host that installing {cellar} would replace, "
+            "and replacing it would end work in flight. Nothing was changed; its reason is printed above."
+        )
+    if (host := deployment.host) is None:
         raise click.ClickException(
             f"Homebrew holds {cellar} but the running helper reports "
             f"{installed_version() or 'no version (unreachable)'} — the deployment did not converge. "

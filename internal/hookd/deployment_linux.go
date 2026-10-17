@@ -18,7 +18,6 @@ const (
 	installedHostName    = "capt-hookd"
 	installedCLIName     = "capt-hook"
 	installedVersionName = "version.json"
-	installLockName      = "install.lock"
 	superviseLockName    = "supervise.lock"
 )
 
@@ -62,6 +61,22 @@ func (p installedPaths) lock(ctx context.Context, name string) (*durable.Lock, e
 	return lock, nil
 }
 
+// incumbentProbes covers every way a host can be serving or starting here: the
+// installed host and its PATH link, the host's owner record, and a live
+// control lane.
+func incumbentProbes() ([]incumbentProbe, error) {
+	installed, err := resolveInstalledPaths()
+	if err != nil {
+		return nil, err
+	}
+	return []incumbentProbe{
+		pathProbe(installed.host),
+		pathProbe(installed.link),
+		pathProbe(hostDaemon().RecordPath()),
+		controlProbe,
+	}, nil
+}
+
 func applyPackagedApplication(ctx context.Context) error {
 	source, err := canonicalExecutable()
 	if err != nil {
@@ -79,6 +94,9 @@ func applyPackagedApplication(ctx context.Context) error {
 		return err
 	}
 	defer lock.Close()
+	if err := proveNoIncumbent(ctx); err != nil {
+		return err
+	}
 	for _, dir := range []string{installed.dir, filepath.Dir(installed.link)} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("captain package: create %q: %w", dir, err)

@@ -1,6 +1,7 @@
 package hookd
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -73,5 +74,37 @@ func TestPackageInstallAbortsBeforeTheAppWhenTheToolEnvFails(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(home, "Applications")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("package-install touched ~/Applications after the tool env failed: %v", err)
+	}
+}
+
+func TestIncumbentProbesRefuseAnInstalledMachineFromTheFilesystemFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		leaf  []string
+		probe int
+	}{
+		{name: "installed app", leaf: []string{"Applications", helperApplicationLeaf}, probe: 0},
+		{name: "deploy records", leaf: []string{"Applications", deployMetadataDir, helperApplicationName}, probe: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("DAEMONKIT_HOME", home)
+			evidence := filepath.Join(append([]string{home}, tc.leaf...)...)
+			if err := os.MkdirAll(evidence, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			probes, err := incumbentProbes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := probes[tc.probe](context.Background()); got != evidence+" exists" || err != nil {
+				t.Fatalf("probe %d = %q, %v; want %q", tc.probe, got, err, evidence+" exists")
+			}
+			err = refuseIncumbent(context.Background(), probes)
+			if !errors.Is(err, errIncumbentHost) || !strings.Contains(err.Error(), evidence) {
+				t.Fatalf("refuseIncumbent = %v, want a refusal naming %q", err, evidence)
+			}
+		})
 	}
 }

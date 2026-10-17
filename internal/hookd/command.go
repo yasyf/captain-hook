@@ -32,6 +32,8 @@ const (
 	// ahead of the install lifecycle. Nothing is disrupted yet, and its wheels
 	// outlast packageLifecycleTimeout on a slow link.
 	packageToolEnvTimeout = 15 * time.Minute
+
+	exitTempFail = 75
 )
 
 // Main executes one capt-hookd client or host command and returns its exit code.
@@ -377,15 +379,40 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
-	err := awaitProductRelease()
-	if err == nil {
-		err = installPackage(installProductToolEnv, applyPackagedApplication, packageToolEnvTimeout, packageLifecycleTimeout)
-	}
+	return packageInstall(stderr, incumbentProbes, func() error {
+		if err := awaitProductRelease(); err != nil {
+			return err
+		}
+		return installPackage(installProductToolEnv, applyPackagedApplication, packageToolEnvTimeout, packageLifecycleTimeout)
+	})
+}
+
+// packageInstall exits EX_TEMPFAIL, having touched nothing, unless the probes
+// prove there is no incumbent host to replace; an install that finds one when
+// it proves again under its own lock exits EX_TEMPFAIL as well.
+func packageInstall(stderr io.Writer, probes func() ([]incumbentProbe, error), install func() error) int {
+	listed, err := probes()
 	if err != nil {
+		fmt.Fprintf(stderr, "%v: %v\n", errIncumbentHost, err)
+		return exitTempFail
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), incumbentProbeTimeout)
+	err = refuseIncumbent(ctx, listed)
+	cancel()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitTempFail
+	}
+	switch err := install(); {
+	case err == nil:
+		return 0
+	case errors.Is(err, errIncumbentHost):
+		fmt.Fprintln(stderr, err)
+		return exitTempFail
+	default:
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	return 0
 }
 
 func installPackage(toolEnv, apply func(context.Context) error, toolEnvTimeout, lifecycleTimeout time.Duration) error {

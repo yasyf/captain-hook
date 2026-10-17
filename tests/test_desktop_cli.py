@@ -92,6 +92,25 @@ def test_install_fails_loudly_when_the_host_stays_behind_the_cellar(monkeypatch:
     assert "System Settings" not in result.output
 
 
+def test_install_defers_when_package_install_refuses_to_replace_a_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = record_brew(monkeypatch, cellar="12.22.4")
+    stub_host(monkeypatch, "12.21.6")
+    recorded = subprocess.run
+
+    def refusing_package_install(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        if argv != PACKAGE_INSTALL:
+            return recorded(argv, **kwargs)
+        calls.append(argv)
+        return SimpleNamespace(returncode=75, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", refusing_package_install)
+    result = invoke("install")
+    assert result.exit_code != 0
+    assert calls == [INSTALL, LIST, PREFIX, PACKAGE_INSTALL]
+    assert "Deferred" in result.output and "12.22.4" in result.output
+    assert "System Settings" not in result.output
+
+
 def test_install_fails_loudly_when_the_host_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     record_brew(monkeypatch, cellar="12.22.4")
     stub_host(monkeypatch, None)
