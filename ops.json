@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"session":"7250b991-7e86-44e8-90fa-1e16cd24276c","ops":[{"kind":"claim","assignee":"Yasyf Mohamedali \u003cyasyf@poetic.com\u003e"}]}
+{"v":1,"lamport":3,"session":"7250b991-7e86-44e8-90fa-1e16cd24276c","ops":[{"kind":"set_branch","branch":"yasyf/quiesce-barrier-20261017"}]}
