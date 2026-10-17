@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -28,6 +30,12 @@ const (
 	// generation to terminate, waits five seconds, force-terminates what stayed,
 	// and proves quiet absence after that.
 	appStopTimeout = 20 * time.Second
+
+	// deployMetadataDir is daemonkit deploy's record directory beside the app,
+	// holding the swap, activation, and services records its verbs resume from.
+	deployMetadataDir = ".daemonkit-deploy"
+
+	launchctlNoService = 113
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -124,6 +132,50 @@ func exactAgents(appPath string) ([]launchd.Agent, error) {
 			AssociatedBundleIdentifiers: []string{helperBundleID},
 		},
 	}, nil
+}
+
+// incumbentProbes covers every way a host can be serving, starting, or owed a
+// resume here: the installed app, deploy's records beside it, the LaunchAgent
+// plists daemonkit writes under the account's home, the host's owner record, a
+// job launchd still holds, and a live control lane. The filesystem probes run
+// first, so an installed machine refuses without contacting its host.
+func incumbentProbes() ([]incumbentProbe, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve user home: %w", err)
+	}
+	account, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("resolve account home: %w", err)
+	}
+	applications := filepath.Join(home, "Applications")
+	agents := filepath.Join(account.HomeDir, "Library", "LaunchAgents")
+	return []incumbentProbe{
+		pathProbe(filepath.Join(applications, helperApplicationLeaf)),
+		pathProbe(filepath.Join(applications, deployMetadataDir, helperApplicationName)),
+		pathProbe(filepath.Join(agents, helperServiceLabel+".plist")),
+		pathProbe(filepath.Join(agents, hostServiceLabel+".plist")),
+		pathProbe(hostDaemon().RecordPath()),
+		launchdJobProbe(helperServiceLabel),
+		launchdJobProbe(hostServiceLabel),
+		controlProbe,
+	}, nil
+}
+
+func launchdJobProbe(label string) incumbentProbe {
+	return func(ctx context.Context) (string, error) {
+		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+		err := exec.CommandContext(ctx, "/bin/launchctl", "print", target).Run()
+		var exit *exec.ExitError
+		switch {
+		case err == nil:
+			return fmt.Sprintf("launchd holds %s", target), nil
+		case errors.As(err, &exit) && exit.ExitCode() == launchctlNoService:
+			return "", nil
+		default:
+			return "", fmt.Errorf("launchctl print %s: %w", target, err)
+		}
+	}
 }
 
 func openDeployment(appPath string) (*deploy.Deployment, error) {

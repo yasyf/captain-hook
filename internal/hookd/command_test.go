@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -482,5 +483,124 @@ func TestDurationEnvironmentUsesSeconds(t *testing.T) {
 	t.Setenv("CAPT_HOOK_CLIENT_TIMEOUT", "1.25")
 	if got := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", time.Second); got != 1250*time.Millisecond {
 		t.Fatalf("duration = %s", got)
+	}
+}
+
+func TestPackageInstallRefusesBeforeAnySideEffectUnlessEveryProbeProvesAbsence(t *testing.T) {
+	t.Parallel()
+	absent := func(context.Context) (string, error) { return "", nil }
+	serving := func(context.Context) (string, error) { return "a Captain Hook host is serving", nil }
+	unanswerable := func(context.Context) (string, error) { return "", errors.New("permission denied") }
+	for _, tc := range []struct {
+		name          string
+		probes        []incumbentProbe
+		listErr       error
+		installErr    error
+		wantCode      int
+		wantRan       int
+		wantInstalled bool
+		wantStderr    []string
+	}{
+		{
+			name:       "evidence refuses and stops probing",
+			probes:     []incumbentProbe{absent, serving, absent},
+			wantCode:   exitTempFail,
+			wantRan:    2,
+			wantStderr: []string{"package-install refused", "a Captain Hook host is serving"},
+		},
+		{
+			name:       "an unanswerable probe refuses",
+			probes:     []incumbentProbe{unanswerable, absent},
+			wantCode:   exitTempFail,
+			wantRan:    1,
+			wantStderr: []string{"package-install refused", "cannot prove", "permission denied"},
+		},
+		{
+			name:       "probes that cannot be listed refuse",
+			listErr:    errors.New("resolve user home: unset"),
+			wantCode:   exitTempFail,
+			wantStderr: []string{"package-install refused", "resolve user home: unset"},
+		},
+		{
+			name:          "proven absence installs",
+			probes:        []incumbentProbe{absent, absent},
+			wantCode:      0,
+			wantRan:       2,
+			wantInstalled: true,
+		},
+		{
+			name:          "an install that finds an incumbent under its lock refuses",
+			probes:        []incumbentProbe{absent},
+			installErr:    fmt.Errorf("%w: a Captain Hook host is serving", errIncumbentHost),
+			wantCode:      exitTempFail,
+			wantRan:       1,
+			wantInstalled: true,
+			wantStderr:    []string{"package-install refused", "a Captain Hook host is serving"},
+		},
+		{
+			name:          "a failed install exits 1",
+			probes:        []incumbentProbe{absent},
+			installErr:    errors.New("land delivered app: refused"),
+			wantCode:      1,
+			wantRan:       1,
+			wantInstalled: true,
+			wantStderr:    []string{"land delivered app: refused"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ran, installed := 0, false
+			counted := make([]incumbentProbe, 0, len(tc.probes))
+			for _, probe := range tc.probes {
+				counted = append(counted, func(ctx context.Context) (string, error) {
+					ran++
+					return probe(ctx)
+				})
+			}
+			var stderr bytes.Buffer
+			code := packageInstall(&stderr,
+				func() ([]incumbentProbe, error) { return counted, tc.listErr },
+				func() error {
+					installed = true
+					return tc.installErr
+				},
+			)
+			if code != tc.wantCode || ran != tc.wantRan || installed != tc.wantInstalled {
+				t.Fatalf("code=%d ran=%d installed=%v, want code=%d ran=%d installed=%v (stderr %q)",
+					code, ran, installed, tc.wantCode, tc.wantRan, tc.wantInstalled, stderr.String())
+			}
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(stderr.String(), want) {
+					t.Fatalf("stderr = %q, want it to name %q", stderr.String(), want)
+				}
+			}
+			if len(tc.wantStderr) == 0 && stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want nothing", stderr.String())
+			}
+		})
+	}
+}
+
+func TestPathProbeReportsPresenceAbsenceAndUnanswerableLookups(t *testing.T) {
+	t.Parallel()
+	present := filepath.Join(t.TempDir(), "present")
+	if err := os.WriteFile(present, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path, wantEvidence string
+		wantErr                  bool
+	}{
+		{name: "present", path: present, wantEvidence: present + " exists"},
+		{name: "absent", path: filepath.Join(filepath.Dir(present), "absent")},
+		{name: "unanswerable", path: filepath.Join(present, "child"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			evidence, err := pathProbe(tc.path)(context.Background())
+			if evidence != tc.wantEvidence || (err != nil) != tc.wantErr {
+				t.Fatalf("pathProbe(%q) = %q, %v; want %q, error %v", tc.path, evidence, err, tc.wantEvidence, tc.wantErr)
+			}
+		})
 	}
 }

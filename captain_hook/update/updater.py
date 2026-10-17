@@ -26,8 +26,10 @@ interactive session picks that deferral up and converges.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -47,6 +49,19 @@ PENDING_RECORD = "pending"
 MAX_ESCALATIONS = 3
 BREW_TIMEOUT = 1800.0
 CELLAR_HOST = "libexec/Captain Hook.app/Contents/Helpers/capt-hookd"
+
+
+@dataclass(frozen=True, slots=True)
+class Deployment:
+    """What :func:`deploy` observed: ``package-install``'s exit and the host's version once it reached the target.
+
+    ``returncode`` is ``None`` when ``package-install`` never ran to an exit, and ``stderr`` is empty when its
+    output streamed to a terminal instead of being captured.
+    """
+
+    host: str | None
+    returncode: int | None
+    stderr: str
 
 
 def update_dir() -> Path:
@@ -117,8 +132,8 @@ def host_at_least(target: str) -> str | None:
         return None
 
 
-def deploy(target: str, *, stream: bool = False) -> str | None:
-    """Land the Cellar's application over the deployment, and the host's version once it reaches ``target``.
+def deploy(target: str, *, stream: bool = False) -> Deployment:
+    """Land the Cellar's application over the deployment, reporting ``package-install``'s exit and the host's version.
 
     ``package-install`` was the formula's ``post_install`` step until Homebrew's post-install sandbox
     denied the ``~/Library/LaunchAgents`` write it makes, failing every ``brew`` lane on every host.
@@ -135,7 +150,7 @@ def deploy(target: str, *, stream: bool = False) -> str | None:
         )
         if prefix.returncode != 0:
             breadcrumb(exit_reason("brew --prefix", prefix), echo=stream)
-            return None
+            return Deployment(None, None, "")
         landed = subprocess.run(
             [str(Path(prefix.stdout.strip()) / CELLAR_HOST), "package-install"],
             capture_output=not stream,
@@ -145,12 +160,12 @@ def deploy(target: str, *, stream: bool = False) -> str | None:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         breadcrumb(f"package-install errored: {exc}", echo=stream)
-        return None
+        return Deployment(None, None, "")
     if landed.returncode != 0:
         breadcrumb(exit_reason("package-install", landed), echo=stream)
     if stream:
         print("Waiting for the host to answer a ping...", file=sys.stderr)
-    return host_at_least(target)
+    return Deployment(host_at_least(target), landed.returncode, landed.stderr or "")
 
 
 def pending() -> str | None:
@@ -198,6 +213,18 @@ def settled(previous: str, host: str) -> None:
     notify(kind="update_installed", title="Captain Hook updated", body=f"Upgraded the signed host to {host}.")
 
 
+def concluded(previous: str, deployment: Deployment) -> bool:
+    match deployment:
+        case Deployment(host=str(host)):
+            settled(previous, host)
+            return True
+        case Deployment(returncode=os.EX_TEMPFAIL, stderr=stderr):
+            breadcrumb(f"update deferred: {stderr.strip().partition('\n')[0]}")
+            return True
+        case _:
+            return False
+
+
 def notify(*, kind: str, title: str, body: str) -> None:
     outcome = client.notify(kind=kind, title=title, body=body)
     if not outcome.ok:
@@ -213,6 +240,10 @@ def run_update(*, apply: bool = True) -> None:
     divergence it finds, but never runs a brew lane: converging supersedes the running daemon, and
     an agent-launched session is precisely where that would drain hook dispatch under work already
     in flight. The next session that may act picks the deferral up from :func:`pending`.
+
+    A ``package-install`` exiting ``EX_TEMPFAIL`` found a host it would have to replace and changed nothing,
+    so the run defers: it spends no escalation, runs no other lane, raises no banner, and records nothing
+    pending, so the next attempt waits for the normal throttle instead of the next session.
 
     Never raises — a network, version, or brew failure becomes a breadcrumb or an
     ``update_failed`` banner, so the async dispatch can never be affected.
@@ -243,14 +274,12 @@ def run_update(*, apply: bool = True) -> None:
         breadcrumb(f"update stalled: host {installed} short of {latest} after {spent} escalations")
         return
     brew(["upgrade", "--formula", FORMULA])
-    if (host := deploy(latest)) is not None:
-        settled(installed, host)
+    if concluded(installed, deploy(latest)):
         return
     record_escalation(latest, spent + 1)
     for lane in ("reinstall", "install"):
         brew([lane, "--formula", FORMULA])
-        if (host := deploy(latest)) is not None:
-            settled(installed, host)
+        if concluded(installed, deploy(latest)):
             return
     breadcrumb(f"update failed: host {installed} did not reach {latest}")
     notify(kind="update_failed", title="Captain Hook update failed", body=f"Could not upgrade the host to {latest}.")

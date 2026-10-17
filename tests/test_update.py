@@ -60,14 +60,14 @@ def stub_converging(monkeypatch: pytest.MonkeyPatch, before: str, after: str, *,
     return host
 
 
-def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any) -> list[list[str]]:
+def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any, *, stderr: str = "brew error") -> list[list[str]]:
     calls: list[list[str]] = []
 
     def fake_run(argv: list[str], **_: Any) -> SimpleNamespace:
         calls.append(argv)
         prefix = argv[:2] == PREFIX[:2]
         rc = 0 if prefix else returncode(argv) if callable(returncode) else returncode
-        return SimpleNamespace(returncode=rc, stdout=CELLAR if prefix else "", stderr="brew error")
+        return SimpleNamespace(returncode=rc, stdout=CELLAR if prefix else "", stderr=stderr)
 
     monkeypatch.setattr(updater.subprocess, "run", fake_run)
     return calls
@@ -199,6 +199,40 @@ def test_run_update_gives_a_newer_release_a_fresh_budget(
 
     assert lanes(brew) == [UPGRADE, REINSTALL]
     assert notes[-1]["kind"] == "update_installed"
+
+
+def test_run_update_defers_when_package_install_refuses_to_replace_the_host(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    """PIN: ``package-install`` exiting 75 found a host it would have to replace and changed nothing.
+
+    That refusal preserves every session's work, so it is a deferral rather than a failure: no
+    escalation spent, no reinstall or install lane, no ``update_failed`` banner, and nothing pending,
+    so the next attempt waits for the normal throttle rather than the next session.
+    """
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    calls = record_brew(
+        monkeypatch,
+        lambda argv: 75 if argv == PACKAGE_INSTALL else 0,
+        stderr=(
+            "captain package: package-install refused: a Captain Hook host is serving, "
+            "and replacing that host would end work in flight\nsecond line\n"
+        ),
+    )
+
+    updater.run_update()
+
+    assert calls == [UPGRADE, PREFIX, PACKAGE_INSTALL]
+    assert lanes(calls) == [UPGRADE]
+    last = updater.update_log_path().read_text().splitlines()[-1].split(" ", 1)[1]
+    assert last == (
+        "update deferred: captain package: package-install refused: a Captain Hook host is serving, "
+        "and replacing that host would end work in flight"
+    )
+    assert updater.escalations("v2.0.0") == 0
+    assert notes == []
+    assert updater.pending() is None
 
 
 def test_run_update_skips_when_host_is_current(monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]) -> None:
