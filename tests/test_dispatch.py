@@ -1007,6 +1007,29 @@ class TestDispatch:
         dispatch_async(evt)
         assert checked == ["sync", "async"]
 
+    def test_raising_condition_sits_its_hook_out_without_sinking_the_event(self) -> None:
+        class Raising(CustomCondition):
+            def check(self, evt: Any) -> bool:
+                raise AttributeError("'NoneType' object has no attribute 'args'")
+
+        register_hook(Event.PreToolUse, message="never rendered", only_if=[Raising()])
+        register_hook(Event.PreToolUse, message="sibling warning")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "sibling warning"
+
+    def test_raising_condition_surfaces_under_inline_tests(self) -> None:
+        class Raising(CustomCondition):
+            def check(self, evt: Any) -> bool:
+                raise AttributeError("boom")
+
+        register_hook(Event.PreToolUse, message="never rendered", only_if=[Raising()])
+
+        with dispatch_module.surfacing_handler_errors(), pytest.raises(AttributeError, match="boom"):
+            dispatch(Event.PreToolUse, make_pre_tool_event())
+
     def test_each_async_hook_gets_its_own_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clock = {"now": 100.0}
         monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
