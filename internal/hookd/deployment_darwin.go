@@ -14,6 +14,7 @@ import (
 
 	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/deploy"
+	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/launchd"
 )
 
@@ -211,21 +212,19 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	lock, err := installLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := proveNoIncumbent(ctx); err != nil {
+		return err
+	}
 	deployment, err := openDeployment(targetPath)
 	if err != nil {
 		return fmt.Errorf("captain package: open deployment: %w", err)
 	}
-	candidate := deploy.Candidate{Source: source, Version: version, Digest: digest}
-	land := deployment.Install
-	if _, err := os.Lstat(targetPath); err == nil {
-		land = deployment.Supersede
-		if err := quiesceInstalledApplication(ctx, source, targetPath); err != nil {
-			return fmt.Errorf("%w; nothing was applied and %s still serves the previous generation", err, targetPath)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("captain package: inspect %q: %w", targetPath, err)
-	}
-	if _, err := land(ctx, candidate); err != nil {
+	if _, err := deployment.Install(ctx, deploy.Candidate{Source: source, Version: version, Digest: digest}); err != nil {
 		return fmt.Errorf("captain package: land delivered app: %w", err)
 	}
 	activation, err := deployment.Activate(ctx)
@@ -236,6 +235,23 @@ func applyPackagedApplication(ctx context.Context) error {
 		return err
 	}
 	return pingBridge(ctx, targetPath)
+}
+
+// installLock serializes every guarded install on this account, so one that
+// proves absence under it cannot interleave with another one landing.
+func installLock(ctx context.Context) (*durable.Lock, error) {
+	resolved, err := resolvePaths()
+	if err != nil {
+		return nil, err
+	}
+	if err := resolved.ensure(); err != nil {
+		return nil, err
+	}
+	lock, err := durable.AcquireLock(ctx, filepath.Join(resolved.dir, installLockName))
+	if err != nil {
+		return nil, fmt.Errorf("captain package: take %s: %w", installLockName, err)
+	}
+	return lock, nil
 }
 
 func uninstallPackagedApplication(ctx context.Context) error {

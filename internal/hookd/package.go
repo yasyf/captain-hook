@@ -18,6 +18,8 @@ const (
 	hostStopTimeout = hostShutdownTimeout + 15*time.Second
 
 	incumbentProbeTimeout = 10 * time.Second
+
+	installLockName = "install.lock"
 )
 
 var errIncumbentHost = errors.New("captain package: package-install refused")
@@ -68,6 +70,17 @@ func refuseIncumbent(ctx context.Context, probes []incumbentProbe) error {
 		}
 	}
 	return nil
+}
+
+// proveNoIncumbent proves absence again under an install's own lock: a guarded
+// install never lands over a host, so this is what keeps an install that took
+// minutes landing its tool env from replacing one that appeared meanwhile.
+func proveNoIncumbent(ctx context.Context) error {
+	probes, err := incumbentProbes()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errIncumbentHost, err)
+	}
+	return refuseIncumbent(ctx, probes)
 }
 
 func pathProbe(path string) incumbentProbe {

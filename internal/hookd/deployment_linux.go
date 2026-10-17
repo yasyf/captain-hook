@@ -18,7 +18,6 @@ const (
 	installedHostName    = "capt-hookd"
 	installedCLIName     = "capt-hook"
 	installedVersionName = "version.json"
-	installLockName      = "install.lock"
 	superviseLockName    = "supervise.lock"
 )
 
@@ -64,8 +63,7 @@ func (p installedPaths) lock(ctx context.Context, name string) (*durable.Lock, e
 
 // incumbentProbes covers every way a host can be serving or starting here: the
 // installed host and its PATH link, the host's owner record, and a live
-// control lane. The install proves them again under its lock, since Ensure
-// drains whatever a concurrent installer started while the tool env landed.
+// control lane.
 func incumbentProbes() ([]incumbentProbe, error) {
 	installed, err := resolveInstalledPaths()
 	if err != nil {
@@ -96,11 +94,7 @@ func applyPackagedApplication(ctx context.Context) error {
 		return err
 	}
 	defer lock.Close()
-	probes, err := incumbentProbes()
-	if err != nil {
-		return fmt.Errorf("%w: %w", errIncumbentHost, err)
-	}
-	if err := refuseIncumbent(ctx, probes); err != nil {
+	if err := proveNoIncumbent(ctx); err != nil {
 		return err
 	}
 	for _, dir := range []string{installed.dir, filepath.Dir(installed.link)} {
