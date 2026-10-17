@@ -1345,3 +1345,45 @@ def test_graph_query_budget_bounds_each_partial_step(tmp_path, monkeypatch):
         session.release()
     finally:
         fixture.close()
+
+
+class StubBridge:
+    def __init__(self, data):
+        self.data = data
+
+    def __call__(self, wrapper):
+        return response(wrapper["request"], self.data)
+
+    def close(self):
+        pass
+
+
+def stats_data():
+    from captain_hook.snapshots.validation import validator
+
+    gauges = validator("host-response").schema["$defs"]["Core_Gauges"]["properties"]
+    return {"kind": "stats", "counters": empty_usage(), "gauges": dict.fromkeys(gauges, 0)}
+
+
+def test_a_cli_scope_validates_each_bridge_response_once(monkeypatch):
+    from captain_hook.snapshots import client as snapshots
+    from captain_hook.snapshots import validation
+
+    validated = []
+    real = validation.validate
+    monkeypatch.setattr(validation, "validate", lambda name, value: (validated.append(name), real(name, value))[1])
+    monkeypatch.setattr(snapshots, "Bridge", lambda event=0: StubBridge(stats_data()))
+    with snapshots.client_scope() as client:
+        client.bind_tool_registry({})
+        assert client.call("stats")["data"]["kind"] == "stats"
+        assert validated == ["host-response"]
+
+
+def test_a_cli_scope_rejects_a_bridge_response_outside_the_schema(monkeypatch):
+    from captain_hook.snapshots import client as snapshots
+
+    monkeypatch.setattr(snapshots, "Bridge", lambda event=0: StubBridge({"kind": "stats", "bogus": 1}))
+    with snapshots.client_scope() as client:
+        client.bind_tool_registry({})
+        with pytest.raises(snapshots.SnapshotProtocolError):
+            client.call("stats")

@@ -426,8 +426,6 @@ class SnapshotClient:
     def call(self, operation: str, *, domain: bool = False, **arguments: object) -> dict[str, Any]:
         from jsonschema import ValidationError
 
-        from captain_hook.snapshots.validation import checked
-
         started = time.monotonic()
         retry_until = started + CLEANUP_SECONDS if operation == "release" else None
         admission_deadline_unix_ms = int((time.time() + self._preparation_seconds) * 1000)
@@ -465,7 +463,6 @@ class SnapshotClient:
             exchange = self._cleanup_exchange if operation == "release" else self._exchange
             try:
                 response = exchange({"schema": HOST_SCHEMA, "request": request, "tool_registry": self.tool_registry()})
-                response = checked("host-response", response)
             except (OSError, ValueError, ValidationError) as exc:
                 raise SnapshotProtocolError(str(exc)) from exc
             if response.get("schema") != HOST_SCHEMA or not isinstance(response.get("response"), dict):
@@ -1601,11 +1598,13 @@ def observing(predicates: Iterable[tuple[str, str]]) -> Iterator[ObserverPlan | 
 
 @contextmanager
 def client_scope(*, defer_cleanup: bool = False, event: int = 0) -> Iterator[SnapshotClient]:
+    from captain_hook.snapshots.validation import checked
+
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
     bridge = Bridge(event=event)
-    client = SnapshotClient(bridge, defer_cleanup=defer_cleanup)
+    client = SnapshotClient(lambda value: checked("host-response", bridge(value)), defer_cleanup=defer_cleanup)
     token = CURRENT_CLIENT.set(client)
     try:
         yield client
