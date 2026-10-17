@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"session":"7250b991-7e86-44e8-90fa-1e16cd24276c","ops":[{"kind":"set_branch","branch":"yasyf/quiesce-barrier-20261017"}]}
+{"v":1,"lamport":4,"session":"7250b991-7e86-44e8-90fa-1e16cd24276c","ops":[{"kind":"add_comment","body":"STOPPED 16:27 by root: 792cd923 FAIL x2 (Capt-only lock does not fence old/direct writers vs daemonkit Install/Activate recover). No merge/release/runtime verification. Next: Option B contract (daemonkit fresh-only pre-recovery + pre-activation gate under its own hold), contract only."}]}
