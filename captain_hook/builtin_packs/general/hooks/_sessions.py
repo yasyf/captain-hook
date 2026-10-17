@@ -22,11 +22,11 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, workflow_state
-from captain_hook.bindings import Resolution, Resolved, Unknown, Unresolved, program_name, references
+from captain_hook.bindings import Resolved, Unknown, Unresolved, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
 from captain_hook.conditions import UserSaid
-from captain_hook.guard_literal import FOLD_TABLE, GUARDED_WORD, QUOTING_CHARS, names_guarded
+from captain_hook.guard_literal import QUOTING_CHARS, names_guarded
 from captain_hook.tickets import (
     Allow,
     Context,
@@ -870,11 +870,6 @@ def expands_name(head: Word) -> bool:
     )
 
 
-def guarded_token(token: str) -> bool:
-    name = PurePath(QUOTING_CHARS.sub("", token)).name.translate(FOLD_TABLE)
-    return GUARDED_WORD.fullmatch(name) is not None
-
-
 def guarded_program_token(token: str) -> str | None:
     name = QUOTING_CHARS.sub("", PurePath(token).name if "/" in token else token)
     return None if (match := GUARDED_PROGRAM.search(name)) is None else match.group(1)
@@ -882,81 +877,6 @@ def guarded_program_token(token: str) -> str | None:
 
 def names_guarded_program(text: str) -> str | None:
     return next((name for token in ARG_TOKEN_BREAK.split(text) if (name := guarded_program_token(token))), None)
-
-
-def guarded_word_token(token: str) -> str | None:
-    name = QUOTING_CHARS.sub("", PurePath(token).name if "/" in token else token).translate(FOLD_TABLE)
-    return None if (match := GUARDED_WORD.search(name)) is None else match.group(1)
-
-
-def names_guarded_word(text: str) -> str | None:
-    return next((name for token in ARG_TOKEN_BREAK.split(text) if (name := guarded_word_token(token))), None)
-
-
-def names_program(resolution: Resolution) -> bool:
-    return isinstance(resolution, Resolved) and all(
-        candidate.split() and guarded_word_token(program_name(candidate)) is None for candidate in resolution.candidates
-    )
-
-
-def guarded_argument(call: Call, *, named: bool) -> str | None:
-    if call.substituted:
-        return "a command substitution"
-    for word in call.command.words[1:]:
-        if word.value is not None:
-            texts: tuple[str, ...] = (word.value,)
-        else:
-            match call.resolve(word):
-                case Resolved(candidates, _):
-                    texts = candidates
-                case Unresolved(None) if named:
-                    continue
-                case Unresolved(None):
-                    return f"`{clip(word.raw, 40)}`"
-                case Unresolved(source):
-                    if names_guarded_word(source) is not None:
-                        return f"`{clip(word.raw, 40)}`"
-                    continue
-        if any(guarded_token(token) for text in texts for token in ARG_TOKEN_BREAK.split(text)):
-            return f"`{clip(word.raw, 40)}`"
-    return None
-
-
-def head_reason(call: Call) -> str | None:
-    if not (words := call.command.words) or (head := words[0]).value is not None and not expands_name(head):
-        return None
-    spelling = spell(call)
-    if expands_name(head):
-        return (
-            f"BLOCKED: `{spelling}` runs a command whose name the shell expands at run time "
-            f"(`{clip(head.raw, 40)}`), so the guard cannot tell what runs. Spell the command name literally."
-        )
-    resolution = call.resolve(head)
-    if (argument := guarded_argument(call, named=names_program(resolution))) is not None:
-        return (
-            f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) with {argument} "
-            "among its arguments, which runs instead if the name expands to nothing. Spell the command name literally."
-        )
-    match resolution:
-        case Resolved() if (spelled := spellings(call)) is not None and spelled.count > VARIANT_LIMIT:
-            return (
-                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) that expands to "
-                f"more than {VARIANT_LIMIT} command lines, more than the guard reads. Spell the command name literally."
-            )
-        case Resolved():
-            return None
-        case Unresolved(None):
-            return (
-                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`), so the guard "
-                "cannot tell what runs. Spell the command name literally."
-            )
-        case Unresolved(source) if source:
-            return (
-                f"BLOCKED: `{spelling}` runs a command named at run time (`{clip(head.raw, 40)}`) built from text "
-                f"the guard cannot read (`{clip(source, 40)}`). Spell the command name literally."
-            )
-        case _:
-            return None
 
 
 def emitted_piece(piece: str) -> str:
@@ -1006,12 +926,7 @@ def spellings(call: Call) -> Spelled | None:
 
 
 def variants(call: Call) -> Variants | None:
-    if (
-        not call.command.words
-        or (call.command.words[0].value is None and head_reason(call) is not None)
-        or (spelled := spellings(call)) is None
-        or spelled.count > VARIANT_LIMIT
-    ):
+    if not call.command.words or (spelled := spellings(call)) is None or spelled.count > VARIANT_LIMIT:
         return None
     texts = tuple(" ".join(part for part in combination if part) for combination in product(*spelled.words))
     return Variants(texts, spelled.unread)

@@ -42,7 +42,6 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     first_operand,
     guard,
     guarded,
-    head_reason,
     hidden_behind,
     hosts_agent,
     inline_class_rulings,
@@ -233,183 +232,6 @@ ROLLBACK_STOP = (
     "~/.local/bin/cci post --drive release-v3 --lane root --kind hold --to merge-walker-r2,incident-run-backlog-0711 "
     "--text 'OWNER 8:25 AM: NO executor rollback.' 2>&1 | tail -1"
 )
-
-
-@guard(
-    tests={
-        guarded(command="read p; $p sleep; ls ~/.orca"): Block(pattern="named at run time"),
-        guarded(command="p=$(echo pkill); $p sleep"): Block(pattern="built from text the guard cannot read"),
-        guarded(command='P=$(ls | head -1); [ -z "$P" ] && P=$(find ~ -name python); "$P" -c x'): Block(
-            pattern="text the guard cannot read"
-        ),
-        guarded(command="C=$(printf '%s%s' pk ill); \"$C\" claude; orca status"): Block(
-            pattern="text the guard cannot read"
-        ),
-        guarded(command='X=echo; V=X; read "$V" <<<pkill; "$X" claude; ls ~/.orca'): Block(pattern="named at run time"),
-        guarded(command='X=echo; V=X; printf -v "$V" pkill; "$X" claude; ls ~/.orca'): Block(
-            pattern="named at run time"
-        ),
-        guarded(command='X=echo; R=read; $R X <<<pkill; "$X" claude; ls ~/.orca'): Block(pattern="named at run time"),
-        guarded(command='X=echo; R=$(echo read); $R X <<<pkill; "$X" claude; ls ~/.orca'): Block(
-            pattern="named at run time"
-        ),
-        guarded(command='for P in /usr/bin/[p]kill; do "$P" -f claude; done'): Block(
-            pattern="text the guard cannot read"
-        ),
-        guarded(command='P=echo; sh -c "P=pkill; \\$P claude"'): Block(pattern="named at run time"),
-        guarded(command="$W kill 14575"): Block(pattern="`kill` among its arguments"),
-        guarded(command="W=timeout; $W 5 kill 14575"): Block(pattern="among its arguments"),
-        guarded(command="$SHELL -c 'kill 14575'"): Block(pattern="among its arguments"),
-        guarded(command="$W $(echo pkill) sleep"): Block(pattern="a command substitution among its arguments"),
-        guarded(command='$W "$1"; ls ~/.orca'): Block(pattern='`"\\$1"` among its arguments'),
-        guarded(command="W='timeout 5'; $W pkill sleep"): Block(pattern="`pkill` among its arguments"),
-        guarded(command="f() { $CMD 14575; }; CMD=kill; f"): Block(pattern="named at run time"),
-        guarded(command="p=ls; (p=kill); $p 14575"): Block(pattern="text the guard cannot read"),
-        guarded(command="false && p=kill; $p 14575"): Block(pattern="text the guard cannot read"),
-        guarded(command="eval 'p=ls'; $p 14575; ls ~/.orca"): Block(pattern="named at run time"),
-        guarded(command='[ -z "$P" ] && kill -l'): Allow(),
-        guarded(command="false && p=ls; $p 14575; ls ~/.orca"): Block(pattern="text the guard cannot read"),
-        guarded(command="cat <<'EOF'\np=ls\nEOF\n$p kill 14575"): Block(),
-        guarded(command="{kill,14575}"): Block(pattern="expands at run time"),
-        guarded(command="{pkill,-x,sleep}"): Block(),
-        guarded(command="kill{,} 14575"): Block(),
-        guarded(command="/bin/{kill,} 14575"): Block(),
-        guarded(command="[k]ill 14575"): Block(),
-        guarded(
-            command=(
-                "S=~/.claude/scratch/release-v3; sed -i '' '/R400 proof: plat/d' $S/desk-deadlines.txt; cd "
-                "/Users/yasyf/.orca/workspaces/monorepo/monorepo/sole && $S/desk-loop.sh 2>&1 | cut -c1-900"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                'AB="agent-browser --session prpack-check"; $AB open "http://127.0.0.1:61118/p/x" >/dev/null 2>&1; '
-                "$AB eval \"(() => { const el = [...document.querySelectorAll('*')].find(e => e.textContent); "
-                'return !!el; })()" 2>&1 | tail -1'
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                "F=/Users/yasyf/.claude/scratch/release-v3/watch-28635-28637.sh; "
-                "sed -i '' 's/--no-watch/--watch/' $F; $F"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                'cd ~/.claude/worktrees/captain-hook/hook-lint-builtins && CA="/Users/yasyf/.claude/plugins/cache/'
-                'skills/codex/1.14.0/skills/codex/../../bin/codex-ask"; "$CA" --lane review --schema findings - '
-                "<<'Q' 2>&1 | tail -40\nReview the builtin packs.\nQ"
-            )
-        ): Block(pattern="text the guard cannot read"),
-        guarded(
-            command=(
-                'CA="/Users/yasyf/.claude/plugins/cache/skills/codex/1.14.0/skills/codex/../../bin/codex-ask"; '
-                'cd ~/.claude/worktrees/captain-hook/hook-lint-builtins && "$CA" --lane review --schema findings - '
-                "<<'Q' 2>&1 | tail -40\nReview the builtin packs.\nQ"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                "CS=/Users/yasyf/.claude/plugins/data/cc-slack-forge/bin/cc-slack\n$CS reply --channel C0BQ --thread "
-                "1790878010.813989 --no-watch --text 'Thanks for accepting the agreement.' 2>&1"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                "cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole; $HOME/.claude/plugins/cache/skills/"
-                "long-running/0.6.49/bin/ledger.py inbox --ledger 829f --take 2>&1 | cut -c1-600"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                "cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/v3-incident-api-1n80-fix-base && "
-                "B=$(realpath ../v3-incident-api-1n7z-fix-base/node_modules/.bin/biome); $B --version"
-            )
-        ): Block(pattern="text the guard cannot read"),
-        guarded(command='timeout 20 "$CP" outcomes --no-doc --session d0bf 2>&1; ls ~/.orca'): Allow(),
-        guarded(
-            command=(
-                "cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole; L=/Users/yasyf/.claude/plugins/cache/skills/"
-                "long-running/0.6.49/bin/ledger.py; S=$(date +%s); $L refresh --ledger 829f --repo Forge-AI/monorepo "
-                "</dev/null 2>&1 | tail -5; $L reconcile --ledger 829f --checkout $PWD </dev/null 2>&1 | tail -25; "
-                'echo "dur=$(( $(date +%s)-S ))s"'
-            )
-        ): Allow(),
-        guarded(command="cd /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole; $L reconcile --checkout $PWD"): Block(
-            pattern="`\\$PWD` among its arguments"
-        ),
-        guarded(command="L=; $L ./run.sh $PWD; ls ~/.orca"): Block(pattern="`\\$PWD` among its arguments"),
-        guarded(command='W=timeout; $W "$1"; ls ~/.orca'): Block(pattern="named at run time"),
-        guarded(command='read -r K <<< kill; W=env; $W "$K" 14575'): Block(pattern="named at run time"),
-        guarded(command="read <<<kill; W=env; $W $REPLY 14575"): Block(pattern="named at run time"),
-        guarded(command='read -r K <<< kill; W=caffeinate; $W "$K" 14575'): Block(pattern="among its arguments"),
-        guarded(command='PWD="i /bin/kill 14575"; W=caffeinate; $W -$PWD'): Block(pattern="among its arguments"),
-        guarded(command="read -r K <<< kill; W=find; $W /tmp -exec \"$K\" 14575 ';'"): Block(
-            pattern="among its arguments"
-        ),
-        guarded(
-            command=(
-                'read N <<<"; -exec /bin/kill 14575 ; -exec echo"; W=find; $W /tmp -maxdepth 1 -exec echo $N {} ";"'
-            )
-        ): Block(pattern="among its arguments"),
-        guarded(command='PWD="exec /bin/kill 14575 ;"; W=find; $W /tmp -$PWD'): Block(pattern="among its arguments"),
-        guarded(command='cd /; W=find; $W "$PWD" -name x'): Block(pattern="among its arguments"),
-        guarded(command='read -r K <<< kill; W=bash; $W -c "$K 14575"'): Block(),
-        guarded(
-            command=("for A in a b c d e f g h kill; do for B in 1 2 3 4 5 6 7 8 14575; do $A $B; done; done")
-        ): Block(pattern="more than 64 command lines"),
-        guarded(
-            command=(
-                "for d in selection dag judge trailers targets stacks images pipeline prcheck reach reads record "
-                "platy render slack hold bake ledger canvas finish; do $d/run.sh; done; ls ~/.orca"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                "B=$(ls /Users/yasyf/.orca/workspaces/monorepo/monorepo/sole/node_modules/.bin/biome 2>/dev/null || "
-                "command -v biome) && $B check infra/ci/src/verbs/release-stacks.ts 2>&1 | tail -25"
-            )
-        ): Block(pattern="text the guard cannot read"),
-        guarded(
-            command=(
-                'for c in "bun infra/graph.ts" "bun infra/k8s.ts delivery"; do eval $c || echo "FAILED $c"; done; '
-                "ls ~/.orca"
-            )
-        ): Allow(),
-        guarded(command="X=echo; X[0]=pkill; $X claude"): Block(pattern="text the guard cannot read"),
-        guarded(command="X=echo; printf -v X pkill; $X claude"): Block(pattern="named at run time"),
-        guarded(command="X=echo; read 'X' <<<pkill; $X claude"): Block(pattern="named at run time"),
-        guarded(command="X=echo; declare -n Y=X; Y=pkill; $X claude"): Block(pattern="named at run time"),
-        guarded(command="X=pkill; X=echo | cat; $X claude"): Block(),
-        guarded(command="X=pkill; X=echo & $X claude"): Block(),
-        guarded(command="X=pk; X+=ill; $X claude; ls ~/.orca"): Block(pattern="named at run time"),
-        guarded(command="X='[p]kill'; $X -x claude"): Block(pattern="expands at run time"),
-        guarded(command="X='{p,q}kill'; $X -x claude"): Block(pattern="expands at run time"),
-        guarded(command='X=echo; function f() { "$X" claude; }; X=pkill; f'): Block(pattern="named at run time"),
-        guarded(command='X=echo; f() { echo }; "$X" claude; }; X=pkill; f'): Block(pattern="named at run time"),
-        guarded(command='for X in {echo,pkill}; do "$X" claude; done'): Block(pattern="text the guard cannot read"),
-        guarded(command="PWD=/tmp; cd /; $PWD/kill 14575"): Block(pattern="named at run time"),
-        guarded(
-            command=(
-                "S=/Users/yasyf/.claude/scratch/release-v3; cat > $S/briefs/s3-2.md <<'EOF'\n# s3-2 brief\n"
-                "Report lines to orca-desk-from-workers.md, then worker_done.\nEOF\n"
-                "cat $S/briefs/common-rules.md >> $S/briefs/s3-2.md\n"
-                "ORCA_LAUNCH_BOOT_SECONDS=180 $S/launch-explicit.sh s3-2 sonnet high $S/briefs/s3-2.md 2>&1 | tail -3"
-            )
-        ): Allow(),
-        guarded(
-            command=(
-                "false && S=/tmp; cat > $S/briefs/s3-2.md <<'EOF'\nReport to orca-desk-from-workers.md.\nEOF\n"
-                "$S/launch-explicit.sh s3-2"
-            )
-        ): Block(pattern="text the guard cannot read"),
-        guarded(command='cd ~/.orca/workspaces/x && for g in a.ts b.ts; do eval "timeout 120 bun $g"; done'): Allow(),
-        guarded(command="~/bin/kill 14575"): Allow(),
-        guarded(command="kill 14575"): Allow(),
-    }
-)
-def opaque_command_name(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(head_reason, Scan.of(evt).calls))
 
 
 def unread_reason(call: Call, arguments: Arguments) -> str:
@@ -735,6 +557,7 @@ def criteria_verdict(call: Call) -> str | None:
         ): Block(pattern="`pkill` signals every process matching a name"),
         guarded(command='pkill -f "never" 2>/dev/null; codex-ask --help'): Block(pattern="`pgrep -fl <pattern>`"),
         guarded(command="p=pkill; $p sleep"): Block(pattern="signals every process matching"),
+        guarded(command="eval 'pkill -x sleep'"): Block(pattern="signals every process matching"),
         guarded(command="for p in pgrep pkill; do $p -x sleep; done"): Block(pattern="signals every process matching"),
         guarded(command="ITEMS='echo pkill'; for X in $ITEMS; do \"$X\" claude; done"): Block(),
         guarded(command="X=pkill; cat <<EOF\n\tEOF\nX=echo\nEOF\n$X claude"): Block(pattern="signals every process"),
@@ -1923,24 +1746,13 @@ def guarded_program_in(args: tuple[str, ...]) -> str | None:
     )
 
 
-def hidden_target(words: tuple[Word, ...]) -> Word | None:
-    return next((word for word in words if word.value is None), None)
-
-
 def unquoted_expansion(word: Word) -> bool:
     parts = segments(word.raw)
     return parts is None or any(isinstance(part, Ref) and not part.quoted for part in parts)
 
 
 def launcher_verdict(call: Call) -> str | None:
-    if call.name not in LAUNCHERS:
-        return None
-    if (hidden := hidden_target(call.command.words[1:])) is not None:
-        return (
-            f"BLOCKED: `{spell(call)}` runs a command named at run time (`{clip(hidden.raw, 40)}`) through "
-            f"`{call.name}`, which hides its target from the guard. Spell the command name literally."
-        )
-    if (inner := guarded_program_in(call.args)) is None:
+    if call.name not in LAUNCHERS or (inner := guarded_program_in(call.args)) is None:
         return None
     return (
         f"BLOCKED: `{spell(call)}` runs `{inner}` through `{call.name}`, which hides its target from the guard. Run "
@@ -1967,9 +1779,9 @@ def launcher_verdict(call: Call) -> str | None:
         guarded(command="arch -arm64 make test-kill"): Allow(),
         guarded(command="caffeinate -i make -C /tmp/ws/x test"): Allow(),
         guarded(command="caffeinate -i make test"): Allow(),
-        guarded(command='read -r K <<< kill; caffeinate "$K" 14575'): Block(pattern="named at run time"),
-        guarded(command="read N; caffeinate -i make -j$N; ls ~/.orca"): Block(pattern="named at run time"),
-        guarded(command='PWD="i /bin/kill 14575"; caffeinate -$PWD'): Block(pattern="named at run time"),
+        guarded(command='read -r K <<< kill; caffeinate "$K" 14575'): Allow(),
+        guarded(command="read N; caffeinate -i make -j$N; ls ~/.orca"): Allow(),
+        guarded(command='PWD="i /bin/kill 14575"; caffeinate -$PWD'): Allow(),
         guarded(command="N=4; caffeinate -i make -j$N; ls ~/.orca"): Allow(),
         guarded(command="X=echo; caffeinate $X 14575; ls ~/.orca"): Allow(),
     }
@@ -1991,14 +1803,7 @@ def find_exec_verdict(call: Call) -> str | None:
             "can add an `-exec` the guard cannot see. Quote it or spell it literally."
         )
     start = next((index for index, arg in enumerate(call.args) if arg in FIND_EXEC), None)
-    if start is None:
-        return None
-    if (program := hidden_target(call.command.words[start + 2 : start + 3])) is not None:
-        return (
-            f"BLOCKED: `{spell(call)}` runs a command named at run time (`{clip(program.raw, 40)}`) through "
-            "`find -exec`, on targets the guard cannot see. Spell the command name literally."
-        )
-    if (inner := guarded_program_in(call.args[start + 1 :])) is None:
+    if start is None or (inner := guarded_program_in(call.args[start + 1 :])) is None:
         return None
     return (
         f"BLOCKED: `{spell(call)}` runs `{inner}` once per matched file through `find -exec`, on targets the guard "
@@ -2013,7 +1818,7 @@ def find_exec_verdict(call: Call) -> str | None:
         guarded(command="find . -exec sh -c 'kill $1' _ {} \\;"): Block(),
         guarded(command="find . -name '*kill*' -exec cat {} +"): Allow(),
         guarded(command="find ./orca -name x -exec cat {} +"): Allow(),
-        guarded(command="read -r K <<< kill; find /tmp -exec \"$K\" 14575 ';'"): Block(pattern="named at run time"),
+        guarded(command="read -r K <<< kill; find /tmp -exec \"$K\" 14575 ';'"): Allow(),
         guarded(command="read N; find /tmp -maxdepth 1 -exec echo \"$N\" {} ';'; ls ~/.orca"): Allow(),
         guarded(command="read N; find /tmp -maxdepth 1 -exec echo $N {} ';'; ls ~/.orca"): Block(
             pattern="unquoted inside a find expression"
@@ -2079,13 +1884,7 @@ def too_deep(spelling: str) -> str:
 
 
 def eval_verdict(call: Call, spelling: str) -> str | None:
-    words = call.command.words[1:]
-    if call.substituted or any(word.value is None for word in words):
-        return (
-            f"BLOCKED: `{spelling}` evaluates text built at run time, so the guard cannot see what runs. Run the "
-            "command directly."
-        )
-    return too_deep(spelling) if words and call.occurrence.nesting == PAYLOAD_DEPTH_LIMIT else None
+    return too_deep(spelling) if call.command.words[1:] and call.occurrence.nesting == PAYLOAD_DEPTH_LIMIT else None
 
 
 def short_flag(value: str | None, letter: str) -> bool:
@@ -2111,20 +1910,15 @@ def shell_verdict(call: Call) -> str | None:
     payload = next(
         (word for word in words[flagged + 1 :] if word.value is None or not word.value.startswith("-")), None
     )
-    if payload is None:
+    if payload is None or payload.value is None:
         return None
-    if payload.value is None:
-        return (
-            f"BLOCKED: `{spelling}` runs a shell payload built at run time, so the guard cannot see what runs. Run the "
-            "command directly."
-        )
     return too_deep(spelling) if call.occurrence.nesting == PAYLOAD_DEPTH_LIMIT else None
 
 
 @guard(
     tests={
-        guarded(command='bash -c "$CMD"; kill -l'): Block(pattern="shell payload built at run time"),
-        guarded(command='eval "$(echo pkill sleep)"'): Block(pattern="evaluates text built at run time"),
+        guarded(command='bash -c "$CMD"; kill -l'): Allow(),
+        guarded(command='eval "$CMD"; kill -l'): Allow(),
         guarded(command=nested(4, "pkill -x sleep")): Block(pattern="nests shells deeper"),
         guarded(command=nested(3, "eval 'pkill -f claude'")): Block(pattern="nests shells deeper"),
         guarded(command=nested(4, "kill -9 14575", wrapper="eval")): Block(pattern="nests shells deeper"),

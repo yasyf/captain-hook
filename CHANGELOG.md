@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A command whose name the session guards cannot read runs.** The general pack blocked any
+  Bash call whose command name came from a variable, a glob, or text the guard could not resolve,
+  as in `P="cci post --drive $D"; $P --kind decision`, and asked for the name spelled literally.
+  The `opaque_command_name` guard and its `head_reason` verdict are gone. `caffeinate "$K"`,
+  `find -exec "$K"`, `eval "$CMD"`, and `bash -c "$CMD"` no longer block on the unread name
+  either. A name the guard can resolve is still spelled out and checked, so `P=pkill; $P -x sleep`
+  still blocks.
+
 - **A judge that overflows its context window or refuses once is asked again, and a citation that
   quotes the user's words names their item.** `Decide.verdict` turned every judge exception into
   `Undecided`. A prompt too long for the `small` tier's on-device model therefore refused the write
