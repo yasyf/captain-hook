@@ -666,7 +666,7 @@ def test_no_plan_is_installed_without_a_deep_predicate():
 
 
 def test_the_plan_is_cleared_when_matching_raises():
-    from captain_hook.dispatch import prepare_hook_events
+    from captain_hook.dispatch import prepare_hook_events, surfacing_handler_errors
 
     def explode(evt):
         assert OBSERVER_PLAN.get() is not None
@@ -674,7 +674,7 @@ def test_the_plan_is_cleared_when_matching_raises():
 
     register_hook(Event.PreToolUse, "fixture", only_if=[LambdaCondition(explode), UsedTool("Read")])
 
-    with pytest.raises(RuntimeError, match="condition failed"):
+    with surfacing_handler_errors(), pytest.raises(RuntimeError, match="condition failed"):
         prepare_hook_events(fixture_event(), async_=False)
     assert OBSERVER_PLAN.get() is None
 

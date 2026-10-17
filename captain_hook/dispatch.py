@@ -172,6 +172,14 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
         return None
 
 
+def note_condition_failure(entry: RegisteredHook, evt: BaseHookEvent, exc: Exception) -> None:
+    """Record that *entry*'s condition raised, so the hook sits the event out like a crashed handler."""
+    from captain_hook import faults
+
+    logger.bind(hook=entry.name).opt(exception=exc).error("hook condition failed")
+    faults.record(f"hook {entry.name}", exc, str(evt.cwd) if evt.cwd else None)
+
+
 def note_evidence_gap(entry: RegisteredHook, exc: EvidenceIncomplete) -> None:
     """Record that *entry* was skipped for incomplete evidence, so its siblings still decide the event."""
     reqenv.evidence_gaps().append(f"{entry.name}: {exc.status}: {exc.reason}")
@@ -664,6 +672,11 @@ def prepare_hook_events(
                     if entries[index].spec.on_incomplete is None:
                         note_evidence_gap(entries[index], exc)
                     matched[index] = entries[index].spec.on_incomplete is not None
+                except Exception as exc:
+                    if _SURFACE_HANDLER_ERRORS.get():
+                        raise
+                    note_condition_failure(entries[index], forks[index], exc)
+                    matched[index] = False
         for index, fork in enumerate(forks):
             if not matched[index]:
                 release_transcript(fork.ctx.transcript)
