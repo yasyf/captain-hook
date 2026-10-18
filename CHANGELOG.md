@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The saturated-host block sends Go to the mac builder and spells `remote-builder exec`'s argv.**
+  `admit_local_build` named `remote-builder exec --lane go|cargo -- <command>`, so blocked agents
+  picked `--machine linux` for Go, whose builder image has no `go`, and wrote `-- go test`, which
+  runs `go go test` because the lane already names the tool. The message now names
+  `remote-builder exec --lane go --machine mac -- <go args>` and `--lane cargo -- <args>`.
+
 - **A command whose name the session guards cannot read runs.** The general pack blocked any
   Bash call whose command name came from a variable, a glob, or text the guard could not resolve,
   as in `P="cci post --drive $D"; $P --kind decision`, and asked for the name spelled literally.
