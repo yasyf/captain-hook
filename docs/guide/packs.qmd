@@ -88,7 +88,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   `ccx vcs ship` to put the change in a stacked PR instead. When the queued PR is only a parent
   that a `ccx vcs ship` would push along with its downstack, the refusal names
   `ccx vcs ship --tip-only` instead, which pushes only the shipped branch. `# ccx:raw` or
-  `CAPT_HOOK_CCX_RAW=1` pushes anyway, and a lookup that fails or times out allows the push.
+  `CAPT_HOOK_CCX_RAW=1` pushes anyway, and a lookup that fails, times out, or answers from a
+  stale cache allows the push.
 
 Two more activate by language, detected from the repo's build manifests:
 

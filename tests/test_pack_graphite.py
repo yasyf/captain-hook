@@ -802,6 +802,7 @@ def test_a_push_to_a_queued_pr_is_denied(
     result = dispatch_stubbed(command, repo, tmp_path, commands)
     assert_fires(result, "deny", "holds `feat`")
     assert_fires(result, "deny", "ccx vcs stack new <name>")
+    assert_fires(result, "deny", "holds `feat` per `ccx vcs pr status 26315`")
 
 
 def test_a_ship_onto_a_queued_pr_is_denied_even_at_the_enqueued_head(
@@ -827,6 +828,18 @@ def test_a_push_to_a_pr_not_queued_is_allowed(isolate_modules: None, ccx_install
     for report in [queue_report(26315, "not queued"), queue_report(26315, "landed")]:
         commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([report])}
         assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
+
+
+def test_a_push_over_a_stale_queued_report_is_allowed(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    """A rate-limited cache answers from its last poll, which can predate the queue letting go."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    stale = {"polledAt": "2026-10-19T14:20:00Z", "probeAt": "2026-10-19T14:50:00Z", "reason": "quota below the floor"}
+    report = queue_report(26315, "queued", ENQUEUED) | {"stale": stale}
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([report])}
+    assert_not_denied(dispatch_stubbed("git push", repo, tmp_path, commands))
 
 
 def test_a_push_of_the_enqueued_head_is_allowed(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
