@@ -515,9 +515,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal names the recheck.** Under a GitHub rate limit `ccx vcs pr status` answers
   from its last poll and marks the report `stale`; the guard treated that report as
   Graphite's current word and refused. A stale report now allows the push, like a lookup
-  that fails or times out. The refusal also names `ccx vcs pr status <n>` and says to rerun
-  the command when it no longer reads queued, since the queue can let a PR go in the
-  seconds after the check reads it.
+  that fails or times out. The refusal also names the `ccx vcs pr status <n>` call it read,
+  so a lane can recheck and rerun when it no longer reads queued: the queue can let a PR go
+  in the seconds after the check reads it.
 
 - **A plugin update no longer runs a pack's new hooks against its old helper modules.**
   When a pack's release directory changed, discovery dropped the pack's submodules from

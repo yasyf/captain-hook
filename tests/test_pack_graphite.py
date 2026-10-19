@@ -802,7 +802,7 @@ def test_a_push_to_a_queued_pr_is_denied(
     result = dispatch_stubbed(command, repo, tmp_path, commands)
     assert_fires(result, "deny", "holds `feat`")
     assert_fires(result, "deny", "ccx vcs stack new <name>")
-    assert_fires(result, "deny", "`ccx vcs pr status 26315` no longer reads queued")
+    assert_fires(result, "deny", "holds `feat` per `ccx vcs pr status 26315`")
 
 
 def test_a_ship_onto_a_queued_pr_is_denied_even_at_the_enqueued_head(

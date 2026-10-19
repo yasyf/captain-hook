@@ -291,6 +291,6 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
         else "Ship the change as a stacked PR: run `ccx vcs stack new <name>` from that branch."
     )
     return evt.block(
-        f"The Graphite merge queue holds {branches} and drops anything pushed after admission. {remedy} "
-        f"If `ccx vcs pr status {numbers}` no longer reads queued, the queue let go after this check; rerun it."
+        f"The Graphite merge queue holds {branches} per `ccx vcs pr status {numbers}` and drops anything pushed "
+        f"after admission. {remedy}"
     )
