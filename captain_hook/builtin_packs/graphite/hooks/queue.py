@@ -42,6 +42,12 @@ class Push:
     head: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class Hold:
+    push: Push
+    number: int
+
+
 def check_budget() -> float:
     left = collect_budget(SYNC_DEADLINE_MARGIN_SECONDS + VERDICT_SECONDS)
     return CHECK_TIMEOUT if left is None else min(CHECK_TIMEOUT, left)
@@ -194,11 +200,11 @@ def planner(call: Call) -> Callable[[Call, Path | None], list[Push] | None] | No
             return None
 
 
-def tip_only_clears(call: Call, session_cwd: Path | None, found: list[Push]) -> bool:
+def tip_only_clears(call: Call, session_cwd: Path | None, found: list[Hold]) -> bool:
     if planner(call) is not ship_pushes or "--tip-only" in (flags := flag_names(call)):
         return False
     kept = {push.branch for push in tip_only_pushes(call, session_cwd, flags)}
-    return all(push.branch not in kept for push in found)
+    return all(hold.push.branch not in kept for hold in found)
 
 
 def moves_heads(call: Call) -> bool:
@@ -231,16 +237,17 @@ def already_enqueued(push: Push, report: dict[str, str]) -> bool:
     return bool(push.head and (enqueued := report.get("enqueued")) and push.head.startswith(enqueued))
 
 
-def holds(cwd: Path, planned: list[Push]) -> list[Push]:
+def holds(cwd: Path, planned: list[Push]) -> list[Hold]:
     if not (prs := open_prs(sorted({push.branch for push in planned}), cwd)):
         return []
     if (reports := queue_reports(sorted(set(prs.values())), cwd)) is None:
         return []
     return [
-        push
+        Hold(push, number)
         for push in planned
         if (number := prs.get(push.branch)) is not None
         and reports[number]["queue"] == "queued"
+        and "stale" not in reports[number]
         and not already_enqueued(push, reports[number])
     ]
 
@@ -259,7 +266,7 @@ def holds(cwd: Path, planned: list[Push]) -> list[Push]:
     },
 )
 def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
-    held: list[Push] = []
+    held: list[Hold] = []
     downstack_only = True
     moved = False
     for call in evt.cmd.calls():
@@ -275,11 +282,15 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
         moved = moved or moves_heads(call)
     if not held:
         return None
-    branches = ", ".join(dict.fromkeys(f"`{push.branch}`" for push in held))
+    branches = ", ".join(dict.fromkeys(f"`{hold.push.branch}`" for hold in held))
+    numbers = " ".join(dict.fromkeys(str(hold.number) for hold in held))
     remedy = (
         "This ship pushes its downstack too; rerun it as `ccx vcs ship --tip-only`, which pushes only "
         "the branch it ships and leaves the queued parent at its admitted head."
         if downstack_only
         else "Ship the change as a stacked PR: run `ccx vcs stack new <name>` from that branch."
     )
-    return evt.block(f"The Graphite merge queue holds {branches} and drops anything pushed after admission. {remedy}")
+    return evt.block(
+        f"The Graphite merge queue holds {branches} and drops anything pushed after admission. {remedy} "
+        f"If `ccx vcs pr status {numbers}` no longer reads queued, the queue let go after this check; rerun it."
+    )
