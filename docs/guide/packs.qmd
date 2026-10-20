@@ -93,10 +93,10 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 
 Two more activate by language, detected from the repo's build manifests:
 
-- `go` — a go-test-before-commit gate and a `go.mod` nudge — active when a recursive, non-ignored
-  `go.mod` or `go.work` exists anywhere in the repo. The gate and both test nudges stand down while the
-  host is saturated, so they never ask for a test the `performance` pack refuses to start.
-- `python` — a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge —
+- `go` — a narrowest-test-run nudge and a `go.mod` nudge — active when a recursive, non-ignored
+  `go.mod` or `go.work` exists anywhere in the repo. The test nudge stands down while the host is
+  saturated, so it never asks for a test the `performance` pack refuses to start.
+- `python` — a narrowest-test-run nudge, AST style rules, and a `uv` missing-dependency nudge —
   active when a recursive, non-ignored `pyproject.toml` exists.
 
 Detection walks the repo once, pruning VCS metadata and `.gitignore`d directories, so a vendored
@@ -554,7 +554,7 @@ and in a command substitution. A command `ssh` sends to another host is not pars
 names the load and core count and tells the agent to let CI grade the commit. Remote work the task
 already has approval for stays possible when written explicitly.
 
-The `go` pack's test-before-commit gate and its two test nudges skip under the same condition.
+The `go` pack's test nudge skips under the same condition.
 
 #### Limits
 

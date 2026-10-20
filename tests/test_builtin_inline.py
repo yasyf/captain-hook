@@ -84,35 +84,6 @@ def test_builtin_pack_inline_tests(dotted: str) -> None:
     assert_inline_tests(dotted)
 
 
-@pytest.mark.parametrize(
-    ("dotted", "command"),
-    [
-        pytest.param("captain_hook.builtin_packs.go.hooks.testing", "git commit internal/cli/root.go", id="go"),
-        pytest.param("captain_hook.builtin_packs.python.hooks.testing", "git commit pkg/mod.py", id="python"),
-    ],
-)
-def test_commit_test_gate_blocks_every_same_turn_retry(
-    dotted: str, command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from captain_hook.dispatch import dispatch
-    from captain_hook.testing.fixtures import T
-    from captain_hook.testing.helpers import input_to_event
-    from captain_hook.testing.types import Input
-    from captain_hook.types import Event
-    from captain_hook.util.builds import LOAD_PER_CORE
-
-    monkeypatch.setenv(LOAD_PER_CORE, "1000000")
-    load_builtin_module(dotted)
-    evt = input_to_event(
-        Event.PreToolUse,
-        Input(command=command, transcript=[T.user("wrap up the change"), T.assistant("wrapping up")], seen={}),
-    )
-    for attempt in range(2):
-        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
-        assert result is not None, f"attempt {attempt} walked past the gate"
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
 def test_general_tasks_gate_blocks_every_same_turn_retry(tmp_path: Path) -> None:
     from captain_hook.dispatch import dispatch
     from captain_hook.testing.fixtures import T
