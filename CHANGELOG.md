@@ -511,6 +511,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Mac without `~/Applications/Captain Hook.app` gets one install note per session, not
+  a hook error on every call.** `bin/hook` handed every event to binrun, which failed reading the
+  missing bundle's `Info.plist` and printed `binrun: read version file: ... no such file or
+  directory` as a hook error on each tool call. `bin/hook` now checks for the bundle first. With no
+  bundle, an event exits 0, and the session's first event carries a `systemMessage` naming `uvx
+  capt-hook helper install`. A guarded call that names a session-ending program still gets its skip
+  note on every call.
+
 - **The queued-push guard no longer holds a push on a stale queue report, and its
   refusal names the recheck.** Under a GitHub rate limit `ccx vcs pr status` answers
   from its last poll and marks the report `stale`; the guard treated that report as

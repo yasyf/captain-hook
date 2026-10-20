@@ -246,7 +246,12 @@ pinned, sha256-verified runner on a machine without it. The descriptor names the
 bundle a deploy replaces. It requires app 12.31.0, the original binrun floor; the plugin sends
 no command that host lacks.
 
-A missing or older app gets binrun's `brew upgrade` error and exit 1, except for a `PreToolUse`
+A missing app never reaches binrun. `bin/hook` checks for the bundle's `Info.plist` first, and
+without it every event exits 0. The session's first event, recognized by the payload's
+`session_id`, carries a `systemMessage` naming `uvx capt-hook helper install`, while a
+`PreToolUse` or `PermissionRequest` still runs the guard literal below.
+
+An older app gets binrun's `brew upgrade` error and exit 1, except for a `PreToolUse`
 or `PermissionRequest`. binrun refuses before reading stdin, so `bin/hook` runs the plugin's
 bundled guard literal under the `python3` on `PATH`. A call that names a session-ending program
 runs under your permissions with a `host-unavailable` skip note and exit 0, and any other
@@ -404,9 +409,10 @@ runtime owner; it does not make untrusted hook code safe.
 ### Host troubleshooting
 
 **The signed host is missing.** Install or repair it with
-`uvx capt-hook helper install`. Dispatch fails non-zero and never runs the Python CLI instead; a
-`PreToolUse` or `PermissionRequest` naming a session-ending program instead runs under your
-permissions with a skip note and exit 0.
+`uvx capt-hook helper install`. Dispatch never runs the Python CLI instead. With no app, each event
+exits 0 and the session's first event notes the install command; a `PreToolUse` or
+`PermissionRequest` naming a session-ending program runs under your permissions with a skip note
+and exit 0.
 [Troubleshooting](troubleshooting.qmd#the-signed-host-is-missing-or-dispatch-fails) walks both.
 
 **A worker is stuck or stale.** Run `"$host" status`, inspect `capt-hookd.log`, then use
