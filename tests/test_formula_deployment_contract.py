@@ -33,6 +33,16 @@ BELOW_MINIMUM = "is version 12.30.9, want at least 12.31.0; run: brew upgrade ya
 NOT_INSTALLED = "hook: Captain Hook is not installed; run: brew install yasyf/tap/captain-hook"
 FAKE_BINRUN_REFUSING = f"#!/bin/sh\necho {shlex.quote(NOT_INSTALLED)} >&2\nexit 1\n"
 FAKE_BINRUN_HEALTHY = "#!/bin/sh\nexit 0\n"
+APP_MISSING = (
+    json.dumps(
+        {
+            "systemMessage": "capt-hook: Captain Hook.app is not installed in ~/Applications, so captain-hook hooks"
+            " are not running. Install it with `uvx capt-hook helper install`."
+        },
+        separators=(",", ":"),
+    )
+    + "\n"
+)
 BROKEN_PYTHON = '#!/bin/sh\necho "Traceback (most recent call last):" >&2\nexit 1\n'
 PASSING_PYTHON = f"#!/bin/sh\nexit {PASS_EXIT}\n"
 REAL_PYTHON = f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n'
@@ -231,15 +241,6 @@ def test_linux_hook_dispatch_execs_the_installed_host_and_notes_the_skip_without
         pytest.param(
             "12.30.9", "PreToolUse", BENIGN_PAYLOAD, 1, "", BELOW_MINIMUM, id="below-minimum-fails-open-benign"
         ),
-        pytest.param(
-            None,
-            "PreToolUse",
-            DESTRUCTIVE_PAYLOAD,
-            0,
-            ENVELOPES["PreToolUse"],
-            "Contents/Info.plist: no such file or directory",
-            id="no-app-skips-with-a-note",
-        ),
         pytest.param("12.31.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="minimum-app-reads-stdin"),
         pytest.param(
             "12.60.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="host-behind-the-plugin-reads-stdin"
@@ -250,7 +251,7 @@ def test_linux_hook_dispatch_execs_the_installed_host_and_notes_the_skip_without
 def test_hook_dispatch_notes_a_guarded_call_binrun_refuses(
     installed: str | None, event: str, payload: bytes, code: int, stdout: str, hint: str | None, tmp_path: Path
 ) -> None:
-    """PIN: binrun's refusal of a missing or too-old app lets a guarded call run with the skip note.
+    """PIN: binrun's refusal of a too-old app lets a guarded call run with the skip note.
 
     binrun refuses before anything reads stdin, so the guard literal reads the payload intact and
     notes the skip on a session-ending call; a benign call keeps the non-blocking exit 1. An app at or past
@@ -284,6 +285,9 @@ def test_hook_dispatch_notes_a_guarded_call_binrun_refuses(
 
 
 def runner_env(tmp_path: Path) -> dict[str, str]:
+    contents = tmp_path / "Applications" / "Captain Hook.app" / "Contents"
+    contents.mkdir(parents=True, exist_ok=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "12.31.0"}))
     return {"HOME": str(tmp_path), "DAEMONKIT_HOME": str(tmp_path), "BINRUN_BIN": str(tmp_path / "binrun")}
 
 
@@ -526,6 +530,50 @@ def test_hook_dispatch_keeps_the_failed_exec_status_for_an_unguarded_event(
     assert (result.returncode, result.stdout) == (exec_failure_status(env["BINRUN_BIN"]), ""), result.stderr
     assert env["BINRUN_BIN"] in result.stderr
     assert "python3" not in result.stderr
+
+
+def app_missing_env(tmp_path: Path) -> dict[str, str]:
+    path = python3_path(tmp_path, REAL_PYTHON)
+    return macos_arm(path) | {"HOME": str(tmp_path), "TMPDIR": str(tmp_path), "BINRUN_BIN": str(tmp_path / "binrun")}
+
+
+def run_hook(event: str, payload: bytes, env: dict[str, str]) -> tuple[int, str, str]:
+    result = subprocess.run(
+        [ROOT / "captain_hook/bin/hook", "run", event],
+        env=env,
+        input=payload.decode(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+@pytest.mark.parametrize("event", ["PostToolUse", "Stop", "PreToolUse", "PermissionRequest"])
+def test_hook_dispatch_notes_a_missing_app_once_per_session(event: str, tmp_path: Path) -> None:
+    """PIN: with no ~/Applications/Captain Hook.app, a call that needs no skip note exits 0 without reaching binrun,
+    carrying the install note on its session's first call and nothing after it.
+    """
+    env = app_missing_env(tmp_path)
+    other = BENIGN_PAYLOAD.replace(b'"s1"', b'"s2"')
+    calls = [run_hook(event, payload, env) for payload in (BENIGN_PAYLOAD, BENIGN_PAYLOAD, other)]
+    assert calls == [(0, APP_MISSING, ""), (0, "", ""), (0, APP_MISSING, "")]
+
+
+@pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
+def test_hook_dispatch_notes_every_session_ending_call_without_the_app(event: str, tmp_path: Path) -> None:
+    """PIN: a missing app never quiets the skip note: every guarded call naming a session-ending program carries it."""
+    env = app_missing_env(tmp_path)
+    calls = [run_hook(event, DESTRUCTIVE_PAYLOAD, env) for _ in range(2)]
+    assert calls == [(0, ENVELOPES[event], "")] * 2
+
+
+def test_hook_dispatch_notes_a_missing_app_on_every_call_without_a_session(tmp_path: Path) -> None:
+    """PIN: a payload naming no session has nothing to remember the note by, so each call carries it."""
+    env = app_missing_env(tmp_path)
+    payload = b'{"tool_name":"Bash","tool_input":{"command":"git status"}}'
+    assert [run_hook("PostToolUse", payload, env) for _ in range(2)] == [(0, APP_MISSING, "")] * 2
 
 
 @pytest.mark.parametrize("python3", [pytest.param(REAL_PYTHON, id="python3"), pytest.param(None, id="no-python3")])

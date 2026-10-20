@@ -6,18 +6,34 @@ case "${1-} ${2-}" in
   *) guarded= ;;
 esac
 root="${0%/*}/.."
-skip() {
-  # binrun refuses before reading stdin and a host that ran has spent it: one byte tells them apart.
-  IFS= read -r -d '' -n 1 first || exit "$1"
-  verdict=$(python3 -I "$root/guard_literal.py" "$guarded" "$first")
+literal() {
+  verdict=$(python3 -I "$root/guard_literal.py" "$guarded" "$1")
   rc=$?
   . "$root/guard_literal.sh"
   [ "$rc" -eq 0 ] && { printf '%s\n' "$verdict"; exit 0; }
-  [ "$rc" -eq "$GUARD_PASS_EXIT" ] && exit 1
+  [ "$rc" -eq "$GUARD_PASS_EXIT" ] && return
   case "$guarded" in
     PreToolUse) printf '%s\n' "$GUARD_SKIP_PreToolUse" ;;
     PermissionRequest) printf '%s\n' "$GUARD_SKIP_PermissionRequest" ;;
   esac
+  exit 0
+}
+skip() {
+  # binrun refuses before reading stdin and a host that ran has spent it: one byte tells them apart.
+  IFS= read -r -d '' -n 1 first || exit "$1"
+  literal "$first"
+  exit 1
+}
+app_missing() {
+  IFS= read -r -d '' -n 4096 payload
+  [ -n "$guarded" ] && literal "$payload"
+  session='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)"'
+  if [[ $payload =~ $session ]]; then
+    shown="${TMPDIR:-/tmp}/capt-hook-app-missing.${BASH_REMATCH[1]}"
+    [ -e "$shown" ] && exit 0
+    : >"$shown"
+  fi
+  printf '%s\n' '{"systemMessage":"capt-hook: Captain Hook.app is not installed in ~/Applications, so captain-hook hooks are not running. Install it with `uvx capt-hook helper install`."}'
   exit 0
 }
 case "$OSTYPE" in
@@ -30,6 +46,7 @@ case "$OSTYPE" in
     exit 1
     ;;
 esac
+[ -e "${DAEMONKIT_HOME:-$HOME}/Applications/Captain Hook.app/Contents/Info.plist" ] || app_missing
 if [ -n "$guarded" ]; then
   ( . "$root/scripts/install-binary.sh" )
   rc=$?
