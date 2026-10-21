@@ -141,7 +141,7 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 	if !cmd.Session {
 		t.Fatal("worker spawn does not own its descendants")
 	}
-	if cmd.Path != "/usr/bin/python3" || cmd.Dir != root ||
+	if cmd.Path != "/usr/bin/python3" || cmd.Dir != filepath.Clean(os.TempDir()) ||
 		len(cmd.Args) != 3 || cmd.Args[0] != "-P" || cmd.Args[1] != "-m" || cmd.Args[2] != "captain_hook.worker" {
 		t.Fatalf("worker spawn = %q %q in %q", cmd.Path, cmd.Args, cmd.Dir)
 	}
@@ -151,23 +151,21 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 		seen[name] = value
 	}
 	// The whole inherited environment carries the user's secrets, so a failure names only what it asserts.
-	if seen["LANG"] != "C" || seen["PATH"] == "" || seen["HOOKS_PROFILE"] != "strict" {
-		t.Fatalf("worker environment: LANG=%q PATH set=%t HOOKS_PROFILE=%q",
-			seen["LANG"], seen["PATH"] != "", seen["HOOKS_PROFILE"])
+	if seen["LANG"] != "C" || seen["PATH"] == "" || seen["HOOKS_PROFILE"] != "strict" || seen["CAPT_HOOK_WORKER_ROOT"] != root {
+		t.Fatalf("worker environment: LANG=%q PATH set=%t HOOKS_PROFILE=%q CAPT_HOOK_WORKER_ROOT=%q",
+			seen["LANG"], seen["PATH"] != "", seen["HOOKS_PROFILE"], seen["CAPT_HOOK_WORKER_ROOT"])
 	}
 }
 
-// TestWorkerCmdSurvivesARootDeletedUnderTheSession pins the fallback: a chdir
+// TestWorkerDirSurvivesARootDeletedUnderTheSession pins the fallback: a chdir
 // into a missing Dir surfaces as posix_spawn reporting the interpreter absent,
 // which killed every dispatch from a session whose workspace had been reaped
 // before it first needed a worker (observed 2026-09-02).
-func TestWorkerCmdSurvivesARootDeletedUnderTheSession(t *testing.T) {
+func TestWorkerDirSurvivesARootDeletedUnderTheSession(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp+"/")
-	root := filepath.Join(tmp, "reaped")
-	cmd := workerCmd(workerKey{id: "abc", root: root}, "/usr/bin/python3")
-	if cmd.Dir != tmp {
-		t.Fatalf("worker spawn Dir = %q, want the clean temp dir %q for a missing root", cmd.Dir, tmp)
+	if dir := workerDir(filepath.Join(tmp, "reaped")); dir != tmp {
+		t.Fatalf("workerDir = %q, want the clean temp dir %q for a missing root", dir, tmp)
 	}
 }
 
