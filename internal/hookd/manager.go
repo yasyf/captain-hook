@@ -690,16 +690,13 @@ func spawnPastEAGAIN(ctx context.Context, backoff []time.Duration, spawn func() 
 	return child, err
 }
 
-// workerCmd runs the worker with -P, so the session repo the worker's Dir names
-// stays off sys.path: a directory there sharing an installed dependency's name
-// otherwise shadows it, failing the import inside the worker thread where no
-// hook response can carry it. CAPT_HOOK_WORKER_SHARD keys the worker's daemon
-// log apart from its pool peers', since loguru rotates per process.
+// workerCmd runs the worker from the temp directory, since a cwd inside the
+// root pins that worktree against removal, and -P keeps it off sys.path.
 func workerCmd(key workerKey, python string) daemonkit.Cmd {
 	env := mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env)
 	return daemonkit.Cmd{
-		Path: python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: workerDir(key.root),
-		Env:     append(env, "CAPT_HOOK_WORKER_SHARD="+strconv.Itoa(key.shard)),
+		Path: python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: filepath.Clean(os.TempDir()),
+		Env:     append(env, "CAPT_HOOK_WORKER_ROOT="+key.root, "CAPT_HOOK_WORKER_SHARD="+strconv.Itoa(key.shard)),
 		Session: true,
 		Exec:    daemonkit.ServingSameUser(),
 	}

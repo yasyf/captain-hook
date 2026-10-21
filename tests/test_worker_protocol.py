@@ -477,7 +477,7 @@ def test_module_entrypoint_reserves_stdout_for_protocol() -> None:
         capture_output=True,
         check=True,
         timeout=5,
-        env={**os.environ, "CAPT_HOOK_WORKER_SHARD": "0"},
+        env={**os.environ, "CAPT_HOOK_WORKER_ROOT": "/repo", "CAPT_HOOK_WORKER_SHARD": "0"},
     )
 
     response = responses(completed.stdout)

@@ -59,11 +59,7 @@ def adopt_user_path() -> None:
     os.environ["PATH"] = merged_path(os.environ.get("PATH", ""), login)
 
 
-def worker_log_key(build: str, shard: str) -> str:
-    try:
-        root = os.path.realpath(os.getcwd())
-    except FileNotFoundError:
-        root = f"deleted-root-{os.getpid()}"
+def worker_log_key(build: str, root: str, shard: str) -> str:
     return f"{build}-{hashlib.sha256(root.encode('utf-8', 'surrogatepass')).hexdigest()[:16]}-{shard}"
 
 
@@ -80,7 +76,9 @@ def main() -> None:
     lift_spawn_nproc_cap()
     bound_transcript_parse_pool()
     skip_bundled_cli_version_probe()
-    router = configure_daemon_logging(worker_log_key(build, os.environ["CAPT_HOOK_WORKER_SHARD"]))
+    router = configure_daemon_logging(
+        worker_log_key(build, os.environ["CAPT_HOOK_WORKER_ROOT"], os.environ["CAPT_HOOK_WORKER_SHARD"])
+    )
     adopt_user_path()
     fallback = sys.stderr
     sys.stdout = ContextIO("stdout", fallback)
