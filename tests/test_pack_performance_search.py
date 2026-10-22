@@ -31,6 +31,7 @@ def repo(tmp_path: Path) -> Path:
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path.resolve() / "home"
     (root / ".claude" / "scratch" / "release-v3" / "specific-lane").mkdir(parents=True)
+    (root / ".claude" / "scratch" / "notes.log").write_text("needle\n")
     (lane := root / ".claude" / "worktrees" / "captain-hook" / "lane" / "src").mkdir(parents=True)
     (lane.parent / ".git").write_text("gitdir: ../actual")
     monkeypatch.setenv("HOME", str(root))
@@ -67,6 +68,10 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
         pytest.param("ugrep --include-dir='*' needle .", id="ugrep-include-dir-recurses"),
         pytest.param("ugrep -r -M python needle .", id="ugrep-magic-is-no-bound"),
         pytest.param("ugrep -r -g'*.py,*' needle .", id="ugrep-broad-glob-in-list"),
+        pytest.param("ugrep -r -g'*.py' --all needle .", id="ugrep-all-cancels-globs"),
+        pytest.param("ugrep --include-fs -r needle .", id="ugrep-include-fs-takes-no-value"),
+        pytest.param("ugrep --max-depth=2 needle .", id="ugrep-max-depth-recurses"),
+        pytest.param("printf needle | rg needle </dev/null", id="redirect-replaces-pipe"),
         pytest.param("rg needle internal/focused .", id="safe-sibling-root"),
         pytest.param("rg needle internal/focused; rg needle .", id="safe-sibling-call"),
         pytest.param("rg needle *", id="bare-star-operand"),
@@ -142,10 +147,16 @@ def test_blocks_search_at_home_roots(performance: None, home: Path, tmp_path: Pa
         pytest.param("ugrep -rn needle ~/.claude/scratch/release-v3/specific-lane", id="scratch-lane"),
         pytest.param("rg needle ~/.claude/worktrees/captain-hook/lane/src", id="worktree-subtree"),
         pytest.param("rg needle '~'", id="quoted-tilde"),
+        pytest.param("rg needle ~/.claude/scratch/notes.log", id="file-under-scratch-root"),
     ],
 )
 def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
     assert decision(command, tmp_path.resolve(), tmp_path) is None
+
+
+def test_match_supplies_the_ugrep_pattern(performance: None, repo: Path, tmp_path: Path) -> None:
+    assert decision("ugrep -r --match /", repo / "internal" / "focused", tmp_path) == "deny"
+    assert decision("ugrep -r --match .", repo / "internal" / "focused", tmp_path) is None
 
 
 def test_classifies_roots_without_walking(

@@ -137,13 +137,13 @@ UGREP = CommandSchema(
     options=(
         Option("patterns", ("-e", "--regexp", "-N", "--neg-regexp", "--and", "--andnot", "--not")),
         Option("pattern_files", ("-f", "--file")),
-        Option("query", ("-Q", "--query"), bool),
+        Option("query", ("-Q", "--query", "--match"), bool),
         Option(
             "recursive",
             ("-r", "-R", "--recursive", "--dereference-recursive", "--index", *(f"-{depth}" for depth in range(1, 10))),
             bool,
         ),
-        Option("depth", ("--depth",)),
+        Option("depth", ("--depth", "--max-depth", "--min-depth")),
         Option("directories", ("-d", "--directories")),
         Option("glob", ("-g", "--glob", "--iglob", "--include")),
         Option("include_dir", ("--include-dir",)),
@@ -153,6 +153,7 @@ UGREP = CommandSchema(
         Option("magic", ("-M", "--file-magic")),
         Option("exclude", ("--exclude", "--exclude-dir", "--exclude-from")),
         Option("from", ("--from",)),
+        Option("all", ("--all", "-@"), bool),
         Option("info", ("-V", "--version", "--help", "-?"), bool),
         Option(
             "parameter",
@@ -183,8 +184,6 @@ UGREP = CommandSchema(
                 "--context-separator",
                 "--delay",
                 "--encoding",
-                "--exclude-fs",
-                "--include-fs",
                 "--filter",
                 "--filter-magic-label",
                 "--format",
@@ -196,9 +195,8 @@ UGREP = CommandSchema(
         Option(
             "mode",
             (
-                *(f"-{letter}" for letter in "0EFGHILPSTUWXYZabchijklnopqsuvwxyz%@.+^"),
+                *(f"-{letter}" for letter in "0EFGHILPSTUWXYZabchijklnopqsuvwxyz%.+^"),
                 "--text",
-                "--all",
                 "--bool",
                 "--break",
                 "--byte-offset",
@@ -209,6 +207,8 @@ UGREP = CommandSchema(
                 "--cpp",
                 "--csv",
                 "--dotall",
+                "--exclude-fs",
+                "--include-fs",
                 "--extended-regexp",
                 "--fixed-strings",
                 "--files",
@@ -231,7 +231,6 @@ UGREP = CommandSchema(
                 "--files-with-matches",
                 "--line-buffered",
                 "--lines",
-                "--match",
                 "--mmap",
                 "--line-number",
                 "--null",
@@ -507,8 +506,11 @@ def names_files(target: Target) -> bool:
 
 
 def broad(target: Target) -> bool:
-    return not names_files(target) and (
-        BROAD_ROOTS(target) or ((path := target.path) is not None and is_repo_root(glob_prefix(path)))
+    path = target.path
+    return (
+        not names_files(target)
+        and not (path is not None and path.is_file())
+        and (BROAD_ROOTS(target) or (path is not None and is_repo_root(glob_prefix(path))))
     )
 
 
@@ -526,11 +528,19 @@ def searches_broadly(arguments: Arguments, roots: Targets) -> bool:
 
 def reads_stdin(arguments: Arguments) -> bool:
     return "-" not in arguments.values.get("pattern_files", ()) and (
-        arguments.call.occurrence.prev_op == "|"
-        or any(
-            redirect.op in STDIN_REDIRECTS and redirect.fd in (None, 0) and redirect.target != "/dev/null"
-            for redirect in arguments.call.redirects
+        source != "/dev/null"
+        if (
+            source := next(
+                (
+                    redirect.target
+                    for redirect in reversed(arguments.call.redirects)
+                    if redirect.op in STDIN_REDIRECTS and redirect.fd in (None, 0)
+                ),
+                None,
+            )
         )
+        is not None
+        else arguments.call.occurrence.prev_op == "|"
     )
 
 
@@ -576,7 +586,7 @@ def grep_bounded(arguments: Arguments) -> bool:
 
 
 def ugrep_bounded(arguments: Arguments) -> bool:
-    return bounded(
+    return not arguments.values.get("all") and bounded(
         (
             *positive(
                 listed(
@@ -659,6 +669,11 @@ hook(
         Input(command="ugrep -r -g'*.py,*' needle ~"): Block(),
         Input(command="ugrep -r -M python needle ~"): Block(),
         Input(command="ugrep -r --and needle --not other ~"): Block(),
+        Input(command="ugrep -r -g'*.py' --all needle ~"): Block(),
+        Input(command="ugrep --include-fs -r needle ~"): Block(),
+        Input(command="ugrep --max-depth=3 needle /"): Block(),
+        Input(command="ugrep -r --match /"): Block(),
+        Input(command="printf needle | rg needle </dev/null"): Block(),
         Input(command="grep -n needle explicit.log", cwd="/repo"): Allow(),
         Input(command="rg needle config.toml tests/test_specific.py", cwd="/repo"): Allow(),
         Input(command="ugrep -rn needle ~/.claude/scratch/release-v3/specific-lane"): Allow(),
