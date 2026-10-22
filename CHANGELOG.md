@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A recursive `grep`, `ugrep`, or `rg` rooted at a broad directory blocks.** The performance pack
+  denies a recursive content search rooted at `/`, a home directory, or a repository root. It also
+  denies one rooted at a `.claude/worktrees` or `.orca/workspaces` pool, or at the first directory
+  under a scratch root such as `~/.claude/scratch/release-v3`. Roots include `.`, an implicit working directory, `~`, and paths
+  reached through `cd`, `sudo`, `timeout`, `sh -c`, and pipelines. Named files, a deeper directory,
+  and a positive filename glob such as `--include='*.py'`, `-g '*.json'`, or `-t py` still run. A bare
+  `*` or `**` glob, a negative glob, `--max-count`, `--max-depth`, and a trailing `| head` do not
+  bound the search. `rg` reading piped or redirected stdin and `rg --files` still run.
+- **A raw `git cat-file -e` blocks.** Each probe can lazily fetch a missing object from a promisor
+  remote in its own process. `git --no-lazy-fetch cat-file -e` and `GIT_NO_LAZY_FETCH=1` still run,
+  and the message points at `git --no-lazy-fetch cat-file --batch-check` and `test -e`.
+
 ### Changed
 
 - **A command whose name the session guards cannot read runs.** The general pack blocked any
