@@ -47,10 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PostToolUseFailure`. `styleguide()` and `lint()` take `max_fires`. The rulings nudge no longer
   asks for a `ccx: ack=` line in the commit message, and the tool-preload note is context, not a
   warning.
-- **The `rm` guard lets a target it cannot verify run.** A glob built at run time, a substitution,
-  an expansion over the match limit, and a host without `trash` no longer block; the `rm` runs as
-  written. A repository root, the filesystem root, a home directory, and a directory that holds
-  repositories still block.
 - **A command whose name the session guards cannot read runs.** The general pack blocked any
   Bash call whose command name came from a variable, a glob, or text the guard could not resolve,
   as in `P="cci post --drive $D"; $P --kind decision`, and asked for the name spelled literally.

@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: a2afbc411f1e5425aece086d8a6b94c6944a4cefbe2ef44dc3575f447fdf4c02
+// capt-hook-widget src-sha256: 506d4fd58e49187e5558dce56d95fae587eac9e732ff3714be47ca802ca494bb
 
 // autocomplete.ts
 var counter = 0;
@@ -525,6 +525,8 @@ var ASSIGNMENT2 = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var SAFE_WORD = /^[^\s'"\\$`;&|<>(){}#]+$/;
 var TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm"];
 var SCRATCH_DIR_NAMES = /* @__PURE__ */ new Set(["tmp", "temp", "scratch", "scratchpad", "scratchpads"]);
+var COMMAND_SUB_BLOCK = "A command substitution supplies the `rm` targets, so no git/jj repository check can verify them. Expand it to explicit paths first.";
+var globOverLimitBlock = (token) => `The glob '${token}' matches more than ${GLOB_LIMIT} files. Run \`ls ${token}\`, then narrow the pattern or run \`rm -r <dir>\` on a named directory.`;
 var repoRootBlock = (token) => `'${token}' is a git/jj repository root, and deleting it destroys the repo and its history. Delete a path inside it, or ask the user to run the \`rm\` themselves.`;
 var fsRootBlock = (token) => `'${token}' is the filesystem root, and deleting it destroys the system. Ask the user to run the \`rm\` themselves.`;
 var containsRepoBlock = (token) => `'${token}' contains git/jj repositories, and deleting it destroys them with their history. Delete a narrower path instead.`;
@@ -705,22 +707,24 @@ function classifyTarget(raw, afterTerminator) {
 function resolveTarget(value, cwd) {
   return join(cwd, value);
 }
-function checkResolved(vfs, resolved, token) {
+function checkResolved(vfs, resolved, token, rewritable) {
   if (isScratch(resolved)) return { kind: "allow" };
   if (resolved !== "/" && !inNamespace(vfs.cwd, resolved)) return { kind: "honesty" };
   if (vfs.isRepoRoot(resolved)) return { kind: "block", message: repoRootBlock(token) };
   if (vfs.inRepo(resolved)) return { kind: "allow" };
-  if (resolved === "/") return { kind: "block", message: fsRootBlock(token) };
-  if (vfs.isDir(resolved) && vfs.containsRepo(resolved)) return { kind: "block", message: containsRepoBlock(token) };
+  if (rewritable) {
+    if (resolved === "/") return { kind: "block", message: fsRootBlock(token) };
+    if (vfs.isDir(resolved) && vfs.containsRepo(resolved)) return { kind: "block", message: containsRepoBlock(token) };
+  }
   return { kind: "recoverable", token };
 }
-function checkTarget(vfs, target) {
-  if (!target.isGlob) return checkResolved(vfs, resolveTarget(target.value, vfs.cwd), target.value);
+function checkTarget(vfs, target, rewritable) {
+  if (!target.isGlob) return checkResolved(vfs, resolveTarget(target.value, vfs.cwd), target.value, rewritable);
   const matches = globExpand(vfs, target.value, vfs.cwd);
-  if (matches.length > GLOB_LIMIT) return { kind: "allow" };
+  if (matches.length > GLOB_LIMIT) return { kind: "block", message: globOverLimitBlock(target.value) };
   let recovery = null;
   for (const match of matches) {
-    const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match);
+    const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match, rewritable);
     if (result.kind === "block" || result.kind === "honesty") return result;
     if (result.kind === "recoverable") {
       if (recovery !== null) return { kind: "honesty" };
@@ -904,15 +908,16 @@ function evaluateRmWorld(world, command) {
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);
     }
-    if (honest && !substitution) return honesty();
+    if (substitution) return block(COMMAND_SUB_BLOCK);
+    if (honest) return honesty();
     let recovery = null;
     for (const target of targets) {
-      const check = checkTarget(vfs, target);
+      const check = checkTarget(vfs, target, rewritable);
       if (check.kind === "honesty") return honesty();
       if (check.kind === "block") return block(check.message);
       if (check.kind === "recoverable" && recovery === null) recovery = check.token;
     }
-    if (substitution || recovery === null) continue;
+    if (recovery === null) continue;
     if (rewritable && targets.every((t) => t.emittable)) {
       const args = targets.map((t) => t.raw.startsWith("-") ? `./${t.raw}` : t.raw);
       edits.push({ ...call.segment, text: [world.trash, ...args].join(" ") });
@@ -924,7 +929,6 @@ function evaluateRmWorld(world, command) {
       };
       continue;
     }
-    if (!rewritable) continue;
     return block(UNRECOVERABLE_BLOCK);
   }
   return result ?? { action: "pass", message: null, rewritten: null };

@@ -46,7 +46,7 @@ block_command(
 )
 ```
 
-The next `git push --force` never executes: the agent sees the reason plus the hint, and reaches for `--force-with-lease` instead. And when a regex isn't enough, walk the parse, the way the shipped `general` pack's `rm` guard does:
+The next `git push --force` never executes: the agent sees the reason plus the hint, and reaches for `--force-with-lease` instead. And when a regex isn't enough, walk the parse — the shipped `general` pack guards `rm` exactly like this:
 
 ```python
 for call in evt.command.calls("rm"):

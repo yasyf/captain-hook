@@ -16,6 +16,14 @@ const SCRATCH_DIR_NAMES = new Set(["tmp", "temp", "scratch", "scratchpad", "scra
 
 // --- verbatim message strings (captain_hook/builtin_packs/general/hooks/deletions.py) ----------
 
+const COMMAND_SUB_BLOCK =
+  "A command substitution supplies the `rm` targets, so no git/jj repository check can verify them. " +
+  "Expand it to explicit paths first.";
+
+const globOverLimitBlock = (token: string): string =>
+  `The glob '${token}' matches more than ${GLOB_LIMIT} files. ` +
+  `Run \`ls ${token}\`, then narrow the pattern or run \`rm -r <dir>\` on a named directory.`;
+
 const repoRootBlock = (token: string): string =>
   `'${token}' is a git/jj repository root, and deleting it destroys the repo and its history. ` +
   "Delete a path inside it, or ask the user to run the `rm` themselves.";
@@ -265,23 +273,25 @@ function resolveTarget(value: string, cwd: string): string {
   return join(cwd, value);
 }
 
-function checkResolved(vfs: Vfs, resolved: string, token: string): CheckResult {
+function checkResolved(vfs: Vfs, resolved: string, token: string, rewritable: boolean): CheckResult {
   if (isScratch(resolved)) return { kind: "allow" };
   if (resolved !== "/" && !inNamespace(vfs.cwd, resolved)) return { kind: "honesty" };
   if (vfs.isRepoRoot(resolved)) return { kind: "block", message: repoRootBlock(token) };
   if (vfs.inRepo(resolved)) return { kind: "allow" };
-  if (resolved === "/") return { kind: "block", message: fsRootBlock(token) };
-  if (vfs.isDir(resolved) && vfs.containsRepo(resolved)) return { kind: "block", message: containsRepoBlock(token) };
+  if (rewritable) {
+    if (resolved === "/") return { kind: "block", message: fsRootBlock(token) };
+    if (vfs.isDir(resolved) && vfs.containsRepo(resolved)) return { kind: "block", message: containsRepoBlock(token) };
+  }
   return { kind: "recoverable", token };
 }
 
-function checkTarget(vfs: Vfs, target: RmTarget): CheckResult {
-  if (!target.isGlob) return checkResolved(vfs, resolveTarget(target.value, vfs.cwd), target.value);
+function checkTarget(vfs: Vfs, target: RmTarget, rewritable: boolean): CheckResult {
+  if (!target.isGlob) return checkResolved(vfs, resolveTarget(target.value, vfs.cwd), target.value, rewritable);
   const matches = globExpand(vfs, target.value, vfs.cwd);
-  if (matches.length > GLOB_LIMIT) return { kind: "allow" };
+  if (matches.length > GLOB_LIMIT) return { kind: "block", message: globOverLimitBlock(target.value) };
   let recovery: CheckResult | null = null;
   for (const match of matches) {
-    const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match);
+    const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match, rewritable);
     if (result.kind === "block" || result.kind === "honesty") return result;
     // Which match the recovery note names is glob.iglob scandir-order-dependent — un-modelable
     // once a second recoverable match exists, so decline rather than guess one.
@@ -508,16 +518,18 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);
     }
-    if (honest && !substitution) return honesty();
+    // check_call: an incomplete operand list (a lifted command substitution) blocks first.
+    if (substitution) return block(COMMAND_SUB_BLOCK);
+    if (honest) return honesty();
 
     let recovery: string | null = null;
     for (const target of targets) {
-      const check = checkTarget(vfs, target);
+      const check = checkTarget(vfs, target, rewritable);
       if (check.kind === "honesty") return honesty();
       if (check.kind === "block") return block(check.message);
       if (check.kind === "recoverable" && recovery === null) recovery = check.token;
     }
-    if (substitution || recovery === null) continue;
+    if (recovery === null) continue;
 
     if (rewritable && targets.every((t) => t.emittable)) {
       const args = targets.map((t) => (t.raw.startsWith("-") ? `./${t.raw}` : t.raw));
@@ -530,7 +542,6 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
       };
       continue;
     }
-    if (!rewritable) continue;
     return block(UNRECOVERABLE_BLOCK);
   }
   return result ?? { action: "pass", message: null, rewritten: null };
