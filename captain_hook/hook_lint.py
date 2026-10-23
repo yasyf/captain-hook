@@ -63,7 +63,7 @@ MESSAGE_KEYWORDS = frozenset({"message", "reason", "hint", "note"})
 MESSAGE_POSITIONAL = frozenset({"block", "warn", "context", "gate", "nudge", "deny"})
 REGEX_METHODS = frozenset({"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"})
 COMMAND_TEXT = re.compile(r"\.raw\b|tool_input(?:\[|\.get\()[\"']command[\"']|^(?:str\()?(?:evt\.)?(?:command|cmd)\)?$")
-TRANSCRIPT_FILES = re.compile(r"\.jsonl\b|\.claude/projects")
+TRANSCRIPT_FILES = re.compile(r"\.claude/projects|\.codex/sessions|\*[^/\s]*\.jsonl\b")
 BROAD_EXCEPTIONS = frozenset({"Exception", "BaseException"})
 COMMAND_PATTERN_CALLS = frozenset({"Command", "CommandCondition", "block_command", "warn_command"})
 ESCAPE_MARKERS = re.compile(r"ccx:raw|root:raw|tooling-lane:|^CAPT_HOOK_CCX_RAW$")
@@ -100,7 +100,9 @@ def copy_violations(text: str) -> list[str]:
     Code spans and ``{placeholders}`` are exempt from the prose rules, so a remediation command may carry
     quotes, ids, and paths of its own. A fenced block is verbatim data and counts toward no rule.
     """
-    prose = ABBREVIATION.sub("eg", PLACEHOLDER.sub("X", CODE_SPAN.sub("X", stripped := FENCED_BLOCK.sub("", text).strip())))
+    prose = ABBREVIATION.sub(
+        "eg", PLACEHOLDER.sub("X", CODE_SPAN.sub("X", stripped := FENCED_BLOCK.sub("", text).strip()))
+    )
     sentences = [part for part in SENTENCE_BREAK.split(prose) if part.strip()]
     return [
         *([f"{len(sentences)} sentences; state the rule, then the remediation"] * (len(sentences) > MAX_SENTENCES)),

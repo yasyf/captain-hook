@@ -158,6 +158,9 @@ class TestStaticLint:
             ("shlex.split(line)", "splits a command by hand"),
             ("open(evt.transcript_path)", "reads the transcript by hand"),
             ("Path(home).glob('*.jsonl')", "reads transcript files by hand"),
+            ("open(f'{home}/.claude/projects/{slug}/{sid}.jsonl')", "reads transcript files by hand"),
+            ("Path('~/.codex/sessions').expanduser().iterdir()", "reads transcript files by hand"),
+            ("open(transcript_path)", "reads the transcript by hand"),
             ("try:\n    run()\nexcept Exception:\n    pass", "swallows failures"),
             ("try:\n    run()\nexcept:\n    pass", "swallows failures"),
             ("with suppress(Exception):\n    run()", "swallows failures"),
@@ -176,6 +179,8 @@ class TestStaticLint:
             "block_command(['git', 'stash'], reason='Stash is shared across worktrees')",
             "hook(Event.PreToolUse, only_if=[CommandCondition(r'curl.*\\|\\s*sh')])",
             "try:\n    run()\nexcept OSError:\n    pass",
+            "CAPTURE_LOG = STATE_DIR / 'owner-prompts.jsonl'\nCAPTURE_LOG.open('a').write(line)",
+            "open(state_dir / f'{session}.jsonl', 'a')",
         ],
     )
     def test_declarative_code_is_clean(self, source: str) -> None:
