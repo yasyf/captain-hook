@@ -19,6 +19,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_OWNER_TERMINAL,
     INLINE_SESSION,
     INLINE_STARTED,
+    INLINE_TABLE,
     KILL_FIX,
     KILL_RULING_TAGS,
     LATER_SESSION,
@@ -217,6 +218,21 @@ DESK_COMMANDS = {
     **INLINE_COMMANDS,
     "ccn answer search desk-runner.py": inline_ruling(DESK_RULING, tags=KILL_RULING_TAGS),
 }
+CODEX_TABLE = (
+    f"{INLINE_TABLE}"
+    "20000     1 20000  501 Thu Jan  1 00:00:00 2026 codex --no-daemon --dangerously-bypass-approvals-and-sandbox\n"
+    "20001 20000 20000  501 Thu Jan  1 00:00:00 2026 codex-code-mode-host\n"
+    "21000     1 21000  501 Thu Jan  1 00:00:00 2026 codex exec --json\n"
+    "21001 21000 21000  501 Thu Jan  1 00:00:00 2026 claude --dangerously-skip-permissions\n"
+)
+CODEX_RULING = "Owner: end the idle codex sessions older than one hour; never claude."
+CODEX_COMMANDS = {
+    **INLINE_COMMANDS,
+    "ps -A -ww -o": CODEX_TABLE,
+    "ccn answer search codex": inline_ruling(CODEX_RULING, tags=KILL_RULING_TAGS),
+    "ccn answer search claude": inline_ruling(CODEX_RULING, tags=KILL_RULING_TAGS),
+}
+CODEX_ALLOW = {"allow": True, "relied_on": ["ccn:0207568"]}
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings(), **inline_run("term_root")}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
@@ -439,6 +455,24 @@ def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungra
                 "ccn answer search claude": inline_ruling("Owner: end claude.", tags=KILL_RULING_TAGS),
             },
         ): Block(pattern="an agent session"),
+        guarded(command="kill 20000", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Allow(),
+        guarded(
+            command="kill 20000",
+            commands=CODEX_COMMANDS,
+            llm={"allow": False, "refusal": "The ruling names other pids."},
+        ): Block(pattern="pid 20000 .* is an agent session"),
+        guarded(command="kill 20000", commands={**INLINE_COMMANDS, "ps -A -ww -o": CODEX_TABLE}): Block(
+            pattern="pid 20000 .* is an agent session"
+        ),
+        guarded(command="kill 21000", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Block(
+            pattern="pid 21000 .* is an agent session"
+        ),
+        guarded(command="kill 21001", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Block(
+            pattern="pid 21001 .* is an agent session"
+        ),
+        guarded(command="renice 10 -p 20000", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Block(
+            pattern="pid 20000 .* is an agent session"
+        ),
         guarded(command="kill -0 14575"): Allow(),
         guarded(command="PID=31337; kill -0 $PID"): Allow(),
         guarded(command='PID=31337; kill -0 "$PID" 2>/dev/null || break'): Allow(),
