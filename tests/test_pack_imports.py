@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -16,6 +17,12 @@ RELATIVE_IMPORT_SRC = (
     "from ._common import SHARED\nfrom captain_hook import Event, hook\nhook(Event.PreToolUse, message=str(SHARED))\n"
 )
 ON_HANDLER_SRC = "from captain_hook import Event, on\n\n\n@on(Event.PostToolUse)\ndef check(evt):\n    return None\n"
+SIBLING_SRC = "from captain_hook import Event, hook\nSHARED = 'shared'\nhook(Event.PreToolUse, message='beta')\n"
+IMPORTS_SIBLING_SRC = (
+    "from .beta import SHARED\n"
+    "from captain_hook import Event, hook\n"
+    "hook(Event.PreToolUse, message=SHARED + ' alpha')\n"
+)
 PRIMITIVES_SRC = (
     "from captain_hook import gate, llm_nudge, nudge, rewrite_command, set_tool_input\n"
     "nudge('Remember the release notes')\n"
@@ -262,3 +269,46 @@ def test_pack_module_rolls_back_partial_registration(tmp_path: Path, isolate_mod
     assert app._state.hooks == []
     assert len(app._state.load_errors) == 1
     assert isinstance(app._state.load_errors[0].exc, AsyncDecisionError)
+
+
+def _sibling_pack(base: Path, alpha_src: str = IMPORTS_SIBLING_SRC) -> Path:
+    base.mkdir(parents=True)
+    (base / "alpha.py").write_text(alpha_src)
+    (base / "beta.py").write_text(SIBLING_SRC)
+    return base
+
+
+def test_pack_module_a_sibling_imported_registers_its_hooks_once(tmp_path: Path, isolate_modules: None) -> None:
+    pack = _sibling_pack(tmp_path / "pack")
+
+    app.reset()
+    discover_pack("ccx", pack)
+
+    assert sorted((h._state_identity, h.spec.message) for h in app._state.hooks) == [
+        ("ccx\0alpha.py", "shared alpha"),
+        ("ccx\0beta.py", "beta"),
+    ]
+
+
+def test_rediscovery_from_the_same_root_registers_every_hook_again(tmp_path: Path, isolate_modules: None) -> None:
+    pack = _sibling_pack(tmp_path / "pack")
+
+    app.reset()
+    discover_pack("ccx", pack)
+    app.reset()
+    discover_pack("ccx", pack)
+
+    assert sorted(h.spec.message for h in app._state.hooks) == ["beta", "shared alpha"]
+
+
+def test_sibling_of_a_module_that_fails_to_load_still_registers(tmp_path: Path, isolate_modules: None) -> None:
+    pack = _sibling_pack(tmp_path / "pack", "from . import beta\nraise RuntimeError('broken')\n")
+    (pack / "_probe.py").write_text("from . import beta\n")
+
+    app.reset()
+    discover_pack("ccx", pack)
+    probe = importlib.import_module("captain_hook._packs.ccx._probe")
+
+    assert [h.spec.message for h in app._state.hooks] == ["beta"]
+    assert [error.source for error in app._state.load_errors] == [str(pack / "alpha.py")]
+    assert probe.beta is sys.modules["captain_hook._packs.ccx.beta"]

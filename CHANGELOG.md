@@ -541,6 +541,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `os.path.join` builds, so `Path.home() / ".claude" / "projects"` is flagged once. A `.jsonl` file
   a hook names literally passes, and `transcript_path` is flagged as before.
 
+- **A pack module that a sibling imports registers its hooks once.** `discover_pack` executed
+  every hook module in a pack, even one a sibling had already imported with a relative import such
+  as `from .beta import SHARED`, so that module's hooks registered twice. Discovery now drops the
+  pack's modules from `sys.modules` before each pass and skips a module a sibling already loaded in
+  this pass. When a module fails to load, the siblings it imported are dropped too, so they load on
+  their own turn and keep their hooks.
+
 - **`capt-hook lint` passes a path under a project directory unless it names a `.jsonl` file.** The
   12.103.1 rule flagged any path built under `.claude/projects`, so a hook reading the auto-memory
   directory, `Path.home() / ".claude" / "projects" / slug / "memory"`, failed lint as a transcript
