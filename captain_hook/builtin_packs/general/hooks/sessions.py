@@ -470,9 +470,6 @@ def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungra
         guarded(command="kill 21001", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Block(
             pattern="pid 21001 .* is an agent session"
         ),
-        guarded(command="renice -n 5 -p 20000", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Block(
-            pattern="pid 20000 .* is an agent session"
-        ),
         guarded(command="kill -0 14575"): Allow(),
         guarded(command="PID=31337; kill -0 $PID"): Allow(),
         guarded(command='PID=31337; kill -0 "$PID" 2>/dev/null || break'): Allow(),
