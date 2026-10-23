@@ -112,7 +112,7 @@ def approving(answer: Answer) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class UserAnswered(CustomTicketCondition):
-    """The user's answers to questions matching any of *patterns*, on ``AskUserQuestion`` or the cc-present board.
+    """The user's answers to questions matching any of *patterns*: ``AskUserQuestion``, the board, a cc-slack card.
 
     A pattern reads the question with its options. With *approved*, only an approving answer counts: one that
     picks an option other than the last shown, picks a last option that reads as a go, or types words that hold

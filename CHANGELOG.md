@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A tap on a cc-slack question card is the user's answer.** Ticket conditions read
+  `UserAnswered` evidence from a cc-slack `slack.action` tap as they read an `AskUserQuestion`
+  answer or a cc-present pick. The tap counts only in a session whose prompts are the user's, only
+  as a harness-written meta line or a channel command queued mid-turn whose whole text is a
+  cc-slack channel envelope, and only when it carries the card's question, its options, and a
+  label among them. An Explain more tap, a tap with no option list, and every other channel line
+  answer nothing.
 - **A recursive `grep`, `ugrep`, or `rg` rooted at a broad directory blocks.** The performance pack
   denies a recursive content search rooted at `/`, a home directory, or a repository root. It also
   denies one rooted at a `.claude/worktrees` or `.orca/workspaces` pool, or at the first directory

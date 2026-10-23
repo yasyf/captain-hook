@@ -39,7 +39,7 @@ class Evidence(BaseModel):
 
 
 class Answer(Evidence):
-    """An answer to a question the agent asked: an ``AskUserQuestion`` call or a cc-present board card.
+    """An answer to a question the agent asked: ``AskUserQuestion``, a cc-present board card, or a cc-slack card.
 
     Attributes:
         question: The question the user answered.
