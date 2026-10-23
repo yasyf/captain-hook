@@ -536,10 +536,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`capt-hook lint` passes a path under a project directory unless it names a `.jsonl` file.** The
   12.103.1 rule flagged any path built under `.claude/projects`, so a hook reading the auto-memory
   directory, `Path.home() / ".claude" / "projects" / slug / "memory"`, failed lint as a transcript
-  read. Below a project directory the rule now flags only a `.jsonl` file or a glob over them. The
-  projects root, a project directory itself, and `.codex/sessions` still flag, and the rule reads
-  only the outermost expression that builds a path, so a prefix of a memory path no longer flags
-  on its own.
+  read. Below a project directory the rule now flags only a `.jsonl` file or a glob over them, and
+  `.jsonl` must end the file name, so `notes.jsonl.md` passes. The projects root, a project
+  directory itself, and `.codex/sessions` still flag. The rule reads only the outermost expression
+  that builds a path, so a prefix of a memory path no longer flags on its own.
 
 - **A Mac without `~/Applications/Captain Hook.app` gets one install note per session, not
   a hook error on every call.** `bin/hook` handed every event to binrun, which failed reading the

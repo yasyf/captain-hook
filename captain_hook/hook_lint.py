@@ -64,9 +64,9 @@ MESSAGE_POSITIONAL = frozenset({"block", "warn", "context", "gate", "nudge", "de
 REGEX_METHODS = frozenset({"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"})
 COMMAND_TEXT = re.compile(r"\.raw\b|tool_input(?:\[|\.get\()[\"']command[\"']|^(?:str\()?(?:evt\.)?(?:command|cmd)\)?$")
 TRANSCRIPT_FILES = re.compile(
-    r"\.claude/projects(?!/[^/\s]+/)|\.codex/sessions|(?:\.claude/projects/|[*?\[])\S*\.jsonl\b"
+    r"\.claude/projects(?!/[^/\s]+/[^/\s])|\.codex/sessions|(?:\.claude/projects/|[*?\[])\S*\.jsonl(?![\w./])"
 )
-PATH_JOINS = frozenset({"Path", "PurePath", "join", "joinpath"})
+PATH_JOINS = frozenset({"Path", "PurePath", "join"})
 BROAD_EXCEPTIONS = frozenset({"Exception", "BaseException"})
 COMMAND_PATTERN_CALLS = frozenset({"Command", "CommandCondition", "block_command", "warn_command"})
 ESCAPE_MARKERS = re.compile(r"ccx:raw|root:raw|tooling-lane:|^CAPT_HOOK_CCX_RAW$")
@@ -220,18 +220,28 @@ def textual_command_name(call: ast.Call) -> str | None:
             return None
 
 
+def path_parts(node: ast.AST) -> list[ast.expr]:
+    match node:
+        case ast.JoinedStr(values=parts):
+            return parts
+        case ast.BinOp(op=ast.Div(), left=left, right=right):
+            return [left, right]
+        case ast.Call(func=ast.Attribute(attr="joinpath", value=base), args=args):
+            return [base, *args]
+        case ast.Call(args=args) if callee(node) in PATH_JOINS:
+            return args
+        case _:
+            return []
+
+
 def path_text(node: ast.AST) -> str:
     match node:
         case ast.Constant(value=str() as text):
             return text
         case ast.JoinedStr(values=parts):
             return "".join(map(path_text, parts))
-        case ast.BinOp(op=ast.Div(), left=left, right=right):
-            return f"{path_text(left)}/{path_text(right)}"
-        case ast.Call(func=ast.Attribute(attr="joinpath", value=base), args=args):
-            return "/".join(map(path_text, [base, *args]))
-        case ast.Call(args=args) if callee(node) in PATH_JOINS:
-            return "/".join(map(path_text, args))
+        case _ if parts := path_parts(node):
+            return "/".join(map(path_text, parts))
         case _:
             return "_"
 
@@ -240,17 +250,7 @@ def names_transcript(node: ast.AST) -> bool:
     return TRANSCRIPT_FILES.search(path_text(node)) is not None
 
 
-def extends_path(parent: ast.AST | None) -> bool:
-    match parent:
-        case ast.JoinedStr() | ast.BinOp(op=ast.Div()) | ast.Attribute(attr="joinpath"):
-            return True
-        case ast.Call() if callee(parent) in PATH_JOINS:
-            return True
-        case _:
-            return False
-
-
-def code_violation(node: ast.AST, parent: ast.AST | None) -> str | None:
+def code_violation(node: ast.AST, path_part: bool) -> str | None:
     match node:
         case ast.Call() if (runs := textual_command_name(node)) is not None:
             return f"matches a command name as text; match it with {runs}"
@@ -260,7 +260,7 @@ def code_violation(node: ast.AST, parent: ast.AST | None) -> str | None:
             return "regexes command text; match with Runs(...), a CommandSchema, or an ast-grep rewrite_command pattern"
         case ast.Attribute(attr="transcript_path") | ast.Name(id="transcript_path"):
             return "reads the transcript by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
-        case ast.expr() if names_transcript(node) and not extends_path(parent):
+        case ast.expr() if not path_part and names_transcript(node):
             return "reads transcript files by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
         case ast.ExceptHandler(type=None):
             return "swallows failures; let the hook raise, the dispatcher records the fault"
@@ -359,9 +359,9 @@ def escape_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
 
 
 def code_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
-    parents = parent_map(tree)
+    parts = {id(part) for node in ast.walk(tree) for part in path_parts(node)}
     for node in ast.walk(tree):
-        if (violation := code_violation(node, parents.get(id(node)))) is not None:
+        if (violation := code_violation(node, id(node) in parts)) is not None:
             yield Finding(path, getattr(node, "lineno", 1), "code", violation)
 
 
