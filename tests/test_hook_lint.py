@@ -160,6 +160,12 @@ class TestStaticLint:
             ("Path(home).glob('*.jsonl')", "reads transcript files by hand"),
             ("open(f'{home}/.claude/projects/{slug}/{sid}.jsonl')", "reads transcript files by hand"),
             ("Path('~/.codex/sessions').expanduser().iterdir()", "reads transcript files by hand"),
+            ("open(Path.home() / '.claude' / 'projects' / slug / f'{sid}.jsonl')", "reads transcript files by hand"),
+            ("Path.home().joinpath('.codex', 'sessions').iterdir()", "reads transcript files by hand"),
+            ("os.path.join(home, '.claude', 'projects')", "reads transcript files by hand"),
+            ("Path(root).glob(f'*{sid}.jsonl')", "reads transcript files by hand"),
+            ("Path(root).glob('*/session.jsonl')", "reads transcript files by hand"),
+            ("Path(root).glob('rollout-?.jsonl')", "reads transcript files by hand"),
             ("open(transcript_path)", "reads the transcript by hand"),
             ("try:\n    run()\nexcept Exception:\n    pass", "swallows failures"),
             ("try:\n    run()\nexcept:\n    pass", "swallows failures"),
@@ -181,6 +187,7 @@ class TestStaticLint:
             "try:\n    run()\nexcept OSError:\n    pass",
             "CAPTURE_LOG = STATE_DIR / 'owner-prompts.jsonl'\nCAPTURE_LOG.open('a').write(line)",
             "open(state_dir / f'{session}.jsonl', 'a')",
+            "open(Path.home().joinpath('.claude', 'captures', f'{session}.jsonl'), 'a')",
         ],
     )
     def test_declarative_code_is_clean(self, source: str) -> None:
