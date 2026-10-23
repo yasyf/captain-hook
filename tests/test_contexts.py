@@ -13,7 +13,6 @@ from captain_hook import T
 from captain_hook.ast_grep import COMMENT_TYPES
 from captain_hook.builtin_packs.general.hooks.models import (
     ProseSpawn,
-    ProseWorkflowScript,
     prose_deliverable_sentences,
 )
 from captain_hook.contexts import (
@@ -389,16 +388,6 @@ class TestProseSpawn:
 
 
 class TestWorkflowScriptSource:
-    def test_inline_script_quotes_pin_lines_and_prose(self) -> None:
-        script = "agent('write the README intro', {label: 'docs', model: 'opus'})\nagent('fix the test')\n"
-        evt = mock_tool_event("Workflow", tool_input={"script": script})
-        content = ProseWorkflowScript().content(evt)
-        assert content is not None
-        assert content.startswith("excerpts around every model pin in this script")
-        assert "  agent('write the README intro', {label: 'docs', model: 'opus'})" in content
-        assert "sentences the prose prefilter matched:" in content
-        assert content.endswith(f"\n\n{script}")
-
     def test_long_line_pin_excerpt_shows_opts(self) -> None:
         script = (
             f"await agent('do a big thing with {'x' * 400}', "
@@ -495,15 +484,9 @@ class TestWorkflowScriptSource:
 
     def test_no_prose_ask_yields_none(self) -> None:
         evt = mock_tool_event("Workflow", tool_input={"script": "agent('fix the test', {model: 'opus'})"})
-        assert ProseWorkflowScript().content(evt) is None
         base = WorkflowScriptSource().content(evt)
         assert base is not None
         assert "  agent('fix the test', {model: 'opus'})" in base
-
-    def test_negated_prose_ask_yields_none(self) -> None:
-        script = "agent('Fix the import. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})"
-        evt = mock_tool_event("Workflow", tool_input={"script": script})
-        assert ProseWorkflowScript().content(evt) is None
 
     def test_script_path_reads_file(self, tmp_path: Any) -> None:
         p = tmp_path / "wf.js"

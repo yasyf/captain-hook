@@ -21,20 +21,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of options, and a label among them. A tap approves only when its label reads as a go and holds
   nothing back, whatever its position. An Explain more tap, a tap with no option list, and every
   other channel line answer nothing.
-- **A recursive `grep`, `ugrep`, or `rg` rooted at a broad directory blocks.** The performance pack
-  denies a recursive content search rooted at `/`, a home directory, or a repository root. It also
-  denies one rooted at a `.claude/worktrees` or `.orca/workspaces` pool, or at the first directory
+- **A recursive `grep`, `ugrep`, or `rg` rooted at a broad directory warns once.** The performance pack
+  warns on a recursive content search rooted at `/`, a home directory, or a repository root. It also
+  warns on one rooted at a `.claude/worktrees` or `.orca/workspaces` pool, or at the first directory
   under a scratch root such as `~/.claude/scratch/release-v3`. Roots include `.`, an implicit working directory, `~`, and paths
   reached through `cd`, `sudo`, `timeout`, `sh -c`, and pipelines. Named files, a deeper directory,
   and a positive filename glob such as `--include='*.py'`, `-g '*.json'`, or `-t py` still run. A bare
   `*` or `**` glob, a negative glob, `--max-count`, `--max-depth`, and a trailing `| head` do not
   bound the search. `rg` reading piped or redirected stdin and `rg --files` still run.
-- **A raw `git cat-file -e` blocks.** Each probe can lazily fetch a missing object from a promisor
+- **A raw `git cat-file -e` warns once.** Each probe can lazily fetch a missing object from a promisor
   remote in its own process. `git --no-lazy-fetch cat-file -e` and `GIT_NO_LAZY_FETCH=1` still run,
   and the message points at `git --no-lazy-fetch cat-file --batch-check` and `test -e`.
 
 ### Changed
 
+- **Mechanical builtin blocks warn once per agent instead.** `jj op restore` and `jj undo`, an
+  over-budget comment edit, a rewrite of an existing plan, edits after a re-plan request, a haiku
+  pin on a delegated spawn, a broad `find`, and a push to a queued PR now warn the first time and
+  then stay quiet. The docs-freshness, prose-spawn, stop-review, deliver-the-fix, and workaround
+  judges are `llm_nudge`s that warn once, and the narrate-then-wait check warns instead of holding
+  the reply.
+- **Every other builtin warning fires once per agent.** The detours, hook-file, toolchain,
+  Graphite routing, draft, landing-state, fix-what-you-touch, teammate, Python style, and tooling
+  nudges cap at one fire, and the two tooling nudges are one registration across `PostToolUse` and
+  `PostToolUseFailure`. `styleguide()` and `lint()` take `max_fires`. The rulings nudge no longer
+  asks for a `ccx: ack=` line in the commit message, and the tool-preload note is context, not a
+  warning.
+- **The `rm` guard lets a target it cannot verify run.** A glob built at run time, a substitution,
+  an expansion over the match limit, and a host without `trash` no longer block; the `rm` runs as
+  written. A repository root, the filesystem root, a home directory, and a directory that holds
+  repositories still block.
 - **A command whose name the session guards cannot read runs.** The general pack blocked any
   Bash call whose command name came from a variable, a glob, or text the guard could not resolve,
   as in `P="cci post --drive $D"; $P --kind decision`, and asked for the name spelled literally.
@@ -125,17 +141,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command with that exit code and stderr and no stdout, so a hook's failure path for a shell-out gets
   an inline test. A `str` still means exit 0 with that stdout.
 
+### Removed
+
+- **Overlapping and over-specific builtin hooks are gone.** The general pack drops the broad
+  `find -exec` block, the legacy, doc, and dense comment nudges, the workflow model and
+  writing-docs nudges, the session guards for `find -exec`, `trap`, `source`, shell stdin, and
+  unparsed tool payloads, the task-list hooks, the tombstone nudge, and the tooling refusal, lane,
+  and repeat-dispatch hooks. The graphite pack drops its jj, raw rebase, merge, and pull warnings
+  and its `gt submit`, `restack`, `create`, `modify`, and force-push routing notes. The go and python
+  test nudges, the performance pack's verification-lane nudges, the steering pack's trivial-type
+  nudge, and the workaround edit nudge are gone too.
+
 ### Added
 
-- **A saturated host refuses new local Go and Cargo builds and tests.**
-  The `performance` pack blocks a Bash call that starts `go build`, `go test`, `go vet`, the
+- **A saturated host warns on new local Go and Cargo builds and tests.**
+  The `performance` pack warns once on a Bash call that starts `go build`, `go test`, `go vet`, the
   `deadcode` tool through `go run`, `cargo build`, `cargo check`, or `cargo test` on the local
-  machine. It blocks only while the 1-minute load average is at or above the core count times
+  machine, saying CI builds and tests. It warns only while the 1-minute load average is at or above the core count times
   `HOOKS_ADMISSION_LOAD_PER_CORE` (default `1`). Calls are found structurally: behind
   `env`/`timeout`/`nice` wrappers, by absolute path, and inside `sh -c` payloads. A command `ssh` or
-  `remote-builder exec` runs elsewhere still goes ahead, and the refusal names that explicit
-  remote path. The `go` pack's test-before-commit gate and its test nudges stand down under the same
-  condition, so neither pack asks for a test the other refuses.
+  `remote-builder exec` runs elsewhere goes ahead without a warning.
 - **An owner ruling lets `kill` end an unowned process by its program name.**
   The sessions pack refused every `kill` of a process with no recorded per-task creation
   identity, even one the owner had ruled a session may end. Terminal closes, `launchctl`

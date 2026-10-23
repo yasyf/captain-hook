@@ -41,11 +41,9 @@ REVIEWED_VIA_COMMAND = [
 ]
 
 HOOK_CASES = [
-    pytest.param("jj new", "warn", "Graphite", id="jj-nudge"),
     pytest.param("git commit -m x", "warn", "ccx vcs ship", id="git-write"),
     pytest.param("git switch -C main", "warn", "ccx vcs ship", id="git-write-switch-force"),
     pytest.param("gt submit", "warn", "review pass", id="submit-gate"),
-    pytest.param("git rebase main", "warn", "ccx vcs stack rebase", id="restack"),
 ]
 
 
@@ -96,6 +94,7 @@ def dispatch_command(
     session_dir: Path,
     transcript: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    session_dir.mkdir(parents=True, exist_ok=True)
     evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd), transcript=transcript))
     return dispatch(Event.PreToolUse, evt, session_dir=session_dir)
 
@@ -179,13 +178,13 @@ def test_skip_if_carve_outs_stay_silent(isolate_modules: None, gt_repo: Path, tm
 
 def test_submit_gate_names_the_review_and_draft_rules(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
-    context = warn_context(dispatch_command("gt submit", gt_repo, tmp_path))
+    context = warn_context(dispatch_command("gt submit", gt_repo, tmp_path / "plain"))
     assert "review pass" in context
     assert "draft" not in context
     assert "approv" not in context.lower()
     for command in ["gt submit -d", "gt submit --draft", "ccx vcs ship -m x --draft"]:
-        assert "never as drafts" in warn_context(dispatch_command(command, gt_repo, tmp_path))
-    reviewed = dispatch_command("gt submit -d", gt_repo, tmp_path, transcript=REVIEWED_VIA_SKILL)
+        assert "never as drafts" in warn_context(dispatch_command(command, gt_repo, tmp_path / command))
+    reviewed = dispatch_command("gt submit -d", gt_repo, tmp_path / "reviewed", transcript=REVIEWED_VIA_SKILL)
     assert "never as drafts" in warn_context(reviewed)
 
 
@@ -195,8 +194,6 @@ def test_submit_gate_names_the_review_and_draft_rules(isolate_modules: None, gt_
         pytest.param("cd {other} && git push", "warn", "ccx vcs ship", id="cd-then-git-write"),
         pytest.param("git -C {other} push", "warn", "ccx vcs ship", id="git-C-write"),
         pytest.param("git --git-dir={other}/.git push", "warn", "ccx vcs ship", id="git-dir-write"),
-        pytest.param("cd {other} && git rebase main", "warn", "ccx vcs stack rebase", id="cd-then-restack"),
-        pytest.param("cd {other} && jj new", "warn", "Graphite", id="cd-then-jj"),
     ],
 )
 def test_hooks_judge_the_repository_the_command_targets(
@@ -222,14 +219,14 @@ def test_ownership_and_verb_are_judged_on_the_same_call(
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert dispatch_command(f"git -C {gt_repo} status && jj new", git_repo, tmp_path) is None
     assert dispatch_command(f"git -C {gt_repo} status && git push", git_repo, tmp_path) is None
-    assert_fires(dispatch_command(f"git -C {git_repo} status && jj new", gt_repo, tmp_path), "warn", "Graphite")
+    assert_fires(dispatch_command(f"git -C {git_repo} status && git push", gt_repo, tmp_path), "warn", "Graphite")
 
 
 def test_a_verbs_own_dash_C_is_not_a_directory_hop(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     (gt_repo / "vendor" / ".git").mkdir(parents=True)
-    assert warn_context(dispatch_command("git switch -C vendor", gt_repo, tmp_path))
-    assert warn_context(dispatch_command("git checkout -B vendor", gt_repo, tmp_path))
+    assert warn_context(dispatch_command("git switch -C vendor", gt_repo, tmp_path / "switch"))
+    assert warn_context(dispatch_command("git checkout -B vendor", gt_repo, tmp_path / "checkout"))
 
 
 def test_git_dir_resolves_against_the_dash_C_cwd_not_as_another_hop(
@@ -240,9 +237,9 @@ def test_git_dir_resolves_against_the_dash_C_cwd_not_as_another_hop(
     (metadata := root / "metadata").mkdir(parents=True)
     (metadata / ".graphite_repo_config").write_text("")
     (separate := root / "separate").mkdir()
-    assert warn_context(dispatch_command("git --git-dir=../metadata -C separate push", root, tmp_path))
-    assert warn_context(dispatch_command(f"git --git-dir={metadata} push", separate, tmp_path))
-    assert warn_context(dispatch_command(f"git --git-dir {metadata} push", git_repo, tmp_path))
+    assert warn_context(dispatch_command("git --git-dir=../metadata -C separate push", root, tmp_path / "relative"))
+    assert warn_context(dispatch_command(f"git --git-dir={metadata} push", separate, tmp_path / "joined"))
+    assert warn_context(dispatch_command(f"git --git-dir {metadata} push", git_repo, tmp_path / "split"))
     assert dispatch_command(f"git --git-dir={git_repo / '.git'} push", separate, tmp_path) is None
 
 
@@ -285,10 +282,10 @@ def test_submit_gate_skips_no_push(isolate_modules: None, gt_repo: Path, tmp_pat
     assert dispatch_command("ccx vcs ship -m x --no-push", gt_repo, tmp_path) is None
 
 
-def test_git_write_warns_every_time(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
+def test_git_write_warns_once(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert warn_context(dispatch_command("git commit -m one", gt_repo, tmp_path))
-    assert warn_context(dispatch_command("git commit -m two", gt_repo, tmp_path))
+    assert dispatch_command("git commit -m two", gt_repo, tmp_path) is None
 
 
 @pytest.mark.parametrize(
@@ -297,7 +294,6 @@ def test_git_write_warns_every_time(isolate_modules: None, gt_repo: Path, tmp_pa
         pytest.param('gt submit -m "add --dry-run support"', id="submit-msg-dry-run"),
         pytest.param('ccx vcs ship -m "wire up --no-push flag"', id="ship-msg-no-push"),
         pytest.param('git commit -m "improve --tags handling"', id="commit-msg-tags"),
-        pytest.param('git merge feature -m "handle --continue path"', id="merge-msg-continue"),
         pytest.param('git commit -m "push to refs/tags cleanup"', id="commit-msg-refs-tags"),
     ],
 )
@@ -355,47 +351,8 @@ def test_nogt_value_parity_with_ccx(isolate_modules: None, tmp_path: Path, value
     """ccx parses ccx.nogt with Go's strconv.ParseBool; yes/on are not in that set, and a hook
     that silenced itself on them would disagree with the lane ccx actually rides."""
     discover_pack("graphite", GRAPHITE_HOOKS)
-    result = dispatch_command("jj new", real_gt_repo(tmp_path, value), tmp_path)
+    result = dispatch_command("git commit -m x", real_gt_repo(tmp_path, value), tmp_path)
     assert (result is None) is disabled
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "jj log",
-        "jj st",
-        "jj status",
-        "jj show @",
-        "jj diff --stat",
-        "jj bookmark list",
-        "jj op log",
-        "jj --help",
-        "jj log && jj status",
-    ],
-)
-def test_read_only_jj_is_allowed(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
-    """The nudge protects stack metadata; a read mutates none, so naming the gt route there only costs work."""
-    discover_pack("graphite", GRAPHITE_HOOKS)
-    assert dispatch_command(command, gt_repo, tmp_path) is None
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "jj new",
-        "jj commit -m x",
-        "jj bookmark set foo",
-        "jj op undo",
-        "jj describe -m x",
-        "jj log && jj new",
-        "jj status; jj abandon",
-    ],
-)
-def test_mutating_jj_is_nudged(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
-    """Every jj call on the line must be a read: skip_if is an any(), so a per-call carve-out
-    would let the mutation in `jj log && jj new` through unnoted."""
-    discover_pack("graphite", GRAPHITE_HOOKS)
-    assert_fires(dispatch_command(command, gt_repo, tmp_path), "warn", "Graphite")
 
 
 @pytest.mark.parametrize(
@@ -425,15 +382,6 @@ def test_stack_writes_with_a_ccx_twin_are_rewritten(
 @pytest.mark.parametrize(
     ("command", "needle"),
     [
-        pytest.param("gt submit --no-stack", "ccx vcs stack submit", id="gt-submit-downstack"),
-        pytest.param("gt submit --ai", "ccx vcs stack submit", id="gt-submit-unmapped-flag"),
-        pytest.param("GT_DEBUG=1 gt submit", "ccx vcs stack submit", id="gt-submit-env"),
-        pytest.param("timeout 60 gt submit", "ccx vcs stack submit", id="gt-submit-wrapper"),
-        pytest.param("gt restack --upstack", "ccx vcs stack restack", id="gt-restack-scoped"),
-        pytest.param("gt sync -f", "ccx vcs stack restack", id="gt-sync"),
-        pytest.param('gt create feat -m "x"', "--new-branch", id="gt-create"),
-        pytest.param('gt modify -m "x"', "ccx vcs ship --amend", id="gt-modify"),
-        pytest.param("gt m -a", "ccx vcs ship --amend", id="gt-m"),
         pytest.param("git rebase main", "ccx vcs stack rebase", id="git-rebase"),
         pytest.param("git rebase --onto origin/dev old-base feat", "ccx vcs stack rebase", id="git-rebase-onto"),
     ],
@@ -491,15 +439,20 @@ def test_a_falsy_raw_env_still_steers(
 
 
 @pytest.mark.parametrize(
-    "command", ["gt restack && echo '# ccx:raw'", "gt restack <<'EOF'\n# ccx:raw\nEOF", 'gt restack "# ccx:raw"']
+    ("command", "needle"),
+    [
+        ("gt restack && echo '# ccx:raw'", "ccx vcs stack restack"),
+        ("git commit -m x <<'EOF'\n# ccx:raw\nEOF", "ccx vcs ship"),
+        ('git commit -m "# ccx:raw"', "ccx vcs ship"),
+    ],
 )
 def test_a_raw_marker_outside_a_comment_still_steers(
-    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, needle: str
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     result = dispatch_command(command, gt_repo, tmp_path)
     assert result is not None
-    assert "ccx vcs stack restack" in result["hookSpecificOutput"].get("additionalContext", "") + str(
+    assert needle in result["hookSpecificOutput"].get("additionalContext", "") + str(
         result["hookSpecificOutput"].get("updatedInput", "")
     )
 
@@ -553,16 +506,6 @@ def ccx_lane(ccx_absent: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     return install
 
 
-@pytest.mark.parametrize("command", FORCE_PUSHES)
-def test_force_push_advises_without_blocking(
-    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
-) -> None:
-    """A rewritten branch has no ccx route: `ccx vcs stack submit` replays it from its recorded
-    base rather than overwriting the remote, so this arm names the route and steps aside."""
-    discover_pack("graphite", GRAPHITE_HOOKS)
-    assert "ccx vcs push" in warn_context(dispatch_command(command, gt_repo, tmp_path))
-
-
 def test_a_bare_lease_push_of_the_current_branch_becomes_ccx_vcs_push(
     isolate_modules: None, ccx_installed: None, tmp_path: Path
 ) -> None:
@@ -577,17 +520,8 @@ def test_a_bare_lease_push_of_the_current_branch_becomes_ccx_vcs_push(
         "git push --force-with-lease=feat:abc origin feat",
         "git push --force-with-lease upstream feat",
     ]:
-        assert "ccx vcs push" in warn_context(dispatch_command(command, repo, tmp_path))
-
-
-def test_force_push_advice_admits_the_rewrite_case(
-    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path
-) -> None:
-    """`ccx vcs stack submit` replays a rewritten branch from its recorded base, so it is never the route named."""
-    discover_pack("graphite", GRAPHITE_HOOKS)
-    context = warn_context(dispatch_command("git push -f origin feat", gt_repo, tmp_path))
-    assert "ccx vcs push" in context
-    assert "ccx vcs stack submit" not in context
+        result = dispatch_command(command, repo, tmp_path)
+        assert result is None or "updatedInput" not in result["hookSpecificOutput"]
 
 
 def test_a_rewrite_on_the_line_carries_the_advice_for_the_rest(
@@ -597,7 +531,7 @@ def test_a_rewrite_on_the_line_carries_the_advice_for_the_rest(
     result = dispatch_command("git push -f origin feat && gt submit", gt_repo, tmp_path)
     assert rewritten_command(result) == "git push -f origin feat && ccx vcs stack submit"
     assert result is not None
-    assert "ccx vcs push" in result["hookSpecificOutput"]["additionalContext"]
+    assert "ccx vcs ship" in result["hookSpecificOutput"]["additionalContext"]
 
 
 @pytest.mark.parametrize(("command", "kind", "needle"), HOOK_CASES)
@@ -646,9 +580,9 @@ def test_stack_writes_rewrite_when_ccx_rides_the_gt_lane(
     assert rewritten_command(dispatch_command("gt submit", gt_repo, tmp_path)) == "ccx vcs stack submit"
 
 
-def test_stack_writes_only_warn_without_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
+def test_stack_writes_stay_silent_without_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
-    assert warn_context(dispatch_command("git rebase main", gt_repo, tmp_path))
+    assert dispatch_command("git rebase main", gt_repo, tmp_path) is None
     assert dispatch_command("gt restack", gt_repo, tmp_path) is None
 
 
@@ -674,13 +608,15 @@ def test_rebase_onto_own_upstream_is_ccx_ships_recovery(
     subprocess.run([*git, "update-ref", "refs/remotes/origin/feat", "HEAD"], check=True)
     subprocess.run([*git, "branch", "local/feat"], check=True)
     assert_not_denied(dispatch_command("git rebase --autostash origin/feat", repo, tmp_path))
-    for command in [
-        "git rebase origin/dev",
-        "git rebase local/feat",
-        "git rebase --onto=main origin/feat",
-        "git rebase origin/feat $(printf other)",
-    ]:
-        assert_fires(dispatch_command(command, repo, tmp_path), "warn", "ccx vcs stack rebase")
+    for index, command in enumerate(
+        [
+            "git rebase origin/dev",
+            "git rebase local/feat",
+            "git rebase --onto=main origin/feat",
+            "git rebase origin/feat $(printf other)",
+        ]
+    ):
+        assert_fires(dispatch_command(command, repo, tmp_path / f"session-{index}"), "warn", "ccx vcs stack rebase")
 
 
 @pytest.fixture
@@ -793,19 +729,17 @@ def dispatch_stubbed(command: str, repo: Path, tmp_path: Path, commands: dict[st
 
 
 @pytest.mark.parametrize("command", ["git push", "git push origin feat", "git push -u origin HEAD", "ccx vcs push"])
-def test_a_push_to_a_queued_pr_is_denied(
-    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
-) -> None:
+def test_a_push_to_a_queued_pr_warns(isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo, _ = queued_repo(tmp_path, "feat")
     commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
     result = dispatch_stubbed(command, repo, tmp_path, commands)
-    assert_fires(result, "deny", "holds `feat`")
-    assert_fires(result, "deny", "ccx vcs stack new <name>")
-    assert_fires(result, "deny", "holds `feat` per `ccx vcs pr status 26315`")
+    assert_fires(result, "warn", "holds `feat`")
+    assert_fires(result, "warn", "ccx vcs stack new <name>")
+    assert_fires(result, "warn", "holds `feat` per `ccx vcs pr status 26315`")
 
 
-def test_a_ship_onto_a_queued_pr_is_denied_even_at_the_enqueued_head(
+def test_a_ship_onto_a_queued_pr_warns_even_at_the_enqueued_head(
     isolate_modules: None, ccx_installed: None, tmp_path: Path
 ) -> None:
     """Ship commits before it pushes, so the branch's head at hook time is not what reaches the remote."""
@@ -817,8 +751,8 @@ def test_a_ship_onto_a_queued_pr_is_denied_even_at_the_enqueued_head(
         QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"][:8])]),
     }
     result = dispatch_stubbed('ccx vcs ship -m "fix"', repo, tmp_path, commands)
-    assert_fires(result, "deny", "`feat`")
-    assert_fires(result, "deny", "ccx vcs stack new <name>")
+    assert_fires(result, "warn", "`feat`")
+    assert_fires(result, "warn", "ccx vcs stack new <name>")
     assert "--tip-only" not in json.dumps(result)
 
 
@@ -864,7 +798,7 @@ def test_the_stacked_pr_recipe_is_allowed_over_a_queued_parent(
 
 
 @pytest.mark.parametrize(
-    ("command", "lookup", "denied"),
+    ("command", "lookup", "warned"),
     [
         pytest.param('ccx vcs ship -m "fix"', pr_lookup(26315, 26316), True, id="ship"),
         pytest.param('ccx vcs ship --tip-only -m "fix"', pr_lookup(26316), False, id="tip-only"),
@@ -872,7 +806,7 @@ def test_the_stacked_pr_recipe_is_allowed_over_a_queued_parent(
     ],
 )
 def test_a_tip_only_ship_leaves_a_queued_parent_alone(
-    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str, lookup: str, denied: bool
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str, lookup: str, warned: bool
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo, _ = queued_repo(tmp_path, "feat", "follow-up")
@@ -882,9 +816,9 @@ def test_a_tip_only_ship_leaves_a_queued_parent_alone(
         QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED), queue_report(26316, "not queued")]),
     }
     result = dispatch_stubbed(command, repo, tmp_path, commands)
-    if denied:
-        assert_fires(result, "deny", "holds `feat`")
-        assert_fires(result, "deny", "ccx vcs ship --tip-only")
+    if warned:
+        assert_fires(result, "warn", "holds `feat`")
+        assert_fires(result, "warn", "ccx vcs ship --tip-only")
     else:
         assert_not_denied(result)
 
@@ -906,17 +840,17 @@ def test_a_ship_held_only_by_its_queued_parent_names_tip_only(
         QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)]),
     }
     result = dispatch_stubbed(command, repo, tmp_path, commands)
-    assert_fires(result, "deny", "holds `feat`")
-    assert_fires(result, "deny", "ccx vcs ship --tip-only")
+    assert_fires(result, "warn", "holds `feat`")
+    assert_fires(result, "warn", "ccx vcs ship --tip-only")
 
 
-def test_a_tip_only_ship_of_a_queued_pr_is_denied(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
+def test_a_tip_only_ship_of_a_queued_pr_warns(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     repo, heads = queued_repo(tmp_path, "feat")
     commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", heads["feat"])])}
     result = dispatch_stubbed('ccx vcs ship --tip-only -m "fix"', repo, tmp_path, commands)
-    assert_fires(result, "deny", "`feat`")
-    assert_fires(result, "deny", "ccx vcs stack new <name>")
+    assert_fires(result, "warn", "`feat`")
+    assert_fires(result, "warn", "ccx vcs stack new <name>")
 
 
 @pytest.mark.parametrize("command", ["git push # ccx:raw", "ccx vcs ship -m x  # ccx:raw"])
@@ -1037,7 +971,7 @@ def test_the_queue_check_needs_ccx(isolate_modules: None, tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("command", ["ccx vcs stack submit", "gt submit", "gt ss"])
-def test_a_stack_submit_is_denied_on_its_one_queued_branch(
+def test_a_stack_submit_warns_on_its_one_queued_branch(
     isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
@@ -1048,12 +982,12 @@ def test_a_stack_submit_is_denied_on_its_one_queued_branch(
         QUEUE_STATUS: json.dumps([queue_report(26314, "not queued"), queue_report(26315, "queued", ENQUEUED)]),
     }
     result = dispatch_stubbed(command, repo, tmp_path, commands)
-    assert_fires(result, "deny", "holds `feat`")
+    assert_fires(result, "warn", "holds `feat`")
     assert result is not None
-    assert "`base`" not in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "`base`" not in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_a_stack_submit_that_replays_a_queued_branch_is_denied(
+def test_a_stack_submit_that_replays_a_queued_branch_warns(
     isolate_modules: None, ccx_installed: None, tmp_path: Path
 ) -> None:
     """A branch the submit restacks first reaches the remote at a new head, whatever it reads now."""
@@ -1069,7 +1003,7 @@ def test_a_stack_submit_that_replays_a_queued_branch_is_denied(
         )
     )
     restacked = commands | {STACK_LIST: stack_list("feat", current="feat", restack=frozenset({"feat"}))}
-    assert_fires(dispatch_stubbed("ccx vcs stack submit", repo, tmp_path, restacked), "deny", "`feat`")
+    assert_fires(dispatch_stubbed("ccx vcs stack submit", repo, tmp_path, restacked), "warn", "`feat`")
 
 
 @pytest.mark.parametrize(
@@ -1088,4 +1022,4 @@ def test_pushes_the_hook_must_not_read_as_no_ops(
     repo, heads = queued_repo(tmp_path, "feat")
     enqueued = heads["feat"] if command.startswith("git commit") else ENQUEUED
     commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", enqueued)])}
-    assert_fires(dispatch_stubbed(command, repo, tmp_path, commands), "deny", "`feat`")
+    assert_fires(dispatch_stubbed(command, repo, tmp_path, commands), "warn", "`feat`")

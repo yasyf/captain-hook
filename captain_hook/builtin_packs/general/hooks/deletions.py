@@ -43,7 +43,7 @@ def unrecoverable(evt: PreToolUseEvent) -> Recoverable:
     )
 
 
-def check_resolved(evt: PreToolUseEvent, target: Target, *, rewritable: bool) -> HookResult | Recoverable | None:
+def check_resolved(evt: PreToolUseEvent, target: Target) -> HookResult | Recoverable | None:
     if (path := target.path) is None or target.is_scratch:
         return None
     token = target.value or target.raw
@@ -54,22 +54,21 @@ def check_resolved(evt: PreToolUseEvent, target: Target, *, rewritable: bool) ->
         )
     if target.in_repo:
         return None
-    if rewritable:
-        if target.is_fs_root:
-            return evt.block(
-                f"'{token}' is the filesystem root, and deleting it destroys the system. "
-                "Ask the user to run the `rm` themselves."
-            )
-        if target.is_home:
-            return evt.block(
-                f"'{token}' is a home directory, and deleting it destroys every file the user owns. "
-                "Ask the user to run the `rm` themselves."
-            )
-        if (scan := Path(os.path.normpath(path))).is_dir(follow_symlinks=False) and contains_repo(scan):
-            return evt.block(
-                f"'{token}' contains git/jj repositories, and deleting it destroys them with their history. "
-                "Delete a narrower path instead."
-            )
+    if target.is_fs_root:
+        return evt.block(
+            f"'{token}' is the filesystem root, and deleting it destroys the system. "
+            "Ask the user to run the `rm` themselves."
+        )
+    if target.is_home:
+        return evt.block(
+            f"'{token}' is a home directory, and deleting it destroys every file the user owns. "
+            "Ask the user to run the `rm` themselves."
+        )
+    if (scan := Path(os.path.normpath(path))).is_dir(follow_symlinks=False) and contains_repo(scan):
+        return evt.block(
+            f"'{token}' contains git/jj repositories, and deleting it destroys them with their history. "
+            "Delete a narrower path instead."
+        )
     return unrecoverable(evt)
 
 
@@ -83,39 +82,24 @@ def scratch_glob(target: Target) -> bool:
     return is_scratch_path(prefix.resolve() / "_")
 
 
-def check_target(
-    evt: PreToolUseEvent, target: Target, cwd: Path | None, *, rewritable: bool
-) -> HookResult | Recoverable | None:
+def check_target(evt: PreToolUseEvent, target: Target, cwd: Path | None) -> HookResult | Recoverable | None:
     if not target.verified and glob.has_magic(target.raw):
-        return evt.block(
-            f"The glob '{target.raw}' is built at run time, so no expansion can be checked before deleting. "
-            "Expand it to explicit paths first."
-        )
+        return None
     target = literal_spelling(target, cwd)
     if not target.has_glob:
-        return check_resolved(evt, target, rewritable=rewritable)
+        return check_resolved(evt, target)
     expansion = target.expand()
-    token = target.value or target.raw
     if expansion.exhausted:
-        return evt.block(
-            f"The glob '{token}' is too broad to verify before deleting. "
-            "Narrow the pattern or run `rm -r <dir>` on a specific directory."
-        )
+        return None
     if len(expansion) > GLOB_LIMIT:
         if not scratch_glob(target):
-            return evt.block(
-                f"The glob '{token}' matches more than {GLOB_LIMIT} files. "
-                f"Run `ls {token}`, then narrow the pattern or run `rm -r <dir>` on a named directory."
-            )
+            return None
         expansion = target.expand(limit=SCRATCH_GLOB_LIMIT)
         if expansion.exhausted or len(expansion) > SCRATCH_GLOB_LIMIT:
-            return evt.block(
-                f"The glob '{token}' matches more than {SCRATCH_GLOB_LIMIT} files, too many to check before "
-                "deleting. Run `rm -r <dir>` on a named scratch directory instead."
-            )
+            return None
     recovery: Recoverable | None = None
     for match in expansion:
-        result = check_resolved(evt, Target(match, match, cwd), rewritable=rewritable)
+        result = check_resolved(evt, Target(match, match, cwd))
         match result:
             case HookResult() as blocked:
                 return blocked
@@ -128,15 +112,12 @@ def splits_a_word(call: Call) -> bool:
     return "\\\n" in call.source.raw
 
 
-def check_call(evt: PreToolUseEvent, call: Call, *, rewritable: bool) -> HookResult | Recoverable | None:
+def check_call(evt: PreToolUseEvent, call: Call) -> HookResult | Recoverable | None:
     if not call.targets.complete:
-        return evt.block(
-            "A command substitution supplies the `rm` targets, so no git/jj repository check can verify them. "
-            "Expand it to explicit paths first."
-        )
+        return None
     recovery: Recoverable | None = None
     for target in call.targets:
-        match check_target(evt, target, call.cwd, rewritable=rewritable):
+        match check_target(evt, target, call.cwd):
             case HookResult() as blocked:
                 return blocked
             case Recoverable() as recoverable if recovery is None:
@@ -149,8 +130,9 @@ def reemits_as_classified(target: Target) -> bool:
     return emit_token(token, plain_words=target.raw == target.value) is not None
 
 
-RECOVERABLE_RM: Block | Rewrite = Rewrite(pattern="trash") if trash_binary() else Block(pattern="repository")
-ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(pattern="repository")
+RECOVERABLE_RM: Rewrite | Allow = Rewrite(pattern="trash") if trash_binary() else Allow()
+UNRECOVERABLE_RM: Block | Allow = Block(pattern="repository") if trash_binary() else Allow()
+ROOT_RM = Block(pattern="filesystem root")
 
 
 @on(
@@ -160,28 +142,28 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command="rm foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="rm -rf /", cwd="/"): ROOT_RM,
         Input(command="''rm -rf /", cwd="/"): ROOT_RM,
-        Input(command="bash -c 'rm -rf /'", cwd="/"): Block(pattern="repository"),
-        Input(command="bash -lc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
-        Input(command="sh -xc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
-        Input(command='bash -c "rm $F"', cwd="/"): Block(pattern="repository"),
-        Input(command='eval "rm $F"', cwd="/"): Block(pattern="repository"),
-        Input(command="rm $FOO", cwd="/"): Block(pattern="repository"),
+        Input(command="bash -c 'rm -rf /'", cwd="/"): ROOT_RM,
+        Input(command="bash -lc 'rm -rf /'", cwd="/"): ROOT_RM,
+        Input(command="sh -xc 'rm -rf /'", cwd="/"): ROOT_RM,
+        Input(command='bash -c "rm $F"', cwd="/"): UNRECOVERABLE_RM,
+        Input(command='eval "rm $F"', cwd="/"): UNRECOVERABLE_RM,
+        Input(command="rm $FOO", cwd="/"): UNRECOVERABLE_RM,
         Input(command="FOO=/outside/x; rm $FOO", cwd="/"): RECOVERABLE_RM,
         Input(command="FOO=/; rm -rf $FOO/x/..", cwd="/"): ROOT_RM,
-        Input(command='rm -f "$(git rev-parse --git-dir)/REBASE_HEAD"', cwd="/"): Block(pattern="substitution"),
-        Input(command="d=$(mktemp -d); rm -rf $d/*", cwd="/"): Block(pattern="built at run time"),
-        Input(command="rm -rf $d/*", cwd="/"): Block(pattern="built at run time"),
+        Input(command='rm -f "$(git rev-parse --git-dir)/REBASE_HEAD"', cwd="/"): Allow(),
+        Input(command="d=$(mktemp -d); rm -rf $d/*", cwd="/"): Allow(),
+        Input(command="rm -rf $d/*", cwd="/"): Allow(),
         Input(command='X="/tmp/x /"; rm -rf $X', cwd="/"): ROOT_RM,
         Input(command='X="/tmp/x /outside"; rm -rf $X', cwd="/"): RECOVERABLE_RM,
-        Input(command='X="/tmp/a /Users/yasyf /tmp/b"; rm -rf $X"$X"', cwd="/"): Block(pattern="repository"),
-        Input(command='read IFS <<<:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): Block(pattern="repository"),
-        Input(command='IFS=:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): Block(pattern="repository"),
-        Input(command="rm -f /tmp/../etc/*", cwd="/"): Block(),
-        Input(command="rm /outside/{a,b}", cwd="/"): Block(pattern="repository"),
-        Input(command="rm foo\\\nbar", cwd="/"): Block(pattern="repository"),
-        Input(command="rm $(ls)", cwd="/"): Block(pattern="repository"),
-        Input(command="rm `ls`", cwd="/"): Block(pattern="repository"),
-        Input(command="rm foo.txt $(ls)", cwd="/"): Block(pattern="repository"),
+        Input(command='X="/tmp/a /Users/yasyf /tmp/b"; rm -rf $X"$X"', cwd="/"): UNRECOVERABLE_RM,
+        Input(command='read IFS <<<:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): UNRECOVERABLE_RM,
+        Input(command='IFS=:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): UNRECOVERABLE_RM,
+        Input(command="rm -f /tmp/../etc/*", cwd="/"): Allow(),
+        Input(command="rm /outside/{a,b}", cwd="/"): UNRECOVERABLE_RM,
+        Input(command="rm foo\\\nbar", cwd="/"): UNRECOVERABLE_RM,
+        Input(command="rm $(ls)", cwd="/"): UNRECOVERABLE_RM,
+        Input(command="rm `ls`", cwd="/"): UNRECOVERABLE_RM,
+        Input(command="rm foo.txt $(ls)", cwd="/"): UNRECOVERABLE_RM,
         Input(command="rm -- data.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="sudo rm /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command=r"\rm /foo.txt", cwd="/"): RECOVERABLE_RM,
@@ -205,7 +187,7 @@ def guard_rm(evt: PreToolUseEvent) -> HookResult | None:
     result: HookResult | None = None
     for call in evt.cmd.calls("rm"):
         rewritable = trash is not None and call.spliceable and not call.nested and not splits_a_word(call)
-        match check_call(evt, call, rewritable=rewritable):
+        match check_call(evt, call):
             case HookResult() as blocked:
                 return blocked
             case Recoverable() as recovery:
@@ -216,6 +198,8 @@ def guard_rm(evt: PreToolUseEvent) -> HookResult | None:
                     is not None
                 ):
                     result = rewritten
+                    continue
+                if trash is None:
                     continue
                 return recovery.block
     return result

@@ -256,6 +256,7 @@ def holds(cwd: Path, planned: list[Push]) -> list[Hold]:
     Event.PreToolUse,
     only_if=[Tool("Bash"), CcxInstalled()],
     skip_if=[Annotated("raw")],
+    max_fires=1,
     tests={
         Input(command="git push", cwd="/"): Allow(),
         Input(command="ccx vcs push", cwd="/"): Allow(),
@@ -290,7 +291,7 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
         if downstack_only
         else "Ship the change as a stacked PR: run `ccx vcs stack new <name>` from that branch."
     )
-    return evt.block(
+    return evt.warn(
         f"The Graphite merge queue holds {branches} per `ccx vcs pr status {numbers}` and drops anything pushed "
         f"after admission. {remedy}"
     )

@@ -19,7 +19,7 @@ nudge(
             )
         )
     ),
-    max_fires=2,
+    max_fires=1,
     tests={
         Input(
             command="go build ./...",

@@ -45,16 +45,14 @@ GENERAL_HOOKS = {
     "sessions",
     "spawns",
     "stops",
-    "tasks",
-    "tombstones",
     "tooling",
     "tools",
 }
-PYTHON_HOOKS = {"style", "testing", "toolchain"}
-GO_HOOKS = {"testing", "toolchain"}
+PYTHON_HOOKS = {"style", "toolchain"}
+GO_HOOKS = {"toolchain"}
 STEERING_HOOKS = {"steering", "teammates", "workarounds"}
 FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
-PERFORMANCE_HOOKS = {"admission", "filesystem", "git_objects", "pipelining", "resources", "search"}
+PERFORMANCE_HOOKS = {"admission", "filesystem", "git_objects", "resources", "search"}
 GRAPHITE_HOOKS = {"queue", "vcs"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
@@ -115,8 +113,7 @@ def test_plain_builtins_have_empty_descriptor(name: str) -> None:
     "name",
     [
         "fragments/deliverable_rubric.md",
-        "fragments/workflow_script_header.md",
-        "models/prose_spawn_gate.md",
+        "models/prose_spawn_nudge.md",
         "models/implementation_spawn_nudge.md",
         "models/inline_edit_nudge.md",
         "tools/preload_nudge.md",

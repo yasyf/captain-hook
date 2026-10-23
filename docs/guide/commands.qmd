@@ -87,7 +87,7 @@ for call in evt.command.calls("rm"):
     return call.sub("rm", "trash", args=call.targets)
 ```
 
-This is the heart of the shipped `general` pack's `rm` guard — [the full example](../examples/command-safety.qmd) adds recoverability checks and repo-root protection.
+The shipped `general` pack's `rm` guard walks targets the same way, though it lets a target it cannot verify run. [The full example](../examples/command-safety.qmd) adds recoverability checks and repo-root protection.
 
 ## Rewrite instead of blocking
 

@@ -2,43 +2,23 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
-
-from pydantic import BaseModel, Field, TypeAdapter
+from typing import TYPE_CHECKING
 
 from captain_hook import (
-    CONFIRMED,
-    UNCONFIRMED,
     Allow,
-    Block,
-    Confirm,
     Event,
-    FromSubagent,
-    HookResult,
-    InlineTests,
     Input,
     OtherCall,
     PostToolUseFailureEvent,
-    SkillCall,
     T,
     TaskCall,
     Tool,
     Warn,
-    WorkflowState,
     llm_nudge,
-    on,
-    workflow_state,
 )
-from captain_hook.builtin_packs.general.hooks._sessions import Unreadable, probe
-from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
-
     from captain_hook import BaseHookEvent
-    from captain_hook.cmd import Call
 
 TOOLING = frozenset({"ccx", "gt", "orca", "ccn", "cc-notes", "cc-slack", "codex-ask", "capt-hook"})
 TOOL_WORD = re.compile(rf"(?<![\w-])({'|'.join(sorted(map(re.escape, TOOLING)))})(?![\w-])")
@@ -48,14 +28,6 @@ LANE_REPORT = re.compile(r"(?i)\bccx refusal:|\btooling defect\b")
 EXIT_HEADER = re.compile(r"\A(?:Error: )?Exit code \d+\n")
 REPEATS = 3
 SCOPE = "tooling_nudge"
-EVIDENCE_CHARS = 240
-RESET = re.compile(r"rate-limited until (?P<at>\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))")
-LOW_QUOTA = 0.02
-AUTH_PROBE_SECONDS = 5.0
-GH_READ_VERBS = frozenset({"view", "list", "status", "checks", "diff", "watch"})
-GH_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
-GH_REPO_FLAGS = ("-R", "--repo")
-REPO_ENDPOINT = re.compile(r"\A/?repos/(?P<repo>[\w.-]+/[\w.-]+)")
 
 PROMPT = """You are a senior engineer watching another engineer ("the agent") mid-task. A
 deterministic scan flagged the tool call that just ran as a possible TOOLING DEFECT or
@@ -120,281 +92,6 @@ MESSAGE = (
 
 
 @dataclass(frozen=True, slots=True)
-class Verb:
-    words: tuple[str, ...]
-
-    def __init__(self, *words: str) -> None:
-        object.__setattr__(self, "words", words)
-
-    @property
-    def text(self) -> str:
-        return " ".join(self.words)
-
-    def ran(self, evt: BaseHookEvent) -> bool:
-        match evt.input:
-            case OtherCall(name=name) if name.startswith("mcp__"):
-                return name.rpartition("__")[2] == self.text
-        return bool(evt.command) and any(argv(call)[: len(self.words)] == self.words for call in evt.command.calls())
-
-    def named_in(self, text: str) -> bool:
-        return re.search(rf"(?<![\w-]){r'\s+'.join(map(re.escape, self.words))}(?![\w-])", text) is not None
-
-
-@dataclass(frozen=True, slots=True)
-class Signature:
-    key: str
-    text: re.Pattern[str]
-    verbs: tuple[Verb, ...]
-    lane_name: re.Pattern[str]
-    window: timedelta | None = None
-    failures_only: bool = False
-    quota: Callable[[BaseHookEvent, Verb], Quota | Unreadable] | None = None
-
-    def source(self, evt: BaseHookEvent) -> Verb | None:
-        return next((verb for verb in self.verbs if verb.ran(evt)), None)
-
-    def refused_text(self, evt: BaseHookEvent) -> str:
-        if not self.failures_only:
-            return result_text(evt)
-        if isinstance(evt, PostToolUseFailureEvent):
-            return evt.error
-        match getattr(evt, "tool_response", None):
-            case {"stderr": str() as stderr}:
-                return stderr
-        return ""
-
-    def expires(self, text: str) -> datetime | None:
-        if found := RESET.search(text):
-            return datetime.fromisoformat(found["at"])
-        return datetime.now(UTC) + self.window if self.window else None
-
-
-class Quota(BaseModel):
-    limit: int
-    remaining: int
-    reset_at: datetime = Field(alias="resetAt")
-
-    @property
-    def low(self) -> bool:
-        return self.remaining <= self.limit * LOW_QUOTA
-
-
-class Identity(BaseModel):
-    quota: Quota
-
-
-class AuthStatus(BaseModel):
-    reads: Identity
-    writes: Identity
-
-
-AUTH_STATUSES = TypeAdapter(list[AuthStatus])
-
-
-def flag_value(args: tuple[str, ...], names: tuple[str, ...]) -> str | None:
-    for index, token in enumerate(args):
-        for name in names:
-            if token == name:
-                return next(iter(args[index + 1 :]), None)
-            if token.startswith(f"{name}=") or (len(name) == 2 and token.startswith(name)):
-                return token.removeprefix(name).removeprefix("=")
-    return None
-
-
-def gh_api_reads(args: tuple[str, ...]) -> bool:
-    if "graphql" in args:
-        return False
-    if method := flag_value(args, ("-X", "--method")):
-        return method.upper() == "GET"
-    return not any(token.startswith(GH_FIELD_FLAGS) for token in args)
-
-
-def token_side(words: tuple[str, ...]) -> Literal["reads", "writes"]:
-    match words:
-        case ("ccx", "vcs", *_):
-            return "reads"
-        case ("gh", "api", *rest):
-            return "reads" if gh_api_reads(tuple(rest)) else "writes"
-        case ("gh", _, verb, *_) if verb in GH_READ_VERBS:
-            return "reads"
-    return "writes"
-
-
-def named_repo(words: tuple[str, ...]) -> tuple[str, ...]:
-    if repo := flag_value(words, GH_REPO_FLAGS):
-        return (repo,)
-    return next(((found["repo"],) for word in words if (found := REPO_ENDPOINT.match(word))), ())
-
-
-def github_quota(evt: BaseHookEvent, verb: Verb) -> Quota | Unreadable:
-    words = next(words for call in evt.command.calls() if (words := argv(call))[: len(verb.words)] == verb.words)
-    shown = probe(
-        ("ccx", "vcs", "auth", "status", "--json", *named_repo(words)),
-        AUTH_PROBE_SECONDS,
-        cwd=evt.cwd or reqenv.cwd(),
-    )
-    if isinstance(shown, Unreadable):
-        return shown
-    status = AUTH_STATUSES.validate_json(shown)[0]
-    return (status.reads if token_side(words) == "reads" else status.writes).quota
-
-
-CC_SLACK_VERBS = (
-    *(Verb("cc-slack", verb) for verb in ("send", "reply", "edit", "react", "watch")),
-    *(Verb(f"slack_{verb}") for verb in ("send", "reply", "edit", "react", "watch", "dm_status")),
-    Verb("cc-slack:slack"),
-)
-GITHUB_VERBS = (
-    Verb("ccx", "vcs", "pr"),
-    Verb("ccx", "vcs", "status"),
-    Verb("ccx", "vcs", "reviews"),
-    Verb("gh", "pr"),
-    Verb("gh", "api"),
-    Verb("gh", "run"),
-    Verb("stack-enqueue"),
-)
-
-SIGNATURES = (
-    Signature(
-        "cc-slack-session",
-        re.compile(r"no cc-slack session for this Claude window"),
-        CC_SLACK_VERBS,
-        re.compile(r"cc-slack-session"),
-    ),
-    Signature(
-        "cc-slack-no-watch",
-        re.compile(r"\bpass `?no_watch\b"),
-        CC_SLACK_VERBS,
-        re.compile(r"cc-slack-no-watch"),
-    ),
-    Signature(
-        "github-quota",
-        re.compile(
-            r"(?i)rate-limited until|api rate limit exceeded|secondary rate limit"
-            r"|graphql\b[^\n]{0,60}\b(?:quota|rate limit)"
-        ),
-        GITHUB_VERBS,
-        re.compile(r"(?<![\w])(?:gh|github|graphql)-(?:quota|rate-limit)"),
-        timedelta(hours=1),
-        failures_only=True,
-        quota=github_quota,
-    ),
-)
-
-
-class Refusal(BaseModel):
-    tool: str
-    verbs: tuple[str, ...]
-    evidence: str
-    expires: datetime | None
-
-    def live(self, now: datetime) -> bool:
-        return self.expires is None or self.expires > now
-
-    def repeated_in(self, text: str) -> bool:
-        return any(Verb(*verb.split()).named_in(text) for verb in self.verbs)
-
-
-@workflow_state("tooling_refusals")
-class ToolingRefusals(WorkflowState):
-    refusals: dict[str, Refusal] = {}
-    lanes: set[str] = set()
-
-
-REFUSAL_MESSAGE = (
-    "`{tool}` refused this action: spawn a tooling lane that fixes it with the line `ccx: tooling-lane={key}` "
-    "in its prompt, "
-    "or report the refusal to your orchestrator if you cannot spawn agents. "
-    "Repeats of the dispatch stay blocked until the lane exists."
-)
-REPEAT_MESSAGE = (
-    "This dispatch repeats an action `{tool}` already refused, and no tooling lane exists for it. "
-    "Spawn the tooling lane with the line `ccx: tooling-lane={key}` in its prompt, then retry."
-)
-REPEAT_RULE = (
-    "This dispatch asks for the same action the first-party tool refused (`{evidence}`), "
-    "rather than an unrelated task that mentions similar words."
-)
-
-
-def argv(call: Call) -> tuple[str, ...]:
-    return (Path(call.name).name, *call.verb_argv[1:])
-
-
-def strings(value: object) -> Iterator[str]:
-    match value:
-        case str():
-            yield value
-        case dict():
-            for item in value.values():
-                yield from strings(item)
-        case list() | tuple():
-            for item in value:
-                yield from strings(item)
-
-
-def result_text(evt: BaseHookEvent) -> str:
-    if isinstance(evt, PostToolUseFailureEvent):
-        return evt.error
-    return "\n".join(strings(getattr(evt, "tool_response", None)))
-
-
-def excerpt(text: str, match: re.Match[str]) -> str:
-    start = text.rfind("\n", 0, match.start()) + 1
-    end = text.find("\n", match.end())
-    return text[start : end if end >= 0 else None].strip()[:EVIDENCE_CHARS]
-
-
-@dataclass(frozen=True, slots=True)
-class Match:
-    signature: Signature
-    ran: Verb
-    text: str
-    found: re.Match[str]
-
-
-def matched(evt: BaseHookEvent) -> Match | None:
-    for signature in SIGNATURES:
-        if (ran := signature.source(evt)) and (found := signature.text.search(text := signature.refused_text(evt))):
-            return Match(signature, ran, text, found)
-    return None
-
-
-def refusal(evt: BaseHookEvent) -> tuple[str, Refusal] | None:
-    if (hit := matched(evt)) is None:
-        return None
-    signature = hit.signature
-    expires = signature.expires(hit.text)
-    if signature.quota and not isinstance(quota := signature.quota(evt, hit.ran), Unreadable):
-        if not quota.low:
-            return None
-        expires = quota.reset_at
-    return signature.key, Refusal(
-        tool=hit.ran.text,
-        verbs=tuple(verb.text for verb in signature.verbs),
-        evidence=excerpt(hit.text, hit.found),
-        expires=expires,
-    )
-
-
-def dispatch_text(evt: BaseHookEvent) -> str:
-    match evt.input:
-        case TaskCall(prompt=prompt):
-            return prompt
-        case SkillCall(skill=skill, args=args):
-            return f"{skill} {args or ''}"
-    return ""
-
-
-def lane_keys(evt: BaseHookEvent) -> set[str]:
-    keys = {key} if (key := evt.annotations.get("tooling-lane")) else set()
-    match evt.input:
-        case TaskCall(agent_name=name) if name:
-            keys |= {signature.key for signature in SIGNATURES if signature.lane_name.search(name)}
-    return keys
-
-
-@dataclass(frozen=True, slots=True)
 class Detection:
     signal: str
     tool: str
@@ -447,7 +144,7 @@ def detect(evt: BaseHookEvent) -> Detection | None:
 
 
 def claim(evt: BaseHookEvent) -> bool:
-    return matched(evt) is None and (found := detect(evt)) is not None and evt.ctx.s.once(found.key, scope=SCOPE)
+    return (found := detect(evt)) is not None and evt.ctx.s.once(found.key, scope=SCOPE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,57 +160,22 @@ class ToolingSignal:
         return f"signal: {found.signal}\ntool: {found.tool}\nevidence:\n{found.evidence[:1500]}"
 
 
-def tooling_nudge(events: Event, tools: tuple[str, ...], tests: InlineTests) -> None:
-    llm_nudge(
-        PROMPT,
-        label="tooling_nudge",
-        message=MESSAGE,
-        only_if=[Tool(*tools)],
-        events=events,
-        when=claim,
-        max_fires=None,
-        contexts=[ToolingSignal()],
-        agent=False,
-        transcript=True,
-        tests=tests,
-    )
-
-
 def bash_calls(command: str, n: int, *, is_error: bool = False) -> list[dict[str, object]]:
     return [line for _ in range(n) for line in T.tool_turn("Bash", command=command, is_error=is_error)]
 
 
-tooling_nudge(
-    Event.PostToolUseFailure,
-    ("Bash",),
-    {
-        Input(
-            command="ccx vcs stack submit",
-            error="Exit code 1\nccx: refusing to submit: submodule pointer changed",
-        ): Warn(pattern="Spawn a tooling lane"),
-        Input(command="gt sync", error="Exit code 2\nUsage: gt sync [options]"): Warn(pattern="tooling lane"),
-        Input(
-            command="gt track --parent dev  # ccx:raw",
-            error="Exit code 1\nERROR: branch already tracked",
-        ): Allow(),
-        Input(
-            command="ccx code read src/mian.py",
-            error="Exit code 1\nccx: path not found: src/mian.py",
-            llm={"fire": False},
-        ): Allow(),
-        Input(command="pytest -q", error="Exit code 1\nFAILED tests/test_x.py::test_y"): Allow(),
-        Input(
-            command="ccx vcs stack submit",
-            error="Exit code 1\nccx: refusing to submit: submodule pointer changed",
-            seen={SCOPE: ["ccx refusal or usage error:ccx"]},
-        ): Allow(),
-    },
-)
-
-tooling_nudge(
-    Event.PostToolUse,
-    ("Bash", "SendMessage", "Agent", "Task", "papercut"),
-    {
+llm_nudge(
+    PROMPT,
+    label="tooling_nudge",
+    message=MESSAGE,
+    only_if=[Tool("Bash", "SendMessage", "Agent", "Task", "papercut")],
+    events=Event.PostToolUse | Event.PostToolUseFailure,
+    when=claim,
+    max_fires=1,
+    contexts=[ToolingSignal()],
+    agent=False,
+    transcript=True,
+    tests={
         Input(command="gh pr edit 123 --base dev  # ccx:raw"): Allow(),
         Input(command="ccn papercut 'ccx ship drops the PR body'"): Warn(pattern="ccn papercut"),
         Input(
@@ -542,6 +204,12 @@ tooling_nudge(
             command="orca terminal send w1 'status?'",
             transcript=bash_calls("orca terminal send w1 'status?'", 2),
         ): Allow(),
+        Input(
+            command="ccx code read src/mian.py",
+            error="Exit code 1\nccx: path not found: src/mian.py",
+            llm={"fire": False},
+        ): Allow(),
+        Input(command="pytest -q", error="Exit code 1\nFAILED tests/test_x.py::test_y"): Allow(),
         Input(command="git status"): Allow(),
         Input(command="ccx vcs status"): Allow(),
         Input(tool="SendMessage", tool_input={"to": "team-lead", "message": "PR #12 merged."}): Allow(),
@@ -552,238 +220,3 @@ tooling_nudge(
         ): Allow(),
     },
 )
-
-
-LIVE = datetime(2099, 1, 1, tzinfo=UTC)
-RESET_PASSED = datetime(2026, 1, 1, tzinfo=UTC)
-QUOTA = Refusal(
-    tool="ccx vcs pr",
-    verbs=tuple(verb.text for verb in GITHUB_VERBS),
-    evidence="ccx: GitHub GraphQL quota exhausted",
-    expires=LIVE,
-)
-QUOTA_REFUSED = ToolingRefusals(refusals={"github-quota": QUOTA})
-SLACK_REFUSED = ToolingRefusals(
-    refusals={
-        "cc-slack-session": Refusal(
-            tool="cc-slack",
-            verbs=tuple(verb.text for verb in CC_SLACK_VERBS),
-            evidence="no cc-slack session for this Claude window",
-            expires=None,
-        )
-    }
-)
-PR_236_BODY = (
-    "Context: The deterministic tooling-refusal path added in #234 blocked an unrelated cc-slack CLI\n"
-    "rebuild dispatch because its prompt included `ccx vcs worktree add`. The quota record came from\n"
-    '`ccx code read` printing an inline test containing "GitHub GraphQL quota exhausted"; a documentation\n'
-    "excerpt about `rate-limited until` produced another false record and blocked a PR watcher.\n"
-)
-CC_SLACK_CLI_SYNC = (
-    "You are cc-slack-cli-sync. Defect: every cc-slack CLI call from lanes now fails: the daemon runs a newer "
-    "release than this CLI. Use a fresh worktree `ccx vcs worktree add cc-slack-cli-sync` if you need to build, "
-    "install the CLI as the new symlink target, and verify `cc-slack --version` matches the daemon and "
-    "`cc-slack send --help` lists `--grant`."
-)
-
-
-@on(
-    Event.PostToolUse | Event.PostToolUseFailure,
-    tests={
-        Input(
-            tool="mcp__plugin_cc-slack_cc-slack__slack_reply",
-            tool_input={"channel_id": "C1", "thread_ts": "1.2", "text": "hi"},
-            output="no cc-slack session for this Claude window; run cc-slack login",
-        ): Warn(pattern="^`slack_reply` refused.*`ccx: tooling-lane=cc-slack-session`"),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "reply in the thread", "subagent_type": "lane"},
-            output="Could not post: cc-slack says to pass no_watch when the thread is already watched.",
-        ): Allow(),
-        Input(
-            tool="mcp__plugin_cc-slack_cc-slack__slack_thread",
-            tool_input={"channel_id": "C1", "thread_ts": "1.2"},
-            output="U1: the bot says no cc-slack session for this Claude window",
-        ): Allow(),
-        Input(
-            command="ccx vcs pr status 12",
-            output="ccx: GitHub GraphQL quota exhausted; rate-limited until 2026-10-01T22:05:00Z",
-        ): Allow(),
-        Input(
-            command="gh pr view 236 --repo yasyf/captain-hook --json body -q .body",
-            output=PR_236_BODY,
-        ): Allow(),
-        Input(
-            command="ccx code read captain_hook/builtin_packs/general/hooks/tooling.py --section 400-415",
-            output='→ [408#bbgx]         ): Warn(pattern=r"^ccx refused: ccx: GitHub GraphQL quota exhausted"),',
-        ): Allow(),
-        Input(
-            command="ccx code read docs/pr-status.md",
-            output="`pr watch` prints `rate-limited until <next probe>` and sleeps until the GraphQL quota resets.",
-        ): Allow(),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw"): Allow(),
-        Input(command="cd wt && gt submit --no-interactive  # ccx:raw"): Allow(),
-        Input(
-            command="cd /wt && git rebase origin/dev 2>&1 | tail -5; git status -s | head # ccx:raw",
-            output="Could not apply 25737e453d... cc-slack: hand a refused op to the newest local build",
-        ): Allow(),
-        Input(command="gh pr edit 123 --base dev  # ccx:raw", env={"CAPT_HOOK_CCX_RAW": "1"}): Allow(),
-        Input(command="ccx vcs status", output="dev · clean"): Allow(),
-        Input(
-            command="cc-slack reply --url C1/p12 --text hi",
-            output="posting\ncc-slack: no cc-slack session for this Claude window\n",
-        ): Warn(pattern="^`cc-slack reply` refused this action"),
-        Input(
-            command="git grep -n 'no cc-slack session' go/cc-slack",
-            output="go/cc-slack/ops.go:651: no cc-slack session for this Claude window",
-        ): Allow(),
-        Input(
-            tool="Read",
-            tool_input={"file_path": "/repo/ops.go"},
-            output="no cc-slack session for this Claude window",
-        ): Allow(),
-    },
-)
-def record_refusal(evt: BaseHookEvent) -> HookResult | None:
-    if (found := refusal(evt)) is None:
-        return None
-    key, record = found
-    with ToolingRefusals.mutate(evt) as state:
-        state.refusals[key] = record
-        covered = key in state.lanes
-    if covered or not evt.ctx.s.once(f"{key}:{evt.agent_id or 'main'}", scope=SCOPE):
-        return None
-    return evt.warn(REFUSAL_MESSAGE.format(tool=record.tool, key=key))
-
-
-@on(
-    Event.PreToolUse,
-    only_if=[Tool("Agent", "Task", "Skill")],
-    tests={
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Fix the GraphQL fallback.", "name": "gh-quota-once-and-for-all"},
-        ): Allow(),
-        Input(tool="Agent", tool_input={"prompt": "Fix cc-slack.\nccx: tooling-lane=cc-slack-session"}): Allow(),
-    },
-)
-def record_lane(evt: BaseHookEvent) -> HookResult | None:
-    if keys := lane_keys(evt) - ToolingRefusals.load(evt).lanes:
-        with ToolingRefusals.mutate(evt) as state:
-            state.lanes |= keys
-    return None
-
-
-@on(
-    Event.PreToolUse,
-    only_if=[Tool("Agent", "Task", "Skill")],
-    skip_if=[FromSubagent()],
-    tests={
-        Input(
-            decide=CONFIRMED,
-            tool="Agent",
-            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
-            state=[SLACK_REFUSED],
-        ): Block(pattern=r"`ccx: tooling-lane=cc-slack-session`"),
-        Input(
-            decide=CONFIRMED,
-            tool="Skill",
-            tool_input={"skill": "cc-slack:slack", "args": "reply in the incident thread"},
-            state=[SLACK_REFUSED],
-        ): Block(pattern="already refused"),
-        Input(
-            tool="Agent",
-            tool_input={
-                "prompt": "Fix the cc-slack session lookup and release it.\nccx: tooling-lane=cc-slack-session",
-                "subagent_type": "lane",
-            },
-            state=[SLACK_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
-            state=[SLACK_REFUSED.model_copy(update={"lanes": {"cc-slack-session"}})],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Land the ledger stack", "subagent_type": "lane"},
-            state=[SLACK_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"},
-            state=[SLACK_REFUSED],
-            decide=UNCONFIRMED,
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
-            agent_id="a1b2c3",
-            state=[SLACK_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Post the reply with cc-slack reply in C1/1.2", "subagent_type": "lane"},
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Post with cc-slack reply.\nccx: tooling-lane=cc-slack-session", "name": "fix"},
-            state=[SLACK_REFUSED],
-        ): Allow(),
-        Input(
-            decide=CONFIRMED,
-            tool="Agent",
-            tool_input={"prompt": "Post with cc-slack reply.\ntooling-lane: cc-slack-session", "name": "fix"},
-            state=[SLACK_REFUSED],
-        ): Block(pattern="already refused"),
-        Input(
-            decide=CONFIRMED,
-            tool="Agent",
-            tool_input={"prompt": "Post with cc-slack reply.\nccx: tooling-lane=github-quota", "name": "fix"},
-            state=[SLACK_REFUSED],
-        ): Block(pattern=r"`ccx: tooling-lane=cc-slack-session`"),
-        Input(
-            decide=CONFIRMED,
-            tool="Agent",
-            tool_input={"prompt": "Poll `ccx vcs pr status 28999` until it lands.", "name": "pr-28999-watch"},
-            state=[QUOTA_REFUSED],
-        ): Block(pattern=r"`ccx: tooling-lane=github-quota`"),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": CC_SLACK_CLI_SYNC, "name": "cc-slack-cli-sync"},
-            state=[QUOTA_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Poll `ccx vcs pr status 28999` until it lands.", "name": "pr-28999-watch"},
-            state=[ToolingRefusals(refusals={"github-quota": QUOTA.model_copy(update={"expires": RESET_PASSED})})],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Poll `ccx vcs pr status 28999` until it lands.", "name": "pr-28999-watch"},
-            state=[QUOTA_REFUSED.model_copy(update={"lanes": {"github-quota"}})],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "Move ccx off GraphQL; verify with gh api rate_limit.", "name": "gh-quota-fix"},
-            state=[QUOTA_REFUSED],
-        ): Allow(),
-        Input(
-            tool="Agent",
-            tool_input={"prompt": "ccx: tooling-lane=github-quota\nVerify with `gh api rate_limit`.", "name": "quota"},
-            state=[QUOTA_REFUSED],
-        ): Allow(),
-    },
-)
-def block_repeated_dispatch(evt: BaseHookEvent) -> HookResult | None:
-    state = ToolingRefusals.load(evt)
-    covered = state.lanes | lane_keys(evt)
-    text = dispatch_text(evt)
-    now = datetime.now(UTC)
-    for key, record in state.refusals.items():
-        if key not in covered and record.live(now) and record.repeated_in(text):
-            return evt.block(
-                REPEAT_MESSAGE.format(tool=record.tool, key=key),
-                confirm=Confirm(rule=REPEAT_RULE.format(evidence=record.evidence)),
-            )
-    return None

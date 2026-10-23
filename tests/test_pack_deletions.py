@@ -17,7 +17,6 @@ from captain_hook.loader import discover_pack
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
-from captain_hook.util import globbing
 from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import emit_token
 from captain_hook.util.vcs import in_vcs_repo
@@ -70,15 +69,8 @@ class TestBlockRiskyRm:
         (nested_root / ".git").mkdir(parents=True)
         assert decision(f"rm {nested_root / 'one' / 'two' / 'file.txt'}", Path("/")) is None
 
-        outside = decision(f"rm {tmp_path / 'outside' / 'file.txt'}", Path("/"))
-        assert outside is not None
-        assert outside["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "repository" in outside["hookSpecificOutput"]["permissionDecisionReason"]
-
-        sudo = decision(f"sudo rm {tmp_path / 'sudo-outside.txt'}", Path("/"))
-        assert sudo is not None
-        assert sudo["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "repository" in sudo["hookSpecificOutput"]["permissionDecisionReason"]
+        assert decision(f"rm {tmp_path / 'outside' / 'file.txt'}", Path("/")) is None
+        assert decision(f"sudo rm {tmp_path / 'sudo-outside.txt'}", Path("/")) is None
 
         repo_root = tmp_path / "whole-repo"
         (repo_root / ".git").mkdir(parents=True)
@@ -100,33 +92,31 @@ class TestBlockRiskyRm:
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd)))
             return dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
 
-        uppercase = decision("RM /x", Path("/"))
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        uppercase = decision(f"RM -rf {repo}", Path("/"))
         assert uppercase is not None
         assert uppercase["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-        repo = tmp_path / "repo"
-        (repo / ".git").mkdir(parents=True)
-        outside = tmp_path / "outside"
-        outside.mkdir()
-        (outside / "victim.txt").write_text("")
-        escaped = decision(r"rm ..\/outside/victim.txt", repo)
+        victim = tmp_path / "victim-repo"
+        (victim / ".git").mkdir(parents=True)
+        escaped = decision(r"rm -rf ..\/victim-repo", repo)
         assert escaped is not None
         assert escaped["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "repository" in escaped["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "repository root" in escaped["hookSpecificOutput"]["permissionDecisionReason"]
 
-        variable = decision("rm $FOO", outside)
-        assert variable is not None
-        assert variable["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "repository" in variable["hookSpecificOutput"]["permissionDecisionReason"]
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        assert decision("rm $FOO", outside) is None
 
     def test_leaf_symlink_semantics(
         self,
         isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
         no_scratch: None,
-        no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general" / "hooks")
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
 
         def decision(command: str) -> dict[str, Any] | None:
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd="/"))
@@ -137,9 +127,7 @@ class TestBlockRiskyRm:
         (target_repo / "real.txt").write_text("")
         outside_link = tmp_path / "outside-link"
         outside_link.symlink_to(target_repo / "real.txt")
-        outside = decision(f"rm {outside_link}")
-        assert outside is not None
-        assert outside["hookSpecificOutput"]["permissionDecision"] == "deny"
+        TestRmTrashRewrite.assert_rewrite(decision(f"rm {outside_link}"), f"/opt/fake/trash {outside_link}")
 
         repo = tmp_path / "repo2"
         (repo / ".git").mkdir(parents=True)
@@ -212,7 +200,7 @@ class TestBlockRiskyRm:
         assert decision("rm *.txt", empty) is None
         assert decision("rm $FOO", empty) is None
 
-    def test_glob_limit_outside_scratch(
+    def test_glob_over_limit_outside_scratch_runs(
         self, isolate_modules: None, no_scratch: None, no_trash: None, tmp_path: Path
     ) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
@@ -225,27 +213,20 @@ class TestBlockRiskyRm:
         over.mkdir()
         for index in range(11):
             (over / f"{index}.txt").write_text("")
-        oversized = decision("rm *.txt", over)
-        assert oversized is not None
-        assert oversized["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "more than 10 files" in oversized["hookSpecificOutput"]["permissionDecisionReason"]
+        assert decision("rm *.txt", over) is None
 
         recursive = tmp_path / "recursive"
         for index in range(11):
             path = recursive / str(index % 2) / f"{index}.txt"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("")
-        recursive_out = decision("rm **/*.txt", recursive)
-        assert recursive_out is not None
-        assert "more than 10 files" in recursive_out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert decision("rm **/*.txt", recursive) is None
 
         entries = tmp_path / "entries"
         entries.mkdir()
         for index in range(15):
             (entries / f"file-{index}.txt").write_text("")
-        all_entries = decision("rm *", entries)
-        assert all_entries is not None
-        assert all_entries["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert decision("rm *", entries) is None
 
     def test_glob_preserves_trailing_slash(
         self,
@@ -280,18 +261,9 @@ class TestBlockRiskyRm:
             Event.PreToolUse,
             Input(command="rm ~capt_hook_no_such_user_xyz/x", cwd="/"),
         )
-        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "repository" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
 
-    @pytest.mark.parametrize(
-        ("walked", "expect_deny"),
-        [
-            pytest.param(20_000, True, id="at-budget"),
-            pytest.param(19_999, False, id="under-budget"),
-        ],
-    )
+    @pytest.mark.parametrize("walked", [pytest.param(20_000, id="at-budget"), pytest.param(19_999, id="under-budget")])
     def test_recursive_glob_budget(
         self,
         isolate_modules: None,
@@ -299,7 +271,6 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
         walked: int,
-        expect_deny: bool,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
         anchors: list[Path] = []
@@ -312,12 +283,7 @@ class TestBlockRiskyRm:
         evt = input_to_event(Event.PreToolUse, Input(command="rm **/*.zzz", cwd=str(tmp_path)))
         result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
         assert anchors == [tmp_path.resolve()]
-        if expect_deny:
-            assert result is not None
-            assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-            assert "too broad" in result["hookSpecificOutput"]["permissionDecisionReason"]
-        else:
-            assert result is None
+        assert result is None
 
     def test_recursive_glob_does_not_follow_symlinks(self, isolate_modules: None, tmp_path: Path) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
@@ -341,16 +307,15 @@ class TestBlockRiskyRm:
         (repo / ".git").mkdir(parents=True)
         (repo / "child" / "match").mkdir(parents=True)
         outside = tmp_path / "outside"
-        outside.mkdir()
-        (outside / "victim.txt").write_text("")
+        (outside / "victim" / ".git").mkdir(parents=True)
         evt = input_to_event(
             Event.PreToolUse,
-            Input(command="rm child/*/../../../outside/*", cwd=str(repo)),
+            Input(command="rm -rf child/*/../../../outside/*", cwd=str(repo)),
         )
         result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "repository" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "repository root" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_tracks_literal_cd(
         self,
@@ -362,12 +327,13 @@ class TestBlockRiskyRm:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        for command in ("cd / && rm somefile", "(cd / && rm somefile)"):
+        (tmp_path / "other" / ".git").mkdir(parents=True)
+        for command in (f"cd {tmp_path} && rm -rf other", f"(cd {tmp_path} && rm -rf other)"):
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(repo)))
             result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
             assert result is not None
             assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-            assert "repository" in result["hookSpecificOutput"]["permissionDecisionReason"]
+            assert "repository root" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_tracks_temp_and_unknown_cd(self, isolate_modules: None, tmp_path: Path) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
@@ -439,7 +405,7 @@ class TestRmTrashRewrite:
             f"/opt/fake/trash {victim}",
         )
 
-    def test_no_trash_denies(
+    def test_no_trash_runs(
         self,
         isolate_modules: None,
         no_scratch: None,
@@ -448,12 +414,7 @@ class TestRmTrashRewrite:
     ) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
         victim = tmp_path / "outside" / "victim.txt"
-        result = self.decision(f"rm {victim}", Path("/"), tmp_path)
-        assert result is not None
-        output = result["hookSpecificOutput"]
-        assert output["permissionDecision"] == "deny"
-        assert "repository" in output["permissionDecisionReason"]
-        assert "updatedInput" not in output
+        assert self.decision(f"rm {victim}", Path("/"), tmp_path) is None
 
     def test_repo_root_still_blocks(
         self,
@@ -472,7 +433,7 @@ class TestRmTrashRewrite:
         assert "history" in output["permissionDecisionReason"]
         assert "updatedInput" not in output
 
-    def test_glob_limit_denies(
+    def test_glob_over_limit_runs(
         self,
         isolate_modules: None,
         monkeypatch: pytest.MonkeyPatch,
@@ -484,15 +445,7 @@ class TestRmTrashRewrite:
         outside.mkdir()
         for index in range(11):
             (outside / f"{index}.txt").write_text("")
-        result = self.decision("rm *.txt", outside, tmp_path)
-        assert result is not None
-        output = result["hookSpecificOutput"]
-        assert output["permissionDecision"] == "deny"
-        assert output["permissionDecisionReason"] == (
-            "The glob '*.txt' matches more than 10 files. "
-            "Run `ls *.txt`, then narrow the pattern or run `rm -r <dir>` on a named directory."
-        )
-        assert "updatedInput" not in output
+        assert self.decision("rm *.txt", outside, tmp_path) is None
 
     def test_glob_within_limit_rewrites_raw_token(
         self,
@@ -548,69 +501,6 @@ class TestRmTrashRewrite:
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
         assert "history" in output["permissionDecisionReason"]
-        assert "updatedInput" not in output
-
-    def test_glob_over_limit_blocks_before_uncollected_repo_root(
-        self,
-        isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
-        no_scratch: None,
-        tmp_path: Path,
-    ) -> None:
-        self.load_with_trash(monkeypatch)
-        outside = tmp_path / "outside"
-        outside.mkdir()
-        for index in range(12):
-            (outside / f"entry-{index}").write_text("")
-        repo = outside / "repo"
-        (repo / ".git").mkdir(parents=True)
-
-        def ordered_iglob(
-            pattern: str,
-            *,
-            root_dir: str,
-            recursive: bool,
-            include_hidden: bool,
-        ) -> Iterator[str]:
-            assert (pattern, root_dir, recursive, include_hidden) == ("*", str(outside), False, False)
-            return iter([*(f"entry-{index}" for index in range(12)), repo.name])
-
-        monkeypatch.setattr(globbing.glob, "iglob", ordered_iglob)
-        expansion = globbing.glob_matches("*", outside, limit=10)
-        assert len(expansion.matches) == 11
-        assert repo.name not in expansion.matches
-
-        result = self.decision("rm -rf *", outside, tmp_path)
-        assert result is not None
-        output = result["hookSpecificOutput"]
-        assert output["permissionDecision"] == "deny"
-        assert output["permissionDecisionReason"] == (
-            "The glob '*' matches more than 10 files. "
-            "Run `ls *`, then narrow the pattern or run `rm -r <dir>` on a named directory."
-        )
-        assert "updatedInput" not in output
-
-    def test_too_broad_glob_denies(
-        self,
-        isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
-        no_scratch: None,
-        tmp_path: Path,
-    ) -> None:
-        self.load_with_trash(monkeypatch)
-
-        def fake_walked_paths(anchor: Path) -> Iterator[Path]:
-            return (Path(f"/synthetic/{index}.txt") for index in range(20_000))
-
-        monkeypatch.setattr("captain_hook.util.globbing.walked_paths", fake_walked_paths)
-        result = self.decision("rm **/*.zzz", tmp_path, tmp_path)
-        assert result is not None
-        output = result["hookSpecificOutput"]
-        assert output["permissionDecision"] == "deny"
-        assert output["permissionDecisionReason"] == (
-            "The glob '**/*.zzz' is too broad to verify before deleting. "
-            "Narrow the pattern or run `rm -r <dir>` on a specific directory."
-        )
         assert "updatedInput" not in output
 
     def test_cd_prefix_preserved(
@@ -936,7 +826,7 @@ class TestBlastRadius:
         assert output["permissionDecision"] == "deny"
         assert "contains git/jj repositories" in output["permissionDecisionReason"]
 
-    def test_non_rewritable_does_not_scan(
+    def test_repo_containing_directory_without_trash(
         self,
         isolate_modules: None,
         monkeypatch: pytest.MonkeyPatch,
@@ -944,16 +834,14 @@ class TestBlastRadius:
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general" / "hooks")
-        deletions = sys.modules["captain_hook._packs.general.deletions"]
-        monkeypatch.setattr(deletions, "trash_binary", lambda: None)
-        monkeypatch.setattr(deletions, "contains_repo", lambda _path: pytest.fail("scanned without trash"))
+        monkeypatch.setattr(sys.modules["captain_hook._packs.general.deletions"], "trash_binary", lambda: None)
         target = tmp_path / "contains-repo"
         (target / "proj" / ".git").mkdir(parents=True)
         result = TestRmTrashRewrite.decision(f"rm -rf {target}", Path("/"), tmp_path)
         assert result is not None
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
-        assert "repository" in output["permissionDecisionReason"]
+        assert "contains git/jj repositories" in output["permissionDecisionReason"]
 
     def test_file_rewrites_without_scan(
         self,
@@ -975,12 +863,12 @@ class TestBlastRadius:
 
 class TestNestedDescent:
     @pytest.mark.parametrize(
-        "command",
+        ("command", "reason"),
         [
-            "bash -c 'rm -rf /'",
-            "bash -lc 'rm -rf /'",
-            "sh -c 'rm {target}'",
-            "eval rm {target}",
+            ("bash -c 'rm -rf /'", "filesystem root"),
+            ("bash -lc 'rm -rf /'", "filesystem root"),
+            ("sh -c 'rm {target}'", "repository"),
+            ("eval rm {target}", "repository"),
         ],
     )
     def test_nested_rm_denies(
@@ -990,6 +878,7 @@ class TestNestedDescent:
         no_scratch: None,
         tmp_path: Path,
         command: str,
+        reason: str,
     ) -> None:
         TestRmTrashRewrite.load_with_trash(monkeypatch)
         target = tmp_path / "outside.txt"
@@ -998,7 +887,7 @@ class TestNestedDescent:
         assert result is not None
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
-        assert "repository" in output["permissionDecisionReason"]
+        assert reason in output["permissionDecisionReason"]
         assert "updatedInput" not in output
 
     def test_nested_scratch_rm_allows(
@@ -1076,7 +965,7 @@ class TestNestedDescent:
         assert result is not None
         output = result["hookSpecificOutput"]
         assert output["permissionDecision"] == "deny"
-        assert "repository" in output["permissionDecisionReason"]
+        assert "filesystem root" in output["permissionDecisionReason"]
 
     def test_top_level_rewrite_and_cd_unchanged(
         self,

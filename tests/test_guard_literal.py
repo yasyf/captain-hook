@@ -237,7 +237,6 @@ def test_fixtures_agree_across_renderings(fixture: dict[str, Any]) -> None:
 def test_guarded_alternation_is_exactly_the_guards_prefilter_set() -> None:
     assert set(guarded_names()) == {*session_guard.GUARDED_PROGRAMS, *session_guard.LAUNCHERS, "find"}
     assert session_guard.names_guarded is guard.names_guarded
-    assert session_guard.QUOTING_CHARS is guard.QUOTING_CHARS
 
 
 def test_regex_dialect_is_valid_in_both_engines() -> None:

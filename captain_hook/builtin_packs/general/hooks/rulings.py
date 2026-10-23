@@ -225,7 +225,7 @@ def nudge(found: list[tuple[Ruling, str]]) -> HookResult:
         action=Action.warn,
         approve=False,
         message=f"This change may contradict the standing decisions {ids}. Read each with `ccn show <id>` and fix "
-        f"the change, or add `ccx: {ACK}=<id>` to the commit message when it is deliberate.",
+        "the change where it does.",
         system_message="rules_nudge: " + "; ".join(f"{r.short} ({r.title}): {sentence}" for r, sentence in found),
     )
 
@@ -233,7 +233,7 @@ def nudge(found: list[tuple[Ruling, str]]) -> HookResult:
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash", "Skill")],
-    max_fires=None,
+    max_fires=1,
     tests={
         Input(command="ccx vcs ship -m 'release: read applied commit'", commands=BRANCH, llm=HIT): Warn(
             pattern="`ec2881e`"

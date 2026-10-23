@@ -31,6 +31,7 @@ def styleguide(
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
     max_shown: int = 5,
+    max_fires: int | None = None,
 ) -> None:
     """Register one change-scoped hook applying the given style rules to Python edits and writes.
 
@@ -48,6 +49,7 @@ def styleguide(
         skip_if: Extra conditions ORed onto the built-in test-file skip.
         events: Override the default ``PostToolUse`` targeting.
         max_shown: Maximum violations shown per rule.
+        max_fires: How many times the hook may fire per agent; ``None`` leaves it uncapped.
 
     Example:
         >>> styleguide(NoPrint, NoBareExcept)
@@ -69,6 +71,7 @@ def styleguide(
         events or Event.PostToolUse,
         only_if=(Tool("Edit|Write"), FilePath("*.py", project_only=False), *only_if),
         skip_if=(TestFile(), *skip_if),
+        max_fires=max_fires,
         tests={key: expected for inst in instances for key, expected in type(inst).tests.items()},
     )(handler)
 

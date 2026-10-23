@@ -28,63 +28,63 @@ itself is not a misroute either.
 
 {deliverable_rubric}
 
-Set block=true only when the prompt asks for a prose artifact and that prose is
+Set fire=true only when the prompt asks for a prose artifact and that prose is
 written by codex, astra, another gpt model, sonnet, haiku, or fable. An opus or
-unpinned subagent that writes the prose itself is routed correctly: block=false.
+unpinned subagent that writes the prose itself is routed correctly: fire=false.
 Recon, review, classification, and code work that references docs stay allowed:
-block=false. When uncertain, block=false — a wrong block stops legitimate work
-cold. Keep reasoning under 40 words.
+fire=false. When uncertain, fire=false — a wrong warning interrupts legitimate
+work. Keep reasoning under 40 words.
 
 <examples>
-<example block="true">
+<example fire="true">
 model: sonnet — Write the README quickstart for this repo.
 Sonnet writes the README prose; prose belongs on opus.
 </example>
-<example block="true">
+<example fire="true">
 model: haiku — Update CHANGELOG.md with an entry for the retry fix.
 Haiku writes the changelog prose; prose belongs on opus.
 </example>
-<example block="true">
+<example fire="true">
 model: fable — Polish the blog post announcing the new CLI.
 Fable is reserved for the most sensitive implementation, not writing; prose belongs on opus.
 </example>
-<example block="true">
+<example fire="true">
 subagent_type: codex:codex-wrapper — Rewrite the README.
 The codex agent hands the README to a gpt model; prose belongs on opus.
 </example>
-<example block="true">
+<example fire="true">
 model: opus — Orchestrate the incident-retro revision. Every sentence of prose is written by gpt-6-astra at xhigh via the codex skill and landed verbatim.
 The opus subagent routes the writing to astra; it should write the prose itself.
 </example>
-<example block="false">
+<example fire="false">
 agent_type: ship-pr, model: sonnet — Run exactly: ccx vcs ship -m "docs: ✨ write the retry guide" --pr-title "docs: ✨ write the retry guide" --pr-body-file /tmp/body.md
 The caller already wrote the title and body; sonnet only runs the ship command, a relay lane.
 </example>
-<example block="false">
+<example fire="false">
 model: sonnet — Open the PR with this title and body verbatim, writing the body to a file first. title: fix retry. body: (fenced markdown follows)
 The finished description is handed over; the subagent lands it verbatim and writes no prose.
 </example>
-<example block="true">
+<example fire="true">
 model: sonnet — Read the diff on this branch, draft the PR title and description, then open the PR.
 Sonnet composes the PR description itself; prose belongs on opus.
 </example>
-<example block="false">
+<example fire="false">
 model: opus — Draft the release notes for v2.
 Opus writes the prose itself.
 </example>
-<example block="false">
+<example fire="false">
 model: opus — Fix the import in cli.py, have the codex skill review the diff, then draft the CHANGELOG entry yourself.
 Codex only reviews; the opus subagent writes the changelog itself.
 </example>
-<example block="false">
+<example fire="false">
 model: sonnet — Fix the failing test in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it.
 CHANGELOG is a constraint, not the deliverable; this is code work.
 </example>
-<example block="false">
+<example fire="false">
 model: sonnet — Review the README draft for factual errors and list them.
 The subagent reports review findings; it does not write or revise the README.
 </example>
-<example block="false">
+<example fire="false">
 subagent_type: codex:codex-wrapper — Review the diff for correctness; return findings as file:line JSON.
 Code review returns findings data, not prose.
 </example>

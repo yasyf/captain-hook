@@ -15,7 +15,7 @@ nudge(
     "Return only a tight digest of final answers and decisions, and keep raw output in your own context.",
     only_if=[FromTeammate()],
     events=Event.SubagentStart,
-    max_fires=None,
+    max_fires=1,
     skip_planning_agents=False,
     tests={
         Input(
