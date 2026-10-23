@@ -58,6 +58,7 @@ def lint(
     events: Event | None = ...,
     tests: InlineTests | None = ...,
     max_shown: int = ...,
+    max_fires: int | None = ...,
 ) -> None: ...
 
 
@@ -73,6 +74,7 @@ def lint(
     events: Event | None = ...,
     tests: InlineTests | None = ...,
     max_shown: int = ...,
+    max_fires: int | None = ...,
 ) -> None: ...
 
 
@@ -87,6 +89,7 @@ def lint(
     events: Event | None = ...,
     tests: InlineTests | None = ...,
     max_shown: int = ...,
+    max_fires: int | None = ...,
 ) -> None: ...
 
 
@@ -102,6 +105,7 @@ def lint(
     events: Event | None = None,
     tests: InlineTests | None = None,
     max_shown: int = 5,
+    max_fires: int | None = None,
 ) -> None:
     """Register a lint check that runs on source-file edits and writes.
 
@@ -139,6 +143,7 @@ def lint(
             events or Event.PostToolUse,
             only_if=(Tool("Edit|Write"), FilePath(*SourceEdits(lang=lang).globs, project_only=False)),
             skip_if=DEFAULT_SKIP_IF,
+            max_fires=max_fires,
             tests=tests,
         )(pattern_handler)
         return
@@ -163,6 +168,7 @@ def lint(
         events or Event.PostToolUse,
         only_if=(Tool("Edit|Write"), FilePath(*SourceEdits(lang=lang).globs, project_only=False)),
         skip_if=DEFAULT_SKIP_IF,
+        max_fires=max_fires,
         tests=tests,
     )(handler)
 

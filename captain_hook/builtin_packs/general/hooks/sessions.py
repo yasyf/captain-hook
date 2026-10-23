@@ -6,10 +6,8 @@ from functools import partial
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
-from cc_transcript.command import PAYLOAD_DEPTH_LIMIT
-
 from captain_hook import Allow, Block
-from captain_hook.bindings import Ref, Resolved, segments
+from captain_hook.bindings import Resolved
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
     CLAUDE_PROMPT,
@@ -40,7 +38,6 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     describe,
     describe_target,
     double_quoted,
-    first_operand,
     guard,
     guarded,
     hidden_behind,
@@ -76,13 +73,12 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.guard_literal import QUOTING_CHARS
 from captain_hook.tickets import Proposal, Reach, Ticket
-from captain_hook.util.shell import SHELLS
 
 if TYPE_CHECKING:
     from cc_transcript.command import Word
 
     from captain_hook import HookResult, ToolRewriteEvent
-    from captain_hook.builtin_packs.general.hooks._sessions import Facts, Unparsed
+    from captain_hook.builtin_packs.general.hooks._sessions import Facts
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Arguments, Scalar
 
@@ -123,7 +119,6 @@ CRITERIA_FIX = (
     "run `kill <pid>` alone."
 )
 SHUTDOWNS = frozenset({"shutdown", "reboot", "halt", "poweroff"})
-FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 ORCA_GROUPS = frozenset(
     {
         "account",
@@ -211,7 +206,6 @@ APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
 PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
 TMUX_ENDINGS = frozenset({"kill-server", "kill-session", "kill-pane", "kill-window"})
-STDIN_SCRIPTS = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
 SERVE_RULING = inline_ruling("Owner: restart com.example.orca-serve once.")
 DESK_RULING = "Owner: end this drive's own desk-runner.py for a version restart."
 DESK_COMMANDS = {
@@ -1777,11 +1771,6 @@ def guarded_program_in(args: tuple[str, ...]) -> str | None:
     )
 
 
-def unquoted_expansion(word: Word) -> bool:
-    parts = segments(word.raw)
-    return parts is None or any(isinstance(part, Ref) and not part.quoted for part in parts)
-
-
 def launcher_verdict(call: Call) -> str | None:
     if call.name not in LAUNCHERS or (inner := guarded_program_in(call.args)) is None:
         return None
@@ -1819,183 +1808,3 @@ def launcher_verdict(call: Call) -> str | None:
 )
 def launcher_hides_target(evt: ToolRewriteEvent) -> HookResult | None:
     return block_first(evt, map(launcher_verdict, Scan.of(evt).literal_calls))
-
-
-def find_exec_verdict(call: Call) -> str | None:
-    if call.name != "find":
-        return None
-    if (
-        loose := next(
-            (word for word in call.command.words[1:] if word.value is None and unquoted_expansion(word)), None
-        )
-    ) is not None:
-        return (
-            f"BLOCKED: `{spell(call)}` expands `{clip(loose.raw, 40)}` unquoted inside a find expression, where it "
-            "can add an `-exec` the guard cannot see. Quote it or spell it literally."
-        )
-    start = next((index for index, arg in enumerate(call.args) if arg in FIND_EXEC), None)
-    if start is None or (inner := guarded_program_in(call.args[start + 1 :])) is None:
-        return None
-    return (
-        f"BLOCKED: `{spell(call)}` runs `{inner}` once per matched file through `find -exec`, on targets the guard "
-        f"cannot see. Run `{inner}` directly against literal pids you verified."
-    )
-
-
-@guard(
-    tests={
-        guarded(command="find /tmp -name '*.pid' -exec kill {} +"): Block(pattern="find -exec"),
-        guarded(command="find /tmp -name '*.pid' -exec KILL {} +"): Block(pattern="find -exec"),
-        guarded(command="find . -exec sh -c 'kill $1' _ {} \\;"): Block(),
-        guarded(command="find . -name '*kill*' -exec cat {} +"): Allow(),
-        guarded(command="find ./orca -name x -exec cat {} +"): Allow(),
-        guarded(command="read -r K <<< kill; find /tmp -exec \"$K\" 14575 ';'"): Allow(),
-        guarded(command="read N; find /tmp -maxdepth 1 -exec echo \"$N\" {} ';'; ls ~/.orca"): Allow(),
-        guarded(command="read N; find /tmp -maxdepth 1 -exec echo $N {} ';'; ls ~/.orca"): Block(
-            pattern="unquoted inside a find expression"
-        ),
-        guarded(
-            command='read N <<<"; -exec /bin/kill 14575 ; -exec echo"; find /tmp -maxdepth 1 -exec echo $N {} ";"'
-        ): Block(pattern="unquoted inside a find expression"),
-        guarded(command="read D; find $D -name x"): Block(pattern="unquoted inside a find expression"),
-        guarded(command="find . -name '*.pyc' -delete"): Allow(),
-    }
-)
-def find_exec_hides_target(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(find_exec_verdict, Scan.of(evt).literal_calls))
-
-
-def trap_verdict(call: Call) -> str | None:
-    if call.name != "trap" or (action := first_operand(call)) is None or action.value is not None:
-        return None
-    return (
-        f"BLOCKED: `{spell(call)}` installs a trap action built at run time, so the guard cannot see what runs when "
-        "it fires. Spell the action literally."
-    )
-
-
-@guard(
-    tests={
-        guarded(command='trap "$ACT" EXIT; kill -l'): Block(pattern="trap action built at run time"),
-        guarded(command="trap 'rm -f /tmp/lock' EXIT; kill -l"): Allow(),
-    }
-)
-def trap_hides_action(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(trap_verdict, Scan.of(evt).literal_calls))
-
-
-def source_verdict(call: Call) -> str | None:
-    if call.name not in {"source", ""} or call.command.words[0].value not in {"source", "."}:
-        return None
-    script = first_operand(call)
-    if script is not None and script.value is not None and script.value not in STDIN_SCRIPTS:
-        return None
-    return (
-        f"BLOCKED: `{spell(call)}` sources commands the guard cannot see from stdin, a process substitution, or a "
-        "file named at run time. Run the commands directly."
-    )
-
-
-@guard(
-    tests={
-        guarded(command="source <(echo pkill -x sleep)"): Block(pattern="sources commands the guard cannot see"),
-        guarded(command="echo kill 14575 | . /dev/stdin"): Block(pattern="sources commands"),
-        guarded(command="source ./env.sh; kill -l"): Allow(),
-    }
-)
-def source_hides_commands(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(source_verdict, Scan.of(evt).literal_calls))
-
-
-def too_deep(spelling: str) -> str:
-    return (
-        f"BLOCKED: `{spelling}` nests shells deeper than the guard can expand, so the innermost command is unchecked. "
-        "Flatten the nesting into one shell."
-    )
-
-
-def eval_verdict(call: Call, spelling: str) -> str | None:
-    return too_deep(spelling) if call.command.words[1:] and call.occurrence.nesting == PAYLOAD_DEPTH_LIMIT else None
-
-
-def short_flag(value: str | None, letter: str) -> bool:
-    return value is not None and value.startswith("-") and not value.startswith("--") and letter in value[1:]
-
-
-def shell_verdict(call: Call) -> str | None:
-    if call.name not in SHELLS and call.name != "eval":
-        return None
-    spelling = spell(call)
-    if call.name == "eval":
-        return eval_verdict(call, spelling)
-    words = call.command.words[1:]
-    flagged = next((index for index, word in enumerate(words) if short_flag(word.value, "c")), None)
-    if flagged is None:
-        script = first_operand(call)
-        if script is not None and script.value is not None and not any(short_flag(word.value, "s") for word in words):
-            return None
-        return (
-            f"BLOCKED: `{spelling}` runs a shell on commands the guard cannot see from stdin, a heredoc, a "
-            "here-string, or a script named at run time. Run the commands directly."
-        )
-    payload = next(
-        (word for word in words[flagged + 1 :] if word.value is None or not word.value.startswith("-")), None
-    )
-    if payload is None or payload.value is None:
-        return None
-    return too_deep(spelling) if call.occurrence.nesting == PAYLOAD_DEPTH_LIMIT else None
-
-
-@guard(
-    tests={
-        guarded(command='bash -c "$CMD"; kill -l'): Allow(),
-        guarded(command='eval "$CMD"; kill -l'): Allow(),
-        guarded(command=nested(4, "pkill -x sleep")): Block(pattern="nests shells deeper"),
-        guarded(command=nested(3, "eval 'pkill -f claude'")): Block(pattern="nests shells deeper"),
-        guarded(command=nested(4, "kill -9 14575", wrapper="eval")): Block(pattern="nests shells deeper"),
-        guarded(command="echo pkill -x sleep | sh"): Block(pattern="commands the guard cannot see"),
-        guarded(command="bash <<< 'pkill -x sleep'"): Block(pattern="commands the guard cannot see"),
-        guarded(command="sh <<'EOF'\npkill -x sleep\nEOF"): Block(pattern="commands the guard cannot see"),
-        guarded(command="printf 'kill 14575' | zsh"): Block(),
-        guarded(command="bash -s <<< 'kill 14575'"): Block(),
-        guarded(command='bash "$SCRIPT"; kill -l'): Block(pattern="commands the guard cannot see"),
-        guarded(command="bash ./run-tests.sh; kill -l"): Allow(),
-        guarded(command=nested(3, "pkill -x sleep")): Allow(),
-    }
-)
-def shell_hides_commands(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(shell_verdict, Scan.of(evt).literal_calls))
-
-
-def unparsed_message(unparsed: Unparsed) -> str:
-    return (
-        f"BLOCKED: {unparsed.source} names `{unparsed.program}` but is not shell the guard can parse, so it cannot "
-        "verify what runs. Rewrite it as plain shell commands."
-    )
-
-
-@guard(
-    tests={
-        guarded(tool="mcp__x__exec", tool_input={"command": "(" * 2000 + "kill 1" + ")" * 2000}): Block(
-            pattern="not shell the guard can parse"
-        ),
-        guarded(command="# kill 14575 later"): Block(pattern="this `Bash` payload names `kill`"),
-        guarded(tool="mcp__jupyter__run", tool_input={"code": "import os\nos.kill(4242, 0)"}): Block(
-            pattern="this `mcp__jupyter__run` payload names `kill`"
-        ),
-        guarded(tool="mcp__jupyter__run", tool_input={"code": "print('watch this ('"}): Allow(),
-        guarded(
-            tool="Workflow",
-            tool_input={
-                "script": (
-                    "const results = await parallel(files.map((f) => () => agent({prompt: `find bugs in ${f}`})));\n"
-                    "if (results.ok) { return results; }"
-                )
-            },
-        ): Allow(),
-        guarded(tool="Skill", tool_input={"skill": "code-review", "args": "don't kill the dev server"}): Allow(),
-        guarded(command="git status"): Allow(),
-    }
-)
-def unparsed_payload(evt: ToolRewriteEvent) -> HookResult | None:
-    return block_first(evt, map(unparsed_message, Scan.of(evt).unparsed))

@@ -16,7 +16,6 @@ from captain_hook import (
     Option,
     Or,
     PathMatches,
-    PathsMatch,
     RanCommand,
     Rewrite,
     Rewritten,
@@ -30,7 +29,6 @@ from captain_hook import (
     rewrite_command_occurrences,
 )
 from captain_hook.cmd import COMMAND_VALUE_FLAGS
-from captain_hook.command_schemas import FIND
 
 if TYPE_CHECKING:
     from captain_hook import Arguments, Occurrence, PreToolUseEvent, WalkContext
@@ -49,12 +47,7 @@ FIND_TO_RG = CommandSchema(
     options_end_operands=True,
 )
 UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktrees"))
-BROAD_FIND_ROOT = PathMatches(
-    ("/", "~", "/Users", "/Users/*", "/home", "/home/*", "/System/Volumes/Data", "**/.claude/worktrees"),
-    unresolved=True,
-)
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
-FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 ATTEMPT_TOOLS = "Bash|Edit|Write"
 
 GIT_STASH = CommandSchema(
@@ -273,11 +266,11 @@ hook(
         "`jj op restore` and `jj undo` rewrite the whole repo to an earlier operation and can clobber "
         "everything since. Run `jj op log` to find the operation, then `jj --at-op=<op> <read command>` to inspect it."
     ),
-    block=True,
+    max_fires=1,
     tests={
-        Input(command="jj op restore abc123"): Block(),
-        Input(command="jj operation restore abc123"): Block(),
-        Input(command="jj undo"): Block(),
+        Input(command="jj op restore abc123"): Warn(),
+        Input(command="jj operation restore abc123"): Warn(),
+        Input(command="jj undo"): Warn(),
         Input(command="jj op log"): Allow(),
         Input(command="jj op show"): Allow(),
         Input(command="jj --at-op=abc123 log"): Allow(),
@@ -397,10 +390,6 @@ def rg_equivalent(call: Call) -> str | None:
             return None
 
 
-def execs_per_hit(arguments: Arguments) -> bool:
-    return "command" in arguments.values or not FIND_EXEC_FLAGS.isdisjoint(arguments.call.args)
-
-
 def rg_for_unbounded_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> Rewritten | None:
     command = occ.command.unwrapped
     if command.executable != "find" or not ctx.spliceable or command.env or command.redirects:
@@ -416,40 +405,6 @@ def rg_for_unbounded_find(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContex
         else None
     )
 
-
-hook(
-    Event.PreToolUse,
-    only_if=[
-        Tool("Bash"),
-        CommandMatches(FIND, only_if=(PathsMatch("roots", BROAD_FIND_ROOT), execs_per_hit)),
-    ],
-    message=(
-        "`find -exec` from /, a home directory, or the worktree pool forks one process per hit across every "
-        "dependency tree. Run `fd -H -i '<pattern>' <root> -x <cmd>` instead."
-    ),
-    block=True,
-    tests={
-        Input(command=r"find / -name '*.pyc' -exec rm {} \;"): Block(),
-        Input(command="find ~ -type f -exec grep -l foo {} +"): Block(),
-        Input(command="find /Users/yasyf -iname '*.log' -exec rm {} +"): Block(),
-        Input(command="find ~ -type f -execdir ls {} +"): Block(),
-        Input(command="find ~/.claude/worktrees -name '*.lock' -exec rm {} +"): Block(),
-        Input(command="find $HOME -name '*.lock' -exec rm {} +"): Block(),
-        Input(command="D=$(mktemp -d); find $D -name '*.json' -exec cat {} +"): Block(),
-        Input(command="cd / && find . -name '*.pyc' -exec rm {} +"): Block(),
-        Input(command="find / -newermt 2020-01-01 -exec echo {} +"): Block(),
-        Input(command="find . -name '*.pyc' -exec rm {} +", cwd="/Users/alice"): Block(),
-        Input(command='D=$(printf /); cd "$D" && find . -exec echo {} +'): Block(),
-        Input(command="find . -name '*.pyc' -exec rm {} +"): Block(),
-        Input(command=r"find . -name '*gil*.json' -exec cat {} \;", cwd="/tmp/reco-box-size"): Allow(),
-        Input(command=r"cd /tmp && find . -name '*gil*.json' -exec cat {} \;"): Allow(),
-        Input(command=r"find . -name '*.pyc' -exec rm {} \;", cwd="/repo"): Allow(),
-        Input(command="R=~/.claude/worktrees/monorepo/x; find $R -name targets.yaml -exec cat {} +"): Allow(),
-        Input(command="find . -name '*.pyc'"): Allow(),
-        Input(command="echo find . -exec rm {} +"): Allow(),
-        Input(command="git status"): Allow(),
-    },
-)
 
 rewrite_command_occurrences(
     visit=rg_for_unbounded_find,

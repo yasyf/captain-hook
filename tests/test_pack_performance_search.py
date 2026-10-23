@@ -40,7 +40,10 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
     result = dispatch(Event.PreToolUse, evt_for(command, cwd=str(cwd)), session_dir=session_dir / "session")
-    return None if result is None else result["hookSpecificOutput"]["permissionDecision"]
+    if result is None:
+        return None
+    output = result["hookSpecificOutput"]
+    return output.get("permissionDecision") if "additionalContext" not in output else "warn"
 
 
 @pytest.mark.parametrize(
@@ -84,8 +87,8 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
         pytest.param("grep -rn --bogus-flag needle internal/focused", id="unknown-option-after-recursion"),
     ],
 )
-def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Path, command: str) -> None:
-    assert decision(command, repo, tmp_path) == "deny"
+def test_warns_on_search_at_repo_root(performance: None, repo: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command, repo, tmp_path) == "warn"
 
 
 @pytest.mark.parametrize(
@@ -137,8 +140,8 @@ def test_allows_bounded_search_at_repo_root(
         pytest.param('rg needle "$HOME"', id="home-variable"),
     ],
 )
-def test_blocks_search_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
-    assert decision(command, tmp_path.resolve(), tmp_path) == "deny"
+def test_warns_on_search_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command, tmp_path.resolve(), tmp_path) == "warn"
 
 
 @pytest.mark.parametrize(
@@ -155,7 +158,7 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
 
 
 def test_match_supplies_the_ugrep_pattern(performance: None, repo: Path, tmp_path: Path) -> None:
-    assert decision("ugrep -r --match /", repo / "internal" / "focused", tmp_path) == "deny"
+    assert decision("ugrep -r --match /", repo / "internal" / "focused", tmp_path) == "warn"
     assert decision("ugrep -r --match .", repo / "internal" / "focused", tmp_path) is None
 
 
@@ -169,13 +172,13 @@ def test_classifies_roots_without_walking(
     monkeypatch.setattr("captain_hook.cmd.contains_repo", walk)
     monkeypatch.setattr("captain_hook.cmd.glob_matches", walk)
     monkeypatch.setattr("captain_hook.util.vcs.scanned_names", walk)
-    assert decision("rg needle .", repo, tmp_path) == "deny"
-    assert decision("grep -rn needle *", repo, tmp_path) == "deny"
+    assert decision("rg needle .", repo, tmp_path / "dot") == "warn"
+    assert decision("grep -rn needle *", repo, tmp_path / "star") == "warn"
     assert decision("rg needle internal/*", repo, tmp_path) is None
     assert decision("rg needle internal/focused", repo, tmp_path) is None
 
 
-def test_search_block_names_its_bounds(performance: None, repo: Path, tmp_path: Path) -> None:
+def test_search_warning_names_its_bounds(performance: None, repo: Path, tmp_path: Path) -> None:
     result = dispatch(Event.PreToolUse, evt_for("rg needle .", cwd=str(repo)), session_dir=tmp_path / "session")
     assert result is not None
-    assert "`-g '*.py'`" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "`-g '*.py'`" in result["hookSpecificOutput"]["additionalContext"]

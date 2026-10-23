@@ -26,7 +26,7 @@ from captain_hook.bindings import Resolved, Unknown, Unresolved, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
 from captain_hook.conditions import UserSaid
-from captain_hook.guard_literal import QUOTING_CHARS, names_guarded
+from captain_hook.guard_literal import names_guarded
 from captain_hook.tickets import (
     Allow,
     Context,
@@ -97,7 +97,6 @@ LAUNCHERS = (
     "su",
     "chroot",
 )
-GUARDED_PROGRAM = re.compile(rf"\b({'|'.join(GUARDED_PROGRAMS)})\b", re.IGNORECASE)
 QUOTED_WORD = re.compile(r'"(?:[^"\\]|\\.)*"')
 ARG_TOKEN_BREAK = re.compile(r"[\s;|&()<>=`]+")
 TEST_BUILTINS = frozenset({"[", "[["})
@@ -891,15 +890,6 @@ def expands_name(head: Word) -> bool:
     )
 
 
-def guarded_program_token(token: str) -> str | None:
-    name = QUOTING_CHARS.sub("", PurePath(token).name if "/" in token else token)
-    return None if (match := GUARDED_PROGRAM.search(name)) is None else match.group(1)
-
-
-def names_guarded_program(text: str) -> str | None:
-    return next((name for token in ARG_TOKEN_BREAK.split(text) if (name := guarded_program_token(token))), None)
-
-
 def emitted_piece(piece: str) -> str:
     return piece if UNQUOTABLE.search(piece) is None else shlex.quote(piece)
 
@@ -1013,12 +1003,6 @@ def names_a_guarded_program(evt: BaseHookEvent) -> bool:
     return any(names_guarded(text) for text in candidate_texts(evt))
 
 
-@dataclass(frozen=True, slots=True)
-class Unparsed:
-    source: str
-    program: str
-
-
 @dataclass(slots=True)
 class Scan:
     LOCK: ClassVar[threading.Lock] = threading.Lock()
@@ -1027,7 +1011,6 @@ class Scan:
     facts: Facts = field(default_factory=Facts)
     calls: list[Call] = field(default_factory=list)
     respelled: list[Call] = field(default_factory=list)
-    unparsed: list[Unparsed] = field(default_factory=list)
     guard: threading.Lock = field(default_factory=threading.Lock)
     scanned: bool = False
 
@@ -1060,8 +1043,6 @@ class Scan:
         line = safe_parse_command_line(text)
         bindings = dict.fromkeys(unread, Unknown(None))
         if not (calls := () if line is None else Cmd(line, raw=text, cwd=cwd, bindings=bindings).calls()):
-            if (named := names_guarded_program(text)) is not None:
-                self.unparsed.append(Unparsed(source, named))
             return
         for call in calls:
             if (resolved := variants(call)) is not None:

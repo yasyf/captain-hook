@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import importlib
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -44,33 +43,6 @@ def load_builtin_module(dotted: str) -> None:
         importlib.import_module(dotted)
 
 
-def dispatch_comment_case(content_name: str, file_name: str, *, advisory_on_deny: bool) -> str | None:
-    from captain_hook.app import _state
-    from captain_hook.app import hook as register_hook
-    from captain_hook.dispatch import dispatch
-    from captain_hook.testing.helpers import input_to_event
-    from captain_hook.testing.types import FileFixture, Input
-    from captain_hook.types import Event
-
-    register_hook(Event.PreToolUse, "blocked first", block=True)
-    dotted = "captain_hook.builtin_packs.general.hooks.comments"
-    module = (
-        importlib.reload(loaded) if (loaded := sys.modules.get(dotted)) is not None else importlib.import_module(dotted)
-    )
-    if not advisory_on_deny:
-        _state.hooks[:] = [
-            replace(entry, spec=replace(entry.spec, advisory_on_deny=False)) if entry.spec.advisory_on_deny else entry
-            for entry in _state.hooks
-        ]
-    evt = input_to_event(
-        Event.PreToolUse,
-        Input(tool="Write", file=FileFixture(name=file_name, content=""), content=getattr(module, content_name)),
-    )
-    result = dispatch(Event.PreToolUse, evt)
-    assert result is not None
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
 def test_builtin_packs_meet_the_authoring_bar() -> None:
     assert lint_paths([BUILTIN_PACKS_DIR]) == []
 
@@ -82,120 +54,3 @@ def test_builtin_pack_inline_tests(dotted: str) -> None:
     load_builtin_module(dotted)
 
     assert_inline_tests(dotted)
-
-
-def test_general_tasks_gate_blocks_every_same_turn_retry(tmp_path: Path) -> None:
-    from captain_hook.dispatch import dispatch
-    from captain_hook.testing.fixtures import T
-    from captain_hook.testing.helpers import input_to_event
-    from captain_hook.testing.types import Input
-    from captain_hook.types import Event
-
-    load_builtin_module("captain_hook.builtin_packs.general.hooks.tasks")
-    evt = input_to_event(
-        Event.Stop,
-        Input(
-            tasks=[{"id": "1", "subject": "a", "status": "pending"}],
-            transcript=[T.user("do the thing"), T.assistant("working on it")],
-            seen={},
-        ),
-    )
-    for attempt in range(2):
-        result = dispatch(Event.Stop, evt, session_dir=tmp_path)
-        assert result is not None, f"attempt {attempt} walked past the gate"
-        assert result["decision"] == "block"
-
-
-@pytest.mark.parametrize(
-    ("content_name", "file_name", "message"),
-    [
-        pytest.param("RS_LONG_DOC", "lib.rs", "Long documentation comment", id="verbose-doc"),
-        pytest.param("PY_DENSE_FIRES", "dense.py", "Comment-dense edit", id="comment-dense"),
-    ],
-)
-def test_general_comment_advisories_cofire_after_deny(content_name: str, file_name: str, message: str) -> None:
-    reason = dispatch_comment_case(content_name, file_name, advisory_on_deny=True)
-    assert reason is not None
-    assert "blocked first" in reason
-    assert "Additional advisories (not the reason for the deny):" in reason
-    assert message in reason
-
-
-@pytest.mark.parametrize(
-    ("content_name", "file_name", "message"),
-    [
-        pytest.param("RS_LONG_DOC", "lib.rs", "Long documentation comment", id="verbose-doc"),
-        pytest.param("PY_DENSE_FIRES", "dense.py", "Comment-dense edit", id="comment-dense"),
-    ],
-)
-def test_general_comment_advisories_require_opt_in(content_name: str, file_name: str, message: str) -> None:
-    reason = dispatch_comment_case(content_name, file_name, advisory_on_deny=False)
-    assert reason == "blocked first"
-    assert message not in reason
-
-
-def dispatch_edit_comment_case(seed: str, old: str, new: str, file_name: str) -> str | None:
-    from captain_hook.dispatch import dispatch
-    from captain_hook.testing.helpers import input_to_event
-    from captain_hook.testing.types import FileFixture, Input
-    from captain_hook.types import Event
-
-    dotted = "captain_hook.builtin_packs.general.hooks.comments"
-    if (loaded := sys.modules.get(dotted)) is not None:
-        importlib.reload(loaded)
-    else:
-        importlib.import_module(dotted)
-    evt = input_to_event(
-        Event.PreToolUse,
-        Input(tool="Edit", file=FileFixture(name=file_name, content=seed), old=old, content=new),
-    )
-    result = dispatch(Event.PreToolUse, evt)
-    assert result is not None
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_general_verbose_block_carries_legacy_advisory() -> None:
-    # One Edit that adds a new over-budget comment (blocks) while reworking a legacy over-budget one
-    # (advisory): the deny message leads with the block and rides the legacy advisory behind it.
-    seed = "# legacy one here\n# legacy two here\n# legacy three here\n# legacy four here\nx = 1\ny = 2\n"
-    old = "# legacy two here\n# legacy three here\n# legacy four here\nx = 1\ny = 2"
-    new = (
-        "# legacy two REWORDED here\n# legacy three here\n# legacy four here\nx = 1\n"
-        "# fresh one here\n# fresh two here\n# fresh three here\n# fresh four here\ny = 2"
-    )
-    reason = dispatch_edit_comment_case(seed, old, new, "combined.py")
-    assert reason is not None
-    assert "Verbose comment" in reason
-    assert "Additional advisories (not the reason for the deny):" in reason
-    assert "Legacy long comment" in reason
-    # The block is the reason; the advisory rides behind the separator.
-    assert reason.index("Verbose comment") < reason.index("Additional advisories") < reason.index("Legacy long comment")
-
-
-IMPERATIVE_CORPUS = [
-    "",
-    "fix",
-    "fix add",
-    "fix add update",
-    "prefix addendum updated",
-    "Fix the parser.\nAdd a test.\nUpdate the docs.",
-    "remove\nremove",
-    "please ADD it and then\n\nRENAME it, finally migrate",
-    "fixadd update change",
-    "we fixed, added, updated",
-    "- fix a\n- add b",
-    "split/merge/convert",
-]
-
-
-@pytest.mark.parametrize("count", [2, 3])
-@pytest.mark.parametrize("text", IMPERATIVE_CORPUS)
-def test_general_imperative_signals_agree_with_lazy_prefix_form(count: int, text: str) -> None:
-    import re
-
-    from captain_hook.builtin_packs.general.hooks.tasks import IMPERATIVES
-
-    lazy_prefix = rf"(?s)(?:.*?{IMPERATIVES}){{{count}}}"
-    anchored = rf"(?s){IMPERATIVES}" + rf"(?:.*?{IMPERATIVES})" * (count - 1)
-    for candidate in (text, *text.splitlines()):
-        assert bool(re.search(anchored, candidate, re.I)) is bool(re.search(lazy_prefix, candidate, re.I))

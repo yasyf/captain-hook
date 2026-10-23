@@ -65,7 +65,7 @@ block_command(
 )
 ```
 
-The next `git push --force` never executes: the agent sees `BLOCKED: Force-pushing rewrites shared history` plus the hint, and reaches for `--force-with-lease` instead. And when a pattern can't decide, walk the parse — this is the heart of the shipped `rm` guard:
+The next `git push --force` never executes: the agent sees `BLOCKED: Force-pushing rewrites shared history` plus the hint, and reaches for `--force-with-lease` instead. And when a pattern can't decide, walk the parse, the way the shipped `rm` guard does:
 
 ```python
 for call in evt.command.calls("rm"):

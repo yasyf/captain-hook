@@ -60,4 +60,4 @@ class CodexSession(CustomCondition):
 def preload_tools(evt: BaseHookEvent) -> HookResult | None:
     if not (tools := [name for name in PRELOADED if name not in evt.disallowed_tools]):
         return None
-    return evt.warn(str(Prompt.load("tools/preload_nudge", tools=",".join(tools), count=len(tools))))
+    return evt.context(str(Prompt.load("tools/preload_nudge", tools=",".join(tools), count=len(tools))))

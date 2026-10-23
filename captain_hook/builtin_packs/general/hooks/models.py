@@ -4,15 +4,11 @@ import re
 from dataclasses import dataclass
 
 from captain_hook import (
-    CONFIRMED,
-    UNCONFIRMED,
     Agent,
     Allow,
     And,
     BaseHookEvent,
-    Block,
     Clause,
-    Confirm,
     Event,
     FilePath,
     FromSubagent,
@@ -28,12 +24,8 @@ from captain_hook import (
     Tool,
     ToolInput,
     Warn,
-    WorkflowScript,
-    WorkflowScriptSource,
     hook,
-    llm_gate,
     llm_nudge,
-    nudge,
     set_tool_input,
 )
 from captain_hook.contexts import WORKFLOW_SCRIPT_CAP
@@ -41,7 +33,6 @@ from captain_hook.langs import LANG_GLOBS
 from captain_hook.signals.nlp import nlp_scan
 
 DELIVERABLE_NUDGE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="fire"))
-WORKFLOW_HEADER = str(Prompt.load("fragments/workflow_script_header"))
 REVIEW_ROUTING_PATTERN = (
     r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
     r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))"
@@ -173,20 +164,6 @@ class ProseSpawn(DelegatedSpawn):
         return f"{base}\n\nsentences the prose prefilter matched:\n{matched}"
 
 
-@dataclass(frozen=True, slots=True)
-class ProseWorkflowScript(WorkflowScriptSource):
-    """Gating context: the script source, present only when its prose asks survive the prefilter."""
-
-    def content(self, evt: BaseHookEvent) -> str | None:
-        if (parts := self.pins_and_source(evt)) is None:
-            return None
-        header, source = parts
-        if not (sentences := prose_deliverable_sentences(source)):
-            return None
-        matched = "\n".join(f"  {s[:300]}" for s in sentences)
-        return f"{header}\n\nsentences the prose prefilter matched:\n{matched}\n\n{source}"
-
-
 hook(
     Event.PreToolUse,
     only_if=[Tool("Agent|Task"), ToolInput("model", r"(?i)\bhaiku\b")],
@@ -201,16 +178,11 @@ hook(
         "Haiku runs only single-fact mechanical steps such as classifying, labeling, or counting one thing per item. "
         "Drop the `model` pin so the spawn runs opus, or pin `model='sonnet'` when the lane calls for sonnet."
     ),
-    block=True,
-    confirm=Confirm(rule="A haiku-pinned spawn whose task needs judgment beyond one mechanical fact per item."),
+    max_fires=1,
     tests={
-        Input(model="haiku", prompt="implement the retry backoff in the client", decide=CONFIRMED): Block(
-            pattern="Drop the `model` pin"
-        ),
-        Input(model="haiku", prompt="implement the retry backoff", decide=CONFIRMED): Block(
-            pattern="single-fact mechanical"
-        ),
-        Input(model="haiku", prompt="review the README for typos", decide=UNCONFIRMED): Allow(),
+        Input(model="haiku", prompt="implement the retry backoff in the client"): Warn(pattern="Drop the `model` pin"),
+        Input(model="haiku", prompt="implement the retry backoff"): Warn(pattern="single-fact mechanical"),
+        Input(model="haiku", prompt="review the README for typos"): Warn(),
         Input(model="haiku", prompt="classify each file's language"): Allow(),
         Input(model="haiku", prompt="Probe subagent capacity: spawn and return the word ok"): Allow(),
         Input(model="haiku", prompt="mechanical step: return the repo's default branch name"): Allow(),
@@ -220,11 +192,8 @@ hook(
     },
 )
 
-llm_gate(
-    Prompt.load(
-        "models/prose_spawn_gate",
-        deliverable_rubric=str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block")),
-    ),
+llm_nudge(
+    Prompt.load("models/prose_spawn_nudge", deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC),
     message=(
         "Prose deliverables are written by Claude Opus, never by codex, astra, sonnet, haiku, or fable. "
         "Re-spawn with `model='opus'` or no `model` pin, as a Claude agent that writes the prose itself."
@@ -241,23 +210,24 @@ llm_gate(
         ToolInput("prompt", r"(?i)\b(classif|label|tag|categoriz|count|extract|mechanical)"),
         Agent("Explore|claude-code-guide"),
     ],
+    max_fires=1,
     agent=False,
     transcript=False,
     max_context=16_000,
     tests={
-        Input(model="sonnet", prompt="Write the README quickstart for this repo"): Block(),
-        Input(model="haiku", prompt="update the CHANGELOG entry for the fix"): Block(),
-        Input(model="fable", prompt="write the README quickstart"): Block(),
+        Input(model="sonnet", prompt="Write the README quickstart for this repo"): Warn(),
+        Input(model="haiku", prompt="update the CHANGELOG entry for the fix"): Warn(),
+        Input(model="fable", prompt="write the README quickstart"): Warn(),
         Input(
             agent_type="codex:codex-wrapper",
             prompt="Rewrite the README quickstart in the technical-builder voice",
-        ): Block(),
+        ): Warn(),
         Input(
             model="opus",
             prompt="Orchestrate the incident-retro revision: rewrite the release notes and redraft "
             "the guide. Every sentence is written by gpt-6-astra at xhigh via the codex skill and "
             "landed verbatim; you orchestrate and never write the prose yourself.",
-        ): Block(),
+        ): Warn(),
         Input(model="opus", prompt="draft the release notes for v2"): Allow(),
         Input(model="claude-opus-5-5", prompt="Write the README quickstart for this repo"): Allow(),
         Input(prompt="write the README quickstart"): Allow(),
@@ -276,13 +246,13 @@ llm_gate(
             model="sonnet",
             prompt='Run exactly: ccx vcs ship -m "docs: write the retry guide" --pr-title "docs: write the '
             'retry guide" --pr-body-file /tmp/body.md',
-            llm={"block": False},
+            llm={"fire": False},
         ): Allow(),
         Input(
             model="opus",
             prompt="Fix the import in cli.py, have the codex skill review the diff, then draft the "
             "CHANGELOG entry yourself.",
-            llm={"block": False},
+            llm={"fire": False},
         ): Allow(),
         Input(model="sonnet", prompt="review the README for factual errors"): Allow(),
         Input(model="sonnet", prompt="update the retry backoff config"): Allow(),
@@ -497,217 +467,5 @@ llm_nudge(
             prompt="Escalation: the codex-wrapper review returned nothing — run the codex skill "
             "to re-review the diff for correctness"
         ): Warn(pattern="codex-wrapper"),
-    },
-)
-
-nudge(
-    "Haiku runs only single-fact mechanical `agent()` steps. "
-    "Drop the `model: 'haiku'` pin from judgment-bearing stages so they run opus.",
-    only_if=[Tool("Workflow"), WorkflowScript(model="haiku")],
-    events=Event.PreToolUse,
-    max_fires=2,
-    tests={
-        Input(script="steps:\n  - agent: reviewer\n    model: 'haiku'\n"): Warn(),
-        Input(script="steps:\n  - agent: reviewer\n    model: 'sonnet'\n"): Allow(),
-    },
-)
-
-llm_nudge(
-    Prompt.load(
-        "models/prose_workflow_nudge",
-        workflow_script_header=WORKFLOW_HEADER,
-        deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
-    ),
-    message=(
-        "Workflow prose stages are written by Claude Opus, never by codex, astra, sonnet, haiku, or fable. "
-        "Pin each prose stage `model: 'opus'` or leave it unpinned, with no `codex:codex-wrapper` agentType."
-    ),
-    contexts=[ProseWorkflowScript()],
-    events=Event.PreToolUse,
-    only_if=[Tool("Workflow")],
-    skip_if=[
-        And(
-            Not(WorkflowScript(model=r"(?i)sonnet|haiku|fable")),
-            Not(WorkflowScript(pattern=r"(?i)\b(codex|astra)\b")),
-        )
-    ],
-    max_fires=2,
-    max_context=16_000,
-    agent=False,
-    transcript=False,
-    tests={
-        Input(script="steps:\n  - agent: write the README intro\n    model: 'sonnet'\n"): Warn(pattern="opus"),
-        Input(script="steps:\n  - agent: write the README intro\n    model: 'fable'\n"): Warn(pattern="opus"),
-        Input(script="agent('Rewrite the README quickstart', {agentType: 'codex:codex-wrapper'})"): Warn(
-            pattern="opus"
-        ),
-        Input(script="steps:\n  - agent: write the README intro\n"): Allow(),
-        Input(script="agent('Rewrite the README quickstart', {model: 'opus'})"): Allow(),
-        Input(script="steps:\n  - agent: fix the retry backoff\n    model: 'sonnet'\n"): Allow(),
-        Input(script="agent('Audit docs/architecture.md for stale claims', {model: 'opus'})"): Allow(),
-        Input(script="agent('recon the module map', {model: 'sonnet'})\n// every prose stage runs on opus\n"): Allow(),
-        Input(
-            script="agent('Fix the import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})",
-        ): Allow(),
-        Input(
-            script="agent('Review the diff for correctness', {agentType: 'codex:codex-wrapper'})\n"
-            "agent('Write the CHANGELOG entry for the fix', {model: 'opus'})",
-            llm={"fire": False},
-        ): Allow(),
-    },
-)
-
-llm_nudge(
-    Prompt.load(
-        "models/review_routing_workflow_nudge",
-        workflow_script_header=WORKFLOW_HEADER,
-        deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
-    ),
-    label="review_routing_workflow",
-    message=(
-        "Workflow review, security-audit, and bug-diagnosis stages route to gpt-6.1-sol through codex. "
-        "Give each such stage `agentType: 'codex:codex-wrapper'` with the self-contained question as its prompt."
-    ),
-    contexts=[WorkflowScriptSource()],
-    events=Event.PreToolUse,
-    only_if=[
-        Tool("Workflow"),
-        WorkflowScript(pattern=REVIEW_ROUTING_PATTERN),
-    ],
-    max_fires=2,
-    max_context=16_000,
-    agent=False,
-    transcript=False,
-    tests={
-        Input(script="const findings = await agent(`Sweep the diff for correctness issues; return JSON`)"): Warn(
-            pattern="codex"
-        ),
-        Input(script="agent(`Adversarially refute: ${f.title}`, {model: 'fable', effort: 'max'})"): Warn(
-            pattern="gpt-6.1-sol"
-        ),
-        Input(
-            script="agent('Write a self-contained codex prompt reviewing this diff, "
-            "then run the codex skill', {model: 'sonnet', effort: 'low'})",
-        ): Warn(pattern="codex-wrapper"),
-        Input(
-            script="agent(`Review the diff hunks in src/ for correctness; return findings as JSON`, "
-            "{agentType: 'codex:codex-wrapper'})",
-            llm={"fire": False},
-        ): Allow(),
-        Input(script="agent('fix the failing import in cli.py')"): Allow(),
-        Input(
-            script="agent(`Synthesize the confirmed review findings and decide which to fix`)",
-            llm={"fire": False},
-        ): Allow(),
-        Input(
-            script="agent(`Synthesize the confirmed review findings and decide which to fix`, "
-            "{agentType: 'codex:codex-wrapper', effort: 'xhigh'})",
-            llm={"fire": False},
-        ): Allow(),
-        Input(
-            script="agent(`Synthesize the confirmed review findings and decide which to fix`, "
-            "{model: 'opus', effort: 'xhigh'})",
-            llm={"fire": False},
-        ): Allow(),
-        Input(script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"): Warn(
-            pattern="gpt-6.1-sol"
-        ),
-        Input(script="agent('Verify the CLI renders the last page correctly')"): Allow(),
-        Input(
-            script=(
-                "const solOrOpus = async (prompt, key) => {\n"
-                "  const r = await agent(prompt, { agentType: 'codex:codex-wrapper', "
-                "label: `${key}:sol`, phase: 'Review', schema: REVIEW })\n"
-                "  if (r) return { ...r, lane_model: 'sol' }\n"
-                "  log(`${key}: sol empty — opus fallback`)\n"
-                "  const f = await agent(prompt, { label: `${key}:opus`, phase: 'Review', schema: REVIEW })\n"
-                "  return f ? { ...f, lane_model: 'opus' } : null\n"
-                "}"
-            ),
-            llm={"fire": False},
-        ): Allow(),
-        Input(
-            script="export const meta = { description: 'refuter pass; sol lane unavailable — "
-            "opus escalation per models table' }\n"
-            "const f = await agent(`Adversarially refute: ${finding.title}`)",
-            llm={"fire": False},
-        ): Allow(),
-        Input(
-            script="const findings = await agent(`Review the diff in src/ for correctness; "
-            "findings as JSON`, {model: 'fable'})"
-        ): Warn(pattern="codex"),
-        Input(
-            script="if (hasRelevantDiff) { const findings = await agent(`Review the diff for "
-            "correctness; findings as JSON`, {model: 'fable'}) }"
-        ): Warn(pattern="codex"),
-        Input(
-            script="const r = await agent(q, { agentType: 'codex:codex-wrapper' })\n"
-            "if (!r) await agent('run the codex skill to review the diff', { model: 'sonnet' })"
-        ): Warn(pattern="codex-wrapper"),
-    },
-)
-
-llm_nudge(
-    Prompt.load("models/writing_docs_spawn_nudge"),
-    message=(
-        "Delegated prose points at the `writing-docs` skill instead of paraphrasing its rules. "
-        "Rewrite the prompt to tell the agent to read the `writing-docs` skill and its references before it writes."
-    ),
-    contexts=[ProseSpawn()],
-    events=Event.PreToolUse,
-    only_if=[Tool("Agent|Task")],
-    skip_if=[
-        ToolInput("prompt", r"(?i)writing-docs"),
-        Agent("Explore|claude-code-guide"),
-    ],
-    max_context=16_000,
-    agent=False,
-    transcript=False,
-    tests={
-        Input(
-            prompt="Rewrite the README of /repo. You are fable; technical-builder voice, no hype "
-            "adjectives. Verify commands against the binary."
-        ): Warn(pattern="writing-docs"),
-        Input(
-            prompt="Rewrite the README of /repo; technical-builder voice, no hype adjectives. Read "
-            "the writing-docs skill at ~/.claude/plugins/cache/skills/writing-docs first."
-        ): Allow(),
-        Input(prompt="Fix the race in daemon.go; update the failing test"): Allow(),
-        Input(
-            prompt="Rewrite the README, but read the doc-writing skill and its references first",
-            llm={"fire": False},
-        ): Allow(),
-    },
-)
-
-llm_nudge(
-    Prompt.load("models/writing_docs_workflow_nudge", workflow_script_header=WORKFLOW_HEADER),
-    message=(
-        "Workflow prose stages point at the `writing-docs` skill instead of paraphrasing its rules. "
-        "Rewrite the `agent()` prompt to tell its subagent to read the `writing-docs` skill and its references."
-    ),
-    contexts=[ProseWorkflowScript()],
-    events=Event.PreToolUse,
-    only_if=[Tool("Workflow")],
-    skip_if=[WorkflowScript(pattern=r"(?i)writing-docs")],
-    max_fires=2,
-    max_context=16_000,
-    agent=False,
-    transcript=False,
-    tests={
-        Input(
-            script="agent('Rewrite the README. You are fable; technical-builder voice, no hype "
-            "adjectives', {model: 'opus'})"
-        ): Warn(pattern="writing-docs"),
-        Input(
-            script="agent('Rewrite the README per the writing-docs skill at "
-            "~/.claude/plugins/cache/skills/writing-docs', {model: 'opus'})"
-        ): Allow(),
-        Input(script="agent('Fix the race in daemon.go; update the failing test')"): Allow(),
-        Input(
-            script="agent('Rewrite the README, but read the doc-writing skill and its references "
-            "first', {model: 'opus'})",
-            llm={"fire": False},
-        ): Allow(),
     },
 )

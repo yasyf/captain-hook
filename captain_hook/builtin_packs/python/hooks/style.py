@@ -140,4 +140,5 @@ styleguide(
     LateClassConstants,
     NoQuotedAnnotations,
     NoWeakeningToAny,
+    max_fires=1,
 )

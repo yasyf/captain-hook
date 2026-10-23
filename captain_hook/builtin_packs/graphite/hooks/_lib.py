@@ -17,45 +17,6 @@ if TYPE_CHECKING:
 
 FIXTURE_GITDIR = Path(__file__).parents[1] / "gitdir"
 
-JJ_READS = frozenset(
-    {
-        ("log",),
-        ("status",),
-        ("st",),
-        ("show",),
-        ("diff",),
-        ("evolog",),
-        ("interdiff",),
-        ("files",),
-        ("root",),
-        ("version",),
-        ("help",),
-        ("bookmark", "list"),
-        ("tag", "list"),
-        ("op", "log"),
-        ("op", "show"),
-        ("op", "diff"),
-        ("operation", "log"),
-        ("operation", "show"),
-        ("operation", "diff"),
-        ("file", "show"),
-        ("file", "list"),
-        ("config", "list"),
-        ("config", "get"),
-        ("config", "path"),
-        ("workspace", "list"),
-        ("workspace", "root"),
-        ("sparse", "list"),
-    }
-)
-
-
-def jj_read(call: Call) -> bool:
-    verbs = tuple(target.value for target in call.targets)
-    return not {"-h", "--help", "-V", "--version"}.isdisjoint(call.flags) or any(
-        verbs[: len(read)] == read for read in JJ_READS
-    )
-
 
 def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
     cwd, git_dir = call.cwd or session_cwd, None
@@ -114,18 +75,6 @@ class GraphiteRuns(CustomCommandLineCondition):
             any(call.verb_argv[: len(argv)] == argv for argv in self.argvs) and graphite_owns(call, evt.cwd)
             for call in evt.cmd.calls()
         )
-
-
-class JJReads(CustomCommandLineCondition):
-    """Matches when every ``jj`` call on the line is a read.
-
-    Every call, not any: ``skip_if`` is an any() over its conditions, so a per-call match
-    would let ``jj log && jj new`` skip the block the mutation earns. A verb outside the
-    read set — a new one included — leaves the line blocked.
-    """
-
-    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
-        return bool(jj := evt.cmd.calls("jj")) and all(jj_read(call) for call in jj)
 
 
 @dataclass(frozen=True, slots=True)

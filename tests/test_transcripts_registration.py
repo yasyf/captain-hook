@@ -942,15 +942,9 @@ def test_each_hook_reads_only_the_tail_it_declares(tmp_path, monkeypatch):
 
 FIRST_SESSION = "s-first-prompt"
 FIRST_PROMPT = "1. add foo\n2. fix bar\n3. update baz"
-TASKS_NUDGE = "general.tasks:nudge_7ef627f7"
-TASKS_WARNING = {
-    "hookSpecificOutput": {
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": (
-            "This message has several distinct requests. Run `TaskCreate` for each before starting work."
-        ),
-    }
-}
+TASKS_MESSAGE = "This message has several distinct requests. Run `TaskCreate` for each before starting work."
+TASKS_SIGNALS = Signals([Signal(pattern=r"(^|\n)\s*[0-9]+[.)]\s", weight=2)], threshold=2, window=0, origin="any")
+TASKS_WARNING = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": TASKS_MESSAGE}}
 OPTION_DUMP = "Option 1 — refactor now\nOption 2 — defer it\nlet me know which you'd prefer"
 QUEUED_WORDS = "ship it once the build is green"
 UNBORN_REASON = "missing: No such file or directory (os error 2)"
@@ -1088,14 +1082,16 @@ def model_calls(monkeypatch) -> list[str]:
 
 
 @pytest.fixture
-def first_prompt_hooks(isolate_modules, model_calls) -> None:
+def first_prompt_hooks(isolate_modules, model_calls) -> str:
     import captain_hook
-    from captain_hook import FromSubagent, llm_nudge
+    from captain_hook import FromSubagent, llm_nudge, nudge
     from captain_hook.app import _state
     from captain_hook.loader import discover_pack
 
     discover_pack("general", Path(captain_hook.__file__).parent / "builtin_packs" / "general" / "hooks")
-    _state.hooks[:] = [hook for hook in _state.hooks if hook.name in {TASKS_NUDGE, "record_queued_words"}]
+    _state.hooks[:] = [hook for hook in _state.hooks if hook.name == "record_queued_words"]
+    nudge(TASKS_MESSAGE, events=Event.UserPromptSubmit, signals=TASKS_SIGNALS)
+    tasks_nudge = _state.hooks[-1].name
     llm_nudge(
         "Decide whether the deliverable wanted a surface.",
         message="This deliverable wanted a surface, not a wall of text.",
@@ -1104,6 +1100,7 @@ def first_prompt_hooks(isolate_modules, model_calls) -> None:
         max_fires=2,
         signals=SHOW_SIGNALS,
     )
+    return tasks_nudge
 
 
 @pytest.fixture
@@ -1118,14 +1115,14 @@ def probe() -> list[int]:
 
 
 @pytest.mark.parametrize(
-    ("prompt", "envelope", "fired"),
+    ("prompt", "envelope", "fires"),
     [
-        pytest.param(FIRST_PROMPT, TASKS_WARNING, (0, 0, ECHO_WINDOW, 0, [TASKS_NUDGE], True), id="matching"),
-        pytest.param("just fix the typo", None, None, id="nonmatching"),
+        pytest.param(FIRST_PROMPT, TASKS_WARNING, True, id="matching"),
+        pytest.param("just fix the typo", None, False, id="nonmatching"),
     ],
 )
 def test_first_prompt_reads_unborn_root_transcript_as_empty_history(
-    tmp_path, first_prompt_hooks, model_calls, snapshot_owner, prompt, envelope, fired
+    tmp_path, first_prompt_hooks, model_calls, snapshot_owner, prompt, envelope, fires
 ):
     from captain_hook.state import PrimitiveState
 
@@ -1145,7 +1142,7 @@ def test_first_prompt_reads_unborn_root_transcript_as_empty_history(
             sorted(state.consumed),
             bool(state.echo_lemmas),
         )
-    ) == fired
+    ) == ((0, 0, ECHO_WINDOW, 0, [first_prompt_hooks], True) if fires else None)
     assert not first_root(tmp_path).exists()
     assert unborn_allowance() == UnbornTranscript()
     assert model_calls == []
@@ -1456,65 +1453,3 @@ def test_a_failed_allowance_write_fails_the_startup(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="No space left on device"):
         start_session(tmp_path, "startup")
     assert unborn_allowance() is None
-
-
-STEERING_GATE = "steering.steering:llm_gate_ff3aaa43"
-
-
-@pytest.fixture
-def steering_gate(isolate_modules, model_calls) -> None:
-    import captain_hook
-    from captain_hook.app import _state
-    from captain_hook.loader import discover_pack
-
-    discover_pack("steering", Path(captain_hook.__file__).parent / "builtin_packs" / "steering" / "hooks")
-    _state.hooks[:] = [hook for hook in _state.hooks if hook.name == STEERING_GATE]
-
-
-@pytest.mark.parametrize(
-    ("event", "fields", "skipped"),
-    [
-        pytest.param(Event.SubagentStop, {"agent_type": ""}, True, id="subagent-stop-explicit-empty"),
-        pytest.param(Event.SubagentStop, {}, False, id="subagent-stop-absent"),
-        pytest.param(Event.SubagentStop, {"agent_type": "general-purpose"}, False, id="subagent-stop-typed"),
-        pytest.param(Event.Stop, {"agent_type": ""}, False, id="stop-explicit-empty"),
-        pytest.param(
-            Event.PostToolUse,
-            {"agent_type": "", "tool_name": "Bash", "tool_input": {"command": "ls"}},
-            False,
-            id="post-tool-use-explicit-empty",
-        ),
-    ],
-)
-def test_steering_gate_skips_an_untyped_subagent_stop_before_any_transcript_read(
-    tmp_path, steering_gate, model_calls, snapshot_owner, event, fields, skipped
-):
-    from captain_hook.app import _state
-    from captain_hook.transcripts import load_transcript
-    from captain_hook.types import InPlanMode, Waiting
-
-    loads: list[str] = []
-
-    def load(path):
-        loads.append(str(path))
-        return load_transcript(path)
-
-    lane = tmp_path / "projects" / FIRST_SESSION / "subagents" / "agent-lane.jsonl"
-    stop = {"agent_id": "agent-lane", "agent_transcript_path": str(lane)} if event is Event.SubagentStop else {}
-    source = lane if event is Event.SubagentStop else first_root(tmp_path)
-    with first_request(tmp_path) as request:
-        envelope, _ = dispatch_event(
-            tmp_path,
-            event,
-            first_raw(tmp_path, event, **stop, **fields),
-            session_dir=first_session_dir(),
-            transcript_loader=load,
-        )
-
-    (gate,) = _state.hooks
-    assert (gate.name, gate.spec.skip_if) == (STEERING_GATE, (Waiting(), InPlanMode()))
-    assert [type(condition.condition).__name__ for condition in gate.spec.only_if] == ["UntypedSubagentStop"]
-    assert (envelope, model_calls) == (None, [])
-    assert (loads, request.evidence_gaps) == (
-        ([], []) if skipped else ([str(source)], [f"{STEERING_GATE}: {UNBORN_REASON}"])
-    )

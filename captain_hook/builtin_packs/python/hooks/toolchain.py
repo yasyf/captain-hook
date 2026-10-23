@@ -13,7 +13,7 @@ nudge(
         isinstance(evt, PostToolUseFailureEvent)
         and bool(re.search(r"ModuleNotFoundError|ImportError: (?:cannot import|No module named)", evt.error))
     ),
-    max_fires=2,
+    max_fires=1,
     tests={
         Input(command="uv run pytest", error="ModuleNotFoundError: No module named 'yaml'"): Warn(),
         Input(command="uv run pytest", error="AssertionError: 1 != 2"): Allow(),

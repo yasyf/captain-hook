@@ -88,7 +88,7 @@ def detour_state(evt: BaseHookEvent, asked: str) -> dict[str, str]:
 @on(
     Event.PostToolUse,
     only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit|Bash")],
-    max_fires=3,
+    max_fires=1,
     tests={
         Input(
             decide=DETOUR,

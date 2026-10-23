@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
-    Block,
     EditedSource,
     Event,
     FilePath,
@@ -13,7 +12,7 @@ from captain_hook import (
     TouchedFile,
     UsedSkill,
     Warn,
-    llm_gate,
+    llm_nudge,
     nudge,
 )
 from captain_hook.builtin_packs.general.hooks._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
@@ -43,15 +42,15 @@ nudge(
 )
 
 
-llm_gate(
+llm_nudge(
     "You are checking documentation freshness before the agent stops. The compact diff of "
     "the uncommitted changes is in <diff>. Judge only the change shown in <diff>; the "
     "transcript is context for intent, and files outside the repository working tree are "
     "never in scope. Decide whether the session changed anything "
     "user-facing — a new flag or option, a renamed command, changed output or behavior, a "
-    "new feature — that README.md or the pages under docs/ don't reflect. Set block=true "
-    "ONLY for a concrete gap, naming the file and section in `reasoning`. Otherwise block=false. "
-    "Do not block on internal refactors, test or tooling changes, or speculative staleness.",
+    "new feature — that README.md or the pages under docs/ don't reflect. Set fire=true "
+    "ONLY for a concrete gap, naming the file and section in `reasoning`. Otherwise fire=false. "
+    "Do not fire on internal refactors, test or tooling changes, or speculative staleness.",
     message="A user-facing change is missing from README.md or docs/. Run `/writing-docs` and update the page.",
     diff=True,
     only_if=[EditedSource()],
@@ -63,7 +62,7 @@ llm_gate(
     events=Event.Stop,
     max_fires=1,
     tests={
-        Input(transcript=[T.assistant(T.tool("Edit", file_path="src/app.py", old_string="a", new_string="b"))]): Block(
+        Input(transcript=[T.assistant(T.tool("Edit", file_path="src/app.py", old_string="a", new_string="b"))]): Warn(
             pattern="writing-docs"
         ),
         Input(

@@ -66,6 +66,7 @@ def single_use_constants(content: str) -> list[str]:
 lint(
     single_use_constants,
     message="A module constant used once belongs inline at its call site. Inline {violations}.",
+    max_fires=1,
     tests={
         Input(
             file="captain_hook/util/proc.py",

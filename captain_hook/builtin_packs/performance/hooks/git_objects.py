@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, Block, CommandMatches, CommandSchema, Event, Input, Operand, Option, Tool, hook
+from captain_hook import Allow, CommandMatches, CommandSchema, Event, Input, Operand, Option, Tool, Warn, hook
 from captain_hook.cmd import COMMAND_VALUE_FLAGS
 
 if TYPE_CHECKING:
@@ -79,15 +79,15 @@ hook(
         "Probe objects in one batch with `git --no-lazy-fetch cat-file --batch-check` on stdin, and check "
         "filesystem paths with `test -e`."
     ),
-    block=True,
+    max_fires=1,
     tests={
-        Input(command="git cat-file -e HEAD~1"): Block(pattern="--batch-check"),
-        Input(command="git -C ~/Code/monorepo cat-file -e HEAD"): Block(),
-        Input(command="git -c core.pager=cat cat-file -e HEAD"): Block(),
-        Input(command='for s in one two; do git cat-file -e "$s" || echo "$s"; done'): Block(),
-        Input(command="sh -c 'git cat-file -e HEAD'"): Block(),
-        Input(command="git cat-file -e HEAD && echo present"): Block(),
-        Input(command="sudo git cat-file -e HEAD"): Block(),
+        Input(command="git cat-file -e HEAD~1"): Warn(pattern="--batch-check"),
+        Input(command="git -C ~/Code/monorepo cat-file -e HEAD"): Warn(),
+        Input(command="git -c core.pager=cat cat-file -e HEAD"): Warn(),
+        Input(command='for s in one two; do git cat-file -e "$s" || echo "$s"; done'): Warn(),
+        Input(command="sh -c 'git cat-file -e HEAD'"): Warn(),
+        Input(command="git cat-file -e HEAD && echo present"): Warn(),
+        Input(command="sudo git cat-file -e HEAD"): Warn(),
         Input(command="git --no-lazy-fetch cat-file -e HEAD"): Allow(),
         Input(command="GIT_NO_LAZY_FETCH=1 git cat-file -e HEAD"): Allow(),
         Input(command="git --no-lazy-fetch cat-file --batch-check <objects.txt"): Allow(),

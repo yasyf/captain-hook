@@ -9,7 +9,6 @@ from spawnllm import Binary, BinaryAnswer, Refused
 from captain_hook import (
     Allow,
     BaseHookEvent,
-    Block,
     CustomCondition,
     Event,
     FromSubagent,
@@ -21,6 +20,7 @@ from captain_hook import (
     Signals,
     T,
     UsedSkill,
+    Warn,
     on,
 )
 from captain_hook.primitives.llm import consume_signals, matched_signals
@@ -322,11 +322,12 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
         UsedSkill("present", scope="session", subagents=False),
         RanCommand(Regex(r"^(?:\S*/)?cc-present start\b"), subagents=False),
     ],
+    max_fires=1,
     tests={
-        Input(decide=BLOCKING, transcript=[T.assistant(PROSE_DECISION)]): Block(pattern="AskUserQuestion"),
+        Input(decide=BLOCKING, transcript=[T.assistant(PROSE_DECISION)]): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING, transcript=[T.assistant("Holding for your pick: rebase onto dev or cherry-pick the fix?")]
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[
@@ -335,29 +336,29 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
                     "Still yours to decide at the end: the pool PRs."
                 )
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[T.assistant("Still yours to decide: the pool PRs.")],
             background_tasks=[
                 {"id": "t1", "type": "subagent", "status": "running", "description": "pr-watcher on the pool PRs"}
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[
                 T.assistant("Still yours to decide: the pool PRs."),
                 *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(8)),
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[T.assistant("The cap is 30 slots today — up to you whether we raise it or shed jobs.")],
-        ): Block(pattern="AskUserQuestion"),
-        Input(decide=BLOCKING, transcript=[T.user("what is waiting on me?"), T.assistant(STILL_WITH_YOU)]): Block(
+        ): Warn(pattern="AskUserQuestion"),
+        Input(decide=BLOCKING, transcript=[T.user("what is waiting on me?"), T.assistant(STILL_WITH_YOU)]): Warn(
             pattern="AskUserQuestion"
         ),
-        Input(decide=BLOCKING, transcript=[T.user("where is the drive?"), T.assistant(CONSOLE_CLICKS)]): Block(
+        Input(decide=BLOCKING, transcript=[T.user("where is the drive?"), T.assistant(CONSOLE_CLICKS)]): Warn(
             pattern="AskUserQuestion"
         ),
         Input(
@@ -368,7 +369,7 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
                 T.assistant(T.tool("AskUserQuestion", questions=[{"question": "Prove the stack apply?"}])),
                 T.assistant(WAITING_ON_YOU),
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[
@@ -376,7 +377,7 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
                 T.assistant("Still yours to decide: the pool PRs."),
                 *(T.assistant(T.tool("Read", file_path=f"api/src/f{n}.ts")) for n in range(3)),
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[
@@ -386,7 +387,7 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
                 T.user(DESK_WAKE),
                 T.assistant(STILL_WITH_YOU),
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[
@@ -396,7 +397,7 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
                 T.assistant(STILL_WITH_YOU),
             ],
             state=[PrimitiveState(last_fired_at=2)],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             transcript=[
                 T.assistant(PROSE_DECISION),
@@ -405,7 +406,7 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
         ): Allow(),
         Input(
             decide=BLOCKING, transcript=[T.assistant("The narrow ci plan is ready; it comes to you for approval.")]
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(transcript=[T.assistant("Applied the fix to your go-to helper; CI is green.")]): Allow(),
         Input(
             agent_id="tm1",
@@ -453,21 +454,21 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
             transcript=[
                 T.assistant("Waiting on you to choose staging or production before running `! aws sso login`.")
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             transcript=[T.assistant("The S3 proof is blocked.\n\nWaiting on your SSO login:\n```\n! aws login\n```")]
         ): Allow(),
         Input(
             decide=BLOCKING, transcript=[T.assistant("Waiting on your SSO login before the S3 proof can run.")]
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[T.assistant(f"{SSO_LOGIN}\n\nAlso your call: rebase onto dev or cherry-pick the fix?")],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(transcript=[T.user(DESK_WAKE), T.assistant(NAMED_WAIT)]): Allow(),
         Input(transcript=[T.assistant("Holding for your pick on the pool PRs."), T.assistant(NAMED_WAITS)]): Allow(),
-        Input(decide=BLOCKING, transcript=[T.assistant("Let me know which.")]): Block(pattern="AskUserQuestion"),
-        Input(decide=BLOCKING, transcript=[T.assistant("Waiting on your pick, which only you can make.")]): Block(
+        Input(decide=BLOCKING, transcript=[T.assistant("Let me know which.")]): Warn(pattern="AskUserQuestion"),
+        Input(decide=BLOCKING, transcript=[T.assistant("Waiting on your pick, which only you can make.")]): Warn(
             pattern="AskUserQuestion"
         ),
         Input(
@@ -475,9 +476,9 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
             transcript=[
                 T.assistant("Waiting on your release plan, which only you can approve.\nThe watch is re-armed.")
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(transcript=[T.assistant(f"{NAMED_WAIT}\nThe watch is re-armed.")]): Allow(),
-        Input(decide=BLOCKING, transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Block(
+        Input(decide=BLOCKING, transcript=[T.assistant(f"{NAMED_WAIT} Let me know which.")]): Warn(
             pattern="AskUserQuestion"
         ),
         Input(
@@ -487,17 +488,17 @@ def narration(evt: BaseHookEvent) -> dict[str, object]:
                     "Waiting on your review verdict, which the owner is producing.\nCan you approve the deployment?"
                 )
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[T.assistant("Waiting on your approval and the CI report, which the CI lane is producing.")],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING,
             transcript=[
                 T.assistant("Waiting on two things:\n- The diff, which the review lane is producing.\n- Your pick.")
             ],
-        ): Block(pattern="AskUserQuestion"),
+        ): Warn(pattern="AskUserQuestion"),
         Input(
             decide=BLOCKING | {"still_produced": YES},
             transcript=[T.assistant("The narrow ci plan comes to you for approval once the plan lane returns it.")],
@@ -537,6 +538,6 @@ def narrate_then_wait(evt: BaseHookEvent) -> HookResult | None:
             "asked_covered": BinaryAnswer(p_yes=covered),
         } if claimed and leaves >= LEAVES_ON_USER and max(produced, covered) < EXEMPT:
             record_fire(evt)
-            return evt.block(NARRATE_MESSAGE)
+            return evt.warn(NARRATE_MESSAGE)
         case _:
             return None

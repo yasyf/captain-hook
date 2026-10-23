@@ -6,22 +6,18 @@ from typing import ClassVar
 from captain_hook import (
     Allow,
     BaseHookEvent,
-    Block,
     Clause,
     CustomCondition,
     Event,
     InPlanMode,
     Input,
     NlpSignal,
-    Not,
     Phrase,
-    RanCommand,
     Signal,
     Signals,
     T,
     Tool,
     Warn,
-    llm_gate,
     llm_nudge,
     nudge,
 )
@@ -87,16 +83,12 @@ class TypeCheckerContext(CustomCondition):
         return bool((t := evt.ctx.transcript) and self.PATTERN.search(t.assistant_text(n=10)))
 
 
-class UntypedSubagentStop(CustomCondition):
-    def check(self, evt: BaseHookEvent) -> bool:
-        return evt.event is Event.SubagentStop and evt.parent_agent_type == ""
-
-
 nudge(
     "Bugs, style violations, and broken tests in code you touch get fixed, not dismissed as pre-existing or "
     "out of scope. "
     "Fix the issue in this change before moving on.",
     skip_if=[TypeCheckerContext()],
+    max_fires=1,
     signals=Signals(
         [
             Signal(
@@ -349,81 +341,6 @@ nudge(
 )
 
 
-nudge(
-    "Trivial type-checker warnings (`cached_property` overriding `property`, minor override mismatches, "
-    "descriptor protocol) need no fix; only type issues that indicate real bugs do. "
-    "Move on to the task without checking git history for who introduced them.",
-    skip_if=[
-        RanCommand("uv", "run", "ty", "check"),
-        RanCommand("uvx", "ty", "check"),
-        RanCommand("prek", "run", "ty"),
-        RanCommand("prek", "run", "--all-files"),
-        RanCommand("uvx", "prek", "run", "ty"),
-        RanCommand("uvx", "prek", "run", "--all-files"),
-        RanCommand("uvx", "pyright"),
-    ],
-    signals=Signals(
-        [
-            Signal(pattern=r"(?i)check\s+(?:the\s+)?git\s+(?:history|log|blame)", weight=2),
-            Signal(pattern=r"(?i)(?:something|warnings?|errors?)\s+i\s+(?:introduced|added|caused)", weight=2),
-            Signal(
-                pattern=(
-                    r"(?i)(?:existed|were\s+there|present)\s+(?:before|prior\s+to)\s+(?:my\s+)?(?:changes?|edits?)"
-                ),
-                weight=2,
-            ),
-            Signal(
-                pattern=(r"(?i)warnings?\s+(?:are|is)?\s*(?:showing\s+up|appearing|popping\s+up)\s+(?:again|now|in)"),
-                weight=2,
-            ),
-        ],
-        threshold=4,
-        window=10,
-        scope="window",
-        vetoes=[
-            Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)"),
-            Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)"),
-        ],
-    ),
-    tests={
-        Input(
-            transcript=[
-                T.assistant("The warnings are showing up again in strict mode, which means pyright is catching them.")
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                T.assistant("Let me check the git history to see if these pyright warnings existed before my changes.")
-            ]
-        ): Warn(),
-        Input(
-            transcript=[
-                T.assistant("Let me check the git history."),
-                T.assistant("The warnings are appearing again."),
-            ]
-        ): Warn(),
-        Input(
-            transcript=[T.assistant("Strict mode pyright is catching warnings — is this something I introduced?")]
-        ): Allow(),
-        Input(transcript=[T.assistant("The wrong return type is the actual bug — let me fix it.")]): Allow(),
-        Input(transcript=[T.assistant("I'll fix this real type error in the engine.")]): Allow(),
-        Input(transcript=[T.assistant("Let me check git history for the auth refactor.")]): Allow(),
-        Input(
-            transcript=[
-                T.assistant(T.tool("Bash", command="uvx pyright src")),
-                T.assistant("Let me check the git history to see if these pyright warnings existed before my changes."),
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                T.assistant(T.tool("Bash", command="uvx ruff check src")),
-                T.assistant("Let me check the git history to see if these pyright warnings existed before my changes."),
-            ]
-        ): Warn(),
-    },
-)
-
-
 llm_nudge(
     """You are a senior engineer. Another engineer ("the agent") just submitted a plan via
 ExitPlanMode. You are running in agent mode in the project's working directory, with read
@@ -483,7 +400,7 @@ decided it) in `reasoning`.""",
 )
 
 
-llm_gate(
+llm_nudge(
     """You are a senior engineer. Another engineer ("the agent") is ending its turn or has just
 produced deferral-shaped content mid-work (a thinking block, a review finding, a task or todo it
 filed). You are running in agent mode in the project's working directory, with read tools. Your
@@ -505,13 +422,13 @@ Read first, judge second:
 Discriminator: Did the agent do the fix the user asked for (or get the user's explicit go-ahead
 for something smaller) — or did it declare the real fix out of reach and substitute a softer
 deliverable without asking, leaving the reported problem in place? Delivered or user-approved
--> block=false. Silent downgrade -> block=true. "Silent" is the whole test: a turn that ends by
+-> fire=false. Silent downgrade -> fire=true. "Silent" is the whole test: a turn that ends by
 asking the user how to proceed on the fix — a question, or a menu of concrete options — is
-never silent, so it is block=false no matter what the turn said before the question. The
+never silent, so it is fire=false no matter what the turn said before the question. The
 question is the sanctioned escape hatch; it is never evidence for firing, and neither is the
 diagnosis, workaround, or unfixed state the turn describes on its way to that question.
 
-Deferral tells (lean block=true): names the correct fix, then declares it blocked because it
+Deferral tells (lean fire=true): names the correct fix, then declares it blocked because it
 "requires a release", a version bump, or an upstream/cross-repo change — in this ecosystem
 releases are tag-driven and routine, so that is work to plan, not a blocker; swaps the fix for
 documentation, help text, README, or error-message copy the user never asked for;
@@ -520,7 +437,7 @@ workaround" / "stopgap" / "interim" language around what shipped; punts to a fol
 future work, or "file an issue" the user didn't request; declares the work done while its own
 transcript shows the reported failure unaddressed and untested.
 
-Legitimate-deferral signs (lean block=false): the agent surfaced the blocker and ASKED the user
+Legitimate-deferral signs (lean fire=false): the agent surfaced the blocker and ASKED the user
 how to proceed before substituting anything; the softer deliverable IS the task the user
 requested; the user approved a plan or message that explicitly named the smaller deliverable (an
 approved ExitPlanMode plan counts as the go-ahead); a genuine hard blockage the agent reported
@@ -541,8 +458,8 @@ extras after the requested fix landed; the flagged content is mid-turn deliberat
 substitute has been executed yet; or the blockage is real, outside the agent's reach, and
 clearly reported rather than papered over.
 
-When uncertain, return block=false. A missed deferral costs one nag; a false alarm on an honest
-stop teaches the agent to ignore this gate. Fire only when a specific tell is clearly present
+When uncertain, return fire=false. A missed deferral costs one nag; a false alarm on an honest
+stop teaches the agent to ignore this nudge. Fire only when a specific tell is clearly present
 and no "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one
 tell that decided it) in `reasoning`.""",
     message=(
@@ -684,9 +601,9 @@ tell that decided it) in `reasoning`.""",
             ),
         ],
     ),
-    events=Event.PostToolUse | Event.Stop | Event.SubagentStop,
-    only_if=[Not(UntypedSubagentStop())],
+    events=Event.Stop,
     skip_if=[InPlanMode()],
+    max_fires=1,
     tests={
         Input(
             transcript=[
@@ -695,7 +612,7 @@ tell that decided it) in `reasoning`.""",
                     "solution is to improve the documentation and help text."
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -704,7 +621,7 @@ tell that decided it) in `reasoning`.""",
                     "run these commands from the repo root."
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -712,7 +629,7 @@ tell that decided it) in `reasoning`.""",
                     "so the pragmatic approach is to document the limitation in the README."
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -737,8 +654,8 @@ tell that decided it) in `reasoning`.""",
                     "to pin around."
                 )
             ]
-        ): Block(),
-        Input(transcript=[T.assistant("I documented the limitation and moved on to the next task.")]): Block(),
+        ): Warn(),
+        Input(transcript=[T.assistant("I documented the limitation and moved on to the next task.")]): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -792,7 +709,7 @@ tell that decided it) in `reasoning`.""",
                     )
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -808,7 +725,7 @@ tell that decided it) in `reasoning`.""",
                     )
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -817,7 +734,7 @@ tell that decided it) in `reasoning`.""",
                 ),
                 *(line for i in range(6) for line in T.tool_turn("Read", file_path=f"/tmp/f{i}.py")),
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -872,7 +789,7 @@ tell that decided it) in `reasoning`.""",
                     )
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -888,7 +805,7 @@ tell that decided it) in `reasoning`.""",
                     )
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -899,7 +816,7 @@ tell that decided it) in `reasoning`.""",
                     )
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -972,7 +889,7 @@ tell that decided it) in `reasoning`.""",
                     "lives in the linter repo."
                 ),
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -980,7 +897,7 @@ tell that decided it) in `reasoning`.""",
                     "documentation instead of fixing it; the bug remains unfixed."
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(
@@ -988,7 +905,7 @@ tell that decided it) in `reasoning`.""",
                     "README for now; the bug remains unfixed."
                 )
             ]
-        ): Block(),
+        ): Warn(),
         Input(
             transcript=[
                 T.assistant(

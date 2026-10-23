@@ -33,6 +33,7 @@ hook(
         MissesAuthoringBar(),
     ],
     skip_if=[TestFile()],
+    max_fires=1,
     tests={
         Input(
             tool="Write",

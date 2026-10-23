@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from captain_hook import (
     Allow,
     BaseHookEvent,
-    Block,
     Clause,
     CustomCondition,
     Event,
@@ -19,6 +18,7 @@ from captain_hook import (
     T,
     Tool,
     UsedTool,
+    Warn,
     hook,
 )
 from captain_hook.signals.nlp import dep_related, find_lemma_matches, parse, scan_text, verb_candidates
@@ -85,7 +85,7 @@ hook(
         "This plan file was already written in this planning session. Use the Edit tool "
         "to make incremental changes instead of rewriting the entire plan with Write."
     ),
-    block=True,
+    max_fires=1,
     tests={
         Input(
             tool="Write",
@@ -95,7 +95,7 @@ hook(
                 T.assistant(T.tool("Write", file_path="/x/plans/p.md", content="# Plan v1")),
                 T.assistant(T.tool("Write", file_path="/x/plans/p.md", content="# Plan v2")),
             ],
-        ): Block(),
+        ): Warn(),
         Input(
             tool="Write",
             file="/x/plans/p.md",
@@ -126,20 +126,20 @@ hook(
         "Plan mode was requested, so no more edits until the user approves a plan. "
         "Call `ExitPlanMode` with the plan, entering plan mode first if needed."
     ),
-    block=True,
+    max_fires=1,
     tests={
         Input(
             tool="Edit",
             file="/x/src/main.py",
             content="x = 1",
             transcript=[T.user("Re-enter plan mode, don't do any more work.")],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
         Input(
             tool="Write",
             file="/x/src/main.py",
             content="x = 1",
             transcript=[T.user("Stop all work until we agree on a plan.")],
-        ): Block(),
+        ): Warn(),
         Input(
             tool="Edit",
             file="/x/src/main.py",
@@ -160,7 +160,7 @@ hook(
             file="/x/src/main.py",
             content="x = 1",
             transcript=[T.user("go back to plan mode")],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
         Input(
             tool="Edit",
             file="/x/src/main.py",
@@ -168,7 +168,7 @@ hook(
             transcript=[
                 T.user("The retry loop and the timeout are both wrong. Re-enter plan mode, don't do any more work.")
             ],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
         Input(
             tool="Edit",
             file="/x/src/main.py",
@@ -211,7 +211,7 @@ hook(
             file="/x/src/main.py",
             content="x = 1",
             transcript=[T.user("stop, go back to plan mode")],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
         Input(
             tool="Write",
             file="/x/.claude/plans/p.md",
@@ -257,7 +257,7 @@ hook(
                 T.assistant(T.tool("ExitPlanMode", plan="# Plan")),
                 T.user("Stop all work until we agree on a plan."),
             ],
-        ): Block(),
+        ): Warn(),
         Input(
             tool="Write",
             file="/x/LANE-REPORT.md",
@@ -288,7 +288,7 @@ hook(
             file="/x/go/ci/internal/release/pipeline/plantext.go",
             content="package pipeline",
             transcript=[T.user("Stop all work until we agree on a plan.\n\n" + ORCA_WORKER_BRIEF)],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
         Input(
             tool="Edit",
             file="/x/src/upload.py",
@@ -300,7 +300,7 @@ hook(
             file="/x/src/main.py",
             content="x = 1",
             transcript=[T.user("Stop all work. We need to re-plan the approach.")],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
         Input(
             tool="Write",
             file="/x/src/main.py",
@@ -315,6 +315,6 @@ hook(
             content="x = 1",
             permission_mode="bypassPermissions",
             transcript=[T.user("Stop all work until we agree on a plan.")],
-        ): Block(pattern="plan mode"),
+        ): Warn(pattern="plan mode"),
     },
 )
