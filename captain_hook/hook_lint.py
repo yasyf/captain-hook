@@ -74,7 +74,11 @@ TEXT_PARSERS = REGEX_METHODS | frozenset(
     {"compile", "startswith", "endswith", "find", "rfind", "index", "count", "partition", "rpartition", "getenv", "get"}
 )
 CONTEXT_TOOLS = frozenset({"Agent", "Task", "Skill", "Read", "Grep", "Glob"})
-ALLOWED_COMMENT = re.compile(r"#!|#\s*(?:TODO|FIXME|WORKAROUND|noqa|type:|pyright:|ruff:|fmt:|pragma)")
+ALLOWED_COMMENT = re.compile(
+    r"#!|#\s*(?:TODO|FIXME|WORKAROUND|noqa|type:|pyright:|ruff:|fmt:|pragma|capt-hook:\s*no-escape\b)"
+)
+NO_ESCAPE = re.compile(r"#\s*capt-hook:\s*no-escape\b(?P<reason>.*)")
+NO_ESCAPE_SYNTAX = "`# capt-hook: no-escape <reason>`"
 LLM_CALLS = frozenset({"llm_evaluate", "llm", "call_llm", "llm_gate", "llm_nudge", "prompt_check"})
 TRANSCRIPT_ATTRIBUTES = frozenset({"t", "transcript"})
 MANDATORY_EVIDENCE = (
@@ -95,6 +99,19 @@ class Finding:
 
     def __str__(self) -> str:
         return f"{self.path}:{self.line}: {self.rule}: {self.detail}"
+
+
+@dataclass(frozen=True, slots=True)
+class Exemption:
+    """A hook that blocks a dispatch or read with no escape on purpose, and the reason its marker gives."""
+
+    path: Path
+    line: int
+    hook: str
+    reason: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line}: exempt: {self.hook}: {self.reason}"
 
 
 def copy_violations(text: str) -> list[str]:
@@ -302,7 +319,7 @@ def reads_annotations(node: ast.AST) -> bool:
     return any(isinstance(n, ast.Attribute) and n.attr == "annotations" for n in ast.walk(node))
 
 
-def unescaped_context_blocks(tree: ast.Module) -> Iterator[ast.AST]:
+def unescaped_context_blocks(tree: ast.Module) -> Iterator[tuple[ast.Call, str, list[ast.AST]]]:
     for node in ast.walk(tree):
         match node:
             case ast.Call() if (
@@ -312,15 +329,41 @@ def unescaped_context_blocks(tree: ast.Module) -> Iterator[ast.AST]:
                 and tool_names(node) & CONTEXT_TOOLS
                 and not escapable(node)
             ):
-                yield node
+                yield node, "hook", [node]
             case ast.FunctionDef(decorator_list=decorators):
                 for on in (d for d in decorators if isinstance(d, ast.Call) and callee(d) == "on"):
-                    if tool_names(on) & CONTEXT_TOOLS and not escapable(on) and not reads_annotations(node):
-                        yield from (
-                            block
-                            for block in calls_named(node, "block")
-                            if isinstance(block.func, ast.Attribute) and keyword(block, "confirm") is None
+                    if (
+                        tool_names(on) & CONTEXT_TOOLS
+                        and not escapable(on)
+                        and not reads_annotations(node)
+                        and (
+                            blocks := [
+                                block
+                                for block in calls_named(node, "block")
+                                if isinstance(block.func, ast.Attribute) and keyword(block, "confirm") is None
+                            ]
                         )
+                    ):
+                        yield on, node.name, blocks
+
+
+def no_escape_reasons(source: str) -> dict[int, str]:
+    return {
+        token.start[0]: marker["reason"].strip()
+        for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        if token.type == tokenize.COMMENT and (marker := NO_ESCAPE.match(token.string))
+    }
+
+
+def no_escape_reason(registration: ast.Call, reasons: dict[int, str]) -> str:
+    return next(
+        (
+            reasons[line]
+            for line in range(registration.lineno, (registration.end_lineno or registration.lineno) + 1)
+            if reasons.get(line)
+        ),
+        "",
+    )
 
 
 def parent_map(tree: ast.Module) -> dict[int, ast.AST]:
@@ -339,7 +382,7 @@ def parses_text(node: ast.AST, parent: ast.AST | None) -> bool:
             return False
 
 
-def escape_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
+def escape_findings(path: Path, tree: ast.Module, reasons: dict[int, str]) -> Iterator[Finding]:
     parents = parent_map(tree)
     for node in ast.walk(tree):
         if (
@@ -349,13 +392,27 @@ def escape_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
             and parses_text(node, parents.get(id(node)))
         ):
             yield Finding(path, node.lineno, "code", "parses the ccx escape by hand; match it with Annotated(...)")
-    for node in unescaped_context_blocks(tree):
-        yield Finding(
-            path,
-            getattr(node, "lineno", 1),
-            "code",
-            "blocks a dispatch or read with no escape; add skip_if=[Annotated(...)] or confirm=Confirm(...)",
-        )
+    for line, reason in reasons.items():
+        if not reason:
+            yield Finding(path, line, "comment", f"a no-escape marker states its reason; write {NO_ESCAPE_SYNTAX}")
+    for registration, _, blocks in unescaped_context_blocks(tree):
+        if not no_escape_reason(registration, reasons):
+            yield from (
+                Finding(
+                    path,
+                    getattr(node, "lineno", 1),
+                    "code",
+                    "blocks a dispatch or read with no escape; add skip_if=[Annotated(...)] or confirm=Confirm(...),"
+                    f" or mark the hook {NO_ESCAPE_SYNTAX}",
+                )
+                for node in blocks
+            )
+
+
+def escape_exemptions(path: Path, tree: ast.Module, reasons: dict[int, str]) -> Iterator[Exemption]:
+    for registration, name, _ in unescaped_context_blocks(tree):
+        if reason := no_escape_reason(registration, reasons):
+            yield Exemption(path, registration.lineno, name, reason)
 
 
 def code_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
@@ -454,12 +511,18 @@ def lint_source(path: Path, source: str) -> list[Finding]:
         [
             *copy_findings(path, tree),
             *code_findings(path, tree),
-            *escape_findings(path, tree),
+            *escape_findings(path, tree, no_escape_reasons(source)),
             *mandatory_findings(path, tree),
             *comment_findings(path, source),
         ],
         key=lambda finding: (finding.line, finding.rule, finding.detail),
     )
+
+
+def source_exemptions(path: Path, source: str) -> list[Exemption]:
+    """Every hook in one hook file's source that a no-escape marker exempts, ordered by line."""
+    tree = ast.parse(source, filename=str(path))
+    return sorted(escape_exemptions(path, tree, no_escape_reasons(source)), key=lambda exemption: exemption.line)
 
 
 def is_hook_source(path: Path) -> bool:
@@ -487,3 +550,8 @@ def hook_sources(paths: Iterable[Path]) -> list[Path]:
 def lint_paths(paths: Iterable[Path]) -> list[Finding]:
     """Every finding across the hook files under ``paths``; a directory is walked, test files skipped."""
     return [finding for source in hook_sources(paths) for finding in lint_source(source, source.read_text())]
+
+
+def lint_exemptions(paths: Iterable[Path]) -> list[Exemption]:
+    """Every hook under ``paths`` that a no-escape marker exempts, with the reason the marker gives."""
+    return [exemption for source in hook_sources(paths) for exemption in source_exemptions(source, source.read_text())]

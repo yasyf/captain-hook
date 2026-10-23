@@ -532,18 +532,20 @@ def run_tests(json_output: bool = False) -> None:
             print(f"  ERROR {f'[{error.pack}] ' if error.pack else ''}{error.source} failed to import: {line}")
 
     package_root = Path(__file__).resolve().parent
-    findings = hook_lint.lint_paths(
-        {
-            source.parent
-            for entry in _state.hooks
-            if not (source := Path(entry.source_file).resolve()).is_relative_to(package_root)
-        }
-    )
+    hook_dirs = {
+        source.parent
+        for entry in _state.hooks
+        if not (source := Path(entry.source_file).resolve()).is_relative_to(package_root)
+    }
+    findings = hook_lint.lint_paths(hook_dirs)
     for finding in findings:
         if json_output:
             print(json.dumps({"id": f"{finding.path}:{finding.line}", "status": "lint", "reason": str(finding)}))
         else:
             print(f"  LINT  {finding}")
+    if not json_output:
+        for exemption in hook_lint.lint_exemptions(hook_dirs):
+            print(f"  EXEMPT {exemption}")
 
     results = run_inline_tests()
     if not results:
@@ -654,9 +656,11 @@ def lint_hooks(state: CliState, paths: tuple[Path, ...], json_output: bool) -> N
     messages, record ids, dates, session ids, token counts, or narrative. Hook code matches commands
     with parsed conditions, reads the session through ``evt.ctx``, lets failures raise, and carries
     no comments. PATHS default to the hooks directory; test files are skipped. ``test`` and
-    ``pack test`` run the same lint. Exits non-zero on any finding.
+    ``pack test`` run the same lint. The text report also lists each hook a
+    ``# capt-hook: no-escape <reason>`` marker exempts, with its reason. Exits non-zero on any finding.
     """
-    findings = hook_lint.lint_paths(paths or (Path(state.hooks_dir),))
+    roots = paths or (Path(state.hooks_dir),)
+    findings = hook_lint.lint_paths(roots)
     for finding in findings:
         click.echo(
             json.dumps(
@@ -665,6 +669,9 @@ def lint_hooks(state: CliState, paths: tuple[Path, ...], json_output: bool) -> N
             if json_output
             else str(finding)
         )
+    if not json_output:
+        for exemption in hook_lint.lint_exemptions(roots):
+            click.echo(str(exemption))
     if findings:
         sys.exit(1)
 
