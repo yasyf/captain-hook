@@ -10,12 +10,15 @@ import pytest
 import captain_hook
 from captain_hook.hook_lint import (
     MANDATORY_EVIDENCE,
+    Exemption,
     Finding,
     copy_violations,
+    lint_exemptions,
     lint_paths,
     lint_source,
     mandatory_handlers,
     result_violations,
+    source_exemptions,
 )
 from captain_hook.types import Action, HookResult
 from tests.helpers import run_cli, write_hook
@@ -31,6 +34,20 @@ warn_command(
     tests={Input(command="pip install requests"): Warn(pattern="uv add"), Input(command="uv add requests"): Allow()},
 )
 """
+
+EXEMPT_HOOK = """
+from captain_hook import Event, Tool, on
+
+
+@on(Event.PreToolUse, only_if=[Tool("Agent")])  # capt-hook: no-escape plan refusal
+def guard(evt):
+    return evt.block("Launches name their slice line. Add the line the refusal names.")
+"""
+
+UNESCAPED = (
+    "blocks a dispatch or read with no escape; add skip_if=[Annotated(...)] or confirm=Confirm(...),"
+    " or mark the hook `# capt-hook: no-escape <reason>`"
+)
 
 NOISY_HOOK = """
 from captain_hook import Allow, Input, Warn, warn_command
@@ -418,6 +435,17 @@ class TestCli:
         result = run_cli("test", hooks_dir=str(hooks_dir))
         assert result.returncode == 0, result.stdout
 
+    def test_lint_lists_exempted_hooks_with_their_reasons(self, hooks_dir: Path) -> None:
+        path = write_hook(hooks_dir, EXEMPT_HOOK)
+        result = run_cli("lint", str(hooks_dir))
+        assert (result.returncode, result.stdout) == (0, f"{path}:5: exempt: guard: plan refusal\n")
+
+    def test_test_command_lists_exempted_hooks(self, hooks_dir: Path) -> None:
+        write_hook(hooks_dir, EXEMPT_HOOK)
+        result = run_cli("test", hooks_dir=str(hooks_dir))
+        assert result.returncode == 0, result.stdout
+        assert "EXEMPT" in result.stdout and "guard: plan refusal" in result.stdout
+
 
 class TestEscapeNotation:
     @pytest.mark.parametrize(
@@ -482,9 +510,7 @@ class TestEscapeNotation:
         ],
     )
     def test_unescaped_dispatch_or_read_block_is_flagged(self, source: str) -> None:
-        assert [detail for rule, detail in findings(source) if rule == "code"] == [
-            "blocks a dispatch or read with no escape; add skip_if=[Annotated(...)] or confirm=Confirm(...)"
-        ]
+        assert [detail for rule, detail in findings(source) if rule == "code"] == [UNESCAPED]
 
     @pytest.mark.parametrize(
         "source",
@@ -503,3 +529,53 @@ class TestEscapeNotation:
     )
     def test_escaped_or_unrelated_blocks_are_clean(self, source: str) -> None:
         assert not [detail for rule, detail in findings(source) if rule == "code"]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "@on(Event.PreToolUse, only_if=[Tool('Agent')])  # capt-hook: no-escape plan refusal\n"
+            "def guard(evt):\n"
+            "    return evt.block('m')",
+            "@on(\n"
+            "    Event.PreToolUse,\n"
+            "    only_if=[Tool('Agent|Task')],\n"
+            ")  # capt-hook: no-escape plan refusal\n"
+            "def guard(evt):\n"
+            "    return evt.block('m')",
+            "hook(  # capt-hook: no-escape plan refusal\n"
+            "    Event.PreToolUse, only_if=[Tool('Read')], message='m', block=True\n"
+            ")",
+        ],
+    )
+    def test_a_no_escape_marker_with_a_reason_exempts_the_hook(self, source: str) -> None:
+        assert findings(source) == []
+        assert [exemption.reason for exemption in source_exemptions(Path("hook.py"), source)] == ["plan refusal"]
+
+    def test_a_no_escape_marker_without_a_reason_is_flagged_and_exempts_nothing(self) -> None:
+        source = (
+            "@on(Event.PreToolUse, only_if=[Tool('Agent')])  # capt-hook: no-escape\n"
+            "def guard(evt):\n"
+            "    return evt.block('m')"
+        )
+        assert findings(source) == [
+            ("comment", "a no-escape marker states its reason; write `# capt-hook: no-escape <reason>`"),
+            ("code", UNESCAPED),
+        ]
+        assert source_exemptions(Path("hook.py"), source) == []
+
+    def test_a_marker_on_another_hook_exempts_nothing(self) -> None:
+        source = (
+            "@on(Event.PreToolUse, only_if=[Tool('Bash')])  # capt-hook: no-escape plan refusal\n"
+            "def other(evt):\n"
+            "    return evt.block('m')\n"
+            "@on(Event.PreToolUse, only_if=[Tool('Agent')])\n"
+            "def guard(evt):\n"
+            "    return evt.block('m')"
+        )
+        assert [detail for rule, detail in findings(source) if rule == "code"] == [UNESCAPED]
+        assert source_exemptions(Path("hook.py"), source) == []
+
+    def test_lint_exemptions_walks_hook_files_only(self, tmp_path: Path) -> None:
+        (tmp_path / "hook.py").write_text(textwrap.dedent(EXEMPT_HOOK))
+        (tmp_path / "test_hook.py").write_text(textwrap.dedent(EXEMPT_HOOK))
+        assert lint_exemptions([tmp_path]) == [Exemption(tmp_path / "hook.py", 5, "guard", "plan refusal")]

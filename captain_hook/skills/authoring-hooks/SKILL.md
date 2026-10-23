@@ -65,13 +65,15 @@ Code bar (every registration):
 - [ ] Session history read through evt.ctx.t, RanCommand, UsedTool, UsedSkill, ReadFile,
       or TouchedFile; never by opening the transcript file
 - [ ] No try/except fallbacks or broad `except`; the dispatcher records a raising hook's fault
-- [ ] Zero comments; `TODO` and `WORKAROUND:` are the only exceptions
+- [ ] Zero comments; `TODO`, `WORKAROUND:`, and a `# capt-hook: no-escape <reason>` marker are the only
+      exceptions
 - [ ] Inline tests: one input that fires, one benign neighbor that stays silent
 - [ ] Escapes and intent read through `Annotated(...)` or `evt.annotations`; never by parsing
       `# ccx:raw`, `tooling-lane:`, or `CAPT_HOOK_CCX_RAW` by hand
 - [ ] Messages offer only the live escapes: `# ccx:raw`, `CAPT_HOOK_CCX_RAW=1`, or a `ccx:` line
 - [ ] A blocking hook names its escape: `skip_if=[Annotated(<key>)]`, `confirm=Confirm(rule=...)`,
-      or both; only security, merge, and session guards block with neither
+      or both; only security, merge, and session guards block with neither, and a deliberate refusal
+      on a dispatch or read carries `# capt-hook: no-escape <reason>`
 ```
 
 ### Escape and intent annotations
@@ -96,6 +98,10 @@ are retired; a hook neither honors nor offers them.
 - `capt-hook lint` flags hand-parsed escapes, a message that offers a retired escape or a
   `CAPT_HOOK_CCX_RAW` value other than `1`, `true`, or `yes`, and a blocking hook on Agent, Task,
   Skill, Read, Grep, or Glob that carries neither an `Annotated` escape nor `confirm=`.
+- A refusal that must have no way through, such as a block whose message names the exact line to
+  add, carries `# capt-hook: no-escape <reason>` on its `@on(...)` decorator or `hook(...)` call,
+  on any line the call spans. The lint skips that hook, and `capt-hook lint` and `capt-hook test`
+  list it with its reason. A marker with no reason is itself a finding and exempts nothing.
 
 The history behind a rule (who asked for it, when, after which incident) belongs in the
 PR body and the commit message. The agent reading a hook message needs the rule and the

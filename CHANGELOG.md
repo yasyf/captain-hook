@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A `# capt-hook: no-escape <reason>` marker exempts a deliberate refusal from the escape lint.**
+  A blocking hook on Agent, Task, Skill, Read, Grep, or Glob that carries the marker on any line of
+  its `@on(...)` decorator or `hook(...)` call passes `capt-hook lint` without an `Annotated` escape
+  or `confirm=`. `capt-hook lint` and `capt-hook test` list each exempted hook with its reason, and a
+  marker with no reason is a finding that exempts nothing.
 - **A tap on a cc-slack question card is the user's answer.** Ticket conditions read
   `UserAnswered` evidence from a cc-slack `slack.action` tap as they read an `AskUserQuestion`
   answer or a cc-present pick. The tap counts only in a session whose prompts are the user's, only
