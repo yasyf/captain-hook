@@ -220,6 +220,13 @@ OWNER_NAMED_RULES = (
     "nothing. One owner instruction permits one such action."
 )
 OWNER_NAMED_TTL = timedelta(hours=1)
+KILL_SESSION_RULES = (
+    "The pending action signals a codex agent session that hosts no other session. The payload is its process "
+    "record: pid, command, start time, and age in hours now. Allow only when a ruling's words name its program and "
+    "cover this exact process: they list its pid, or set an age floor, such as older than one hour, that its age "
+    "clears. Deny when the words list only other pids, set a floor its age does not clear, exclude this kind of "
+    "session, or only ask for cleanup in general."
+)
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
 SHELL_TASK_IDS = {"Bash": "backgroundTaskId", "Monitor": "taskId"}
@@ -463,6 +470,19 @@ def process_class(row: ProcessRow) -> str | None:
 
 def is_agent(row: ProcessRow) -> bool:
     return proc.is_claude(row.command.split()) or row.argv0 in {"claude", "codex"}
+
+
+def lone_codex_session(row: ProcessRow, table: ProcessTable) -> bool:
+    return row.argv0 == "codex" and not any(process_class(below) for below in table.descendants(row.pid))
+
+
+def session_record(row: ProcessRow) -> dict[str, str | int]:
+    return {
+        "pid": row.pid,
+        "command": clip(row.command, 120),
+        "started": row.started.isoformat(),
+        "age_hours": int((datetime.now() - row.started).total_seconds() // 3600),
+    }
 
 
 def hosts_agent(row: ProcessRow) -> bool:
@@ -826,10 +846,11 @@ def pid_verdict(
             f"unrelated process. {fix}"
         )
     if pid in ownership.protected:
-        return (
+        message = (
             f"BLOCKED: {describe(row)} is {process_class(row) or 'an ancestor of a protected process'}, which no "
             "session may signal, stop, reprioritize, or restart. Ask the owner to end it."
         )
+        return message if lifted is None or not lone_codex_session(row, ownership.table) else lifted(row, message)
     if facts.started_here(row):
         return None
     agent = ownership.table.nearest(row.ppid, is_agent)
@@ -1375,6 +1396,16 @@ KILL_PROCESS = Tickets(
     ttl=RETRY_WINDOW,
     hook="sessions",
 )
+KILL_SESSION = Tickets(
+    "sessions.kill-session",
+    ("program", "process"),
+    Reach.ONCE,
+    rules=(Rule("ruling", Decide(KILL_SESSION_RULES, over=(UserRuled("program", tags=KILL_RULING_TAGS),))),),
+    deny="Have the owner name the session's program with its pid, or an age floor it clears, in a cc-notes answer "
+    f"tagged {' and '.join(sorted(KILL_RULING_TAGS))} before the acting session starts.",
+    ttl=RETRY_WINDOW,
+    hook="sessions",
+)
 
 
 def owner_named(kind: str, key: str, target: str) -> Tickets:
@@ -1445,12 +1476,14 @@ def lift(
 
 def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | None:
     refusals: list[Ungranted] = []
+    tickets, payload = (KILL_SESSION, session_record(row)) if is_agent(row) else (KILL_PROCESS, {})
     for name in programs(row):
         action = Proposal(
             place={"program": name, "process": f"{row.pid}@{row.started.isoformat()}"},
+            payload=payload,
             summary=f"kill {row.pid} ({name})",
         )
-        if (ungranted := lift(evt, KILL_PROCESS, action, message, owner=False)) is None:
+        if (ungranted := lift(evt, tickets, action, message, owner=False)) is None:
             return None
         refusals.append(ungranted)
     return refusals[0] if refusals else Ungranted(message)
