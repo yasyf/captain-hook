@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -302,9 +303,12 @@ def test_rediscovery_from_the_same_root_registers_every_hook_again(tmp_path: Pat
 
 def test_sibling_of_a_module_that_fails_to_load_still_registers(tmp_path: Path, isolate_modules: None) -> None:
     pack = _sibling_pack(tmp_path / "pack", "from . import beta\nraise RuntimeError('broken')\n")
+    (pack / "_probe.py").write_text("from . import beta\n")
 
     app.reset()
     discover_pack("ccx", pack)
+    probe = importlib.import_module("captain_hook._packs.ccx._probe")
 
     assert [h.spec.message for h in app._state.hooks] == ["beta"]
     assert [error.source for error in app._state.load_errors] == [str(pack / "alpha.py")]
+    assert probe.beta is sys.modules["captain_hook._packs.ccx.beta"]

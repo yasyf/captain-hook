@@ -55,6 +55,13 @@ def submodules(pkg: str) -> set[str]:
     return {name for name in sys.modules if name.startswith(f"{pkg}.")}
 
 
+def drop_module(fqn: str) -> None:
+    parent, _, name = fqn.rpartition(".")
+    module = sys.modules.pop(fqn)
+    if (package := sys.modules.get(parent)) is not None and getattr(package, name, None) is module:
+        delattr(package, name)
+
+
 def evict_submodules(pkg: str) -> None:
     for fqn in submodules(pkg):
         del sys.modules[fqn]
@@ -211,7 +218,7 @@ def discover_pack(name: str, pack_dir: Path) -> None:
             # nothing, so a broken file never leaks a partially-wired guard.
             del _state.hooks[before:]
             for sibling in submodules(pkg) - present:
-                del sys.modules[sibling]
+                drop_module(sibling)
             logger.bind(file=str(path)).opt(exception=True).warning("skipped unloadable hook file")
             _state.load_errors.append(LoadError(str(path), exc, pack=name))
         else:
