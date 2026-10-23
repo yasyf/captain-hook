@@ -2,10 +2,11 @@
 
 Only the user's own words count as theirs: the root session's prompts (a lane's own prompts are its
 brief and teammates' messages), messages the user queued while the agent worked, what the user typed
-when rejecting a plan in the root session, their ``AskUserQuestion`` answers, and their picks on a
-cc-present board. Teammate messages, tool output, notifications, channel lines, and inbox lines are
-never the user's words. A cc-notes answer counts only if it was last written before the acting
-session started, so an agent cannot record a ruling and act on it.
+when rejecting a plan in the root session, their ``AskUserQuestion`` answers, their picks on a
+cc-present board, and their taps on a cc-slack card that asked a question. Teammate messages, tool
+output, notifications, other channel lines, and inbox lines are never the user's words. A cc-notes
+answer counts only if it was last written before the acting session started, so an agent cannot
+record a ruling and act on it.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from cc_transcript.activity import ToolUse, Turn
 from cc_transcript.filterspec import DENIAL_KIND_USER_REJECTED, USER_SAID_MARKER, USER_SAID_TRAILER
-from cc_transcript.models import AssistantEvent, AttachmentEvent, QueuedCommand
+from cc_transcript.models import AssistantEvent, AttachmentEvent, QueuedCommand, UserEvent
 from cc_transcript.tools import AskUserQuestionResult, parse_tool_result
 
 from captain_hook.tickets.records import Answer, Evidence, Proposal
@@ -44,6 +45,12 @@ CCN_NOT_FOUND = 3
 PRESENT = "cc-present"
 REPLACED = "an instruction the user typed while rejecting the agent's call"
 QUESTION_TOOL = "AskUserQuestion"
+CARD_SERVER = "plugin:cc-slack:cc-slack"
+CARD_TAP = re.compile(
+    rf'<channel source="{re.escape(CARD_SERVER)}"[^>]*\btype="slack\.action"[^>]*>'
+    r"\s*(?P<payload>\{.*\})\s*</channel>",
+    re.S,
+)
 VERDICTS = {"approved": "", "rejected": ""}
 OPTION_NUMBER = re.compile(r"\s*(\d+)\b")
 MACHINE_ENVELOPES = (
@@ -320,6 +327,59 @@ def board_answers(state: dict[str, Any]) -> list[Answer]:
     return found
 
 
+def card_payload(text: str) -> dict[str, Any] | None:
+    if (match := CARD_TAP.fullmatch(text.strip())) is None:
+        return None
+    payload = json.loads(match["payload"])
+    return payload if isinstance(payload, dict) else None
+
+
+def card_taps(events: Iterable[Any]) -> Iterator[tuple[dict[str, Any], datetime | None]]:
+    for event in events:
+        if (
+            isinstance(event, UserEvent)
+            and event.meta.is_meta
+            and event.source_tool_use_id is None
+            and event.source_tool_assistant_uuid is None
+        ):
+            text = event.text
+        elif (
+            isinstance(event, AttachmentEvent)
+            and isinstance(event.detail, QueuedCommand)
+            and event.detail.origin == "channel"
+        ):
+            text = event.detail.prompt or ""
+        else:
+            continue
+        if (payload := card_payload(text)) is not None:
+            yield payload, event.meta.timestamp
+
+
+def card_answer(payload: dict[str, Any], at: datetime | None) -> Answer | None:
+    options = payload.get("options")
+    label = payload.get("label")
+    question = payload.get("question")
+    if (
+        not isinstance(options, list)
+        or not all(isinstance(option, str) for option in options)
+        or not isinstance(question, str)
+        or not question
+        or label not in options
+    ):
+        return None
+    shown = dict.fromkeys(options, "")
+    return Answer(
+        id=f"card:{payload['action_ts']}",
+        source="card",
+        quote=label,
+        said_at=at,
+        detail=render_answer(question, shown, (label,), "", ""),
+        question=question,
+        options=shown,
+        chosen=(label,),
+    )
+
+
 def board_state(tree: str, cwd: Path | None) -> dict[str, Any]:
     argv = [PRESENT, "outcomes", "--session", tree]
     try:
@@ -466,10 +526,20 @@ class TranscriptSources:
         return sorted(found.values(), key=lambda use: use.result_ts or use.ts)
 
     def answers(self) -> list[Answer]:
-        """Every answer across the tree's sessions, however far back; the window bounds words and touches only."""
+        """Every answer across the tree's sessions, however far back; the window bounds words and touches only.
+
+        A card tap counts only in a session whose prompts are the user's, where cc-slack delivers it.
+        """
         asked = {item.id: item for use in self.uses(None) for item in use_answers(use)}
         board = {item.id: item for item in board_answers(board_state(tree_of(self.evt), self.evt.cwd))}
-        return [*asked.values(), *board.values()]
+        card = {
+            item.id: item
+            for turn, prompts_are_user in self.turns(None)
+            if prompts_are_user
+            for payload, at in card_taps(turn.events)
+            if (item := card_answer(payload, at)) is not None
+        }
+        return [*asked.values(), *board.values(), *card.values()]
 
     def touches(self) -> list[Touch]:
         """The tree's tool calls inside the window; a question put to the user is an answer, never a touch."""
@@ -621,7 +691,7 @@ class Context:
 
     @cached_property
     def answers(self) -> tuple[Answer, ...]:
-        """The user's answers to the agent's questions, on ``AskUserQuestion`` and the board."""
+        """The user's answers to the agent's questions, on ``AskUserQuestion``, the board, and cc-slack cards."""
         return tuple(self.sources.answers())
 
     @cached_property

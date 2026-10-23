@@ -97,10 +97,14 @@ class CustomTicketCondition(CustomCondition):
 def approving(answer: Answer) -> bool:
     """Whether the user approved: picked an option other than the last one shown, or typed no hold.
 
+    A cc-slack card tap approves only when its label reads as a go and holds nothing back, whatever its position.
+
     Words typed beyond a pick's number decide over the pick, so ``3, DM him`` on a three-option
     question approves while a bare ``3`` holds. A last option that itself reads as a go, such as
     ``Post without the prevention sentence``, approves too.
     """
+    if answer.source == "card":
+        return any(GO.search(pick) and not HOLD.search(pick) for pick in answer.chosen)
     words = OPTION_NUMBER.sub("", answer.typed, count=1) if answer.chosen else answer.typed
     if words:
         return HOLD.search(words) is None
@@ -112,7 +116,7 @@ def approving(answer: Answer) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class UserAnswered(CustomTicketCondition):
-    """The user's answers to questions matching any of *patterns*, on ``AskUserQuestion`` or the cc-present board.
+    """The user's answers to questions matching any of *patterns*: ``AskUserQuestion``, the board, a cc-slack card.
 
     A pattern reads the question with its options. With *approved*, only an approving answer counts: one that
     picks an option other than the last shown, picks a last option that reads as a go, or types words that hold

@@ -364,6 +364,72 @@ class TestBoard:
         wide = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=200)
         assert [touch.tool for touch in wide.touches] == ["slack_thread"]
 
+    def test_a_tap_on_a_cc_slack_question_card_is_an_answer_and_no_other_channel_line_is(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        from captain_hook import T
+        from captain_hook.context import HookContext
+        from captain_hook.session import SessionStore
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tickets import context as sources
+        from captain_hook.tickets.conditions import approving
+
+        monkeypatch.setattr(sources, "board_state", lambda tree, cwd: {})
+        question = 'Post this in C1, thread 1.2? "the fix is live"'
+        channel = {"kind": "channel", "server": sources.CARD_SERVER}
+
+        def tap(action_ts: str, label: str, server: str = sources.CARD_SERVER, **fields: Any) -> str:
+            payload = {
+                "type": "slack.action",
+                "action_ts": action_ts,
+                "label": label,
+                "waits": True,
+                "question": question,
+                "options": ["Yes", "No"],
+            } | fields
+            envelope = f'<channel source="{server}" subject_id="s1" type="slack.action">'
+            return f"{envelope}\n{json.dumps(payload)}\n</channel>"
+
+        def queued(text: str, origin: dict[str, str]) -> dict[str, Any]:
+            return {
+                "type": "attachment",
+                "attachment": {"type": "queued_command", "prompt": text, "commandMode": "prompt", "origin": origin},
+            }
+
+        transcript = fixture_session(
+            [
+                T.user("watch the release"),
+                T.assistant("asked on the card"),
+                T.user(tap("1.3", "No"), isMeta=True, origin=channel),
+                T.user(tap("1.4", "No", options=["No", "Yes"]), isMeta=True, origin=channel),
+                T.user(tap("1.5", "Explain more"), isMeta=True, origin=channel),
+                T.user(tap("1.6", "Yes", options=[]), isMeta=True, origin=channel),
+                T.user(tap("1.7", "Yes", options={"Yes": None}), isMeta=True, origin=channel),
+                T.user(tap("1.8", "Yes", server="plugin:other:other"), isMeta=True, origin=channel),
+                T.user(tap("1.9", "Yes")),
+                T.user(tap("2.0", "Yes"), isMeta=True, sourceToolUseID="toolu_skill"),
+                queued(tap("2.1", "Yes"), {"kind": "peer"}),
+                queued(tap("2.2", "Yes"), channel),
+                queued(tap("2.3", "Yes"), channel),
+                T.user(tap("2.3", "Yes"), isMeta=True, origin=channel),
+            ]
+        )
+        evt = PreToolUseEvent(
+            _raw={"session_id": TREE, "tool_name": "slack_reply", "tool_use_id": "toolu_1", "tool_input": {}},
+            ctx=HookContext(session=SessionStore(tmp_path), transcript=transcript, settings=None),
+        )
+        ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "the fix is live"}))
+        assert [(item.id, item.chosen) for item in ctx.answers] == [
+            ("card:1.3", ("No",)),
+            ("card:1.4", ("No",)),
+            ("card:2.2", ("Yes",)),
+            ("card:2.3", ("Yes",)),
+        ]
+        assert [approving(item) for item in ctx.answers] == [False, False, True, True]
+        assert found(UserAnswered(Holds("text")), ctx) == list(ctx.answers[2:])
+
     def test_a_rejected_call_hands_the_judge_only_the_users_words(self, tmp_path: Path) -> None:
         from cc_transcript.filterspec import USER_SAID_MARKER, USER_SAID_TRAILER
 
