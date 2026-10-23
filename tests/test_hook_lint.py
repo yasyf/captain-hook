@@ -374,7 +374,7 @@ class TestStaticLint:
         functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
         recognized = {handler.name for handler in mandatory_handlers(sessions, tree, functions)}
         assert {"kill_unverified_pid", "signal_by_criteria"} <= recognized
-        assert len(recognized) >= 18
+        assert len(recognized) >= 13
         assert lint_paths([BUILTIN_PACKS_DIR]) == []
 
     def test_comments_except_todos_and_workarounds(self) -> None:

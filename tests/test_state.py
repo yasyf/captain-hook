@@ -393,7 +393,7 @@ class TestHookName:
     def test_pack_module_hook_name_is_pack_qualified(self, isolate_modules: None) -> None:
         import_pack_module("captain_hook._packs.general.docs", PACKS_DIR / "general" / "hooks" / "docs.py")
         names = sorted(entry.name for entry in app._state.hooks)
-        assert re.fullmatch(r"general\.docs:llm_gate_[0-9a-f]{8}", names[0])
+        assert re.fullmatch(r"general\.docs:llm_nudge_[0-9a-f]{8}", names[0])
         assert re.fullmatch(r"general\.docs:nudge_[0-9a-f]{8}", names[1])
 
     def test_pack_namespace_module_is_pack_qualified_off_disk(self, tmp_path: Path, isolate_modules: None) -> None:

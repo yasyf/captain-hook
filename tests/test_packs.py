@@ -490,25 +490,21 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
 def test_enabling_steering_pack_registers_hooks() -> None:
     resolved = manager.resolve_builtin("steering")
     discover_pack("steering", resolved.path)
-    # Seven: steering.py's two signal nudges + band-aid nudge + deferral gate, workarounds.py's
-    # nudge + gate, teammates.py's digest nudge.
-    assert len(app._state.hooks) == 7
+    assert len(app._state.hooks) == 5
     assert "captain_hook._packs.steering.steering" in sys.modules
     assert "captain_hook._packs.steering.teammates" in sys.modules
 
 
-def test_steering_deferral_gate_skips_in_plan_mode() -> None:
-    from captain_hook.types import InPlanMode, Waiting
+def test_steering_deferral_nudge_skips_in_plan_mode() -> None:
+    from captain_hook.types import InPlanMode
 
     discover_pack("steering", manager.resolve_builtin("steering").path)
-    # Of the two Stop-gates (deferral + upstream-workaround), the deferral gate is the one that
-    # skips in plan mode; the workaround gate guards only on Waiting().
-    (gate,) = (
+    (nudge,) = (
         h
         for h in app._state.hooks
         if h.spec.events & (Event.Stop | Event.SubagentStop) and InPlanMode() in h.spec.skip_if
     )
-    assert gate.spec.skip_if == (Waiting(), InPlanMode())
+    assert nudge.spec.skip_if == (InPlanMode(),)
 
 
 def test_gitignore_lines_survives_an_unstattable_path(monkeypatch: pytest.MonkeyPatch) -> None:

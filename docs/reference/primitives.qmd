@@ -112,7 +112,8 @@ gate(message: str, **kwargs) -> None   # == nudge(message, block=True, ...)
 
 ```python
 lint(check: Callable[[str], list[str]] | Callable[[ast.AST], Iterator[str]], *, message: str,
-     trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5) -> None
+     trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5,
+     max_fires=None) -> None
 
 diff_lint(check: Callable[[ast.AST, ast.AST], list[str]], *, message: str, sep=", ",
           block=False, events=None, tests=None, max_shown=5, only_if=..., skip_if=...) -> None
