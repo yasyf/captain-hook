@@ -26,10 +26,10 @@ RM_WORLD_TESTS_MJS = SRC / "tests" / "rm_world.test.mjs"
 LLM_TESTS_MJS = SRC / "tests" / "llm.test.mjs"
 MATRIX = json.loads((SRC / "matrix.json").read_text())
 BUNDLE_SHA256 = {
-    "compiler.js": "1e567c6a41a68c7a0d62b25a18749d99bc0b152b41324e96bea7d78410a0db05",
-    "editor.js": "c2146ee3dcc76a6516010a556f75bf5a465f688f3c43fa23aac77d8e8e585355",
-    "emulator.js": "3b233312b30c8b7b7d105c252c6bd2cd2e45887af7cc67ff73e2521cd253a0d3",
-    "llm.js": "073434037bfd2705d26931df8cc6bcb5c8081cdce65a7098c698965cb8f8e1c1",
+    "compiler.js": "1693e1ca325ea4bed3b50e719e5181cec50589010fe19091057176b8dc15bca3",
+    "editor.js": "8de6495e05586177365e7b5c928e4615c08b5acdc121638376a52191e0befde2",
+    "emulator.js": "1c3599d6357c5e6cf451f27fbc03b09fce9f06475bb8194d197b912f5e68aada",
+    "llm.js": "003a792a2fed61e65b0f877516e20ab748107e4537428995e9393a2b010af5ec",
 }
 WLLAMA_WASM_SHA256 = "4197ce6d3dc9240c42ee52b4197dc99638875a06b0083901f8a57767338a0cfa"
 

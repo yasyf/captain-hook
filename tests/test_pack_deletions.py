@@ -681,7 +681,7 @@ class TestRmTrashRewrite:
         )
         assert output["updatedInput"]["command"].startswith("'/opt/fake dir/trash' ")
 
-    def test_variable_target_denies(
+    def test_variable_target_runs(
         self,
         isolate_modules: None,
         monkeypatch: pytest.MonkeyPatch,
@@ -691,12 +691,7 @@ class TestRmTrashRewrite:
         self.load_with_trash(monkeypatch)
         outside = tmp_path / "outside"
         outside.mkdir()
-        result = self.decision("rm $FOO", outside, tmp_path)
-        assert result is not None
-        output = result["hookSpecificOutput"]
-        assert output["permissionDecision"] == "deny"
-        assert "repository" in output["permissionDecisionReason"]
-        assert "updatedInput" not in output
+        assert self.decision("rm $FOO", outside, tmp_path) is None
 
     def test_allowed_rm_untouched(
         self,

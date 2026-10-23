@@ -73,7 +73,7 @@ def check_resolved(evt: PreToolUseEvent, target: Target) -> HookResult | Recover
 
 
 def literal_spelling(target: Target, cwd: Path | None) -> Target:
-    return target if target.verified else Target(unescape_shell(target.raw), target.raw, cwd)
+    return Target(unescape_shell(target.raw), target.raw, cwd)
 
 
 def scratch_glob(target: Target) -> bool:
@@ -82,10 +82,13 @@ def scratch_glob(target: Target) -> bool:
     return is_scratch_path(prefix.resolve() / "_")
 
 
+def protected(result: HookResult | Recoverable | None) -> HookResult | None:
+    return result if isinstance(result, HookResult) else None
+
+
 def check_target(evt: PreToolUseEvent, target: Target, cwd: Path | None) -> HookResult | Recoverable | None:
-    if not target.verified and glob.has_magic(target.raw):
-        return None
-    target = literal_spelling(target, cwd)
+    if not target.verified:
+        return None if glob.has_magic(target.raw) else protected(check_resolved(evt, literal_spelling(target, cwd)))
     if not target.has_glob:
         return check_resolved(evt, target)
     expansion = target.expand()
@@ -113,8 +116,6 @@ def splits_a_word(call: Call) -> bool:
 
 
 def check_call(evt: PreToolUseEvent, call: Call) -> HookResult | Recoverable | None:
-    if not call.targets.complete:
-        return None
     recovery: Recoverable | None = None
     for target in call.targets:
         match check_target(evt, target, call.cwd):
@@ -122,7 +123,7 @@ def check_call(evt: PreToolUseEvent, call: Call) -> HookResult | Recoverable | N
                 return blocked
             case Recoverable() as recoverable if recovery is None:
                 recovery = recoverable
-    return recovery
+    return recovery if call.targets.complete else None
 
 
 def reemits_as_classified(target: Target) -> bool:
@@ -145,9 +146,9 @@ ROOT_RM = Block(pattern="filesystem root")
         Input(command="bash -c 'rm -rf /'", cwd="/"): ROOT_RM,
         Input(command="bash -lc 'rm -rf /'", cwd="/"): ROOT_RM,
         Input(command="sh -xc 'rm -rf /'", cwd="/"): ROOT_RM,
-        Input(command='bash -c "rm $F"', cwd="/"): UNRECOVERABLE_RM,
-        Input(command='eval "rm $F"', cwd="/"): UNRECOVERABLE_RM,
-        Input(command="rm $FOO", cwd="/"): UNRECOVERABLE_RM,
+        Input(command='bash -c "rm $F"', cwd="/"): Allow(),
+        Input(command='eval "rm $F"', cwd="/"): Allow(),
+        Input(command="rm $FOO", cwd="/"): Allow(),
         Input(command="FOO=/outside/x; rm $FOO", cwd="/"): RECOVERABLE_RM,
         Input(command="FOO=/; rm -rf $FOO/x/..", cwd="/"): ROOT_RM,
         Input(command='rm -f "$(git rev-parse --git-dir)/REBASE_HEAD"', cwd="/"): Allow(),
@@ -155,15 +156,16 @@ ROOT_RM = Block(pattern="filesystem root")
         Input(command="rm -rf $d/*", cwd="/"): Allow(),
         Input(command='X="/tmp/x /"; rm -rf $X', cwd="/"): ROOT_RM,
         Input(command='X="/tmp/x /outside"; rm -rf $X', cwd="/"): RECOVERABLE_RM,
-        Input(command='X="/tmp/a /Users/yasyf /tmp/b"; rm -rf $X"$X"', cwd="/"): UNRECOVERABLE_RM,
-        Input(command='read IFS <<<:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): UNRECOVERABLE_RM,
-        Input(command='IFS=:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): UNRECOVERABLE_RM,
+        Input(command='X="/tmp/a /Users/yasyf /tmp/b"; rm -rf $X"$X"', cwd="/"): Allow(),
+        Input(command='read IFS <<<:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): Allow(),
+        Input(command='IFS=:; X="/tmp/x:/Users/yasyf"; rm -rf $X', cwd="/"): Allow(),
         Input(command="rm -f /tmp/../etc/*", cwd="/"): Allow(),
         Input(command="rm /outside/{a,b}", cwd="/"): UNRECOVERABLE_RM,
         Input(command="rm foo\\\nbar", cwd="/"): UNRECOVERABLE_RM,
         Input(command="rm $(ls)", cwd="/"): Allow(),
         Input(command="rm `ls`", cwd="/"): Allow(),
         Input(command="rm foo.txt $(ls)", cwd="/"): Allow(),
+        Input(command="rm -rf / $(ls)", cwd="/"): ROOT_RM,
         Input(command="rm -- data.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="sudo rm /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command=r"\rm /foo.txt", cwd="/"): RECOVERABLE_RM,

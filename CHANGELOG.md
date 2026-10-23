@@ -147,8 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `find -exec` block, the legacy, doc, and dense comment nudges, the workflow model and
   writing-docs nudges, the session guards for `find -exec`, `trap`, `source`, shell stdin, and
   unparsed tool payloads, the task-list hooks, the tombstone nudge, and the tooling refusal, lane,
-  and repeat-dispatch hooks. The graphite pack drops its jj, raw rebase, merge, and pull warnings
-  and its `gt submit`, `restack`, `create`, `modify`, and force-push routing notes. The go and python
+  and repeat-dispatch hooks. The graphite pack drops its jj warning, the combined raw rebase, merge,
+  and pull warning (the `git rebase` note naming `ccx vcs stack rebase` stays), and its `gt submit`, `restack`, `create`, `modify`, and force-push routing notes. The go and python
   test nudges, the performance pack's verification-lane nudges, the steering pack's trivial-type
   nudge, and the workaround edit nudge are gone too.
 

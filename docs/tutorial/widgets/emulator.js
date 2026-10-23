@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: fbef2f7b0bf2754d0aac81e476156980b5cb1807798eabb6887017d11fc48aa3
+// capt-hook-widget src-sha256: a2afbc411f1e5425aece086d8a6b94c6944a4cefbe2ef44dc3575f447fdf4c02
 
 // autocomplete.ts
 var counter = 0;
@@ -904,8 +904,7 @@ function evaluateRmWorld(world, command) {
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);
     }
-    if (substitution) continue;
-    if (honest) return honesty();
+    if (honest && !substitution) return honesty();
     let recovery = null;
     for (const target of targets) {
       const check = checkTarget(vfs, target);
@@ -913,7 +912,7 @@ function evaluateRmWorld(world, command) {
       if (check.kind === "block") return block(check.message);
       if (check.kind === "recoverable" && recovery === null) recovery = check.token;
     }
-    if (recovery === null) continue;
+    if (substitution || recovery === null) continue;
     if (rewritable && targets.every((t) => t.emittable)) {
       const args = targets.map((t) => t.raw.startsWith("-") ? `./${t.raw}` : t.raw);
       edits.push({ ...call.segment, text: [world.trash, ...args].join(" ") });

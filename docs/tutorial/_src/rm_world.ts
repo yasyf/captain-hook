@@ -508,8 +508,7 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);
     }
-    if (substitution) continue;
-    if (honest) return honesty();
+    if (honest && !substitution) return honesty();
 
     let recovery: string | null = null;
     for (const target of targets) {
@@ -518,7 +517,7 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
       if (check.kind === "block") return block(check.message);
       if (check.kind === "recoverable" && recovery === null) recovery = check.token;
     }
-    if (recovery === null) continue;
+    if (substitution || recovery === null) continue;
 
     if (rewritable && targets.every((t) => t.emittable)) {
       const args = targets.map((t) => (t.raw.startsWith("-") ? `./${t.raw}` : t.raw));
