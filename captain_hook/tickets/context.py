@@ -328,7 +328,6 @@ def board_answers(state: dict[str, Any]) -> list[Answer]:
 
 
 def card_payload(text: str) -> dict[str, Any] | None:
-    """The ``slack.action`` payload a cc-slack channel line carries, or ``None`` for any other text."""
     if (match := CARD_TAP.fullmatch(text.strip())) is None:
         return None
     payload = json.loads(match["payload"])
@@ -336,9 +335,13 @@ def card_payload(text: str) -> dict[str, Any] | None:
 
 
 def card_taps(events: Iterable[Any]) -> Iterator[tuple[dict[str, Any], datetime | None]]:
-    """The cc-slack card taps the harness delivered: a meta channel line, or a channel command queued mid-turn."""
     for event in events:
-        if isinstance(event, UserEvent) and event.meta.is_meta:
+        if (
+            isinstance(event, UserEvent)
+            and event.meta.is_meta
+            and event.source_tool_use_id is None
+            and event.source_tool_assistant_uuid is None
+        ):
             text = event.text
         elif (
             isinstance(event, AttachmentEvent)
@@ -353,11 +356,16 @@ def card_taps(events: Iterable[Any]) -> Iterator[tuple[dict[str, Any], datetime 
 
 
 def card_answer(payload: dict[str, Any], at: datetime | None) -> Answer | None:
-    """The answer a card tap gives: only a tap on one of the options a question card showed."""
-    options = payload.get("options") or []
-    label = payload.get("label", "")
-    question = payload.get("question", "")
-    if not question or label not in options:
+    options = payload.get("options")
+    label = payload.get("label")
+    question = payload.get("question")
+    if (
+        not isinstance(options, list)
+        or not all(isinstance(option, str) for option in options)
+        or not isinstance(question, str)
+        or not question
+        or label not in options
+    ):
         return None
     shown = dict.fromkeys(options, "")
     return Answer(

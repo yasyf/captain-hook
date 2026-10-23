@@ -97,10 +97,14 @@ class CustomTicketCondition(CustomCondition):
 def approving(answer: Answer) -> bool:
     """Whether the user approved: picked an option other than the last one shown, or typed no hold.
 
+    A cc-slack card tap approves only when its label reads as a go and holds nothing back, whatever its position.
+
     Words typed beyond a pick's number decide over the pick, so ``3, DM him`` on a three-option
     question approves while a bare ``3`` holds. A last option that itself reads as a go, such as
     ``Post without the prevention sentence``, approves too.
     """
+    if answer.source == "card":
+        return any(GO.search(pick) and not HOLD.search(pick) for pick in answer.chosen)
     words = OPTION_NUMBER.sub("", answer.typed, count=1) if answer.chosen else answer.typed
     if words:
         return HOLD.search(words) is None

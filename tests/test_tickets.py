@@ -392,26 +392,28 @@ class TestBoard:
             envelope = f'<channel source="{server}" subject_id="s1" type="slack.action">'
             return f"{envelope}\n{json.dumps(payload)}\n</channel>"
 
-        queued = {
-            "type": "attachment",
-            "attachment": {
-                "type": "queued_command",
-                "prompt": tap("1.5", "Yes"),
-                "commandMode": "prompt",
-                "origin": channel,
-            },
-        }
+        def queued(text: str, origin: dict[str, str]) -> dict[str, Any]:
+            return {
+                "type": "attachment",
+                "attachment": {"type": "queued_command", "prompt": text, "commandMode": "prompt", "origin": origin},
+            }
+
         transcript = fixture_session(
             [
                 T.user("watch the release"),
                 T.assistant("asked on the card"),
                 T.user(tap("1.3", "No"), isMeta=True, origin=channel),
-                T.user(tap("1.4", "Explain more"), isMeta=True, origin=channel),
+                T.user(tap("1.4", "No", options=["No", "Yes"]), isMeta=True, origin=channel),
+                T.user(tap("1.5", "Explain more"), isMeta=True, origin=channel),
                 T.user(tap("1.6", "Yes", options=[]), isMeta=True, origin=channel),
-                T.user(tap("1.7", "Yes", server="plugin:other:other"), isMeta=True, origin=channel),
-                T.user(tap("1.8", "Yes")),
-                queued,
-                T.user(tap("1.5", "Yes"), isMeta=True, origin=channel),
+                T.user(tap("1.7", "Yes", options={"Yes": None}), isMeta=True, origin=channel),
+                T.user(tap("1.8", "Yes", server="plugin:other:other"), isMeta=True, origin=channel),
+                T.user(tap("1.9", "Yes")),
+                T.user(tap("2.0", "Yes"), isMeta=True, sourceToolUseID="toolu_skill"),
+                queued(tap("2.1", "Yes"), {"kind": "peer"}),
+                queued(tap("2.2", "Yes"), channel),
+                queued(tap("2.3", "Yes"), channel),
+                T.user(tap("2.3", "Yes"), isMeta=True, origin=channel),
             ]
         )
         evt = PreToolUseEvent(
@@ -419,9 +421,14 @@ class TestBoard:
             ctx=HookContext(session=SessionStore(tmp_path), transcript=transcript, settings=None),
         )
         ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "the fix is live"}))
-        assert [(item.id, item.chosen) for item in ctx.answers] == [("card:1.3", ("No",)), ("card:1.5", ("Yes",))]
-        assert [approving(item) for item in ctx.answers] == [False, True]
-        assert found(UserAnswered(Holds("text")), ctx) == [ctx.answers[1]]
+        assert [(item.id, item.chosen) for item in ctx.answers] == [
+            ("card:1.3", ("No",)),
+            ("card:1.4", ("No",)),
+            ("card:2.2", ("Yes",)),
+            ("card:2.3", ("Yes",)),
+        ]
+        assert [approving(item) for item in ctx.answers] == [False, False, True, True]
+        assert found(UserAnswered(Holds("text")), ctx) == list(ctx.answers[2:])
 
     def test_a_rejected_call_hands_the_judge_only_the_users_words(self, tmp_path: Path) -> None:
         from cc_transcript.filterspec import USER_SAID_MARKER, USER_SAID_TRAILER
