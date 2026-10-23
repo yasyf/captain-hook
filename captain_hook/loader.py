@@ -51,8 +51,12 @@ def is_skip_marked(path: Path) -> bool:
     return path.is_file() and bool(re.search(r"^__capt_hook_skip__\s*=\s*True\b", path.read_text(), re.MULTILINE))
 
 
+def submodules(pkg: str) -> set[str]:
+    return {name for name in sys.modules if name.startswith(f"{pkg}.")}
+
+
 def evict_submodules(pkg: str) -> None:
-    for fqn in [name for name in sys.modules if name.startswith(f"{pkg}.")]:
+    for fqn in submodules(pkg):
         del sys.modules[fqn]
     if (package := sys.modules.get(pkg)) is not None:
         for name, value in list(vars(package).items()):
@@ -103,9 +107,7 @@ def discover_hooks(hooks_dir: str | Path) -> None:
 
 def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
     if existing := sys.modules.get(fqn):
-        if existing.__path__ != search_paths:
-            existing.__path__ = search_paths
-            evict_submodules(fqn)
+        existing.__path__ = search_paths
         return existing
     spec = importlib.util.spec_from_loader(fqn, loader=None, is_package=True)
     if spec is None:
@@ -189,22 +191,27 @@ def discover_pack(name: str, pack_dir: Path) -> None:
     pkg = f"{PACK_PACKAGE_PREFIX}.{pack_module_name(name)}"
     ensure_pack_package(PACK_PACKAGE_PREFIX, [])
     ensure_pack_package(pkg, [str(pack_dir)])
+    evict_submodules(pkg)
     for path in sorted(pack_dir.glob("*.py")):
+        fqn = f"{pkg}.{path.stem}"
         if path.stem.startswith("_") or path.stem == CONF_MODULE or is_test_module(path.stem):
             continue
-        if is_skip_marked(path):
+        if is_skip_marked(path) or fqn in sys.modules:
             continue
         # Broad catch is deliberate: one unloadable or non-hook .py must not abort
         # the whole pack. Logged loudly at WARNING and recorded in ``load_errors`` so
         # ``capt-hook test`` fails on it, never silently swallowed.
         before = len(_state.hooks)
+        present = set(sys.modules)
         try:
-            import_pack_module(f"{pkg}.{path.stem}", path)
+            import_pack_module(fqn, path)
         except Exception as exc:
             # Roll back any hooks the module registered before it raised: a module that
             # half-loads (e.g. one valid hook then an AsyncDecisionError) must contribute
             # nothing, so a broken file never leaks a partially-wired guard.
             del _state.hooks[before:]
+            for sibling in submodules(pkg) - present:
+                del sys.modules[sibling]
             logger.bind(file=str(path)).opt(exception=True).warning("skipped unloadable hook file")
             _state.load_errors.append(LoadError(str(path), exc, pack=name))
         else:
