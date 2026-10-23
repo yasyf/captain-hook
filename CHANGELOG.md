@@ -57,7 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an instruction to go ahead as a decline. Every rejected call and any prompt carrying the banner
   now yields an `instruction` item holding only the typed words, labeled as replacing the rejected
   call. `PLAN_TOOL` and `plan_feedback()` are gone; `instruction_words` is public.
-||||||| parent of e749b5bf (tickets: 🐛 a refusing or overflowing judge is asked again, and a quoted citation names its item)
 
 - **A judge citation that copies a whole evidence header line names the item it heads.**
   12.101.2 matched a citation copied whole, the id after its first colon, or the text after the
@@ -524,6 +523,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mints a ticket.
 
 ### Fixed
+
+- **`capt-hook lint` flags a `.jsonl` string only when it names a transcript.** The transcript-read
+  rule matched every string constant containing `.jsonl`. A hook that appends to its own capture
+  log, such as `owner-prompts.jsonl`, failed lint as a hand-rolled transcript read, so hooks split
+  the filename across two constants to pass. The rule now flags a path under `.claude/projects` or
+  `.codex/sessions`, and a glob over `.jsonl` files such as `*.jsonl`, `*/session.jsonl`, or
+  `rollout-?.jsonl`. It reads the whole path that an f-string, a `/` chain, `joinpath`, `Path()`, or
+  `os.path.join` builds, so `Path.home() / ".claude" / "projects"` is flagged once. A `.jsonl` file
+  a hook names literally passes, and `transcript_path` is flagged as before.
 
 - **A Mac without `~/Applications/Captain Hook.app` gets one install note per session, not
   a hook error on every call.** `bin/hook` handed every event to binrun, which failed reading the
