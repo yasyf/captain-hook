@@ -161,6 +161,9 @@ class TestStaticLint:
             ("open(f'{home}/.claude/projects/{slug}/{sid}.jsonl')", "reads transcript files by hand"),
             ("Path('~/.codex/sessions').expanduser().iterdir()", "reads transcript files by hand"),
             ("open(Path.home() / '.claude' / 'projects' / slug / f'{sid}.jsonl')", "reads transcript files by hand"),
+            ("Path.home() / '.claude' / 'projects' / slug / f'{sid}.jsonl'", "reads transcript files by hand"),
+            ("Path.home() / '.claude' / 'projects' / slug", "reads transcript files by hand"),
+            ("Path.home().glob('.claude/projects/*/*.jsonl')", "reads transcript files by hand"),
             ("Path.home().joinpath('.codex', 'sessions').iterdir()", "reads transcript files by hand"),
             ("os.path.join(home, '.claude', 'projects')", "reads transcript files by hand"),
             ("Path(root).glob(f'*{sid}.jsonl')", "reads transcript files by hand"),
@@ -188,6 +191,11 @@ class TestStaticLint:
             "CAPTURE_LOG = STATE_DIR / 'owner-prompts.jsonl'\nCAPTURE_LOG.open('a').write(line)",
             "open(state_dir / f'{session}.jsonl', 'a')",
             "open(Path.home().joinpath('.claude', 'captures', f'{session}.jsonl'), 'a')",
+            "dirs.add(Path.home() / '.claude' / 'projects' / main / 'memory')",
+            "Path.home().joinpath('.claude', 'projects', slug, 'memory', 'MEMORY.md').read_text()",
+            "open(f'{home}/.claude/projects/{slug}/memory/{name}.md')",
+            "os.path.join(home, '.claude', 'projects', slug, 'memory')",
+            "Path.home().glob('.claude/projects/*/memory/*.md')",
         ],
     )
     def test_declarative_code_is_clean(self, source: str) -> None:

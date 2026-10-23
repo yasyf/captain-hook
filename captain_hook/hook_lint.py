@@ -63,8 +63,10 @@ MESSAGE_KEYWORDS = frozenset({"message", "reason", "hint", "note"})
 MESSAGE_POSITIONAL = frozenset({"block", "warn", "context", "gate", "nudge", "deny"})
 REGEX_METHODS = frozenset({"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"})
 COMMAND_TEXT = re.compile(r"\.raw\b|tool_input(?:\[|\.get\()[\"']command[\"']|^(?:str\()?(?:evt\.)?(?:command|cmd)\)?$")
-TRANSCRIPT_FILES = re.compile(r"\.claude/projects|\.codex/sessions|[*?\[]\S*\.jsonl\b")
-PATH_JOINS = frozenset({"Path", "PurePath", "join"})
+TRANSCRIPT_FILES = re.compile(
+    r"\.claude/projects(?!/[^/\s]+/)|\.codex/sessions|(?:\.claude/projects/|[*?\[])\S*\.jsonl\b"
+)
+PATH_JOINS = frozenset({"Path", "PurePath", "join", "joinpath"})
 BROAD_EXCEPTIONS = frozenset({"Exception", "BaseException"})
 COMMAND_PATTERN_CALLS = frozenset({"Command", "CommandCondition", "block_command", "warn_command"})
 ESCAPE_MARKERS = re.compile(r"ccx:raw|root:raw|tooling-lane:|^CAPT_HOOK_CCX_RAW$")
@@ -218,7 +220,7 @@ def textual_command_name(call: ast.Call) -> str | None:
             return None
 
 
-def path_text(node: ast.AST | None) -> str:
+def path_text(node: ast.AST) -> str:
     match node:
         case ast.Constant(value=str() as text):
             return text
@@ -234,8 +236,18 @@ def path_text(node: ast.AST | None) -> str:
             return "_"
 
 
-def names_transcript(node: ast.AST | None) -> bool:
+def names_transcript(node: ast.AST) -> bool:
     return TRANSCRIPT_FILES.search(path_text(node)) is not None
+
+
+def extends_path(parent: ast.AST | None) -> bool:
+    match parent:
+        case ast.JoinedStr() | ast.BinOp(op=ast.Div()) | ast.Attribute(attr="joinpath"):
+            return True
+        case ast.Call() if callee(parent) in PATH_JOINS:
+            return True
+        case _:
+            return False
 
 
 def code_violation(node: ast.AST, parent: ast.AST | None) -> str | None:
@@ -248,7 +260,7 @@ def code_violation(node: ast.AST, parent: ast.AST | None) -> str | None:
             return "regexes command text; match with Runs(...), a CommandSchema, or an ast-grep rewrite_command pattern"
         case ast.Attribute(attr="transcript_path") | ast.Name(id="transcript_path"):
             return "reads the transcript by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
-        case ast.expr() if names_transcript(node) and not names_transcript(parent):
+        case ast.expr() if names_transcript(node) and not extends_path(parent):
             return "reads transcript files by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
         case ast.ExceptHandler(type=None):
             return "swallows failures; let the hook raise, the dispatcher records the fault"
