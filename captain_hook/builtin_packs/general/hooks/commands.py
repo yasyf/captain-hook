@@ -16,6 +16,7 @@ from captain_hook import (
     Option,
     Or,
     PathMatches,
+    PathsMatch,
     RanCommand,
     Rewrite,
     Rewritten,
@@ -29,6 +30,7 @@ from captain_hook import (
     rewrite_command_occurrences,
 )
 from captain_hook.cmd import COMMAND_VALUE_FLAGS
+from captain_hook.command_schemas import FIND
 
 if TYPE_CHECKING:
     from captain_hook import Arguments, Occurrence, PreToolUseEvent, WalkContext
@@ -47,6 +49,46 @@ FIND_TO_RG = CommandSchema(
     options_end_operands=True,
 )
 UNBOUNDED_ROOT = PathMatches(("/", "~", "/Users", "/Users/*", "**/.claude/worktrees"))
+BROAD_FIND_ROOT = PathMatches(
+    ("/", "~", "/Users", "/Users/*", "/home", "/home/*", "/System/Volumes/Data", "**/.claude/worktrees"),
+    unresolved=True,
+)
+FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+DELETING_PROGRAMS = frozenset({"rm", "rmdir", "unlink", "shred", "trash"})
+FIND_VALUE_FLAGS = frozenset(
+    {
+        "-f",
+        "-maxdepth",
+        "-mindepth",
+        "-name",
+        "-iname",
+        "-path",
+        "-ipath",
+        "-wholename",
+        "-iwholename",
+        "-regex",
+        "-iregex",
+        "-type",
+        "-xtype",
+        "-mtime",
+        "-mmin",
+        "-atime",
+        "-amin",
+        "-ctime",
+        "-cmin",
+        "-size",
+        "-user",
+        "-group",
+        "-uid",
+        "-gid",
+        "-perm",
+        "-links",
+        "-inum",
+        "-newer",
+        "-fstype",
+    }
+)
+EXEC_ENDS = frozenset({";", "+"})
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
 ATTEMPT_TOOLS = "Bash|Edit|Write"
 
@@ -434,5 +476,47 @@ rewrite_command_occurrences(
         Input(command="find ~ -iname a -iname b"): Allow(),
         Input(command="echo find ~ -iname foo"): Allow(),
         Input(command="git status"): Allow(),
+    },
+)
+
+
+def deletes_per_hit(arguments: Arguments) -> bool:
+    args = iter(arguments.call.args)
+    for arg in args:
+        if arg == "-delete":
+            return True
+        if arg in FIND_EXEC_FLAGS:
+            if next(args, "").rsplit("/", 1)[-1] in DELETING_PROGRAMS:
+                return True
+            next((end for end in args if end in EXEC_ENDS), None)
+        elif arg in FIND_VALUE_FLAGS:
+            next(args, None)
+    return False
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[
+        Tool("Bash"),
+        CommandMatches(FIND, only_if=(PathsMatch("roots", BROAD_FIND_ROOT), deletes_per_hit)),
+    ],
+    message=(
+        "A `find` that deletes from /, a home directory, or the worktree pool can wipe other sessions' work. "
+        "Run it from the directory you mean to clean, or `rm` the named paths."
+    ),
+    block=True,
+    tests={
+        Input(command=r"find / -name '*.pyc' -exec rm {} \;"): Block(),
+        Input(command="find /Users/yasyf -iname '*.log' -exec rm {} +"): Block(),
+        Input(command="find ~/.claude/worktrees -name '*.lock' -exec rm {} +"): Block(),
+        Input(command="find $HOME -name '*.lock' -exec /bin/rm -f {} +"): Block(),
+        Input(command="find ~ -name '*.tmp' -delete"): Block(),
+        Input(command="find . -name '*.pyc' -delete", cwd="/Users/alice"): Block(),
+        Input(command="find ~ -type f -exec grep -l foo {} +"): Allow(),
+        Input(command="find ~ -type f -exec grep -l -- -delete {} +"): Allow(),
+        Input(command="find / -name '-delete' -print"): Allow(),
+        Input(command="find . -name '*.pyc' -exec rm {} +", cwd="/repo"): Allow(),
+        Input(command="find /tmp/build -name '*.o' -delete"): Allow(),
+        Input(command="echo find / -delete"): Allow(),
     },
 )
