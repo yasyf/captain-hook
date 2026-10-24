@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `find` that deletes from a broad root blocks.** A `find` rooted at `/`, a home directory, or
+  the worktree pool that runs `-delete` or `-exec rm` (or `rmdir`, `unlink`, `shred`, `trash`) is
+  refused, since it can remove other sessions' work. A non-deleting `-exec`, such as `grep`, runs.
 - **Mechanical builtin blocks warn once per agent instead.** `jj op restore` and `jj undo`, an
   over-budget comment edit, a rewrite of an existing plan, edits after a re-plan request, a haiku
   pin on a delegated spawn, a broad `find`, and a push to a queued PR now warn the first time and
@@ -139,8 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **Overlapping and over-specific builtin hooks are gone.** The general pack drops the broad
-  `find -exec` block, the legacy, doc, and dense comment nudges, the workflow model and
+- **Overlapping and over-specific builtin hooks are gone.** The general pack drops the legacy, doc, and dense comment nudges, the workflow model and
   writing-docs nudges, the session guards for `find -exec`, `trap`, `source`, shell stdin, and
   unparsed tool payloads, the task-list hooks, the tombstone nudge, and the tooling refusal, lane,
   and repeat-dispatch hooks. The graphite pack drops its jj warning, the combined raw rebase, merge,
