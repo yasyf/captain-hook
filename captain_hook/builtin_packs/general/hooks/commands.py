@@ -55,6 +55,40 @@ BROAD_FIND_ROOT = PathMatches(
 )
 FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 DELETING_PROGRAMS = frozenset({"rm", "rmdir", "unlink", "shred", "trash"})
+FIND_VALUE_FLAGS = frozenset(
+    {
+        "-f",
+        "-maxdepth",
+        "-mindepth",
+        "-name",
+        "-iname",
+        "-path",
+        "-ipath",
+        "-wholename",
+        "-iwholename",
+        "-regex",
+        "-iregex",
+        "-type",
+        "-xtype",
+        "-mtime",
+        "-mmin",
+        "-atime",
+        "-amin",
+        "-ctime",
+        "-cmin",
+        "-size",
+        "-user",
+        "-group",
+        "-uid",
+        "-gid",
+        "-perm",
+        "-links",
+        "-inum",
+        "-newer",
+        "-fstype",
+    }
+)
+EXEC_ENDS = frozenset({";", "+"})
 GLOB_FLAGS = {"name": "--glob", "iname": "--iglob"}
 ATTEMPT_TOOLS = "Bash|Edit|Write"
 
@@ -447,11 +481,17 @@ rewrite_command_occurrences(
 
 
 def deletes_per_hit(arguments: Arguments) -> bool:
-    args = arguments.call.args
-    return "-delete" in args or any(
-        flag in FIND_EXEC_FLAGS and program.rsplit("/", 1)[-1] in DELETING_PROGRAMS
-        for flag, program in zip(args, args[1:], strict=False)
-    )
+    args = iter(arguments.call.args)
+    for arg in args:
+        if arg == "-delete":
+            return True
+        if arg in FIND_EXEC_FLAGS:
+            if next(args, "").rsplit("/", 1)[-1] in DELETING_PROGRAMS:
+                return True
+            next((end for end in args if end in EXEC_ENDS), None)
+        elif arg in FIND_VALUE_FLAGS:
+            next(args, None)
+    return False
 
 
 hook(
@@ -473,6 +513,8 @@ hook(
         Input(command="find ~ -name '*.tmp' -delete"): Block(),
         Input(command="find . -name '*.pyc' -delete", cwd="/Users/alice"): Block(),
         Input(command="find ~ -type f -exec grep -l foo {} +"): Allow(),
+        Input(command="find ~ -type f -exec grep -l -- -delete {} +"): Allow(),
+        Input(command="find / -name '-delete' -print"): Allow(),
         Input(command="find . -name '*.pyc' -exec rm {} +", cwd="/repo"): Allow(),
         Input(command="find /tmp/build -name '*.o' -delete"): Allow(),
         Input(command="echo find / -delete"): Allow(),
