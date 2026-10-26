@@ -8,6 +8,7 @@ from captain_hook import (
     Allow,
     Event,
     Input,
+    LambdaCondition,
     OtherCall,
     PostToolUseFailureEvent,
     T,
@@ -15,10 +16,11 @@ from captain_hook import (
     Tool,
     Warn,
     llm_nudge,
+    nudge,
 )
 
 if TYPE_CHECKING:
-    from captain_hook import BaseHookEvent
+    from captain_hook import BaseHookEvent, PostToolUseEvent
 
 TOOLING = frozenset({"ccx", "gt", "orca", "ccn", "cc-notes", "cc-slack", "codex-ask", "capt-hook"})
 TOOL_WORD = re.compile(rf"(?<![\w-])({'|'.join(sorted(map(re.escape, TOOLING)))})(?![\w-])")
@@ -28,6 +30,10 @@ LANE_REPORT = re.compile(r"(?i)\bccx refusal:|\btooling defect\b")
 EXIT_HEADER = re.compile(r"\A(?:Error: )?Exit code \d+\n")
 REPEATS = 3
 SCOPE = "tooling_nudge"
+ORCA_PROMPT_BLOCKED = (
+    "agent_prompt_blocked Terminal prompt request ID: r1. Re-issue the exact command with --retry-request r1 "
+    "--wait-submit <seconds>; do not retry it without that ID."
+)
 
 PROMPT = """You are a senior engineer watching another engineer ("the agent") mid-task. A
 deterministic scan flagged the tool call that just ran as a possible TOOLING DEFECT or
@@ -218,5 +224,26 @@ llm_nudge(
             tool_input={"prompt": "reply in the thread", "subagent_type": "lane"},
             output="Blocked: no cc-slack session for this Claude window.",
         ): Allow(),
+    },
+)
+
+
+def orca_refused_for_dialog(evt: PostToolUseEvent | PostToolUseFailureEvent) -> bool:
+    output = evt.error if isinstance(evt, PostToolUseFailureEvent) else evt.tool_response
+    return "agent_prompt_blocked" in str(output)
+
+
+nudge(
+    "Orca refused the send because the agent shows a dialog, and `--retry-request` refuses the same way. "
+    "Answer it with `orca terminal send --terminal <handle> --text N` and no `--enter` to pick option N, "
+    "or `--enter` alone to confirm the highlighted one.",
+    only_if=[Tool("Bash"), LambdaCondition(orca_refused_for_dialog)],
+    events=Event.PostToolUse | Event.PostToolUseFailure,
+    tests={
+        Input(command="orca terminal send --terminal t --text 1 --enter 2>&1 | tail -3", output=ORCA_PROMPT_BLOCKED): (
+            Warn(pattern="and no `--enter`")
+        ),
+        Input(command="orca terminal send --terminal t --text 1", output='{"ok":true}'): Allow(),
+        Input(command="orca terminal send --terminal t --text hi --enter", output="terminal_handle_stale"): Allow(),
     },
 )

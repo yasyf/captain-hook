@@ -1220,7 +1220,8 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
     if arguments.unread:
         return (
             f"BLOCKED: `{spelling}` passes `{clip(arguments.unread[0].raw, 40)}`, an option the guard does not know, "
-            "so it cannot rule out an interrupt. Drop the option."
+            "so it cannot rule out an interrupt. Drop the option; to answer a dialog, send `--text N` without "
+            "`--enter`, or `--enter` alone."
         )
     for word in words.get("rest", ()):
         flag, _, value = word.raw.partition("=")
@@ -1278,6 +1279,9 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
         guarded(command="orca terminal send --terminal t --text hi --enter --timeout-ms 3000"): Block(
             pattern="passes `--timeout-ms`"
         ),
+        guarded(command="orca terminal send --terminal t --keys Enter"): Block(pattern="without `--enter`"),
+        guarded(command="orca terminal send --terminal t --text 1"): Allow(),
+        guarded(command="orca terminal send --terminal t --enter"): Allow(),
         guarded(command='orca terminal send "$X" --text hi --enter'): Block(pattern="may read as `--interrupt`"),
         guarded(command="orca terminal send --terminal $t --text hi --enter"): Block(pattern="may split"),
         guarded(command="orca terminal send --terminal=$t --text hi --enter"): Block(),

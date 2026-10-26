@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Orca's dialog refusal names the send that answers the dialog.** When `orca terminal send` fails
+  with `agent_prompt_blocked` because the agent shows a dialog such as a tool approval, the general
+  pack tells the agent to pick option N with `--text N` and no `--enter`, or to press Enter alone
+  with `--enter`. The guard's refusal of an unknown `orca terminal send` option, such as `--keys`,
+  says the same.
 - **A `# capt-hook: no-escape <reason>` marker exempts a deliberate refusal from the escape lint.**
   A blocking hook on Agent, Task, Skill, Read, Grep, or Glob that carries the marker on any line of
   its `@on(...)` decorator or `hook(...)` call passes `capt-hook lint` without an `Annotated` escape
