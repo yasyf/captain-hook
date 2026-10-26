@@ -6,7 +6,18 @@ from functools import partial
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, Block
+from captain_hook import (
+    Allow,
+    Block,
+    Event,
+    Input,
+    LambdaCondition,
+    PostToolUseEvent,
+    PostToolUseFailureEvent,
+    Tool,
+    Warn,
+    nudge,
+)
 from captain_hook.bindings import Resolved
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
@@ -196,6 +207,14 @@ END_OF_SESSION_CHORDS = frozenset(
 END_OF_SESSION_ACTION = re.compile(r"(?i)\b(quit|close|kill|stop|terminate|interrupt|remove|delete)\b")
 END_OF_SESSION = frozenset(
     {"exit", "/exit", "/quit", "logout", "\x03", "\x04", "^c", "^d", "c-c", "c-d", "\\x03", "\\x04"}
+)
+DIALOG_ANSWER = (
+    "To answer a dialog in another terminal, pick option N with `orca terminal send --terminal <handle> --text N` "
+    "and no `--enter`, or confirm the highlighted option with `--enter` alone."
+)
+ORCA_PROMPT_BLOCKED = (
+    "agent_prompt_blocked Terminal prompt request ID: r1. Re-issue the exact command with --retry-request r1 "
+    "--wait-submit <seconds>; do not retry it without that ID."
 )
 LAUNCHCTL_ENDINGS = frozenset(
     {"bootout", "kill", "kickstart", "stop", "remove", "unload", "disable", "reboot", "asuser", "bsexec"}
@@ -1220,7 +1239,7 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
     if arguments.unread:
         return (
             f"BLOCKED: `{spelling}` passes `{clip(arguments.unread[0].raw, 40)}`, an option the guard does not know, "
-            "so it cannot rule out an interrupt. Drop the option."
+            f"so it cannot rule out an interrupt. Drop the option. {DIALOG_ANSWER}"
         )
     for word in words.get("rest", ()):
         flag, _, value = word.raw.partition("=")
@@ -1278,6 +1297,9 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
         guarded(command="orca terminal send --terminal t --text hi --enter --timeout-ms 3000"): Block(
             pattern="passes `--timeout-ms`"
         ),
+        guarded(command="orca terminal send --terminal t --keys Enter"): Block(pattern="and no `--enter`"),
+        guarded(command="orca terminal send --terminal t --text 1"): Allow(),
+        guarded(command="orca terminal send --terminal t --enter"): Allow(),
         guarded(command='orca terminal send "$X" --text hi --enter'): Block(pattern="may read as `--interrupt`"),
         guarded(command="orca terminal send --terminal $t --text hi --enter"): Block(pattern="may split"),
         guarded(command="orca terminal send --terminal=$t --text hi --enter"): Block(),
@@ -1329,6 +1351,29 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
 def orca_send_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
     scan = Scan.of(evt)
     return block_first(evt, (orca_send_verdict(call, scan, evt) for call in scan.literal_calls))
+
+
+def orca_refused_for_dialog(evt: PostToolUseEvent | PostToolUseFailureEvent) -> bool:
+    output = evt.error if isinstance(evt, PostToolUseFailureEvent) else str(evt.tool_response)
+    return "agent_prompt_blocked" in output
+
+
+nudge(
+    "Orca refused the send because the agent in that terminal shows a dialog, such as a tool approval, and "
+    f"`--retry-request` hits the same refusal while the dialog stays open. {DIALOG_ANSWER}",
+    only_if=[Tool("Bash"), LambdaCondition(orca_refused_for_dialog)],
+    events=Event.PostToolUse | Event.PostToolUseFailure,
+    tests={
+        Input(command="orca terminal send --terminal t --text 1 --enter", error=ORCA_PROMPT_BLOCKED): Warn(
+            pattern="and no `--enter`"
+        ),
+        Input(command="orca terminal send --terminal t --text 1 --enter 2>&1 | tail -3", output=ORCA_PROMPT_BLOCKED): (
+            Warn(pattern="and no `--enter`")
+        ),
+        Input(command="orca terminal send --terminal t --text hi --enter", error="terminal_handle_stale"): Allow(),
+        Input(command="orca terminal send --terminal t --text 1", output='{"ok":true}'): Allow(),
+    },
+)
 
 
 def ends_session_key(key: str) -> bool:
