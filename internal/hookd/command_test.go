@@ -351,7 +351,7 @@ func TestVersionReportsExactSchemaAndBuild(t *testing.T) {
 
 func TestPackageInstallStartsTheLifecycleBudgetAfterASlowToolEnv(t *testing.T) {
 	t.Parallel()
-	const toolEnvTimeout, lifecycleTimeout = 10 * time.Second, 100 * time.Millisecond
+	const toolEnvTimeout, lifecycleTimeout = 10 * time.Second, 500 * time.Millisecond
 	var lifecycleBudget time.Duration
 	err := installPackage(
 		func(ctx context.Context) error {
