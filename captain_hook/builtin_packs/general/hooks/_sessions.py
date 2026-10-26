@@ -287,54 +287,43 @@ def inline_ruling(
     )
 
 
-def inline_create(
-    handle: str, command: str = "orca terminal create --worktree active --command codex --json"
+def inline_call(
+    tool: str, tool_input: dict[str, Any], content: str, result: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
+    use_id = f"toolu_{tool.lower()}"
+    answer: dict[str, Any] = {
+        "type": "user",
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use_id, "content": content}]},
+    }
     return [
         *INLINE_TRANSCRIPT,
         {
             "type": "assistant",
             "message": {
                 "role": "assistant",
-                "content": [{"type": "tool_use", "id": "toolu_create", "name": "Bash", "input": {"command": command}}],
+                "content": [{"type": "tool_use", "id": use_id, "name": tool, "input": tool_input}],
             },
         },
-        {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_create",
-                        "content": json.dumps({"ok": True, "result": {"terminal": {"handle": handle}}}),
-                    }
-                ],
-            },
-        },
+        answer if result is None else {**answer, "toolUseResult": result},
     ]
+
+
+def inline_create(
+    handle: str, command: str = "orca terminal create --worktree active --command codex --json"
+) -> list[dict[str, Any]]:
+    created = json.dumps({"ok": True, "result": {"terminal": {"handle": handle}}})
+    return inline_call("Bash", {"command": command}, created)
 
 
 def inline_spawn(task: str, *, tool: str = "Agent", status: str = "teammate_spawned") -> list[dict[str, Any]]:
     name, _, team = task.partition("@")
-    return [
-        *INLINE_TRANSCRIPT,
-        {
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": "toolu_spawn", "name": tool, "input": {"name": name}}],
-            },
-        },
-        {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": "toolu_spawn", "content": f"agent_id: {task}"}],
-            },
-            "toolUseResult": {"status": status, "teammate_id": task, "agent_id": task, "name": name, "team_name": team},
-        },
-    ]
+    result = {"status": status, "teammate_id": task, "agent_id": task, "name": name, "team_name": team}
+    return inline_call(tool, {"name": name}, f"agent_id: {task}", result)
+
+
+def inline_background(task: str, *, tool: str = "Bash") -> list[dict[str, Any]]:
+    command = {"command": "sleep 600", "run_in_background": True}
+    return inline_call(tool, command, f"Running in background with ID: {task}", {SHELL_TASK_IDS[tool]: task})
 
 
 def inline_workers(*handles: str) -> str:
@@ -1281,31 +1270,38 @@ def still_settled(action: Proposal) -> bool:
     return worker is not None and worker["dispatchId"] == action.payload["dispatch"]
 
 
-def spawned(use: ToolUse, task: str) -> bool:
-    if use.call.name not in SPAWN_TOOLS or use.result is None:
-        return False
-    result = use.result.tool_use_result
-    return isinstance(result, dict) and result.get("status") == "teammate_spawned" and result.get("teammate_id") == task
+def started(use: ToolUse, task: str) -> str | None:
+    if use.result is None or not isinstance(result := use.result.tool_use_result, dict):
+        return None
+    match child_of(result, use.call.name):
+        case (source, child) if child == task and (source == "shell" or TEAMMATE_TASK.fullmatch(task)):
+            return source
+        case _:
+            return None
 
 
 @dataclass(frozen=True, slots=True)
 class SpawnedHere(CustomTicketCondition):
-    """This agent's own transcript records spawning the task as its teammate."""
+    """This agent's own transcript records starting the task: a teammate it spawned, or a shell or Monitor it ran."""
 
     def evidence(self, ctx: Context) -> list[Evidence] | None:
         task = ctx.place["task"]
-        if TEAMMATE_TASK.fullmatch(task) is None or ctx.evt is None:
+        if ctx.evt is None:
             return None
-        found = next((use for turn in ctx.evt.ctx.t.turns for use in turn.tool_uses if spawned(use, task)), None)
+        found = next(
+            ((use, source) for turn in ctx.evt.ctx.t.turns for use in turn.tool_uses if (source := started(use, task))),
+            None,
+        )
         if found is None:
             return None
+        use, source = found
         return [
             Evidence(
-                id=f"teammate:{task}",
-                source="teammate",
+                id=f"{source}:{task}",
+                source=source,
                 quote=task,
-                said_at=found.result_ts or found.ts,
-                detail="this agent's own transcript records spawning it as its teammate",
+                said_at=use.result_ts or use.ts,
+                detail=f"this agent's own transcript records its {use.call.name} call starting it",
             )
         ]
 
