@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from captain_hook import Allow, Block, Event, Input, LambdaCondition, Tool, on
 from captain_hook.builtin_packs.general.hooks._sessions import (
     INLINE_COMMANDS,
+    INLINE_SESSION,
     INLINE_STARTED,
     INLINE_TRANSCRIPT,
     LATER_SESSION,
@@ -21,7 +22,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     record_child,
     spawning_root,
 )
-from captain_hook.tickets import Proposal
+from captain_hook.tickets import Proposal, Reach, Ticket
 
 if TYPE_CHECKING:
     from captain_hook import BaseHookEvent, HookResult, PostToolUseEvent, ToolRewriteEvent
@@ -31,6 +32,23 @@ OWN_LANE = "lane-2@session-67c0e5da"
 OWN_SHELL = "bghannz4t"
 stopping = partial(Input, tool="TaskStop", commands=INLINE_COMMANDS, transcript=INLINE_TRANSCRIPT)
 stopping_own_shell = partial(stopping, tool_input={"task_id": OWN_SHELL}, agent_id="lane-1")
+stopping_as_dispatched = partial(
+    stopping, tool_input={"task_id": OWN_SHELL}, session_id=INLINE_SESSION, root_transcript=INLINE_TRANSCRIPT
+)
+OTHER_SESSION = "feedface-0000-4000-8000-000000000000"
+
+
+def shell_ticket(tree: str, agent: str = f"{INLINE_SESSION}/main") -> Ticket:
+    return Ticket(
+        id="5e11000000b1",
+        kind=TASK_STOP.kind,
+        tree=tree,
+        place={"agent": agent, "task": OWN_SHELL},
+        reach=Reach.PLACE,
+        rule="shell",
+        author="hook:sessions",
+        created=INLINE_STARTED,
+    )
 
 
 def names_a_stop_tool(evt: BaseHookEvent) -> bool:
@@ -115,6 +133,13 @@ def describe_target(target: tuple[str, str] | None) -> str:
             pattern=f"on task `{OWN_SHELL}` cannot be verified"
         ),
         stopping_own_shell(root_transcript=inline_background(OWN_SHELL)): Block(pattern="cannot be verified"),
+        stopping_as_dispatched(tickets=[shell_ticket(INLINE_SESSION)]): Allow(),
+        stopping_as_dispatched(tickets=[shell_ticket(INLINE_SESSION, f"{INLINE_SESSION}/lane-1")]): Block(
+            pattern=f"on task `{OWN_SHELL}` cannot be verified"
+        ),
+        stopping_as_dispatched(tickets=[shell_ticket(OTHER_SESSION, f"{OTHER_SESSION}/main")]): Block(
+            pattern="cannot be verified"
+        ),
         Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(tool="mcp__orca__TaskStop", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(command="printf 'TaskStop wcn64vfub'"): Allow(),

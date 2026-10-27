@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An agent stops its own background shell after the session changes Orca dispatches.** The ticket
+  a `Bash` or `Monitor` call mints for its background task, and the one an `Agent` or `Task` call
+  mints for its teammate, now lives in the session's own tree. An attended session in an Orca
+  terminal joins its Run coordinator's tree only while Orca reports its dispatch live, so a shell
+  started while it did not lost its ticket once the coordinator resolved again, and `TaskStop` on it
+  blocked once its launch had left the transcript tail. Another agent's or another session's task
+  stays blocked.
 - **A lane stops its own background shell.** A subagent's `TaskStop` on a background task its own
   `Bash` or `Monitor` call started, such as a `run_in_background` heartbeat loop, is allowed when the
   agent's transcript records that call's result naming the task id, even if no ticket was minted

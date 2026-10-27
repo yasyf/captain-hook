@@ -49,6 +49,8 @@ class Tickets:
         window: How many recent messages of each session the context reads.
         machine: Markers of a prompt a tool wrote on the user's behalf; such a prompt is never their words.
         hook: The hook the declaration belongs to, for logs.
+        own_session: Whether tickets live in the acting session's own tree, for a place that names the acting
+            agent: that tree holds while the session joins and leaves an Orca coordinator's tree.
     """
 
     kind: str
@@ -61,6 +63,7 @@ class Tickets:
     window: int = 60
     machine: tuple[str, ...] = ()
     hook: str = "tickets"
+    own_session: bool = False
 
     def __post_init__(self) -> None:
         DECLARED[self.kind] = self
@@ -81,6 +84,7 @@ class Tickets:
             evt,
             self.kind,
             self.canonical(action),
+            tree=evt.session_id if self.own_session else None,
             trees=() if coordinator is None else (coordinator,),
             window=self.window,
             machine=self.machine,

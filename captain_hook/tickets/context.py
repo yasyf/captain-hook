@@ -594,8 +594,9 @@ class Context:
     Attributes:
         kind: The declaration's kind.
         action: The action to cover.
-        tree: The root session id of the acting tree.
-        trees: The trees whose tickets cover the action: its own, and its Orca coordinator's.
+        tree: The tree a ticket minted here joins: the acting tree's root session id, unless the declaration
+            keeps its tickets in the acting session's own tree.
+        trees: The trees whose tickets cover the action: that tree, the acting tree, and its Orca coordinator's.
         session: The acting session.
         agent: The acting agent.
         call: The id of the pending call.
@@ -622,18 +623,20 @@ class Context:
         kind: str,
         action: Proposal,
         *,
+        tree: str | None = None,
         trees: Sequence[str] = (),
         window: int = WINDOW,
         machine: Sequence[str] = (),
     ) -> Context:
         """The live context of *evt*, remembered on the event so conditions reach it through :meth:`current`."""
-        tree = tree_of(evt)
+        acting = tree_of(evt)
+        home = tree or acting
         needles = tuple(value for value in action.place.values() if value)
         ctx = cls(
             kind=kind,
             action=action,
-            tree=tree,
-            trees=tuple(dict.fromkeys((tree, *trees))),
+            tree=home,
+            trees=tuple(dict.fromkeys((home, acting, *trees))),
             session=evt.session_id,
             agent=evt.agent_id or "main",
             call=call_id(evt),

@@ -256,8 +256,10 @@ INLINE_TABLE = (
     "18100     1 18100  501 Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json\n"
     f"18101 18100 18100  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} orchestration worker-list --json\n"
     "18200     1 18200  501 Thu Jan  1 00:00:00 2026 python3 serve-wrapper.py\n"
-    "18300     1 18300  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node /Users/dev/.live-dashboard/0.5.2/server.js\n"
-    "18301     1 18301  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node /Users/dev/.live-dashboard/0.5.2/server.js\n"
+    "18300     1 18300  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node "
+    "/Users/dev/.live-dashboard/0.5.2/server.js\n"
+    "18301     1 18301  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node "
+    "/Users/dev/.live-dashboard/0.5.2/server.js\n"
     f"18201 18200 18200  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} serve --port 7777\n"
     "19000     1 19000  501 Thu Jan  1 00:00:00 2026 /Applications/Slack.app/Contents/MacOS/Slack\n"
     "19001 19000 19000  501 Thu Jan  1 00:00:00 2026 /Applications/Slack.app/Contents/Frameworks/Slack Helper.app/"
@@ -1372,6 +1374,7 @@ TASK_STOP = Tickets(
     deny="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
     "this agent started, or have the owner name the task id in a cc-notes answer before the stopping session starts.",
     hook="sessions",
+    own_session=True,
 )
 KILL_PROCESS = Tickets(
     "sessions.kill",
