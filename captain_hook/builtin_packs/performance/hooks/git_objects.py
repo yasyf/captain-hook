@@ -63,6 +63,50 @@ GIT_CAT_FILE = CommandSchema(
 )
 
 COUNT_LIMIT = re.compile(r"-\d+|-n\d*|--max-count(=\d+)?")
+WHOLE_TREE_PATHSPECS = frozenset({"", ".", "./", "*", "**", "**/*", ":/"})
+
+GIT_LOG = CommandSchema(
+    "git",
+    operands=(Operand("verb"), Operand("rest", count="*")),
+    options=(
+        Option("environment", COMMAND_VALUE_FLAGS["git"]),
+        Option("all_refs", ("--all",), bool),
+        Option("pickaxe", ("-S", "-G")),
+        Option("since", ("--since", "--after", "--since-as-filter")),
+        Option("count", ("-n", "--max-count")),
+        Option("format", ("--format", "--pretty")),
+        Option("filter", ("--grep", "--author", "--committer", "--until", "--before")),
+        Option(
+            "mode",
+            (
+                "--oneline",
+                "--no-pager",
+                "--paginate",
+                "--bare",
+                "--no-replace-objects",
+                "--no-optional-locks",
+                "--literal-pathspecs",
+                "--glob-pathspecs",
+                "--noglob-pathspecs",
+                "--icase-pathspecs",
+                "--graph",
+                "--decorate",
+                "--no-decorate",
+                "--name-only",
+                "--name-status",
+                "--stat",
+                "--patch",
+                "--no-patch",
+                "--pickaxe-all",
+                "--pickaxe-regex",
+                "--reverse",
+                "--no-merges",
+                "--first-parent",
+            ),
+            bool,
+        ),
+    ),
+)
 
 
 def probes_lazily(arguments: Arguments) -> bool:
@@ -80,6 +124,68 @@ def limits_pathspecs(arguments: Arguments) -> bool:
             return any(COUNT_LIMIT.fullmatch(word) for word in rest[rest.index("--") + 1 :])
         case _:
             return False
+
+
+def searches_all_history(arguments: Arguments) -> bool:
+    if arguments.values.get("verb") != ("log",) or not arguments.values.get("all_refs"):
+        return False
+    if not arguments.values.get("pickaxe") or arguments.values.get("since"):
+        return False
+    words = arguments.call.command.words
+    bound = tuple(word for role in arguments.words.values() for word in role)
+    return not any(
+        word.value == "--"
+        and not any(word is value for value in bound)
+        and (paths := words[index + 1 :])
+        and all(path.value is not None and path.value not in WHOLE_TREE_PATHSPECS for path in paths)
+        for index, word in enumerate(words)
+    )
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CommandMatches(GIT_LOG, only_if=(searches_all_history,))],
+    message=(
+        "`git log --all -S/-G` without a pathspec or lower date bound searches content across every ref's history "
+        "and can repeatedly fetch missing objects from a promisor remote. Add `-- <component/path>` or "
+        "`--since=<date>`, or search one ref or range. `head`, `-n`, and `--max-count` limit output, not the scan."
+    ),
+    max_fires=1,
+    tests={
+        Input(command='git log --all --oneline -S"type replicaRoutes" 2>/dev/null | head -5'): Warn(),
+        Input(command="git log --all -G 'type.*replicaRoutes' | head -5"): Warn(),
+        Input(command="git -C ~/Code/monorepo -c core.pager=cat --no-pager log --all -Sneedle -n 5"): Warn(),
+        Input(command="timeout 30 git log --all --max-count=5 -Gneedle"): Warn(),
+        Input(command="sh -c 'git log --all -Sneedle'"): Warn(),
+        Input(command="sudo git log --all -n5 -Sneedle"): Warn(),
+        Input(command="git log --all -S --since=2026-10-01"): Warn(),
+        Input(command="git log --all -G --all"): Warn(),
+        Input(command="git log --all -G -- README.md"): Warn(),
+        Input(command="git log --all -Sneedle --until=2026-10-01"): Warn(),
+        Input(command="git log --all -Sneedle -- ."): Warn(),
+        Input(command="git log --all -Sneedle -- ./"): Warn(),
+        Input(command="git log --all -Sneedle -- '*'"): Warn(),
+        Input(command="git log --all -Sneedle -- '**'"): Warn(),
+        Input(command="git log --all -Sneedle -- '**/*'"): Warn(),
+        Input(command="git log --all -Sneedle -- :/"): Warn(),
+        Input(command="git log --all -Sneedle -- . api/src/routes.ts"): Warn(),
+        Input(command="git log --all -Gneedle -- api/src/routes '**/*'"): Warn(),
+        Input(command="git log --all -Sneedle --since=2026-10-01"): Allow(),
+        Input(command="git log --all --after 2026-10-01 -Gneedle"): Allow(),
+        Input(command="git log --all --since-as-filter=2026-10-01 -Sneedle"): Allow(),
+        Input(command="git log --all -Sneedle -- api/src/routes"): Allow(),
+        Input(command="git log --all -Gneedle -- api/src/routes.ts"): Allow(),
+        Input(command="git log --all -S -- -- api/src/routes.ts"): Allow(),
+        Input(command="git log origin/main -Sneedle"): Allow(),
+        Input(command="git log origin/main..HEAD -Gneedle"): Allow(),
+        Input(command="git log --all --oneline"): Allow(),
+        Input(command="git log -S --all"): Allow(),
+        Input(command="git log --since --all -Sneedle"): Allow(),
+        Input(command="git grep -Gneedle"): Allow(),
+        Input(command="git diff --all -Sneedle"): Allow(),
+        Input(command="echo 'git log --all -Sneedle'"): Allow(),
+    },
+)
 
 
 hook(
