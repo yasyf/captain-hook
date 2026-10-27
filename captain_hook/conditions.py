@@ -372,13 +372,24 @@ class EditedSource(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         root = evt.ctx.repo_root
-        return any(
-            not f.is_test
-            and f.suffix not in self.exclude_suffixes
-            and not f.under("docs", ".claude", ".github")
-            and is_project_path(f.path, root)
-            for window in evt.ctx.t.deep_inputs()
-            for f in window.files("Edit|Write")
+
+        def has_source_edit(window: PredicateInputs) -> bool:
+            return any(
+                not f.is_test
+                and f.suffix not in self.exclude_suffixes
+                and not f.under("docs", ".claude", ".github")
+                and is_project_path(f.path, root)
+                for f in window.files("Edit|Write")
+            )
+
+        transcript = evt.ctx.t
+        root_inputs = (
+            transcript.query({"kind": "predicate_inputs", "order": "forward"})
+            if isinstance(transcript, RemoteSession)
+            else (transcript.predicate_inputs,)
+        )
+        return any(has_source_edit(window) for window in root_inputs) or any(
+            has_source_edit(window) for window in transcript.deep_inputs()
         )
 
 
