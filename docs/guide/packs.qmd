@@ -40,8 +40,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
   pre-existing issue, don't swap the requested fix for docs.
 - `performance` — a subprocess resource monitor, plus one-time warnings on broad `find` and recursive
-  `grep` roots and on `git cat-file -e`. One host ticker in `capt-hookd` samples the children of each registered
-  session. When a child runs past `min_runtime_seconds` at sustained CPU or disk pressure, the monitor warns
+  `grep` roots, on `git cat-file -e`, and on a `git log` count limit written after `--`. One host
+  ticker in `capt-hookd` samples the children of each registered session. When a child runs past `min_runtime_seconds` at sustained CPU or disk pressure, the monitor warns
   the session through its next hook event and a desktop notification, then waits out the grace period.
   It then asks TypeSafe Jev whether the child is disposable. When Jev says yes with at least 0.9
   probability, the monitor sends one targeted `SIGTERM` after it revalidates the pid, parent, process
