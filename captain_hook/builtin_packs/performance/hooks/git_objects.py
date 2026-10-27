@@ -146,9 +146,9 @@ hook(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CommandMatches(GIT_LOG, only_if=(searches_all_history,))],
     message=(
-        "`git log --all -S/-G` without a pathspec or lower date bound searches content across every ref's history "
-        "and can repeatedly fetch missing objects from a promisor remote. Add `-- <component/path>` or "
-        "`--since=<date>`, or search one ref or range. `head`, `-n`, and `--max-count` limit output, not the scan."
+        "`git log --all -S/-G` without a pathspec or lower date bound scans every ref's history and can keep "
+        "fetching objects from a promisor remote, and `head`, `-n`, or `--max-count` cap only its output. Add "
+        "`-- <component/path>` or `--since=<date>`, or search one ref or range."
     ),
     max_fires=1,
     tests={
