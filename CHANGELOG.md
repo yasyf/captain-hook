@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`capt-hook transcripts warm` reports prepared-cache reads beside raw transcript reads.** Its JSON
+  adds `root_prepared_cache_bytes_read`, `root_verify_prepared_cache_bytes_read`,
+  `warm_prepared_cache_bytes_read`, and `verify_prepared_cache_bytes_read`. Each sums the
+  `prepared_cache_bytes_read` usage of that phase's own replies, next to the matching
+  `*_source_bytes_read`, which counts transcript bytes only, so a phase that read no transcript bytes
+  can still show prepared facts read back from the owner's disk cache. A step that ends without a
+  reply, such as one cut off by the foreground deadline, no longer counts the previous step's bytes a
+  second time.
 - **The owner's answer naming a pid lifts the kill guard.** When the session guard blocks `kill` on a
   process no agent vouches for, the spawning root's kill passes once the owner's own words or an
   `AskUserQuestion`, board, or cc-slack card answer name that pid and ask to end it, as a terminal

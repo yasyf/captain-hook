@@ -162,7 +162,11 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
         if operation == "warm_root":
             return {
                 "status": "ok",
-                "usage": {"source_bytes_read": 1 if len(calls) == 1 else 0, "cache_hits": 0},
+                "usage": {
+                    "source_bytes_read": 1 if len(calls) == 1 else 0,
+                    "prepared_cache_bytes_read": 2 if len(calls) == 1 else 3,
+                    "cache_hits": 0,
+                },
                 "data": {
                     "kind": "warmed_root",
                     "owner_epoch": "owner",
@@ -177,6 +181,7 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
             "status": "ok",
             "usage": {
                 "source_bytes_read": 1 if len(calls) == 3 else 0,
+                "prepared_cache_bytes_read": 5 if len(calls) == 3 else 11,
                 "discovery_entries_examined": 0,
                 "cache_hits": 0 if len(calls) == 3 else 1,
             },
@@ -218,7 +223,9 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
         "complete": True,
         "root_steps": 1,
         "root_source_bytes_read": 1,
+        "root_prepared_cache_bytes_read": 2,
         "root_verify_source_bytes_read": 0,
+        "root_verify_prepared_cache_bytes_read": 3,
         "root_facts_complete": True,
         "sources": 1,
         "steps": 1,
@@ -226,9 +233,11 @@ def test_warm_command_uses_registered_ids_and_only_prints_counters(tmp_path, mon
         "fact_cache_write_bytes": 50,
         "fact_cache_writes": 1,
         "warm_source_bytes_read": 1,
+        "warm_prepared_cache_bytes_read": 5,
         "verify_complete": True,
         "verify_steps": 1,
         "verify_source_bytes_read": 0,
+        "verify_prepared_cache_bytes_read": 11,
         "verify_cache_hits": 1,
         "elapsed_seconds": pytest.approx(0, abs=1),
         "status": "complete",
@@ -265,7 +274,7 @@ def test_warm_command_paces_only_progress_that_read_from_disk(tmp_path, monkeypa
         if operation == "warm_root":
             return {
                 "status": "ok",
-                "usage": {"source_bytes_read": 0, "cache_hits": 1},
+                "usage": {"source_bytes_read": 0, "prepared_cache_bytes_read": 0, "cache_hits": 1},
                 "data": {
                     "kind": "warmed_root",
                     "owner_epoch": "owner",
@@ -327,6 +336,84 @@ def test_warm_command_paces_only_progress_that_read_from_disk(tmp_path, monkeypa
     assert slept == paced
     assert len(calls) == 6
     assert json.loads(result.output)["verify_cache_hits"] == 16
+    assert json.loads(result.output)["verify_prepared_cache_bytes_read"] == 2 * cache_bytes_read
+    assert json.loads(result.output)["verify_source_bytes_read"] == 0
+
+
+def test_warm_command_counts_no_usage_for_a_step_that_got_no_reply(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import SnapshotClient
+
+    register_transcript("s-deadline", thread_id="thread-1")
+    client = SnapshotClient(lambda _: {})
+    client.bind_tool_registry({})
+    calls = []
+
+    def warm(operation, **arguments):
+        calls.append((operation, arguments))
+        if operation == "warm_root":
+            return {
+                "status": "ok",
+                "usage": {"source_bytes_read": 0, "prepared_cache_bytes_read": 0, "cache_hits": 1},
+                "data": {
+                    "kind": "warmed_root",
+                    "owner_epoch": "owner",
+                    "source_revision": "revision",
+                    "source_offset": 100,
+                    "source_size": 100,
+                    "complete": True,
+                    "facts_complete": True,
+                },
+            }
+        if sum(name == "warm_registered" for name, _ in calls) > 1:
+            raise EvidenceIncomplete("deadline", "foreground transcript deadline exhausted")
+        return {
+            "status": "ok",
+            "usage": {"source_bytes_read": 0, "prepared_cache_bytes_read": 4096, "cache_hits": 0},
+            "data": {
+                "kind": "warmed_registry",
+                "owner_epoch": "owner",
+                "membership_revision": "revision",
+                "next_index": 1,
+                "complete": False,
+                "source_offset": 0,
+                "source_size": 0,
+                "fact_cache_bytes": 4096,
+                "fact_cache_write_bytes": 0,
+                "fact_cache_writes": 0,
+            },
+        }
+
+    class RootSession:
+        def view(self):
+            return {"attachments": []}
+
+        def release(self):
+            pass
+
+    @contextmanager
+    def scope():
+        yield client
+
+    monkeypatch.setattr(client, "call", warm)
+    monkeypatch.setattr(client, "acquire", lambda _, tail_bytes: RootSession())
+    monkeypatch.setattr(
+        client,
+        "pages",
+        lambda *args, **kwargs: iter(({"kind": "classifier", "classifier": {"id": "native", "version": "1"}},)),
+    )
+    monkeypatch.setattr(
+        "captain_hook.transcripts.resolved_transcript_paths",
+        lambda *_args, **_kwargs: {SessionId("s-deadline"): tmp_path / "root.jsonl"},
+    )
+    monkeypatch.setattr("captain_hook.snapshots.client.client_scope", scope)
+    monkeypatch.setattr("captain_hook.cli.CliState.discover", lambda self: [])
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    result = CliRunner().invoke(cli, ["transcripts", "warm", "--session", "s-deadline", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    reported = json.loads(result.output)
+    assert (reported["status"], reported["steps"]) == ("deadline", 2)
+    assert (reported["warm_source_bytes_read"], reported["warm_prepared_cache_bytes_read"]) == (0, 4096)
 
 
 def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_path, monkeypatch):
@@ -347,7 +434,7 @@ def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_pa
         calls.append((operation, arguments))
         return {
             "status": "ok",
-            "usage": {"source_bytes_read": 0, "cache_hits": 1},
+            "usage": {"source_bytes_read": 0, "prepared_cache_bytes_read": 0, "cache_hits": 1},
             "data": {
                 "kind": "warmed_root",
                 "owner_epoch": "owner",
@@ -400,7 +487,7 @@ def test_warm_command_reports_unavailable_configured_classifier(tmp_path, monkey
         calls.append((operation, arguments))
         return {
             "status": "ok",
-            "usage": {"source_bytes_read": 0, "cache_hits": 1},
+            "usage": {"source_bytes_read": 0, "prepared_cache_bytes_read": 0, "cache_hits": 1},
             "data": {
                 "kind": "warmed_root",
                 "owner_epoch": "owner",

@@ -966,8 +966,8 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
         raise click.ClickException("hook discovery failed for project root")
     started = monotonic()
 
-    def advance(state: RegisteredWarmState | RootWarmState) -> tuple[bool, int, str | None, int, int]:
-        steps = read_bytes = cache_hits = 0
+    def advance(state: RegisteredWarmState | RootWarmState) -> tuple[bool, int, str | None, int, int, int]:
+        steps = read_bytes = cache_bytes_read = cache_hits = 0
         complete = False
         failure = None
         while (remaining := max_seconds - (monotonic() - started)) > 0:
@@ -976,16 +976,18 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
                 complete = state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=min(WARM_STEP_SECONDS, remaining))
             except EvidenceIncomplete as exc:
                 read_bytes += state.last_usage.get("source_bytes_read", 0)
+                cache_bytes_read += state.last_usage.get("prepared_cache_bytes_read", 0)
                 cache_hits += state.last_usage.get("cache_hits", 0)
                 failure = exc.status
                 break
             read_bytes += state.last_usage["source_bytes_read"]
+            cache_bytes_read += state.last_usage["prepared_cache_bytes_read"]
             cache_hits += state.last_usage["cache_hits"]
             if complete:
                 break
             if interval := warm_interval(state.last_usage):
                 sleep(min(interval, max(0, max_seconds - (monotonic() - started))))
-        return complete, steps, failure, read_bytes, cache_hits
+        return complete, steps, failure, read_bytes, cache_bytes_read, cache_hits
 
     with client_scope() as client:
         client.foreground_deadline_unix_ms = int((time() + max_seconds) * 1000)
@@ -999,12 +1001,12 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
         if root_path is None:
             raise click.ClickException("root transcript is unavailable")
         root_warmer = RootWarmState(root_path, NATIVE_CLASSIFIER, client, HOOK_TAIL_BYTES)
-        root_warmed, root_steps, root_failure, root_reads, _ = advance(root_warmer)
+        root_warmed, root_steps, root_failure, root_reads, root_cache_reads, _ = advance(root_warmer)
         root_verified = False
-        root_verify_reads = 0
+        root_verify_reads = root_verify_cache_reads = 0
         classifier = NATIVE_CLASSIFIER
         if root_warmed:
-            root_verified, _, verify_failure, root_verify_reads, _ = advance(
+            root_verified, _, verify_failure, root_verify_reads, root_verify_cache_reads, _ = advance(
                 RootWarmState(root_path, NATIVE_CLASSIFIER, client, HOOK_TAIL_BYTES)
             )
             root_failure = root_failure or verify_failure
@@ -1035,27 +1037,27 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
             except EvidenceIncomplete as exc:
                 root_failure = root_failure or exc.status
         classified_warmed = classified_verified = classifier_ready and classifier == NATIVE_CLASSIFIER
-        classified_reads = classified_verify_reads = 0
+        classified_reads = classified_verify_reads = classified_cache_reads = classified_verify_cache_reads = 0
         classified_steps = 0
         if classifier_ready and classifier != NATIVE_CLASSIFIER and classifier["id"] != "captain-configured":
-            classified_warmed, classified_steps, classified_failure, classified_reads, _ = advance(
-                RootWarmState(root_path, classifier, client)
+            classified_warmed, classified_steps, classified_failure, classified_reads, classified_cache_reads, _ = (
+                advance(RootWarmState(root_path, classifier, client))
             )
             root_failure = root_failure or classified_failure
             if classified_warmed:
-                classified_verified, _, verify_failure, classified_verify_reads, _ = advance(
-                    RootWarmState(root_path, classifier, client)
+                classified_verified, _, verify_failure, classified_verify_reads, classified_verify_cache_reads, _ = (
+                    advance(RootWarmState(root_path, classifier, client))
                 )
                 root_failure = root_failure or verify_failure
         warmer = RegisteredWarmState(sources, client)
-        warmed, steps, failure_status, warm_reads, _ = (
-            advance(warmer) if sources.thread_ids or sources.direct_paths else (True, 0, None, 0, 0)
+        warmed, steps, failure_status, warm_reads, warm_cache_reads, _ = (
+            advance(warmer) if sources.thread_ids or sources.direct_paths else (True, 0, None, 0, 0, 0)
         )
         verified = False
-        verify_steps = verify_reads = verify_hits = 0
+        verify_steps = verify_reads = verify_cache_reads = verify_hits = 0
         if warmed:
             if sources.thread_ids or sources.direct_paths:
-                verified, verify_steps, verify_failure, verify_reads, verify_hits = advance(
+                verified, verify_steps, verify_failure, verify_reads, verify_cache_reads, verify_hits = advance(
                     RegisteredWarmState(sources, client)
                 )
                 failure_status = failure_status or verify_failure
@@ -1068,7 +1070,9 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
                 "complete": complete,
                 "root_steps": root_steps + classified_steps,
                 "root_source_bytes_read": root_reads + classified_reads,
+                "root_prepared_cache_bytes_read": root_cache_reads + classified_cache_reads,
                 "root_verify_source_bytes_read": root_verify_reads + classified_verify_reads,
+                "root_verify_prepared_cache_bytes_read": root_verify_cache_reads + classified_verify_cache_reads,
                 "root_facts_complete": classified_warmed and classified_verified,
                 "sources": len(sources.thread_ids) + len(sources.direct_paths),
                 "steps": steps,
@@ -1076,9 +1080,11 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
                 "fact_cache_write_bytes": warmer.fact_cache_write_bytes,
                 "fact_cache_writes": warmer.fact_cache_writes,
                 "warm_source_bytes_read": warm_reads,
+                "warm_prepared_cache_bytes_read": warm_cache_reads,
                 "verify_complete": verified,
                 "verify_steps": verify_steps,
                 "verify_source_bytes_read": verify_reads,
+                "verify_prepared_cache_bytes_read": verify_cache_reads,
                 "verify_cache_hits": verify_hits,
                 "elapsed_seconds": round(monotonic() - started, 3),
                 "status": root_failure or failure_status or ("complete" if complete else "deadline"),

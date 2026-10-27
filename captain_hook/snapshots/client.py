@@ -771,6 +771,7 @@ class RegisteredWarmState:
 
     def step(self, *, read_bytes: int, deadline_seconds: float) -> bool:
         limits = graph_limits() | {"max_source_read_bytes": read_bytes}
+        self.last_usage = {}
         result = self.client.call(
             "warm_registered",
             classifier=NATIVE_CLASSIFIER,
@@ -838,6 +839,7 @@ class RootWarmState:
     last_usage: dict[str, int] = field(default_factory=dict)
 
     def step(self, *, read_bytes: int, deadline_seconds: float) -> bool:
+        self.last_usage = {}
         result = self.client.call(
             "warm_root",
             path=str(self.path),
