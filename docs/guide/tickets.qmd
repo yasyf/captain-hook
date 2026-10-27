@@ -422,6 +422,7 @@ a lane's `TaskStop`, and a `kill`, and lift each through these ticket kinds:
 | `sessions.task-stop` | `agent`, `task` | place, 7 days | `spawned-here`, then `ruling`; minted on spawn as `teammate` or `shell` |
 | `sessions.kill` | `program`, `process` | once, 2 minutes | `ruling`, an answer tagged `scope:durable` and `sessions-guard` naming the program |
 | `sessions.kill-session` | `program`, `process` | once, 2 minutes | `ruling`, the judge reads answers tagged `scope:durable` and `sessions-guard` naming the program, and allows a codex session hosting no other session only when the words list its pid or set an age floor it clears |
+| `sessions.kill.owner` | `pid` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the pid |
 
 A ruling covers its target while it stands. Every check reads it again, so each new
 call on that target mints its own once ticket, and the ticket's two minutes cover
@@ -447,7 +448,7 @@ and tells the user
 
 The `.owner` kinds serve only the spawning root: the main thread of a session with
 no root session above it. They run after the other lifts deny, and their judge reads only the
-user's words and answers that name the exact handle or label. A description, a
+user's words and answers that name the exact handle, label, or pid. A description, a
 general cleanup request, or words naming another target permit nothing.
 
 `sessions.task-stop` covers one task for the agent that started it. On
