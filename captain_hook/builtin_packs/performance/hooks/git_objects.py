@@ -160,7 +160,7 @@ hook(
         Input(command="sudo git log --all -n5 -Sneedle"): Warn(),
         Input(command="git log --all -S --since=2026-10-01"): Warn(),
         Input(command="git log --all -G --all"): Warn(),
-        Input(command="git log --all -G -- README.md"): Warn(),
+        Input(command="git log --all -G -- README.md"): Allow(),
         Input(command="git log --all -Sneedle --until=2026-10-01"): Warn(),
         Input(command="git log --all -Sneedle -- ."): Warn(),
         Input(command="git log --all -Sneedle -- ./"): Warn(),
