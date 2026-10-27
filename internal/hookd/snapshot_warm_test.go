@@ -374,6 +374,129 @@ func TestWarmScopeKeyCoversEveryInvalidationInput(t *testing.T) {
 	}
 }
 
+func TestCompletedWarmDemandIsDebouncedAcrossWorkersFromItsAcceptance(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		demand   func() map[string]any
+		progress map[string]any
+	}{
+		{"registered", registeredDemand, registryProgress(8, true, "epoch-1", "rev-1", 0)},
+		{"root", rootDemand, rootProgress(true, true, "epoch-1", "src-1", 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newWarmHarness(t)
+			key := h.demand(tc.demand(), 1)
+			call := h.receive()
+			h.clock.Advance(4 * time.Second)
+			h.reply(call, warmResult{status: "ok", data: tc.progress})
+			h.settled()
+			for caller := 2; caller < 10; caller++ {
+				if again := h.demand(tc.demand(), caller); again != key || h.jobs() != 0 {
+					t.Fatalf("caller %d key=%s jobs=%d, want completed scope %s suppressed", caller, again, h.jobs(), key)
+				}
+			}
+			h.clock.Advance(5 * time.Second)
+			h.demand(tc.demand(), 10)
+			h.settled()
+			h.clock.Advance(time.Second)
+			h.demand(tc.demand(), 11)
+			h.answer(warmResult{status: "ok", data: tc.progress})
+			h.settled()
+			if got := strings.Count(h.logged(), "complete after 1 steps"); got != 2 {
+				t.Fatalf("completed runs=%d, want one before and one at the debounce boundary", got)
+			}
+		})
+	}
+}
+
+func TestCompletedWarmDemandDoesNotSuppressAChangedBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any, *snapshots.CallContext)
+	}{
+		{"registry", func(demand map[string]any, _ *snapshots.CallContext) {
+			demand["tool_registry"] = []any{map[string]any{"name": "Shell", "behaves_like": "Bash", "span_edit": nil}}
+		}},
+		{"path", func(demand map[string]any, _ *snapshots.CallContext) {
+			demand["request"].(map[string]any)["path"] = "/tmp/other.jsonl"
+		}},
+		{"authority", func(_ map[string]any, caller *snapshots.CallContext) {
+			caller.Authority.EffectiveUID = "502"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newWarmHarness(t)
+			h.demand(rootDemand(), 1)
+			h.answer(warmResult{status: "ok", data: rootProgress(true, true, "epoch-1", "src-1", 0)})
+			h.settled()
+			demand, caller := rootDemand(), warmCaller(2)
+			tc.mutate(demand, &caller)
+			if err := h.coordinator.demand(encodeDemand(t, demand), caller); err != nil {
+				t.Fatal(err)
+			}
+			h.answer(warmResult{status: "ok", data: rootProgress(true, true, "epoch-1", "src-2", 0)})
+			h.settled()
+			if got := strings.Count(h.logged(), "complete after 1 steps"); got != 2 {
+				t.Fatalf("completed runs=%d, want both bindings executed", got)
+			}
+		})
+	}
+}
+
+func TestFailedWarmDemandCanBeDemandedAgainImmediately(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result warmResult
+		steps  int
+	}{
+		{"refused", warmResult{status: "permission_denied"}, 1},
+		{"cancelled", warmResult{status: "cancelled"}, 2},
+		{"deadline", warmResult{status: "deadline"}, 2},
+		{"transport", warmResult{err: errors.New("fixture")}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newWarmHarness(t)
+			key := h.demand(rootDemand(), 1)
+			for range tc.steps {
+				h.answer(tc.result)
+			}
+			h.settled()
+			h.demand(rootDemand(), 2)
+			if h.job(key) == nil {
+				t.Fatal("the unsuccessful job suppressed another demand")
+			}
+			h.answer(warmResult{status: "ok", data: rootProgress(true, true, "epoch-1", "src-1", 0)})
+			h.settled()
+		})
+	}
+}
+
+func TestCompletedWarmDemandHistoryStaysBounded(t *testing.T) {
+	h := newWarmHarness(t)
+	keys := make([]string, maxWarmJobs+1)
+	for index := range keys {
+		demand := rootDemand()
+		demand["request"].(map[string]any)["path"] = fmt.Sprintf("/tmp/root-%d.jsonl", index)
+		keys[index] = h.demand(demand, index)
+		h.answer(warmResult{status: "ok", data: rootProgress(true, true, "epoch-1", "src-1", 0)})
+		h.settled()
+		h.clock.Advance(time.Millisecond)
+	}
+	h.coordinator.mu.Lock()
+	defer h.coordinator.mu.Unlock()
+	if len(h.coordinator.completed) != maxWarmJobs {
+		t.Fatalf("completed history=%d, want %d", len(h.coordinator.completed), maxWarmJobs)
+	}
+	if _, kept := h.coordinator.completed[keys[0]]; kept {
+		t.Fatal("the oldest completed demand was retained at capacity")
+	}
+	for _, key := range keys[1:] {
+		if _, kept := h.coordinator.completed[key]; !kept {
+			t.Fatalf("newer completed demand %s was evicted", key)
+		}
+	}
+}
+
 func TestWarmCursorResetsWhenTheScopeChangesUnderIt(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
