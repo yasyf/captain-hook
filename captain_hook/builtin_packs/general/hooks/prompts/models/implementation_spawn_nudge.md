@@ -17,7 +17,7 @@ hard planning, and synthesis/accept-reject over findings run on opus at xhigh.
 Fable-5.1 is reserved for the most sensitive implementation, reached as a typed
 model='fable' subagent; ordinary auth, migrations, concurrency, or error-prone
 code alone does not qualify. A missed implementation lane crosses between opus
-xhigh and sol xhigh before reaching fable. All prose/writing runs on opus, and
+xhigh and sol xhigh before reaching fable. Long-form copy runs on gemini-4-argon, and
 code/diff review (finder; refuter only at audit depth), security review/audit,
 verification of security-sensitive code, and bug diagnosis have sol xhigh lanes;
 separate nudges handle both.

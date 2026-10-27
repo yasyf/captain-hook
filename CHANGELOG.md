@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A spawn that writes long-form copy is told to hand it to `gemini-4-argon`, on any Claude model.**
+  The general pack's prose nudge used to warn only when codex, astra, sonnet, haiku, or fable wrote
+  docs or release notes, and sent the writing to Opus. It now fires on Opus and unpinned spawns too,
+  and names `gemini -m gemini-4-argon -p` with the facts and rules, landed verbatim. A prompt that
+  already names gemini or argon stays silent. PR titles, PR bodies, and commit messages no longer
+  count: the lane that ships them writes them inline.
 - **An agent stops its own background shell after the session changes Orca dispatches.** The ticket
   a `Bash` or `Monitor` call mints for its background task, and the one an `Agent` or `Task` call
   mints for its teammate, now lives in the session's own tree. An attended session in an Orca

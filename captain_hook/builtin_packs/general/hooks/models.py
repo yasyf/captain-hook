@@ -54,7 +54,6 @@ WRITING_VERBS = (
 INLINE_EDIT_MIN_CHARS = 400
 SUSTAINED_BROWSER_CALLS = 5
 BROWSER_DRIVER = re.compile(r"(?i)\b(agent-browser|playwright)\b")
-CODEX_AGENTS = ("codex-wrapper", "codex:codex-wrapper", "codex-wrapper-async", "codex:codex-wrapper-async")
 SOURCE_FILE_GLOBS = tuple(
     pattern for language, patterns in LANG_GLOBS.items() if language != "md" for pattern in patterns
 )
@@ -95,8 +94,12 @@ def prose_deliverable_sentences(text: str) -> list[str]:
         "article",
         "newsletter",
         "email",
-        "pr description",
-        "commit message",
+        "retro",
+        "retrospective",
+        "postmortem",
+        "standup",
+        "slack message",
+        "slack post",
     )
     writing = Phrase(*WRITING_VERBS)
     if not (matched := nlp_scan([Clause(noun=artifact, verb=writing)], text)):
@@ -195,18 +198,15 @@ hook(
 llm_nudge(
     Prompt.load("models/prose_spawn_nudge", deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC),
     message=(
-        "Prose deliverables are written by Claude Opus, never by codex, astra, sonnet, haiku, or fable. "
-        "Re-spawn with `model='opus'` or no `model` pin, as a Claude agent that writes the prose itself."
+        "Long-form copy such as docs, READMEs, release notes, posts, and retros is written by gemini-4-argon. "
+        "Have the writer pipe the facts and rules (voice card, slop-cop rules, length caps) to "
+        "`gemini -m gemini-4-argon -p` and land the reply verbatim."
     ),
     contexts=[ProseSpawn()],
     events=Event.PreToolUse,
     only_if=[Tool("Agent|Task")],
     skip_if=[
-        And(
-            Not(ToolInput("model", r"(?i)\b(sonnet|haiku|fable)\b")),
-            Not(ToolInput("prompt", r"(?i)\b(codex|astra)\b")),
-            Not(Agent(*CODEX_AGENTS)),
-        ),
+        ToolInput("prompt", r"(?i)\b(gemini|argon)\b"),
         ToolInput("prompt", r"(?i)\b(classif|label|tag|categoriz|count|extract|mechanical)"),
         Agent("Explore|claude-code-guide"),
     ],
@@ -215,9 +215,12 @@ llm_nudge(
     transcript=False,
     max_context=16_000,
     tests={
-        Input(model="sonnet", prompt="Write the README quickstart for this repo"): Warn(),
+        Input(model="sonnet", prompt="Write the README quickstart for this repo"): Warn(pattern="gemini-4-argon"),
         Input(model="haiku", prompt="update the CHANGELOG entry for the fix"): Warn(),
         Input(model="fable", prompt="write the README quickstart"): Warn(),
+        Input(model="opus", prompt="draft the release notes for v2"): Warn(pattern="gemini -m gemini-4-argon -p"),
+        Input(model="claude-opus-5-5", prompt="Write the README quickstart for this repo"): Warn(),
+        Input(prompt="draft the release notes for v2"): Warn(),
         Input(
             agent_type="codex:codex-wrapper",
             prompt="Rewrite the README quickstart in the technical-builder voice",
@@ -228,10 +231,12 @@ llm_nudge(
             "the guide. Every sentence is written by gpt-6-astra at xhigh via the codex skill and "
             "landed verbatim; you orchestrate and never write the prose yourself.",
         ): Warn(),
-        Input(model="opus", prompt="draft the release notes for v2"): Allow(),
-        Input(model="claude-opus-5-5", prompt="Write the README quickstart for this repo"): Allow(),
-        Input(prompt="write the README quickstart"): Allow(),
-        Input(prompt="draft the release notes for v2"): Allow(),
+        Input(
+            model="opus",
+            prompt="Draft the release notes for v2: hand the facts and the voice card to "
+            "`gemini -m gemini-4-argon -p` and land the reply verbatim.",
+        ): Allow(),
+        Input(model="sonnet", prompt="Have Gemini write the README quickstart and land it verbatim"): Allow(),
         Input(
             agent_type="ship-pr",
             prompt="Write the PR description below to a body file and open the PR.\ntitle: fix retry\nbody: ...",
@@ -248,12 +253,8 @@ llm_nudge(
             'retry guide" --pr-body-file /tmp/body.md',
             llm={"fire": False},
         ): Allow(),
-        Input(
-            model="opus",
-            prompt="Fix the import in cli.py, have the codex skill review the diff, then draft the "
-            "CHANGELOG entry yourself.",
-            llm={"fire": False},
-        ): Allow(),
+        Input(model="sonnet", prompt="Fix the retry bug, write the commit message, and ship it"): Allow(),
+        Input(model="opus", prompt="Draft the PR description for this branch and open the PR"): Allow(),
         Input(model="sonnet", prompt="review the README for factual errors"): Allow(),
         Input(model="sonnet", prompt="update the retry backoff config"): Allow(),
         Input(model="haiku", prompt="label each README section with its Diataxis mode"): Allow(),

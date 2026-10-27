@@ -12,8 +12,8 @@ gpt-6.1-sol at xhigh on the standard tier. Spawn agent type 'codex:codex-wrapper
 with the self-contained question as its prompt; use Skill(codex) from the main
 conversation. A Claude-model spawn that asks its agent to run the codex skill is
 the retired wrapper shape. Design/architecture review, approach judgment, and
-synthesis/accept-reject over findings belong on opus at xhigh. All prose/writing
-runs on opus; reading a prose artifact does not make it code review. The most
+synthesis/accept-reject over findings belong on opus at xhigh. Long-form copy
+runs on gemini-4-argon; reading a prose artifact does not make it code review. The most
 sensitive implementation goes directly to a typed model='fable' subagent and is
 outside this review nudge. For review or diagnosis, escalate a sol miss to opus
 at xhigh. Fable is never a review or diagnosis lane.
@@ -60,7 +60,7 @@ Synthesis/accept-reject is outside this nudge on any route.
 </example>
 <example fire="false">
 Review the README draft for factual errors.
-Prose review is outside this code-review nudge; any prose revisions run on opus.
+Prose review is outside this code-review nudge; any copy revisions run on gemini-4-argon.
 </example>
 <example fire="true">
 Audit the session-token handling in auth/middleware.py for vulnerabilities.
