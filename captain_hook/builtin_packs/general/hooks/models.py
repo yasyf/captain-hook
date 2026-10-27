@@ -200,7 +200,7 @@ llm_nudge(
     message=(
         "Long-form copy such as docs, READMEs, release notes, posts, and retros is written by gemini-4-argon. "
         "Have the writer pipe the facts and rules (voice card, slop-cop rules, length caps) to "
-        "`gemini -m gemini-4-argon -p` and land the reply verbatim."
+        "`gemini -m gemini-4-argon --skip-trust -p` and land the reply verbatim."
     ),
     contexts=[ProseSpawn()],
     events=Event.PreToolUse,
@@ -218,7 +218,9 @@ llm_nudge(
         Input(model="sonnet", prompt="Write the README quickstart for this repo"): Warn(pattern="gemini-4-argon"),
         Input(model="haiku", prompt="update the CHANGELOG entry for the fix"): Warn(),
         Input(model="fable", prompt="write the README quickstart"): Warn(),
-        Input(model="opus", prompt="draft the release notes for v2"): Warn(pattern="gemini -m gemini-4-argon -p"),
+        Input(model="opus", prompt="draft the release notes for v2"): Warn(
+            pattern="gemini -m gemini-4-argon --skip-trust -p"
+        ),
         Input(model="claude-opus-5-5", prompt="Write the README quickstart for this repo"): Warn(),
         Input(prompt="draft the release notes for v2"): Warn(),
         Input(

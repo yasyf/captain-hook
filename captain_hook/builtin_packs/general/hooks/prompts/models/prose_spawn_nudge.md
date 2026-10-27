@@ -10,7 +10,7 @@ gemini-4-argon?
 
 The Model Routing rubric: long-form copy — docs, READMEs, changelogs, blog posts,
 design docs, retros, release notes, plan prose, Slack, Linear, and standup copy —
-is written by gemini-4-argon through `gemini -m gemini-4-argon -p`. The lane
+is written by gemini-4-argon through `gemini -m gemini-4-argon --skip-trust -p`. The lane
 hands argon the facts and the rules (voice card, slop-cop rules, length caps) and
 lands the reply verbatim. Every other writer is the misroute, whatever its model:
 an opus, sonnet, haiku, fable, or unpinned Claude subagent that writes the copy
