@@ -1031,6 +1031,96 @@ class TestEditedSourceScoping:
         assert EditedSource().check(evt) is True
         assert EditedSource(exclude_suffixes=(".py",)).check(evt) is False
 
+    def test_root_source_edit_does_not_request_deep_inputs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript.query import Session
+
+        transcript = make_transcript(T.assistant(T.tool("Edit", file_path="src/app.py", old_string="", new_string="x")))
+        ctx = build_ctx(transcript=transcript, project_root=tmp_path)
+        monkeypatch.setattr(Session, "deep_inputs", lambda _: pytest.fail("root source edit requested deep inputs"))
+
+        assert EditedSource().check(make_event(StopEvent, ctx=ctx)) is True
+
+    @pytest.mark.parametrize(
+        ("root_file", "child_file", "exclude_suffixes", "expected"),
+        [
+            ("README.md", "src/child.py", (".md",), True),
+            ("src/main.py", "src/child.rs", (".py",), True),
+            ("README.md", "docs/child.py", (".md",), False),
+            ("/outside/main.py", "/outside/child.py", (), False),
+            ("tests/test_main.py", "tests/test_child.py", (), False),
+            (".claude/workflow.py", ".github/check.py", (), False),
+        ],
+    )
+    def test_root_negative_keeps_deep_source_scope(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        root_file: str,
+        child_file: str,
+        exclude_suffixes: tuple[str, ...],
+        expected: bool,
+    ) -> None:
+        from cc_transcript.query import Session
+
+        transcript = make_transcript(T.assistant(T.tool("Edit", file_path=root_file, old_string="", new_string="x")))
+        child = make_transcript(T.assistant(T.tool("Write", file_path=child_file, content="x")))
+        calls = []
+
+        def deep_inputs(session: Session) -> Iterator[Any]:
+            calls.append(session)
+            yield session.predicate_inputs
+            yield child.predicate_inputs
+
+        monkeypatch.setattr(Session, "deep_inputs", deep_inputs)
+        evt = make_event(StopEvent, ctx=build_ctx(transcript=transcript, project_root=tmp_path))
+
+        assert EditedSource(exclude_suffixes=exclude_suffixes).check(evt) is expected
+        assert calls == [transcript]
+
+    def test_root_source_edit_does_not_resolve_registered_history(
+        self, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook.snapshots.client import GraphSources
+        from tests.test_snapshot_fixture_owner import write_messages
+
+        root = tmp_path_factory.mktemp("repo")
+        monkeypatch.setenv("TMPDIR", str(root))
+        path = root / "root.jsonl"
+        write_messages(
+            path,
+            raw_text("user", "edit"),
+            raw_assistant(raw_tool_use("Edit", {"file_path": "src/app.py", "old_string": "a", "new_string": "b"})),
+        )
+        fixture = FixtureOwner()
+        fixture.client.bind_tool_registry({})
+        operations = []
+        exchange = fixture.client._exchange
+
+        def record(wrapper):
+            operations.append(wrapper["request"]["operation"])
+            return exchange(wrapper)
+
+        fixture.client._exchange = record
+        try:
+            transcript = fixture.load(path).with_registered_sources(
+                GraphSources(thread_ids=tuple(f"thread-{index}" for index in range(918)), roots=(root,))
+            )
+            try:
+                before = fixture.client.call("stats")["data"]["counters"]
+                evt = make_event(StopEvent, ctx=build_ctx(transcript=transcript, project_root=root))
+
+                assert EditedSource().check(evt) is True
+
+                after = fixture.client.call("stats")["data"]["counters"]
+                assert not {"prepare_graph", "query_graph", "warm_registered", "locate"}.intersection(operations)
+                assert after["discovery_entries_examined"] == before["discovery_entries_examined"] == 0
+                assert after["source_opens"] == before["source_opens"]
+                assert after["cold_parses"] == before["cold_parses"]
+            finally:
+                transcript.release()
+        finally:
+            fixture.close()
+
 
 def skill_evt(skill: str) -> BaseHookEvent:
     ctx = build_ctx(transcript=make_transcript(T.user("go"), T.assistant(T.tool("Skill", skill=skill))))
