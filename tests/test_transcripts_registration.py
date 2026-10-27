@@ -340,7 +340,16 @@ def test_warm_command_paces_only_progress_that_read_from_disk(tmp_path, monkeypa
     assert json.loads(result.output)["verify_source_bytes_read"] == 0
 
 
-def test_warm_command_counts_no_usage_for_a_step_that_got_no_reply(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("observed", "totals"),
+    [
+        pytest.param({}, (0, 4096), id="no-reply"),
+        pytest.param(
+            {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096}, (7, 8192), id="refused-reply-then-deadline"
+        ),
+    ],
+)
+def test_warm_command_counts_the_usage_a_failed_step_observed(tmp_path, monkeypatch, observed, totals):
     from captain_hook.snapshots.client import SnapshotClient
 
     register_transcript("s-deadline", thread_id="thread-1")
@@ -365,7 +374,7 @@ def test_warm_command_counts_no_usage_for_a_step_that_got_no_reply(tmp_path, mon
                 },
             }
         if sum(name == "warm_registered" for name, _ in calls) > 1:
-            raise EvidenceIncomplete("deadline", "foreground transcript deadline exhausted")
+            raise EvidenceIncomplete("deadline", "foreground transcript deadline exhausted", usage=observed)
         return {
             "status": "ok",
             "usage": {"source_bytes_read": 0, "prepared_cache_bytes_read": 4096, "cache_hits": 0},
@@ -413,7 +422,7 @@ def test_warm_command_counts_no_usage_for_a_step_that_got_no_reply(tmp_path, mon
     assert result.exit_code == 1
     reported = json.loads(result.output)
     assert (reported["status"], reported["steps"]) == ("deadline", 2)
-    assert (reported["warm_source_bytes_read"], reported["warm_prepared_cache_bytes_read"]) == (0, 4096)
+    assert (reported["warm_source_bytes_read"], reported["warm_prepared_cache_bytes_read"]) == totals
 
 
 def test_warm_command_prepares_root_classifier_without_registered_sources(tmp_path, monkeypatch):

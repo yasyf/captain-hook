@@ -975,9 +975,10 @@ def transcripts_warm(session_id: str, root: Path, max_seconds: int) -> None:
             try:
                 complete = state.step(read_bytes=WARM_STEP_BYTES, deadline_seconds=min(WARM_STEP_SECONDS, remaining))
             except EvidenceIncomplete as exc:
-                read_bytes += state.last_usage.get("source_bytes_read", 0)
-                cache_bytes_read += state.last_usage.get("prepared_cache_bytes_read", 0)
-                cache_hits += state.last_usage.get("cache_hits", 0)
+                usage = state.last_usage or exc.usage
+                read_bytes += usage.get("source_bytes_read", 0)
+                cache_bytes_read += usage.get("prepared_cache_bytes_read", 0)
+                cache_hits += usage.get("cache_hits", 0)
                 failure = exc.status
                 break
             read_bytes += state.last_usage["source_bytes_read"]

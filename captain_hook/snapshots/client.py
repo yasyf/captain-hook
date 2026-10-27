@@ -80,10 +80,12 @@ def warm_interval(usage: Mapping[str, int]) -> float:
     return WARM_INTERVAL_SECONDS if any(usage.get(name, 0) for name in WARM_IO_COUNTERS) else 0
 
 
-def with_retried_usage(result: dict[str, Any], retried: Mapping[str, int]) -> dict[str, Any]:
-    if not retried:
-        return result
-    return result | {"usage": {name: count + retried.get(name, 0) for name, count in result["usage"].items()}}
+def summed_usage(first: Mapping[str, int], second: Mapping[str, int]) -> dict[str, int]:
+    return dict(first) | {name: first.get(name, 0) + count for name, count in second.items()}
+
+
+def with_observed_usage(result: dict[str, Any], observed: Mapping[str, int]) -> dict[str, Any]:
+    return result | {"usage": summed_usage(result["usage"], observed)} if observed else result
 
 
 def foreground_seconds(event: str) -> float:
@@ -183,10 +185,11 @@ def observable(query: str) -> bool:
 
 
 class EvidenceIncomplete(RuntimeError):
-    def __init__(self, status: str, reason: str) -> None:
+    def __init__(self, status: str, reason: str, *, usage: Mapping[str, int] | None = None) -> None:
         super().__init__(f"transcript evidence {status}: {reason}")
         self.status = status
         self.reason = reason
+        self.usage = dict(usage or {})
 
 
 class SnapshotProtocolError(EvidenceIncomplete):
@@ -430,13 +433,22 @@ class SnapshotClient:
                 self.foreground_deadline_unix_ms = previous
 
     def call(self, operation: str, *, domain: bool = False, **arguments: object) -> dict[str, Any]:
+        observed: dict[str, int] = {}
+        try:
+            return self._call(operation, domain, arguments, observed)
+        except EvidenceIncomplete as exc:
+            exc.usage = summed_usage(exc.usage, observed)
+            raise
+
+    def _call(
+        self, operation: str, domain: bool, arguments: dict[str, object], observed: dict[str, int]
+    ) -> dict[str, Any]:
         from jsonschema import ValidationError
 
         started = time.monotonic()
         retry_until = started + CLEANUP_SECONDS if operation == "release" else None
         admission_deadline_unix_ms = int((time.time() + self._preparation_seconds) * 1000)
         retry_delay = 0.01
-        retried_usage: dict[str, int] = {}
         while True:
             with self._guard:
                 self._counter += 1
@@ -483,17 +495,18 @@ class SnapshotClient:
                 and self.foreground_deadline_unix_ms is not None
                 and int(time.time() * 1000) >= self.foreground_deadline_unix_ms
             ):
+                observed |= summed_usage(observed, result["usage"])
                 raise EvidenceIncomplete("deadline", "lease expired at the foreground transcript deadline")
             if result.get("status") != "retained_limit":
-                return with_retried_usage(result, retried_usage)
+                return with_observed_usage(result, observed)
             if retry_until is None:
                 horizon = int(request.get("deadline_unix_ms", admission_deadline_unix_ms))
                 if self.foreground_deadline_unix_ms is not None:
                     horizon = min(horizon, self.foreground_deadline_unix_ms)
                 retry_until = monotonic_deadline(horizon)
             if (remaining := retry_until - time.monotonic()) <= 0:
-                return with_retried_usage(result, retried_usage)
-            retried_usage = with_retried_usage(result, retried_usage)["usage"]
+                return with_observed_usage(result, observed)
+            observed |= summed_usage(observed, result["usage"])
             time.sleep(min(retry_delay, remaining))
             retry_delay = min(retry_delay * 2, 0.1)
 

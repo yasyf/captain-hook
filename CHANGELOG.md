@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can still show prepared facts read back from the owner's disk cache. A step that ends without a
   reply, such as one cut off by the foreground deadline, no longer counts the previous step's bytes a
   second time. A snapshot request the client retries after `retained_limit` returns the usage of every
-  reply it received, so bytes a refused attempt read count toward both totals instead of vanishing.
+  reply it received, and one that reaches its deadline while it retries raises with that usage, so
+  bytes a refused attempt read count toward both totals instead of vanishing.
 - **The owner's answer naming a pid lifts the kill guard.** When the session guard blocks `kill` on a
   process no agent vouches for, the spawning root's kill passes once the owner's own words or an
   `AskUserQuestion`, board, or cc-slack card answer name that pid and ask to end it, as a terminal
