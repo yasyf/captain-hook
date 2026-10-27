@@ -453,21 +453,19 @@ def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungra
                 "ccn answer search claude": inline_ruling("Owner: end claude.", tags=KILL_RULING_TAGS),
             },
         ): Block(pattern="an agent session"),
-        guarded(command="kill 18300 18301", session_id=INLINE_SESSION): Block(
-            pattern="pid 18300 .* no agent ancestor to vouch"
-        ),
+        guarded(command="kill 18300 18301", session_id=INLINE_SESSION): Block(pattern="ownership of pid 18300"),
         guarded(
             command="kill 18300 18301", session_id=INLINE_SESSION, transcript=inline_ask(BOTH_PIDS), llm=OWNER_KILL
         ): Allow(),
         guarded(
             command="kill 18300 18301", session_id=INLINE_SESSION, transcript=inline_ask(ONE_PID), llm=OWNER_KILL
-        ): Block(pattern="pid 18301 .* no agent ancestor to vouch"),
+        ): Block(pattern="ownership of pid 18301"),
         guarded(
             command="kill 18300",
             session_id=INLINE_SESSION,
             transcript=inline_ask(BOTH_PIDS, pick="Leave them"),
             llm={"allow": False, "refusal": "The owner picked Leave them."},
-        ): Block(pattern="pid 18300 .* no agent ancestor to vouch"),
+        ): Block(pattern="ownership of pid 18300"),
         guarded(command="kill 20000", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Allow(),
         guarded(
             command="kill 20000",
