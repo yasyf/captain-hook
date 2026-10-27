@@ -24,6 +24,7 @@ const (
 	warmReplyGrace     = 2 * time.Second
 	warmBytesPerSecond = warmStepBytes / 2
 	warmDemandWindow   = 5 * time.Minute
+	warmDemandDebounce = 10 * time.Second
 	warmDemandHeadroom = 512
 	warmStallLimit     = 2
 	maxWarmJobs        = 128
@@ -117,6 +118,7 @@ type warmJob struct {
 	registry    json.RawMessage
 	callContext snapshots.CallContext
 	demanded    time.Time
+	accepted    time.Time
 	served      uint64
 	steps       int
 	stalled     int
@@ -238,17 +240,18 @@ type warmCoordinator struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu      sync.Mutex
-	jobs    map[string]*warmJob
-	order   uint64
-	ready   time.Time
-	running bool
-	closed  bool
+	mu        sync.Mutex
+	jobs      map[string]*warmJob
+	completed map[string]time.Time
+	order     uint64
+	ready     time.Time
+	running   bool
+	closed    bool
 }
 
 func newWarmCoordinator(step func(context.Context, json.RawMessage, snapshots.CallContext) (json.RawMessage, error), now func() time.Time, log io.Writer) *warmCoordinator {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &warmCoordinator{step: step, now: now, pause: warmSleep, log: log, ctx: ctx, cancel: cancel, jobs: make(map[string]*warmJob)}
+	return &warmCoordinator{step: step, now: now, pause: warmSleep, log: log, ctx: ctx, cancel: cancel, jobs: make(map[string]*warmJob), completed: make(map[string]time.Time)}
 }
 
 func (c *warmCoordinator) demand(body json.RawMessage, callContext snapshots.CallContext) error {
@@ -280,6 +283,15 @@ func (c *warmCoordinator) join(key string, created *warmJob) bool {
 		return true
 	}
 	job, ok := c.jobs[key]
+	now := c.now()
+	if !ok {
+		if accepted, completed := c.completed[key]; completed {
+			if now.Sub(accepted) < warmDemandDebounce {
+				return true
+			}
+			delete(c.completed, key)
+		}
+	}
 	if !ok && created == nil {
 		return false
 	}
@@ -289,9 +301,10 @@ func (c *warmCoordinator) join(key string, created *warmJob) bool {
 		}
 		c.order++
 		created.served = c.order
+		created.accepted = now
 		c.jobs[key], job = created, created
 	}
-	job.demanded = c.now()
+	job.demanded = now
 	if !c.running {
 		c.running = true
 		c.wg.Add(1)
@@ -387,8 +400,31 @@ func (c *warmCoordinator) settle(job *warmJob, reply *warmReply) {
 		c.stop(job, stopped)
 	case complete:
 		delete(c.jobs, job.key)
+		c.rememberCompletion(job)
 		fmt.Fprintf(c.log, "captain: snapshot warm %s %.16s complete after %d steps %s\n", job.operation, job.key, job.steps, job.usage)
 	}
+}
+
+func (c *warmCoordinator) rememberCompletion(job *warmJob) {
+	now := c.now()
+	for key, accepted := range c.completed {
+		if now.Sub(accepted) >= warmDemandDebounce {
+			delete(c.completed, key)
+		}
+	}
+	if now.Sub(job.accepted) >= warmDemandDebounce {
+		return
+	}
+	if len(c.completed) >= maxWarmJobs {
+		var oldest string
+		for key, accepted := range c.completed {
+			if oldest == "" || accepted.Before(c.completed[oldest]) {
+				oldest = key
+			}
+		}
+		delete(c.completed, oldest)
+	}
+	c.completed[job.key] = job.accepted
 }
 
 func (c *warmCoordinator) close() {
