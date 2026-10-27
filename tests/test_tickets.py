@@ -715,6 +715,21 @@ class TestLift:
         lane.ctx.root_path = tmp_path / f"{TREE}.jsonl"
         assert isinstance(declared(action=proposal).check(lane), Allow)
 
+    def test_an_own_session_kind_keeps_its_tickets_as_the_session_joins_and_leaves_a_coordinators_tree(
+        self, tmp_path: Path
+    ) -> None:
+        tickets = declared(action=proposal, own_session=True)
+        alone = event(tmp_path, session="worker-session")
+        dispatched = event(tmp_path, session="worker-session")
+        dispatched.ctx.root_path = tmp_path / f"{TREE}.jsonl"
+        for minter, checker in ((alone, dispatched), (dispatched, alone)):
+            ticket = tickets.mint(tickets.context(minter), "seed", [])
+            assert ticket.tree == "worker-session"
+            verdict = tickets.check(checker)
+            assert isinstance(verdict, Allow) and verdict.ticket.id == ticket.id
+            assert isinstance(tickets.check(event(tmp_path, session="other-session")), Deny)
+            store.revoke(ticket.id)
+
     def test_hook_rejects_tickets_without_a_block(self) -> None:
         from captain_hook import hook
 

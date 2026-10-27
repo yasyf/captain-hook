@@ -106,6 +106,7 @@ its check runs."
 | `window` | How many recent messages of each session the context reads; 60 by default |
 | `machine` | Markers of a prompt a tool wrote for the user, which never counts as their words |
 | `hook` | The hook name used in logs and the user's system message |
+| `own_session` | Keep tickets in the acting session's own tree, for a place that names the acting agent; `False` by default |
 
 ## Read a ticket record
 
@@ -153,7 +154,9 @@ dispatch joins the tree of its Run's coordinator, the Claude session in the term
 Orca names as the Run's `coordinator_handle`. Like a subagent, it reads that session as
 its root. The coordinator's prompts and answers are the user's, the lane's own prompts
 are its brief, and the tickets the lane mints belong to the coordinator's tree. No other
-tree sees them.
+tree sees them. A declaration with `own_session=True` mints into the acting session's
+own tree instead and reads it beside the acting tree, so its tickets hold while the
+session joins and leaves a coordinator's tree between dispatches.
 
 A ticket stops covering anything when it expires or is revoked. Pick `ttl` for how
 long the permission should last. A once ticket with a short `ttl` covers an
@@ -454,7 +457,8 @@ general cleanup request, or words naming another target permit nothing.
 `sessions.task-stop` covers one task for the agent that started it. On
 `PostToolUse`, the pack mints a ticket at place `{agent: "<session>/<agent>", task}`
 for a teammate an `Agent` or `Task` call spawned and for a background task a `Bash`
-or `Monitor` call started, so the ticket outlives compaction. `spawned-here` holds
+or `Monitor` call started. The kind keeps its tickets in the session's own tree, so the
+ticket outlives compaction and the session's moves between Orca dispatches. `spawned-here` holds
 when the agent's own transcript records spawning a `<name>@session-<8 hex>`
 teammate, or a `Bash` or `Monitor` call whose result names the background task id,
 so an agent stops its own background shell even when no ticket was minted. The root

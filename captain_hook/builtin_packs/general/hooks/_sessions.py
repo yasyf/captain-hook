@@ -1372,6 +1372,7 @@ TASK_STOP = Tickets(
     deny="Stop only a teammate this agent spawned, by its `<name>@session-<id>` task id, or a background shell "
     "this agent started, or have the owner name the task id in a cc-notes answer before the stopping session starts.",
     hook="sessions",
+    own_session=True,
 )
 KILL_PROCESS = Tickets(
     "sessions.kill",
