@@ -641,7 +641,7 @@ hook(
         ),
         Input(command="ugrep -rl needle ~/.claude/scratch/release-v3"): Block(),
         Input(
-            command='cd ~/.claude/scratch/durable-agents-rebuild && grep -rl "backup in cloud storage" . '
+            command='grep -rl "backup in cloud storage" ~/.claude/scratch/durable-agents-rebuild '
             '2>/dev/null | grep -v node_modules | head -3'
         ): Block(),
         Input(command="grep -r -e needle /"): Block(),

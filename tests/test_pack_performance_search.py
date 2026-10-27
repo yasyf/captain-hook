@@ -31,6 +31,7 @@ def repo(tmp_path: Path) -> Path:
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path.resolve() / "home"
     (root / ".claude" / "scratch" / "release-v3" / "specific-lane").mkdir(parents=True)
+    (root / ".claude" / "scratch" / "durable-agents-rebuild").mkdir()
     (root / ".claude" / "scratch" / "notes.log").write_text("needle\n")
     (lane := root / ".claude" / "worktrees" / "captain-hook" / "lane" / "src").mkdir(parents=True)
     (lane.parent / ".git").write_text("gitdir: ../actual")
