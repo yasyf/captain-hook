@@ -42,6 +42,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     guarded,
     hidden_behind,
     hosts_agent,
+    inline_ask,
     inline_class_rulings,
     inline_create,
     inline_dispatch,
@@ -227,6 +228,9 @@ CODEX_COMMANDS = {
     "ccn answer search claude": inline_ruling(CODEX_RULING, tags=KILL_RULING_TAGS),
 }
 CODEX_ALLOW = {"allow": True, "relied_on": ["ccn:0207568"]}
+BOTH_PIDS = "Two old dashboard servers (pids 18300, 18301) poll GitHub for nothing."
+ONE_PID = "The old dashboard server (pid 18300) polls GitHub for nothing."
+OWNER_KILL = {"allow": True, "relied_on": ["ask:toolu_askuserquestion#0"]}
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings(), **inline_run("term_root")}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
@@ -449,6 +453,21 @@ def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungra
                 "ccn answer search claude": inline_ruling("Owner: end claude.", tags=KILL_RULING_TAGS),
             },
         ): Block(pattern="an agent session"),
+        guarded(command="kill 18300 18301", session_id=INLINE_SESSION): Block(
+            pattern="pid 18300 .* no agent ancestor to vouch"
+        ),
+        guarded(
+            command="kill 18300 18301", session_id=INLINE_SESSION, transcript=inline_ask(BOTH_PIDS), llm=OWNER_KILL
+        ): Allow(),
+        guarded(
+            command="kill 18300 18301", session_id=INLINE_SESSION, transcript=inline_ask(ONE_PID), llm=OWNER_KILL
+        ): Block(pattern="pid 18301 .* no agent ancestor to vouch"),
+        guarded(
+            command="kill 18300",
+            session_id=INLINE_SESSION,
+            transcript=inline_ask(BOTH_PIDS, pick="Leave them"),
+            llm={"allow": False, "refusal": "The owner picked Leave them."},
+        ): Block(pattern="pid 18300 .* no agent ancestor to vouch"),
         guarded(command="kill 20000", commands=CODEX_COMMANDS, llm=CODEX_ALLOW): Allow(),
         guarded(
             command="kill 20000",

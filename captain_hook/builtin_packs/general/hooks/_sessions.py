@@ -211,12 +211,12 @@ SETTLED_CLOSE_RULES = (
     "to terminals it is not."
 )
 OWNER_NAMED_RULES = (
-    "The pending action ends something that may host a session: it closes an Orca terminal, or stops, restarts, or "
-    "unloads a launchd service. The scope names the exact terminal handle or service label. Allow only when the "
-    "owner's own words, a prompt, a message they queued, or an AskUserQuestion answer, name this exact target, by its "
-    "handle or label, and ask for it to be closed, stopped, restarted, or kicked, or pick an option that does. Words "
-    "about another target, a general instruction to clean up, and words that only describe the target permit "
-    "nothing. One owner instruction permits one such action."
+    "The pending action ends something that may host a session: it closes an Orca terminal, stops, restarts, or "
+    "unloads a launchd service, or signals a process. The scope names the exact terminal handle, service label, or "
+    "pid. Allow only when the owner's own words, a prompt, a message they queued, or an AskUserQuestion answer, name "
+    "this exact target, by its handle, label, or pid, and ask for it to be closed, stopped, restarted, kicked, or "
+    "killed, or pick an option that does. Words about another target, a general instruction to clean up, and words "
+    "that only describe the target permit nothing. One owner instruction permits one such action."
 )
 OWNER_NAMED_TTL = timedelta(hours=1)
 KILL_SESSION_RULES = (
@@ -256,6 +256,8 @@ INLINE_TABLE = (
     "18100     1 18100  501 Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json\n"
     f"18101 18100 18100  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} orchestration worker-list --json\n"
     "18200     1 18200  501 Thu Jan  1 00:00:00 2026 python3 serve-wrapper.py\n"
+    "18300     1 18300  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node /Users/dev/.live-dashboard/0.5.2/server.js\n"
+    "18301     1 18301  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node /Users/dev/.live-dashboard/0.5.2/server.js\n"
     f"18201 18200 18200  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} serve --port 7777\n"
     "19000     1 19000  501 Thu Jan  1 00:00:00 2026 /Applications/Slack.app/Contents/MacOS/Slack\n"
     "19001 19000 19000  501 Thu Jan  1 00:00:00 2026 /Applications/Slack.app/Contents/Frameworks/Slack Helper.app/"
@@ -306,6 +308,14 @@ def inline_call(
         },
         answer if result is None else {**answer, "toolUseResult": result},
     ]
+
+
+def inline_ask(description: str, pick: str = "Stop them") -> list[dict[str, Any]]:
+    question = "Stop the stale processes?"
+    options = [{"label": "Stop them", "description": description}, {"label": "Leave them", "description": "Keep them."}]
+    asked = {"questions": [{"question": question, "header": "Stale procs", "multiSelect": False, "options": options}]}
+    answered = {**asked, "answers": {question: pick}, "annotations": {}}
+    return inline_call("AskUserQuestion", asked, f'"{question}"="{pick}"', answered)
 
 
 def inline_create(
@@ -1399,9 +1409,12 @@ def owner_named(kind: str, key: str, target: str) -> Tickets:
 
 TERMINAL_CLOSE_NAMED = owner_named("sessions.close", "terminal", "terminal")
 LAUNCHD_STOP_NAMED = owner_named("sessions.launchctl", "service", "service")
+KILL_NAMED = owner_named("sessions.kill", "pid", "pid")
 OWNER_NAMED = {
     TERMINAL_CLOSE.kind: TERMINAL_CLOSE_NAMED,
     LAUNCHD_STOP.kind: LAUNCHD_STOP_NAMED,
+    KILL_PROCESS.kind: KILL_NAMED,
+    KILL_SESSION.kind: KILL_NAMED,
 }
 SETTLED_CLOSE = Tickets(
     "sessions.close-settled",
@@ -1463,7 +1476,12 @@ def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | 
         if (ungranted := lift(evt, tickets, action, message, owner=False)) is None:
             return None
         refusals.append(ungranted)
-    return refusals[0] if refusals else Ungranted(message)
+    named = Proposal(
+        place={"pid": str(row.pid)},
+        payload={"process": f"{row.pid}@{row.started.isoformat()}", "command": row.command},
+        summary=f"kill {row.pid}",
+    )
+    return owner_lift(evt, tickets, named, refusals[0] if refusals else Ungranted(message))
 
 
 def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:

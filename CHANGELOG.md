@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The owner's answer naming a pid lifts the kill guard.** When the session guard blocks `kill` on a
+  process no agent vouches for, the spawning root's kill passes once the owner's own words or an
+  `AskUserQuestion`, board, or cc-slack card answer name that pid and ask to end it, as a terminal
+  close and a launchd stop already do. A judge reads only the words that name the pid, and the lift
+  mints a one-use ticket that lives an hour.
 - **Orca's dialog refusal names the send that answers the dialog.** When `orca terminal send` fails
   with `agent_prompt_blocked` because the agent shows a dialog such as a tool approval, the general
   pack tells the agent to pick option N with `--text N` and no `--enter`, or to press Enter alone
