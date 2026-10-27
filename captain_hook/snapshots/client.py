@@ -80,6 +80,14 @@ def warm_interval(usage: Mapping[str, int]) -> float:
     return WARM_INTERVAL_SECONDS if any(usage.get(name, 0) for name in WARM_IO_COUNTERS) else 0
 
 
+def summed_usage(first: Mapping[str, int], second: Mapping[str, int]) -> dict[str, int]:
+    return dict(first) | {name: first.get(name, 0) + count for name, count in second.items()}
+
+
+def with_observed_usage(result: dict[str, Any], observed: Mapping[str, int]) -> dict[str, Any]:
+    return result | {"usage": summed_usage(result["usage"], observed)} if observed else result
+
+
 def foreground_seconds(event: str) -> float:
     """The seconds one dispatch may spend on evidence; turn-level gates fire rarely and get more."""
     return GATE_WORK_SECONDS if event in GATE_EVENTS else GRAPH_WORK_SECONDS
@@ -177,10 +185,11 @@ def observable(query: str) -> bool:
 
 
 class EvidenceIncomplete(RuntimeError):
-    def __init__(self, status: str, reason: str) -> None:
+    def __init__(self, status: str, reason: str, *, usage: Mapping[str, int] | None = None) -> None:
         super().__init__(f"transcript evidence {status}: {reason}")
         self.status = status
         self.reason = reason
+        self.usage = dict(usage or {})
 
 
 class SnapshotProtocolError(EvidenceIncomplete):
@@ -424,6 +433,16 @@ class SnapshotClient:
                 self.foreground_deadline_unix_ms = previous
 
     def call(self, operation: str, *, domain: bool = False, **arguments: object) -> dict[str, Any]:
+        observed: dict[str, int] = {}
+        try:
+            return self._call(operation, domain, arguments, observed)
+        except EvidenceIncomplete as exc:
+            exc.usage = summed_usage(exc.usage, observed)
+            raise
+
+    def _call(
+        self, operation: str, domain: bool, arguments: dict[str, object], observed: dict[str, int]
+    ) -> dict[str, Any]:
         from jsonschema import ValidationError
 
         started = time.monotonic()
@@ -476,16 +495,18 @@ class SnapshotClient:
                 and self.foreground_deadline_unix_ms is not None
                 and int(time.time() * 1000) >= self.foreground_deadline_unix_ms
             ):
+                observed |= summed_usage(observed, result["usage"])
                 raise EvidenceIncomplete("deadline", "lease expired at the foreground transcript deadline")
             if result.get("status") != "retained_limit":
-                return result
+                return with_observed_usage(result, observed)
             if retry_until is None:
                 horizon = int(request.get("deadline_unix_ms", admission_deadline_unix_ms))
                 if self.foreground_deadline_unix_ms is not None:
                     horizon = min(horizon, self.foreground_deadline_unix_ms)
                 retry_until = monotonic_deadline(horizon)
             if (remaining := retry_until - time.monotonic()) <= 0:
-                return result
+                return with_observed_usage(result, observed)
+            observed |= summed_usage(observed, result["usage"])
             time.sleep(min(retry_delay, remaining))
             retry_delay = min(retry_delay * 2, 0.1)
 
@@ -771,6 +792,7 @@ class RegisteredWarmState:
 
     def step(self, *, read_bytes: int, deadline_seconds: float) -> bool:
         limits = graph_limits() | {"max_source_read_bytes": read_bytes}
+        self.last_usage = {}
         result = self.client.call(
             "warm_registered",
             classifier=NATIVE_CLASSIFIER,
@@ -838,6 +860,7 @@ class RootWarmState:
     last_usage: dict[str, int] = field(default_factory=dict)
 
     def step(self, *, read_bytes: int, deadline_seconds: float) -> bool:
+        self.last_usage = {}
         result = self.client.call(
             "warm_root",
             path=str(self.path),

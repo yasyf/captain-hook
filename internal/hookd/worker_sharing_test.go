@@ -34,17 +34,10 @@ func silentWorker(t *testing.T) (*workerClient, net.Conn) {
 func TestCallerTimeoutLeavesTheWorkerUsable(t *testing.T) {
 	t.Parallel()
 	worker, serverConn := silentWorker(t)
-	go func() {
-		for {
-			if _, err := wireproto.DecodeFrame(serverConn); err != nil {
-				return
-			}
-		}
-	}()
+	held := newHeldReplyDeadline(t.Context())
+	drainExpiringOnEvent(serverConn, held)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	if _, err := worker.call(ctx, testEventRequest("PreToolUse")); err == nil {
+	if _, err := worker.call(held, testEventRequest("PreToolUse")); err == nil {
 		t.Fatal("call against a worker that never answers succeeded")
 	}
 
@@ -62,11 +55,13 @@ func TestCallerTimeoutLeavesTheWorkerUsable(t *testing.T) {
 func lateReplyLeavesTheWorkerUsable(t *testing.T, late func(id uint64) wireproto.Frame) {
 	t.Helper()
 	worker, serverConn := silentWorker(t)
+	held := newHeldReplyDeadline(t.Context())
 	go func() {
 		abandoned, err := wireproto.DecodeFrame(serverConn)
 		if err != nil {
 			return
 		}
+		held.expire()
 		abandon, err := wireproto.DecodeFrame(serverConn)
 		if err != nil || abandon.Op != wireproto.OpAbandon || abandon.ID != abandoned.ID {
 			t.Errorf("frame after the abandoned request = %+v, %v; want its abandon frame", abandon, err)
@@ -83,9 +78,7 @@ func lateReplyLeavesTheWorkerUsable(t *testing.T, late func(id uint64) wireproto
 		})
 	}()
 
-	timedOut, cancelTimedOut := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelTimedOut()
-	if _, err := worker.call(timedOut, testEventRequest("PreToolUse")); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := worker.call(held, testEventRequest("PreToolUse")); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("call against a worker that answers late = %v, want DeadlineExceeded", err)
 	}
 

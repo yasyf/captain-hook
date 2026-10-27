@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -767,17 +768,49 @@ func replyingWorker(t *testing.T, manager *workerManager, entry *workerEntry, ho
 	return worker
 }
 
+type heldReplyDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newHeldReplyDeadline(parent context.Context) *heldReplyDeadline {
+	return &heldReplyDeadline{Context: parent, done: make(chan struct{})}
+}
+
+func (c *heldReplyDeadline) expire() { c.once.Do(func() { close(c.done) }) }
+
+func (c *heldReplyDeadline) Done() <-chan struct{} { return c.done }
+
+func (c *heldReplyDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func drainExpiringOnEvent(conn net.Conn, held *heldReplyDeadline) {
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(conn)
+			if err != nil {
+				return
+			}
+			if frame.Op == wireproto.OpEvent {
+				held.expire()
+			}
+		}
+	}()
+}
+
 func TestTimedOutWorkStaysCountedForAdmission(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
 	worker, serverConn := silentWorker(t)
-	go func() {
-		for {
-			if _, err := wireproto.DecodeFrame(serverConn); err != nil {
-				return
-			}
-		}
-	}()
+	held := newHeldReplyDeadline(t.Context())
+	drainExpiringOnEvent(serverConn, held)
 	request := testEventRequest("PreToolUse")
 	request.Root = "/live"
 	key, err := makeWorkerKey(request)
@@ -789,9 +822,7 @@ func TestTimedOutWorkStaysCountedForAdmission(t *testing.T) {
 	close(entry.ready)
 	manager.entries[key.member()] = entry
 
-	short, cancelShort := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancelShort()
-	if _, err := manager.dispatch(short, request); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := manager.dispatch(held, request); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("first dispatch = %v, want a timeout while the worker holds the reply", err)
 	}
 
