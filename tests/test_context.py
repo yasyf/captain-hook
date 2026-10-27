@@ -89,6 +89,16 @@ class TestSessionManagement:
         assert discovery_client.requests[0]["roots"] == [str(CLAUDE_PROJECTS_DIR), str(sessions_root())]
         assert discovery_client.released == []
 
+    def test_cleanup_stale_searches_a_living_transcript_once_per_window(self, tmp_path, monkeypatch, discovery_client):
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+        sd = ensure_session(SessionId(SESSION_ID))
+        age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
+        discovery_client.results[SESSION_ID] = tmp_path / "sleeping.jsonl"
+        cleanup_stale()
+        cleanup_stale()
+        assert sd.is_dir()
+        assert [request["session_ids"] for request in discovery_client.requests] == [[SESSION_ID]]
+
     def test_cleanup_stale_excludes_current_session(self, tmp_path, monkeypatch, discovery_client):
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
         current = ensure_session(SessionId(SESSION_ID))
@@ -741,7 +751,9 @@ class TestCallLlm:
 
         label = "Yes: reply in any #alerts-api / #alerts-runs alert thread (Recommended)"
         question = "Standing grant for incident threads?"
-        questions = [{"question": question, "header": "Alert grant", "multiSelect": False, "options": [{"label": label}]}]
+        questions = [
+            {"question": question, "header": "Alert grant", "multiSelect": False, "options": [{"label": label}]}
+        ]
         ask = T.tool("AskUserQuestion", questions=questions)
         root = fixture_file(
             [

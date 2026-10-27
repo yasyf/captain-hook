@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import time
@@ -35,6 +36,9 @@ def ensure_session(session_id: SessionId) -> Path:
 def cleanup_stale(exclude: SessionId | None = None) -> None:
     """Reap session dirs untouched for STALE_AGE_SECONDS whose transcript is gone.
 
+    A stale dir whose transcript still exists is touched, so each one costs one
+    transcript search per STALE_AGE_SECONDS rather than one on every SessionStart.
+
     ``exclude`` skips the current session unconditionally — the caller's own dir is live
     even if a clock skew or a transcript-discovery miss would otherwise mark it stale.
     """
@@ -57,7 +61,10 @@ def cleanup_stale(exclude: SessionId | None = None) -> None:
             client, [SessionId(sd.name) for sd, _ in stale], roots=[CLAUDE_PROJECTS_DIR, sessions_root()]
         )
     for sd, initial in stale:
-        if resolved[SessionId(sd.name)] is not None or sd.name == exclude:
+        if sd.name == exclude:
+            continue
+        if resolved[SessionId(sd.name)] is not None:
+            os.utime(sd)
             continue
         try:
             current = sd.stat()
