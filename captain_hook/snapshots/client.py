@@ -80,6 +80,12 @@ def warm_interval(usage: Mapping[str, int]) -> float:
     return WARM_INTERVAL_SECONDS if any(usage.get(name, 0) for name in WARM_IO_COUNTERS) else 0
 
 
+def with_retried_usage(result: dict[str, Any], retried: Mapping[str, int]) -> dict[str, Any]:
+    if not retried:
+        return result
+    return result | {"usage": {name: count + retried.get(name, 0) for name, count in result["usage"].items()}}
+
+
 def foreground_seconds(event: str) -> float:
     """The seconds one dispatch may spend on evidence; turn-level gates fire rarely and get more."""
     return GATE_WORK_SECONDS if event in GATE_EVENTS else GRAPH_WORK_SECONDS
@@ -430,6 +436,7 @@ class SnapshotClient:
         retry_until = started + CLEANUP_SECONDS if operation == "release" else None
         admission_deadline_unix_ms = int((time.time() + self._preparation_seconds) * 1000)
         retry_delay = 0.01
+        retried_usage: dict[str, int] = {}
         while True:
             with self._guard:
                 self._counter += 1
@@ -478,14 +485,15 @@ class SnapshotClient:
             ):
                 raise EvidenceIncomplete("deadline", "lease expired at the foreground transcript deadline")
             if result.get("status") != "retained_limit":
-                return result
+                return with_retried_usage(result, retried_usage)
             if retry_until is None:
                 horizon = int(request.get("deadline_unix_ms", admission_deadline_unix_ms))
                 if self.foreground_deadline_unix_ms is not None:
                     horizon = min(horizon, self.foreground_deadline_unix_ms)
                 retry_until = monotonic_deadline(horizon)
             if (remaining := retry_until - time.monotonic()) <= 0:
-                return result
+                return with_retried_usage(result, retried_usage)
+            retried_usage = with_retried_usage(result, retried_usage)["usage"]
             time.sleep(min(retry_delay, remaining))
             retry_delay = min(retry_delay * 2, 0.1)
 

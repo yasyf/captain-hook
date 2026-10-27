@@ -862,6 +862,26 @@ def test_retain_queues_for_admission_within_the_foreground_deadline():
     assert len(requests) == 3
 
 
+def test_call_returns_the_usage_of_every_reply_it_retried():
+    requests = []
+    busy_usage = {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096}
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if len(requests) < 3:
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy", busy_usage)}
+        return response(request, {"kind": "acquired", "description": description()})
+
+    client = SnapshotClient(exchange, foreground_seconds=5)
+    client.bind_tool_registry({})
+
+    usage = client.call("retain", handle={"owner_epoch": "owner", "lease_id": "lease"})["usage"]
+    assert len(requests) == 3
+    assert (usage["source_bytes_read"], usage["prepared_cache_bytes_read"], usage["requests_failed"]) == (14, 8192, 2)
+    assert usage.keys() == empty_usage().keys()
+
+
 @pytest.mark.parametrize(
     ("event", "seconds"),
     [
