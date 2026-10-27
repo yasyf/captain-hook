@@ -31,6 +31,7 @@ def repo(tmp_path: Path) -> Path:
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path.resolve() / "home"
     (root / ".claude" / "scratch" / "release-v3" / "specific-lane").mkdir(parents=True)
+    (root / ".claude" / "scratch" / "durable-agents-rebuild").mkdir()
     (root / ".claude" / "scratch" / "notes.log").write_text("needle\n")
     (lane := root / ".claude" / "worktrees" / "captain-hook" / "lane" / "src").mkdir(parents=True)
     (lane.parent / ".git").write_text("gitdir: ../actual")
@@ -87,8 +88,8 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
         pytest.param("grep -rn --bogus-flag needle internal/focused", id="unknown-option-after-recursion"),
     ],
 )
-def test_warns_on_search_at_repo_root(performance: None, repo: Path, tmp_path: Path, command: str) -> None:
-    assert decision(command, repo, tmp_path) == "warn"
+def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command, repo, tmp_path) == "deny"
 
 
 @pytest.mark.parametrize(
@@ -134,14 +135,19 @@ def test_allows_bounded_search_at_repo_root(
         pytest.param("ugrep -rl needle ~/.claude/scratch/release-v3", id="scratch-project-listing"),
         pytest.param("sh -c 'cd ~/.claude/scratch/release-v3 && ugrep -rn needle .'", id="cd-in-payload"),
         pytest.param("cd ~/.claude/scratch/release-v3 && grep -rn needle .", id="cd-before-call"),
+        pytest.param(
+            'cd ~/.claude/scratch/durable-agents-rebuild && grep -rl "backup in cloud storage" . '
+            '2>/dev/null | grep -v node_modules | head -3',
+            id="incident-recursive-scratch-pipeline",
+        ),
         pytest.param("rg needle ~/.claude/worktrees/captain-hook", id="worktree-pool"),
         pytest.param("rg needle ~/.claude/worktrees/captain-hook/lane", id="worktree-root"),
         pytest.param("rg needle ~", id="home"),
         pytest.param('rg needle "$HOME"', id="home-variable"),
     ],
 )
-def test_warns_on_search_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
-    assert decision(command, tmp_path.resolve(), tmp_path) == "warn"
+def test_blocks_search_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command, tmp_path.resolve(), tmp_path) == "deny"
 
 
 @pytest.mark.parametrize(
@@ -158,7 +164,7 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
 
 
 def test_match_supplies_the_ugrep_pattern(performance: None, repo: Path, tmp_path: Path) -> None:
-    assert decision("ugrep -r --match /", repo / "internal" / "focused", tmp_path) == "warn"
+    assert decision("ugrep -r --match /", repo / "internal" / "focused", tmp_path) == "deny"
     assert decision("ugrep -r --match .", repo / "internal" / "focused", tmp_path) is None
 
 
@@ -172,13 +178,19 @@ def test_classifies_roots_without_walking(
     monkeypatch.setattr("captain_hook.cmd.contains_repo", walk)
     monkeypatch.setattr("captain_hook.cmd.glob_matches", walk)
     monkeypatch.setattr("captain_hook.util.vcs.scanned_names", walk)
-    assert decision("rg needle .", repo, tmp_path / "dot") == "warn"
-    assert decision("grep -rn needle *", repo, tmp_path / "star") == "warn"
+    assert decision("rg needle .", repo, tmp_path / "dot") == "deny"
+    assert decision("grep -rn needle *", repo, tmp_path / "star") == "deny"
     assert decision("rg needle internal/*", repo, tmp_path) is None
     assert decision("rg needle internal/focused", repo, tmp_path) is None
 
 
-def test_search_warning_names_its_bounds(performance: None, repo: Path, tmp_path: Path) -> None:
+def test_search_denial_names_its_bounds(performance: None, repo: Path, tmp_path: Path) -> None:
     result = dispatch(Event.PreToolUse, evt_for("rg needle .", cwd=str(repo)), session_dir=tmp_path / "session")
     assert result is not None
-    assert "`-g '*.py'`" in result["hookSpecificOutput"]["additionalContext"]
+    assert "`-g '*.py'`" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_blocks_successive_searches_in_one_session(performance: None, repo: Path, tmp_path: Path) -> None:
+    assert decision("grep -rl needle .", repo, tmp_path) == "deny"
+    assert decision("rg other .", repo, tmp_path) == "deny"
+    assert decision("rg needle internal/focused", repo, tmp_path) is None
