@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A lane stops its own background shell.** A subagent's `TaskStop` on a background task its own
+  `Bash` or `Monitor` call started, such as a `run_in_background` heartbeat loop, is allowed when the
+  agent's transcript records that call's result naming the task id, even if no ticket was minted
+  when the call finished. A task id the agent never started, another session's shell, or a lane name
+  a `Bash` call printed stays blocked.
 - **A `find` that deletes from a broad root blocks.** A `find` rooted at `/`, a home directory, or
   the worktree pool that runs `-delete` or `-exec rm` (or `rmdir`, `unlink`, `shred`, `trash`) is
   refused, since it can remove other sessions' work. A non-deleting `-exec`, such as `grep`, runs.

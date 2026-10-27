@@ -455,7 +455,9 @@ general cleanup request, or words naming another target permit nothing.
 for a teammate an `Agent` or `Task` call spawned and for a background task a `Bash`
 or `Monitor` call started, so the ticket outlives compaction. `spawned-here` holds
 when the agent's own transcript records spawning a `<name>@session-<8 hex>`
-teammate. The root session's `TaskStop` is never guarded.
+teammate, or a `Bash` or `Monitor` call whose result names the background task id,
+so an agent stops its own background shell even when no ticket was minted. The root
+session's `TaskStop` is never guarded.
 
 `sessions.kill` names the process as `<pid>@<start time>`, so a ticket never covers
 a recycled pid. The program is the script for a `python`, `node`, `bun`, `deno`,

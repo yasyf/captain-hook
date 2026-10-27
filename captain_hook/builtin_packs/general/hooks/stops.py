@@ -14,6 +14,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     block_first,
     child_place,
     clip,
+    inline_background,
     inline_ruling,
     inline_spawn,
     lift,
@@ -27,7 +28,9 @@ if TYPE_CHECKING:
 
 STOP_TOOLS = frozenset({"TaskStop"})
 OWN_LANE = "lane-2@session-67c0e5da"
+OWN_SHELL = "bghannz4t"
 stopping = partial(Input, tool="TaskStop", commands=INLINE_COMMANDS, transcript=INLINE_TRANSCRIPT)
+stopping_own_shell = partial(stopping, tool_input={"task_id": OWN_SHELL}, agent_id="lane-1")
 
 
 def names_a_stop_tool(evt: BaseHookEvent) -> bool:
@@ -106,6 +109,12 @@ def describe_target(target: tuple[str, str] | None) -> str:
         stopping(tool_input={"task_id": OWN_LANE}, agent_id="lane-1", root_transcript=inline_spawn(OWN_LANE)): Block(
             pattern="cannot be verified"
         ),
+        stopping_own_shell(transcript=inline_background(OWN_SHELL)): Allow(),
+        stopping_own_shell(transcript=inline_background(OWN_SHELL, tool="Monitor")): Allow(),
+        stopping_own_shell(transcript=inline_background("b0f1e2d3c")): Block(
+            pattern=f"on task `{OWN_SHELL}` cannot be verified"
+        ),
+        stopping_own_shell(root_transcript=inline_background(OWN_SHELL)): Block(pattern="cannot be verified"),
         Input(tool="TaskOutput", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(tool="mcp__orca__TaskStop", tool_input={"task_id": "wcn64vfub"}): Allow(),
         Input(command="printf 'TaskStop wcn64vfub'"): Allow(),
