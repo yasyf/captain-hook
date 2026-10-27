@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`git log --all -S` or `-G` with no pathspec or lower date bound draws a warning.** Such a search
+  reads content across every ref's history and can keep fetching missing objects from a promisor
+  remote. The performance pack warns once per session and names the bounds that scope it: `--
+  <component/path>`, `--since=<date>`, or a single ref or range. `head`, `-n`, and `--max-count`
+  limit the output, not the scan, so they do not silence it, and a whole-tree pathspec such as `.`
+  or `:/` counts as none.
 - **`capt-hook transcripts warm` reports prepared-cache reads beside raw transcript reads.** Its JSON
   adds `root_prepared_cache_bytes_read`, `root_verify_prepared_cache_bytes_read`,
   `warm_prepared_cache_bytes_read`, and `verify_prepared_cache_bytes_read`. Each sums the
