@@ -10,20 +10,23 @@ import (
 	"github.com/yasyf/daemonkit"
 )
 
-// Server is the captain-hook product host. Daemonkit owns its listener,
-// lifecycle, transport, admission, child identities, and reaping.
 type Server struct {
 	paths  paths
 	daemon daemonkit.Daemon
 }
 
-// NewServer builds the one stable captain-hook host.
 func NewServer() (*Server, error) {
 	resolved, err := resolvePaths()
 	if err != nil {
 		return nil, err
 	}
-	return &Server{paths: resolved, daemon: hostDaemon()}, nil
+	program, err := servingProgram()
+	if err != nil {
+		return nil, err
+	}
+	daemon := hostDaemon()
+	daemon.Program = program
+	return &Server{paths: resolved, daemon: daemon}, nil
 }
 
 // Run serves the exact v1 host until daemonkit completes ordered shutdown.
@@ -75,9 +78,6 @@ type hostProduct struct {
 	monitor   *resourceMonitor
 }
 
-// Handle owns dispatch for every captain-hook op. Admission to the business
-// lane is the only authority boundary: any peer daemonkit admitted may invoke
-// any op here.
 func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemonkit.Reply, error) {
 	switch req.Op {
 	case opTranscript, opEventTranscript:
@@ -88,7 +88,7 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 			return daemonkit.Reply{}, fmt.Errorf("captain: decode event request: %w", err)
 		}
 		if event.ClientPID != req.Caller.PID {
-			return daemonkit.Reply{}, errors.New("captain: event client pid does not match authenticated peer")
+			return daemonkit.Reply{}, errors.New("captain: event client pid does not match socket peer")
 		}
 		if event.Event == resourceEvent {
 			return daemonkit.Reply{}, fmt.Errorf("captain: %s is a host event and cannot be submitted by a client", resourceEvent)

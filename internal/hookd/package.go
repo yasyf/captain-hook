@@ -29,13 +29,12 @@ func canonicalExecutable() (string, error) {
 	return resolved, nil
 }
 
-// stopInstalledHost makes nothing serve the host label and takes its agent
-// down, draining the incumbent through the control lane.
 func stopInstalledHost(ctx context.Context) error {
 	client, err := daemonkit.Open(hostDaemon())
 	if err != nil {
-		return fmt.Errorf("captain package: open signed host: %w", err)
+		return fmt.Errorf("captain package: open host: %w", err)
 	}
+	defer closeDaemonClient(client)
 	stopCtx, cancel := context.WithTimeout(ctx, hostStopTimeout)
 	defer cancel()
 	if err := client.Stop(stopCtx); err != nil {

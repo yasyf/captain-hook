@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	hostTeamID            = "SXKCTF23Q2"
 	helperBundleID        = "com.yasyf.capt-hook.helper"
 	helperServiceLabel    = "com.yasyf.capt-hook.helper"
 	helperApplicationName = "Captain Hook"
@@ -24,16 +25,17 @@ const (
 	hostBundleExecutable  = "Contents/Helpers/capt-hookd"
 	bridgePingTimeout     = 8 * time.Second
 
-	// appStopTimeout bounds the signed stop entrypoint, which asks the running
-	// generation to terminate, waits five seconds, force-terminates what stayed,
-	// and proves quiet absence after that.
 	appStopTimeout = 20 * time.Second
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
-func helperApplicationRequirement() daemonkit.Requirement {
-	return daemonkit.Requirement{TeamID: hostTeamID, SigningIdentifier: helperBundleID}
+func servingProgram() (daemonkit.Program, error) {
+	app, err := packagedApplicationPath()
+	if err != nil {
+		return daemonkit.Program{}, err
+	}
+	return daemonkit.InBundle(app, hostBundleExecutable)
 }
 
 func marketingVersion() (string, error) {
@@ -133,7 +135,7 @@ func openDeployment(appPath string) (*deploy.Deployment, error) {
 	}
 	return deploy.Open(deploy.Config{
 		App:         appPath,
-		Requirement: helperApplicationRequirement(),
+		Requirement: deploy.Requirement{TeamID: hostTeamID, SigningIdentifier: helperBundleID},
 		Daemon:      hostDaemon(),
 		Agents:      agents,
 	})
@@ -240,17 +242,6 @@ func validateGeneration(generation deploy.Generation, appPath, version string) e
 	return nil
 }
 
-// quiesceInstalledApplication stops the helper generation running out of the
-// installed bundle. Supersede and Uninstall both inventory every executable in
-// that bundle and refuse with deploy.ErrLive while any of them is alive, and
-// the app half is not the daemon daemonkit drains — so the app is stopped here,
-// through the signed entrypoint that terminates the exact generation at a named
-// path and proves quiet absence before exiting. Finding nothing to stop is that
-// proof, not a failure.
-//
-// The controller is the packaged app's own binary, never the installed one:
-// running the installed executable would put a live process inside the very
-// bundle the inventory has to find empty.
 func quiesceInstalledApplication(ctx context.Context, controllerApp, installedApp string) (err error) {
 	resolved, err := resolvePaths()
 	if err != nil {
@@ -273,8 +264,8 @@ func quiesceInstalledApplication(ctx context.Context, controllerApp, installedAp
 	controller := appExecutablePath(controllerApp)
 	result, err := owned.Run(runCtx, daemonkit.Cmd{
 		Path: controller, Dir: filepath.Dir(controller),
-		Args: []string{"--deployment-stop-installed-generation", installedApp},
-		Exec: daemonkit.ServingSigned(helperApplicationRequirement()), MaxOutput: 4 << 10,
+		Args:      []string{"--deployment-stop-installed-generation", installedApp},
+		MaxOutput: 4 << 10,
 	})
 	if err != nil {
 		return fmt.Errorf(
@@ -288,9 +279,6 @@ func quiesceInstalledApplication(ctx context.Context, controllerApp, installedAp
 	return nil
 }
 
-// pingBridge proves the signed broker in the activated bundle answers with
-// this build. It runs after Activate rather than inside it: v0.21 seals
-// readiness from the daemon's own published health and takes no consumer hook.
 func pingBridge(ctx context.Context, appPath string) (err error) {
 	resolved, err := resolvePaths()
 	if err != nil {
@@ -313,7 +301,7 @@ func pingBridge(ctx context.Context, appPath string) (err error) {
 	bridge := bridgeExecutablePath(appPath)
 	result, err := owned.Run(runCtx, daemonkit.Cmd{
 		Path: bridge, Dir: filepath.Dir(bridge), Args: []string{"ping"},
-		Exec: daemonkit.ServingSigned(helperClientRequirement()), MaxOutput: 4 << 10,
+		MaxOutput: 4 << 10,
 	})
 	if err != nil {
 		return fmt.Errorf("captain package: broker ping: %w: bridge stderr %q", err, bytes.TrimSpace(result.Stderr))

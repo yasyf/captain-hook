@@ -29,20 +29,26 @@ func NewClient() (*Client, error) {
 func openClient(d daemonkit.Daemon) (*Client, error) {
 	daemon, err := daemonkit.Open(d)
 	if err != nil {
-		return nil, fmt.Errorf("captain: open signed host: %w", err)
+		return nil, fmt.Errorf("captain: open host: %w", err)
 	}
 	return &Client{daemon: daemon, business: daemon.Business()}, nil
 }
 
 // Close settles the product session.
 func (c *Client) Close() error {
-	return closeLane(c.business)
+	return errors.Join(closeLane(c.business), closeDaemonClient(c.daemon))
 }
 
 func closeLane(lane *daemonkit.Business) error {
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 	return lane.Close(ctx)
+}
+
+func closeDaemonClient(client *daemonkit.Client) error {
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+	return client.Close(ctx)
 }
 
 // Event dispatches exactly once. A host that is absent, starting, draining,

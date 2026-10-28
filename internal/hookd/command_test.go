@@ -79,7 +79,7 @@ func TestRunSkipsAMandatoryEventTheGuardDidNotCompleteWithANote(t *testing.T) {
 		client            scriptedClient
 	}{
 		{"host unavailable", "PreToolUse", "host-unavailable",
-			errors.New("captain: open signed host: /Users/x/Captain Hook.app is not installed"), scriptedClient{}},
+			errors.New("captain: open host: /Users/x/Captain Hook.app is not installed"), scriptedClient{}},
 		{"refused until the deadline", "PreToolUse", "transport-refused", nil, scriptedClient{err: refused}},
 		{"other transport error", "PreToolUse", "transport-error", nil,
 			scriptedClient{err: errors.New("captain: decode event response: boom")}},
@@ -177,7 +177,7 @@ func TestRunAnswersAMandatoryEventLocallyWhenTheHostTransportFails(t *testing.T)
 		"transport-refused": {nil, scriptedClient{err: refused}},
 		"transport-timeout": {nil, scriptedClient{err: context.DeadlineExceeded}},
 		"transport-error":   {nil, scriptedClient{err: errors.New("captain: decode event response: boom")}},
-		"host-unavailable":  {errors.New("captain: open signed host: absent"), scriptedClient{}},
+		"host-unavailable":  {errors.New("captain: open host: absent"), scriptedClient{}},
 	}
 	for kind, failure := range failures {
 		for name, tc := range map[string]struct {
@@ -292,8 +292,8 @@ func TestRunKeepsNonMandatoryOutcomesAsTheyWere(t *testing.T) {
 		code                 int
 		stdout, stderr       string
 	}{
-		{"host unavailable", "PreToolUse", benignPayload, errors.New("captain: open signed host: absent"),
-			scriptedClient{}, 1, "", "captain: open signed host: absent\n"},
+		{"host unavailable", "PreToolUse", benignPayload, errors.New("captain: open host: absent"),
+			scriptedClient{}, 1, "", "captain: open host: absent\n"},
 		{"transport error", "PreToolUse", benignPayload, nil,
 			scriptedClient{err: errors.New("captain: decode event response: boom")}, 1, "",
 			"captain: decode event response: boom\n"},

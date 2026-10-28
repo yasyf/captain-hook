@@ -12,6 +12,7 @@ import (
 	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/supervise"
+	"github.com/yasyf/daemonkit/version"
 )
 
 const (
@@ -104,6 +105,7 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer closeDaemonClient(client)
 	if err := ensureSupervisedHost(ctx, client); err != nil && !errors.Is(err, supervise.ErrNoSupervisor) {
 		return err
 	}
@@ -122,7 +124,7 @@ func openSupervisedHost() (*daemonkit.Client, error) {
 	if err := resolved.ensure(); err != nil {
 		return nil, err
 	}
-	program, err := daemonkit.Stable()
+	program, err := servingProgram()
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +135,13 @@ func openSupervisedHost() (*daemonkit.Client, error) {
 		return nil, fmt.Errorf("captain package: open host: %w", err)
 	}
 	return client, nil
+}
+
+func servingProgram() (daemonkit.Program, error) {
+	if Build == "0.0.0" {
+		return daemonkit.Stable(version.Running("dev"))
+	}
+	return daemonkit.Stable(Build)
 }
 
 // ensureSupervisedHost converges the label's supervisor on this build,
