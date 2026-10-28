@@ -83,7 +83,7 @@ func spawnPythonSnapshotOwner(t *testing.T, python string, config []byte) *snaps
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	owner, err := handshakeSnapshotOwner(ctx, conn, config, nil)
+	owner, err := handshakeSnapshotOwner(ctx, conn, config)
 	if err != nil {
 		t.Fatalf("real Python handshake: %v", err)
 	}

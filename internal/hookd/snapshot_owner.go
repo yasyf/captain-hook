@@ -43,6 +43,12 @@ func (l snapshotOwnerLog) terminal(at time.Time, exit daemonkit.Exit) {
 	fmt.Fprintf(l.writer, "captain: snapshot_owner_exit time=%s pid=%d process_start=%s metadata_known=%t identity_source=point_probe_only exit_code=%d signal=%d\n", at.UTC().Format(time.RFC3339Nano), l.pid, l.start, l.known, exit.Code, exit.Signal)
 }
 
+type snapshotOwnerFailure struct {
+	at      time.Time
+	cause   string
+	pending int
+}
+
 type snapshotOwner struct {
 	cancelGrace time.Duration
 	conn        net.Conn
@@ -53,10 +59,10 @@ type snapshotOwner struct {
 	nextID      uint64
 	closed      bool
 	err         error
-	failure     func(time.Time, string, int)
+	failure     snapshotOwnerFailure
 }
 
-func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawMessage, failure func(time.Time, string, int)) (*snapshotOwner, error) {
+func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawMessage) (*snapshotOwner, error) {
 	if err := snapshots.Validate("config", config); err != nil {
 		return nil, err
 	}
@@ -76,7 +82,7 @@ func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawM
 	if !stop() {
 		return nil, ctx.Err()
 	}
-	owner := &snapshotOwner{cancelGrace: workerSettlementTimeout, conn: conn, pending: make(map[uint64]snapshotPending), failure: failure}
+	owner := &snapshotOwner{cancelGrace: workerSettlementTimeout, conn: conn, pending: make(map[uint64]snapshotPending)}
 	go owner.readLoop()
 	return owner, nil
 }
@@ -260,9 +266,8 @@ func (o *snapshotOwner) failLocked(err error, cause string) {
 		return
 	}
 	o.closed, o.err = true, err
-	failedAt := time.Now()
-	report := o.failure
 	pending := o.pending
+	o.failure = snapshotOwnerFailure{at: time.Now(), cause: cause, pending: len(pending)}
 	o.pending = make(map[uint64]snapshotPending)
 	o.mu.Unlock()
 	_ = o.conn.Close()
@@ -273,13 +278,14 @@ func (o *snapshotOwner) failLocked(err error, cause string) {
 	for _, request := range pending {
 		request.result <- snapshotResult{err: err}
 	}
-	if report != nil {
-		report(failedAt, cause, len(pending))
-	}
 }
 
 func (o *snapshotOwner) exited(exit daemonkit.Exit, log snapshotOwnerLog) {
 	o.fail(fmt.Errorf("captain: snapshot owner exited: %v", exit), "child_exit")
+	o.mu.Lock()
+	failure := o.failure
+	o.mu.Unlock()
+	log.failure(failure.at, failure.cause, failure.pending)
 	log.terminal(time.Now(), exit)
 }
 
@@ -515,7 +521,7 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 		start = fmt.Sprintf("%d.%06d", row.StartUnix, row.StartUsec)
 	}
 	log := snapshotOwnerLog{writer: s.manager.logWriter, pid: child.PID(), start: start, known: known}
-	owner, err := handshakeSnapshotOwner(ctx, conn, s.config, log.failure)
+	owner, err := handshakeSnapshotOwner(ctx, conn, s.config)
 	if err != nil {
 		_ = conn.Close()
 		return nil, s.manager.stopChild(child, errors.New("captain: snapshot owner handshake"), err)
