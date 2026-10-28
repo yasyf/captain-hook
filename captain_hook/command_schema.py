@@ -62,7 +62,10 @@ class Arguments:
     or command substitution prevents a complete binding. Known path operands remain
     available so a policy can still reject an explicitly broad root. ``unread`` holds
     the words from the first unknown option on, or the option left without its value,
-    so a policy can name exactly what stopped the binding.
+    so a policy can name exactly what stopped the binding. ``dashdash`` counts the positional
+    words read before an end-of-options ``--``, or is None when none was written, so a program
+    that gives the separator its own meaning, such as ``git grep`` reading revisions before it
+    and pathspecs after, can split its operands.
     """
 
     words: dict[str, tuple[Word, ...]]
@@ -72,6 +75,7 @@ class Arguments:
     operands_complete: bool
     call: Call
     unread: tuple[Word, ...] = ()
+    dashdash: int | None = None
 
     def paths(self, name: str) -> Targets:
         """Return the named role as path targets with the invocation's working directory.
@@ -105,7 +109,14 @@ class CommandSchema:
     options end binding and mark the result incomplete instead of guessing their arity. A
     value attached to a short option (``-oVAL``) binds only when every single-dash alias
     is one letter, since a schema with find-style single-dash words cannot split such a
-    token unambiguously.
+    token unambiguously. A ``subcommand`` schema describes one verb of a program with global
+    options, such as ``git grep``: it binds only the words after the call's leading global
+    options and the verb, so a global ``-c key=value`` and the verb's own ``-c`` never share
+    an alias table. A short-option cluster binds only when every letter is a flag, since a
+    schema that does not list every short option cannot tell where a value starts; with
+    ``clustered_values``, a schema that does reads the cluster the way getopt and Git's
+    parse-options do, flags letter by letter until one that takes a value, which takes the
+    rest of the word or else the next word, so ``-nC3`` binds ``-n`` and ``-C 3``.
     """
 
     program: str
@@ -114,6 +125,12 @@ class CommandSchema:
     options_end_operands: bool = False
     operands_end_options: bool = False
     separators: tuple[str, ...] = ()
+    subcommand: tuple[str, ...] = ()
+    clustered_values: bool = False
+
+    def invokes(self, call: Call) -> bool:
+        """Whether ``call`` runs this schema's subcommand, read past the program's global options."""
+        return call.verb_argv[1 : 1 + len(self.subcommand)] == self.subcommand
 
     def bind(self, call: Call) -> Arguments:
         """Bind an invocation while preserving the parser's word provenance."""
@@ -125,11 +142,13 @@ class CommandSchema:
         values: dict[str, list[Scalar | None]] = {}
         positional: list[Word] = []
         unread: tuple[Word, ...] = ()
+        dashdash: int | None = None
         accept_operands = True
         accept_options = True
         complete = not call.substituted
         operands_complete = not call.substituted
-        stream = iter(call.command.words[1:])
+        skipped = len(call.leading_options) + len(self.subcommand) if self.subcommand else 0
+        stream = iter(call.command.words[1 + skipped :])
         for index, word in enumerate(stream):
             token = word.value
             flag, joined, attached = (token or "").partition("=")
@@ -146,6 +165,7 @@ class CommandSchema:
                 flag, inline = token[:2], token[2:]
             if token == "--" and accept_options:
                 accept_options = False
+                dashdash = len(positional)
                 continue
             if token in self.separators and accept_options:
                 accept_operands = False
@@ -157,17 +177,17 @@ class CommandSchema:
                 and not token.startswith("--")
                 and flag not in aliases
                 and len(token) > 2
-                and all(
-                    (part := aliases.get(f"-{letter}")) is not None and part.type is bool and not part.first
-                    for letter in token[1:]
-                )
+                and (cluster := short_cluster(token[1:], aliases, take_values=self.clustered_values and short_values))
+                is not None
             ):
-                for letter in token[1:]:
-                    option = aliases[f"-{letter}"]
+                flags, valued = cluster
+                for option in flags:
                     values.setdefault(option.name, []).append(True)
                     if self.options_end_operands and not option.prefix:
                         accept_operands = False
-                continue
+                if valued is None:
+                    continue
+                flag, inline = valued
             if accept_options and (option := aliases.get(flag)) is not None and not (option.first and index):
                 if self.options_end_operands and not option.prefix:
                     accept_operands = False
@@ -231,7 +251,28 @@ class CommandSchema:
             operands_complete,
             call,
             unread,
+            dashdash,
         )
+
+
+def short_cluster(
+    letters: str, aliases: dict[str, Option], *, take_values: bool
+) -> tuple[list[Option], tuple[str, str | None] | None] | None:
+    options = [aliases.get(f"-{letter}") for letter in letters]
+    count = next(
+        (
+            index
+            for index, option in enumerate(options)
+            if option is None or option.type is not bool or option.first
+        ),
+        len(options),
+    )
+    flags = [aliases[f"-{letter}"] for letter in letters[:count]]
+    if count == len(letters):
+        return flags, None
+    if not take_values or not flags or (valued := options[count]) is None or valued.first:
+        return None
+    return flags, (f"-{letters[count]}", letters[count + 1 :] or None)
 
 
 def glob_prefix(path: Path) -> Path:
@@ -317,5 +358,6 @@ class CommandMatches(CustomCondition):
             all(predicate(arguments) for predicate in self.only_if)
             and not any(predicate(arguments) for predicate in self.skip_if)
             for call in evt.cmd.calls(self.schema.program)
+            if self.schema.invokes(call)
             for arguments in (self.schema.bind(call),)
         )

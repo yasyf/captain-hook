@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +21,7 @@ from captain_hook import (
     Tool,
     hook,
 )
+from captain_hook.cmd import git_location
 from captain_hook.command_schema import glob_prefix
 from captain_hook.util.scratch import TEMP_ROOTS
 from captain_hook.util.vcs import is_repo_root
@@ -26,7 +29,10 @@ from captain_hook.util.vcs import is_repo_root
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from cc_transcript.command import Word
+
     from captain_hook import Arguments
+    from captain_hook.cmd import Call
     from captain_hook.command_schema import Scalar
 
 BROAD_ROOTS = PathMatches(
@@ -53,6 +59,10 @@ RECURSIVE_ROLES = ("recursive", "depth", "include_dir")
 INFO_ROLES = ("info", "listing", "generate")
 RECURSE_ACTIONS = frozenset({"rec", "recu", "recur", "recurs", "recurse", "dereference-recurse"})
 STDIN_REDIRECTS = frozenset({"<", "<<<"})
+GIT_GREP_GROUPS = frozenset({"(", ")"})
+SHORT_MAGIC = frozenset({"/", "!", "^"})
+GIT_LOCATION_OPTIONS = frozenset({"--git-dir", "--work-tree"})
+GIT_LOCATION_VARIABLES = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
 
 GREP = CommandSchema(
     "grep",
@@ -492,6 +502,114 @@ RG = CommandSchema(
 )
 
 
+GIT_GREP = CommandSchema(
+    "git",
+    subcommand=("grep",),
+    clustered_values=True,
+    operands=(Operand("operands", count="*"),),
+    options=(
+        Option("patterns", ("-e",)),
+        Option("pattern_files", ("-f",)),
+        Option("info", ("--help",), bool),
+        Option(
+            "parameter",
+            (
+                "-A",
+                "-B",
+                "-C",
+                "-m",
+                "--after-context",
+                "--before-context",
+                "--context",
+                "--max-count",
+                "--max-depth",
+                "--threads",
+            ),
+        ),
+        Option(
+            "mode",
+            (
+                *(f"-{digit}" for digit in range(10)),
+                *(f"-{letter}" for letter in "EFGHILPWachilnopqrvwz"),
+                "--cached",
+                "--no-cached",
+                "--index",
+                "--no-index",
+                "--untracked",
+                "--no-untracked",
+                "--exclude-standard",
+                "--no-exclude-standard",
+                "--recurse-submodules",
+                "--no-recurse-submodules",
+                "--invert-match",
+                "--no-invert-match",
+                "--ignore-case",
+                "--no-ignore-case",
+                "--word-regexp",
+                "--no-word-regexp",
+                "--text",
+                "--no-text",
+                "--textconv",
+                "--no-textconv",
+                "--recursive",
+                "--no-recursive",
+                "--extended-regexp",
+                "--no-extended-regexp",
+                "--basic-regexp",
+                "--no-basic-regexp",
+                "--fixed-strings",
+                "--no-fixed-strings",
+                "--perl-regexp",
+                "--no-perl-regexp",
+                "--line-number",
+                "--no-line-number",
+                "--column",
+                "--no-column",
+                "--full-name",
+                "--no-full-name",
+                "--files-with-matches",
+                "--no-files-with-matches",
+                "--name-only",
+                "--no-name-only",
+                "--files-without-match",
+                "--no-files-without-match",
+                "--null",
+                "--no-null",
+                "--only-matching",
+                "--no-only-matching",
+                "--count",
+                "--no-count",
+                "--color",
+                "--no-color",
+                "--break",
+                "--no-break",
+                "--heading",
+                "--no-heading",
+                "--no-context",
+                "--no-threads",
+                "--show-function",
+                "--no-show-function",
+                "--function-context",
+                "--no-function-context",
+                "--and",
+                "--or",
+                "--not",
+                "--quiet",
+                "--no-quiet",
+                "--all-match",
+                "--no-all-match",
+                "--open-files-in-pager",
+                "--no-open-files-in-pager",
+                "--ext-grep",
+                "--no-ext-grep",
+                "--no-max-count",
+            ),
+            bool,
+        ),
+    ),
+)
+
+
 def narrows(glob: Scalar | None) -> bool:
     return isinstance(glob, str) and any(character.isalnum() for character in glob)
 
@@ -522,8 +640,8 @@ def named_roots(arguments: Arguments) -> Targets:
     )
 
 
-def searches_broadly(arguments: Arguments, roots: Targets) -> bool:
-    return not roots.complete or any(map(broad, roots or (Target(".", ".", arguments.cwd),)))
+def searches_broadly(roots: Targets, cwd: Path | None) -> bool:
+    return not roots.complete or any(map(broad, roots or (Target(".", ".", cwd),)))
 
 
 def reads_stdin(arguments: Arguments) -> bool:
@@ -552,7 +670,7 @@ def recursive(arguments: Arguments) -> bool:
 
 
 def grep_searches_broadly(arguments: Arguments) -> bool:
-    return recursive(arguments) and searches_broadly(arguments, named_roots(arguments))
+    return recursive(arguments) and searches_broadly(named_roots(arguments), arguments.cwd)
 
 
 def ugrep_searches_broadly(arguments: Arguments) -> bool:
@@ -561,12 +679,109 @@ def ugrep_searches_broadly(arguments: Arguments) -> bool:
         recursive(arguments)
         or any(isinstance(glob, str) and "/" in glob for glob in arguments.values.get("glob", ()))
         or (roots.complete and not roots and not reads_stdin(arguments))
-    ) and searches_broadly(arguments, roots)
+    ) and searches_broadly(roots, arguments.cwd)
 
 
 def rg_searches_broadly(arguments: Arguments) -> bool:
     roots = named_roots(arguments)
-    return not (roots.complete and not roots and reads_stdin(arguments)) and searches_broadly(arguments, roots)
+    return not (roots.complete and not roots and reads_stdin(arguments)) and searches_broadly(roots, arguments.cwd)
+
+
+def pathspec_magic(value: str) -> tuple[frozenset[str], str]:
+    if value.startswith(":("):
+        close = value.find(")")
+        return (
+            (frozenset({"unparsed"}), value)
+            if close < 0
+            else (frozenset(part.split(":", 1)[0] for part in value[2:close].split(",")), value[close + 1 :])
+        )
+    rest = value[1:]
+    short = ""
+    while rest[:1] in SHORT_MAGIC:
+        short, rest = short + rest[0], rest[1:]
+    return (
+        frozenset({*(("top",) if "/" in short else ()), *(("exclude",) if {"!", "^"} & set(short) else ())}),
+        rest.removeprefix(":"),
+    )
+
+
+def top_broad(target: Target) -> bool:
+    return (
+        target.value is None
+        or os.path.isabs(os.path.expanduser(target.value))
+        or not narrows(target.value.strip("/"))
+    )
+
+
+def pathspec_broad(target: Target, *, relocated: bool) -> bool | None:
+    if target.value is None:
+        return broad(target)
+    magic = target.value.startswith(":")
+    kinds, pattern = pathspec_magic(target.value) if magic else (frozenset(), target.value)
+    if "exclude" in kinds:
+        return None
+    if "top" in kinds:
+        return top_broad(Target(pattern or ".", pattern or ".", target.cwd))
+    spec = Target(os.path.normpath(pattern), pattern if magic else target.raw, target.cwd)
+    return top_broad(spec) if relocated else broad(spec)
+
+
+def git_relocated(call: Call) -> bool:
+    scope, _ = call.cmd.scope_for(call, call.command.words[0])
+    wrapped = call.source.words[: len(call.source.words) - len(call.command.words)]
+    return not (
+        GIT_LOCATION_OPTIONS.isdisjoint(option.partition("=")[0] for option in call.leading_options)
+        and GIT_LOCATION_VARIABLES.isdisjoint(
+            {name for name, _ in call.source.env} | {word.raw.partition("=")[0] for word in wrapped} | scope.exported
+        )
+    )
+
+
+def git_cwd(call: Call) -> Path | None:
+    leading = call.command.words[: 1 + len(call.leading_options)]
+    return (
+        None
+        if any(
+            word.value is None and (flag.value == "-C" or word.raw.startswith("-C")) for flag, word in pairwise(leading)
+        )
+        else git_location(call, None)[0]
+    )
+
+
+def names_path(target: Target) -> bool:
+    return (target.value or "").startswith(":") or target.has_glob or (path := target.path) is None or path.exists()
+
+
+def git_grep_operands(arguments: Arguments) -> tuple[list[Word], list[Word] | None] | None:
+    operands = arguments.words.get("operands", ())
+    head = [word for word in operands[: arguments.dashdash] if word.value not in GIT_GREP_GROUPS]
+    tail = None if arguments.dashdash is None else list(operands[arguments.dashdash :])
+    if any(arguments.values.get(role) for role in PATTERN_ROLES):
+        return head, tail
+    if head:
+        return head[1:], tail
+    if not tail:
+        return None
+    rest = tail[1:]
+    split = next((index for index, word in enumerate(rest) if word.value == "--"), None)
+    return (rest, None) if split is None else (rest[:split], rest[split + 1 :])
+
+
+def git_grep_searches_broadly(arguments: Arguments) -> bool:
+    if not arguments.operands_complete:
+        return True
+    if (operands := git_grep_operands(arguments)) is None:
+        return False
+    call, cwd, relocated = arguments.call, git_cwd(arguments.call), git_relocated(arguments.call)
+    head, tail = operands
+    targets = [
+        Target(target.value, target.raw, cwd)
+        for word in (head if tail is None else tail)
+        for target in call.word_targets(word)
+    ]
+    pathspecs = [target for target in targets if names_path(target)] if tail is None else targets
+    verdicts = [verdict for target in pathspecs if (verdict := pathspec_broad(target, relocated=relocated)) is not None]
+    return any(verdicts or (relocated or broad(Target(".", ".", cwd)),))
 
 
 def bounded(includes: tuple[Scalar | None, ...]) -> bool:
@@ -626,12 +841,13 @@ hook(
             CommandMatches(GREP, only_if=(grep_searches_broadly,), skip_if=(grep_bounded, informational)),
             CommandMatches(UGREP, only_if=(ugrep_searches_broadly,), skip_if=(ugrep_bounded, informational)),
             CommandMatches(RG, only_if=(rg_searches_broadly,), skip_if=(rg_bounded, informational)),
+            CommandMatches(GIT_GREP, only_if=(git_grep_searches_broadly,), skip_if=(informational,)),
         ),
     ],
     message=(
-        "A recursive `grep`, `ugrep`, or `rg` at /, a home, a repository root, a worktree pool, or a scratch "
-        "project reads every file under it. Search a deeper directory or named files, narrow it with "
-        "`--include='*.py'` or `-g '*.py'`, or run `ccx code grep <text> <dir>`."
+        "A recursive `grep`, `ugrep`, `rg`, or `git grep` at /, a home, a repository root, a worktree pool, or a "
+        "scratch project reads every file under it. Search a deeper directory or named files, narrow it with "
+        "`--include='*.py'`, `-g '*.py'`, or a `-- '*.py'` pathspec, or run `ccx code grep <text> <dir>`."
     ),
     block=True,
     max_fires=None,
@@ -679,6 +895,37 @@ hook(
         Input(command="ugrep --max-depth=3 needle /"): Block(),
         Input(command="ugrep -r --match /"): Block(),
         Input(command="printf needle | rg needle </dev/null"): Block(),
+        Input(command="git grep needle"): Block(),
+        Input(command="git -C / grep needle"): Block(),
+        Input(command="git -C ~ grep -n needle"): Block(),
+        Input(command="git -C ~/.claude/worktrees/captain-hook grep needle"): Block(),
+        Input(command='git -C "$WORKTREE" grep needle'): Block(),
+        Input(command="git -c core.quotepath=off -C ~ grep -c needle"): Block(),
+        Input(command="sh -c 'cd ~ && git grep needle'"): Block(),
+        Input(command="git grep -n -e needle -- .", cwd="/Users/alice"): Block(),
+        Input(command="git grep needle -- ':!vendor'", cwd="/Users/alice"): Block(),
+        Input(command="git grep needle HEAD -- .", cwd="/Users/alice"): Block(),
+        Input(command="git grep needle HEAD", cwd="/Users/alice"): Block(),
+        Input(command="git grep --bogus-flag needle -- src", cwd="/Users/alice"): Block(),
+        Input(command="git grep needle -- :/"): Block(),
+        Input(command="git grep -- needle", cwd="/Users/alice"): Block(),
+        Input(command="SPEC=':/'; git grep needle -- \"$SPEC\""): Block(),
+        Input(command="git grep needle -- ':(top,glob)**/**'"): Block(),
+        Input(command="git --namespace -Cinternal grep needle", cwd="/Users/alice"): Block(),
+        Input(command="git --git-dir=/srv/demo/.git grep --cached needle", cwd="/srv/demo/internal/focused"): Block(),
+        Input(command="git --git-dir /srv/demo/.git grep needle -- .", cwd="/srv/demo/internal/focused"): Block(),
+        Input(command="GIT_DIR=/srv/demo/.git git grep --cached needle", cwd="/srv/demo/internal/focused"): Block(),
+        Input(command="env GIT_DIR=/srv/demo/.git git grep needle", cwd="/srv/demo/internal/focused"): Block(),
+        Input(command="export GIT_DIR=/srv/demo/.git; git grep needle", cwd="/srv/demo/internal/focused"): Block(),
+        Input(command="git --work-tree=/srv/demo grep needle", cwd="/srv/demo/internal/focused"): Block(),
+        Input(
+            command="git --git-dir=/srv/demo/.git grep --cached needle -- internal/..",
+            cwd="/srv/demo/internal/focused",
+        ): Block(),
+        Input(command="git grep needle -- src/..", cwd="/Users/alice"): Block(),
+        Input(command="git grep -nC3 needle", cwd="/Users/alice"): Block(),
+        Input(command="git grep -nC 3 needle -- .", cwd="/Users/alice"): Block(),
+        Input(command="git grep -nOvim needle -- src", cwd="/Users/alice"): Block(),
         Input(command="grep -n needle explicit.log", cwd="/repo"): Allow(),
         Input(command="rg needle config.toml tests/test_specific.py", cwd="/repo"): Allow(),
         Input(command="ugrep -rn needle ~/.claude/scratch/release-v3/specific-lane"): Allow(),
@@ -700,6 +947,23 @@ hook(
         Input(command="rg -e / src", cwd="/repo"): Allow(),
         Input(command="grep -rn -- '~' src", cwd="/repo"): Allow(),
         Input(command="ugrep needle /"): Allow(),
-        Input(command="git grep needle"): Allow(),
+        Input(command="git grep needle -- src", cwd="/Users/alice"): Allow(),
+        Input(command="git grep -c needle -- src", cwd="/Users/alice"): Allow(),
+        Input(command="git -C /srv/project/internal grep needle"): Allow(),
+        Input(command="git -C /srv/demo/internal/focused grep needle"): Allow(),
+        Input(
+            command="git --git-dir=/srv/demo/.git grep --cached needle -- internal/focused",
+            cwd="/srv/demo/internal/focused",
+        ): Allow(),
+        Input(command="git grep -nC3 needle -- src", cwd="/Users/alice"): Allow(),
+        Input(command="git grep needle -- src/../lib", cwd="/Users/alice"): Allow(),
+        Input(command="git grep -nC 3 needle -- src", cwd="/Users/alice"): Allow(),
+        Input(command="git grep needle -- '*.py'"): Allow(),
+        Input(command="git grep -e needle -- ':(glob)**/*.py'"): Allow(),
+        Input(command="git grep needle -- :/internal"): Allow(),
+        Input(command="git grep --help"): Allow(),
+        Input(command="git --help grep"): Allow(),
+        Input(command="git grep"): Allow(),
+        Input(command="echo 'git grep needle'"): Allow(),
     },
 )
