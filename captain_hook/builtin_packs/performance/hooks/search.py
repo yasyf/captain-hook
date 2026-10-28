@@ -36,6 +36,10 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Scalar
 
+POOLS = (".claude/worktrees", ".orca/workspaces")
+HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2}
+POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in POOLS), unresolved=True)
+POOL_MEMBERS = PathMatches(tuple(f"**/{pool}/*" for pool in POOLS))
 BROAD_ROOTS = PathMatches(
     (
         "/",
@@ -45,10 +49,8 @@ BROAD_ROOTS = PathMatches(
         "/home",
         "/home/*",
         "/System/Volumes/Data",
-        "**/.claude/worktrees",
-        "**/.claude/worktrees/*",
-        "**/.orca/workspaces",
-        "**/.orca/workspaces/*",
+        *POOL_ROOTS.patterns,
+        *POOL_MEMBERS.patterns,
         "**/.claude/scratch",
         "**/.claude/scratch/*",
         *(pattern for root in TEMP_ROOTS for pattern in (str(root), f"{root}/*")),
@@ -58,6 +60,7 @@ BROAD_ROOTS = PathMatches(
 PATTERN_ROLES = ("patterns", "pattern_files", "query")
 RECURSIVE_ROLES = ("recursive", "depth", "include_dir")
 INFO_ROLES = ("info", "listing", "generate")
+RG_OUTPUT_ROLES = ("files", "listing", "generate")
 RECURSE_ACTIONS = frozenset({"rec", "recu", "recur", "recurs", "recurse", "dereference-recurse"})
 STDIN_REDIRECTS = frozenset({"<", "<<<"})
 GIT_GREP_GROUPS = frozenset({"(", ")"})
@@ -338,7 +341,8 @@ RG = CommandSchema(
         Option("glob", ("-g", "--glob", "--iglob")),
         Option("type", ("-t", "--type")),
         Option("type_add", ("--type-add",)),
-        Option("listing", ("--files", "--type-list"), bool),
+        Option("files", ("--files",), bool),
+        Option("listing", ("--type-list",), bool),
         Option("generate", ("--generate",)),
         Option("info", ("-h", "--help", "-V", "--version", "--pcre2-version"), bool),
         Option(
@@ -624,12 +628,54 @@ def names_files(target: Target) -> bool:
             return False
 
 
-def at_home(target: Target) -> bool:
+def written(target: Target) -> Path | None:
     if target.value is None:
-        return False
+        return None
     path = Path(os.path.expanduser(target.value) if target.raw.startswith("~") else target.value)
     root = path if path.is_absolute() else None if target.cwd is None else target.cwd / path
-    return root is not None and glob_prefix(root).resolve() == Path.home().resolve()
+    return None if root is None else glob_prefix(root)
+
+
+def canonical(target: Target) -> Path | None:
+    return None if (root := written(target)) is None else root.resolve()
+
+
+def at_home(target: Target) -> bool:
+    return canonical(target) == Path.home().resolve()
+
+
+def pool_anchors() -> dict[Path, int]:
+    return {Path.home() / pool: levels for pool, levels in HOME_POOL_LEVELS.items()}
+
+
+def encloses_home_or_pool(root: Path) -> bool:
+    return root in {
+        ancestor.resolve()
+        for anchor in (Path.home(), *pool_anchors())
+        for ancestor in (anchor, *anchor.parents, *anchor.resolve().parents)
+    }
+
+
+def pool_member(target: Target, lexical: Path, root: Path) -> bool:
+    return POOL_MEMBERS(target) or any(
+        anchor in path.parents[:levels]
+        for pool, levels in pool_anchors().items()
+        for anchor in (pool, pool.resolve())
+        for path in (Path(os.path.normpath(lexical)), root)
+    )
+
+
+def spans_checkouts(target: Target) -> bool:
+    if (path := target.path) is not None and path.is_file():
+        return False
+    if (lexical := written(target)) is None:
+        return True
+    root = lexical.resolve()
+    return (
+        POOL_ROOTS(target)
+        or encloses_home_or_pool(root)
+        or (pool_member(target, lexical, root) and not is_repo_root(root))
+    )
 
 
 def broad(target: Target) -> bool:
@@ -851,6 +897,18 @@ def informational(arguments: Arguments) -> bool:
     return any(arguments.values.get(role) for role in INFO_ROLES)
 
 
+def lists_files(arguments: Arguments) -> bool:
+    outputs = [role for role in arguments.order if role in RG_OUTPUT_ROLES]
+    return not arguments.values.get("info") and (
+        outputs[-1:] == ["files"] or (not arguments.complete and "files" in outputs)
+    )
+
+
+def lists_home_or_pool(arguments: Arguments) -> bool:
+    roots = arguments.paths("operands")
+    return not roots.complete or any(map(spans_checkouts, roots or (Target(".", ".", arguments.cwd),)))
+
+
 hook(
     Event.PreToolUse,
     only_if=[
@@ -858,7 +916,7 @@ hook(
         Or(
             CommandMatches(GREP, only_if=(grep_searches_broadly,), skip_if=(grep_bounded, informational)),
             CommandMatches(UGREP, only_if=(ugrep_searches_broadly,), skip_if=(ugrep_bounded, informational)),
-            CommandMatches(RG, only_if=(rg_searches_broadly,), skip_if=(rg_bounded, informational)),
+            CommandMatches(RG, only_if=(rg_searches_broadly,), skip_if=(rg_bounded, informational, lists_files)),
             CommandMatches(GIT_GREP, only_if=(git_grep_searches_broadly,), skip_if=(informational,)),
         ),
     ],
@@ -959,7 +1017,7 @@ hook(
         Input(command="cat explicit.log | rg needle"): Allow(),
         Input(command="rg needle <explicit.log"): Allow(),
         Input(command="cat explicit.log | ugrep needle"): Allow(),
-        Input(command="rg --files ~"): Allow(),
+        Input(command="rg --files /tmp/scratch-lane"): Allow(),
         Input(command="rg --type-list"): Allow(),
         Input(command="rg needle / --help"): Allow(),
         Input(command="echo 'ugrep -rn needle /'"): Allow(),
@@ -985,5 +1043,79 @@ hook(
         Input(command="git --help grep"): Allow(),
         Input(command="git grep"): Allow(),
         Input(command="echo 'git grep needle'"): Allow(),
+    },
+)
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CommandMatches(RG, only_if=(lists_files, lists_home_or_pool))],
+    message=(
+        "`rg --files` over `~`, a worktree pool, or any directory above them is blocked even with `-g` or `-t` "
+        "filename filters. List one checkout or a deeper subtree instead: `rg --files <checkout>` or "
+        "`rg --files <checkout>/<dir>`."
+    ),
+    block=True,
+    max_fires=None,
+    tests={
+        Input(
+            command="rg --files -g AGENTS.md -g CLAUDE.md "
+            "/Users/yasyf/.claude/worktrees/captain-hook/language-shared-cache "
+            "/Users/yasyf/.claude/worktrees/captain-hook /Users/yasyf/.claude/worktrees"
+        ): Block(pattern="blocked even with"),
+        Input(command="rg --files /Users/yasyf/.claude/worktrees/captain-hook"): Block(),
+        Input(command="rg --files -g AGENTS.md /Users/yasyf/.claude/worktrees/captain-hook"): Block(),
+        Input(command="rg --files /Users/yasyf/.claude/worktrees"): Block(),
+        Input(command="rg --files --glob=CLAUDE.md /Users/yasyf/.claude/worktrees"): Block(),
+        Input(command="rg --files -gAGENTS.md ~/.orca/workspaces/captain-hook"): Block(),
+        Input(command="rg --files ~"): Block(),
+        Input(command="rg --files -g '*.py' ~"): Block(),
+        Input(command="rg --files --iglob=agents.md -tmd ~"): Block(),
+        Input(command='rg --files "$HOME"'): Block(),
+        Input(command="cd ~ && rg --files"): Block(),
+        Input(command="rg --files src ~/.claude/worktrees", cwd="/repo"): Block(),
+        Input(command="sh -c 'rg --files -g AGENTS.md ~/.claude/worktrees' | head -5"): Block(),
+        Input(command="rg --type-list --files ~"): Block(),
+        Input(command="rg --generate=man --files ~"): Block(),
+        Input(command="rg --generate man --files ~"): Block(),
+        Input(command="rg --files --type-list --files ~"): Block(),
+        Input(command="rg --files --type-list -nC3 --files ~"): Block(),
+        Input(command="rg --files ~ --type-list -nC3 --files"): Block(),
+        Input(command='rg --files -g AGENTS.md "$POOL"'): Block(),
+        Input(command="rg --files /"): Block(),
+        Input(command="rg --files ~/.."): Block(),
+        Input(command="rg --files ~/.claude"): Block(),
+        Input(command="rg --files -g AGENTS.md ~/.claude"): Block(),
+        Input(command="rg --files ~/.orca"): Block(),
+        Input(command="cd ~/.claude && rg --files"): Block(),
+        Input(command="rg --files .claude/worktrees", cwd="/repo"): Block(),
+        Input(command="rg --files -g AGENTS.md .claude/worktrees/stale", cwd="/repo"): Block(),
+        Input(command="rg --files ~/repos/orca/workspaces"): Block(),
+        Input(command="rg --files ~/repos/orca/workspaces/7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"): Block(),
+        Input(
+            command="rg --files -g AGENTS.md ~/repos/orca/workspaces/7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17/captain-hook"
+        ): Block(),
+        Input(command="rg --files ~/repos/orca"): Block(),
+        Input(command="rg --files ~/repos"): Block(),
+        Input(
+            command="rg --files -g AGENTS.md /Users/yasyf/.claude/worktrees/captain-hook/language-shared-cache"
+        ): Allow(),
+        Input(command="rg --files ~/.claude/worktrees/captain-hook/lane"): Allow(),
+        Input(command="rg --files ~/.claude/worktrees/captain-hook/lane/src"): Allow(),
+        Input(command="rg --files ~/.claude/scratch"): Allow(),
+        Input(command="rg --files ~/.config"): Allow(),
+        Input(
+            command="rg --files ~/repos/orca/workspaces/7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17/captain-hook/lane"
+        ): Allow(),
+        Input(command="rg --files .", cwd="/repo"): Allow(),
+        Input(command="rg --files", cwd="/repo"): Allow(),
+        Input(command="rg --files -g AGENTS.md src/internal", cwd="/repo"): Allow(),
+        Input(command="rg --files /tmp/scratch-lane"): Allow(),
+        Input(command="rg --files --help ~"): Allow(),
+        Input(command="rg --type-list"): Allow(),
+        Input(command="rg --files --type-list ~"): Allow(),
+        Input(command="rg --files --generate=man ~"): Allow(),
+        Input(command="rg --files --generate man ~"): Allow(),
+        Input(command="rg needle ~/.claude/worktrees"): Allow(),
+        Input(command="echo 'rg --files ~'"): Allow(),
     },
 )

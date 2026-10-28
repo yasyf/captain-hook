@@ -198,6 +198,19 @@ def test_a_complete_binding_leaves_nothing_unread() -> None:
     assert KILL.bind(evt_for("kill -9 123 456").cmd.call("kill")).unread == ()
 
 
+@pytest.mark.parametrize(
+    ("command", "order"),
+    [
+        pytest.param("tool -C 3 -n x", ("context", "flag"), id="separate-words"),
+        pytest.param("tool -iC 3 -n x", ("flag", "context", "flag"), id="cluster-then-flag"),
+        pytest.param("tool -C3 -nC", ("context", "flag", "context"), id="option-missing-its-value"),
+        pytest.param("tool x", (), id="operands-only"),
+    ],
+)
+def test_order_names_each_option_role_as_written(command: str, order: tuple[str, ...]) -> None:
+    assert CLUSTERED.bind(evt_for(command).cmd.call("tool")).order == order
+
+
 def test_schema_binds_a_pattern_paths_and_typed_options() -> None:
     schema = CommandSchema(
         "rg",
