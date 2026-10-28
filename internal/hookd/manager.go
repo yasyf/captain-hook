@@ -698,7 +698,6 @@ func workerCmd(key workerKey, python string) daemonkit.Cmd {
 		Path: python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: filepath.Clean(os.TempDir()),
 		Env:     append(env, "CAPT_HOOK_WORKER_ROOT="+key.root, "CAPT_HOOK_WORKER_SHARD="+strconv.Itoa(key.shard)),
 		Session: true,
-		Exec:    daemonkit.ServingSameUser(),
 	}
 }
 

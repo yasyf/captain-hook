@@ -20,7 +20,6 @@ func scriptedHostDaemon() daemonkit.Daemon {
 	return daemonkit.Daemon{
 		Label:    "chk",
 		Schemas:  []daemonkit.Schema{hostSchema},
-		Trust:    daemonkit.Trust{Serving: daemonkit.ServingSameUser()},
 		Shutdown: daemonkit.Grace(5 * time.Second),
 		MaxFrame: maxHostFrame,
 	}
@@ -44,7 +43,13 @@ func TestScriptedHostHelper(t *testing.T) {
 			})
 		}
 	})
-	if _, err := daemonkit.Serve(context.Background(), scriptedHostDaemon(), func(daemonkit.Ctx) (daemonkit.Product, error) {
+	daemon := scriptedHostDaemon()
+	program, err := daemonkit.Stable("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.Program = program
+	if _, err := daemonkit.Serve(context.Background(), daemon, func(daemonkit.Ctx) (daemonkit.Product, error) {
 		return &hostProduct{manager: manager, hub: newNotificationHub(), monitor: testResourceMonitor(t, manager)}, nil
 	}); err != nil {
 		t.Fatal(err)

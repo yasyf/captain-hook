@@ -77,7 +77,7 @@ func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 	_, err = product.Handle(ctx, daemonkit.Request{
 		Op: opEvent, Body: event, Caller: daemonkit.Caller{PID: request.ClientPID + 1},
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not match authenticated peer") {
+	if err == nil || !strings.Contains(err.Error(), "does not match socket peer") {
 		t.Fatalf("event accepted a forged client pid: %v", err)
 	}
 

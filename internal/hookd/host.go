@@ -32,7 +32,7 @@ const (
 const hostSchema daemonkit.Schema = "captain-hook.host.v1"
 
 // Build is stamped from the release tag into the wheel and signed helper.
-var Build = "0.0.0"
+var Build = "dev"
 
 type hostVersion struct {
 	Schema int    `json:"schema"`

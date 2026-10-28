@@ -502,7 +502,7 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 		return nil, err
 	}
 	cmd := daemonkit.Cmd{Path: python, Args: []string{"-P", "-m", "captain_hook.snapshots.worker"},
-		Dir: filepath.Clean(os.TempDir()), Env: workerBaseEnvironment(os.Environ()), Session: true, Exec: daemonkit.ServingSameUser()}
+		Dir: filepath.Clean(os.TempDir()), Env: workerBaseEnvironment(os.Environ()), Session: true}
 	spawnCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
 	defer cancel()
 	child, err := spawnPastEAGAIN(spawnCtx, spawnBackoff, func() (*daemonkit.Child, error) {

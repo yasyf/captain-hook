@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Any process running as the same user can now connect to the daemon.** Connections and spawned
+  workers no longer require peer or child verification. Package installation still verifies the app's
+  signature, and Linux development rebuilds use the executable's modification time as their build
+  identity so the supervisor can replace an older build without hashing the executable.
 - **A spawn that writes long-form copy is told to hand it to `gemini-4-argon`, on any Claude model.**
   The general pack's prose nudge used to warn only when codex, astra, sonnet, haiku, or fable wrote
   docs or release notes, and sent the writing to Opus. It now fires on Opus and unpinned spawns too,

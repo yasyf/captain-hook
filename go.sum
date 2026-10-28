@@ -7,6 +7,8 @@ github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 h1:1EYB5IzjZawrrnELUi78f9fPu57Hu
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
 github.com/yasyf/daemonkit v0.32.1 h1:x+Il6cBJDRbhQlom0nEclFpcHUsGwtrm1G0npoeDrqY=
 github.com/yasyf/daemonkit v0.32.1/go.mod h1:3qcpiMyByFCbb9WcrzMYLcES/u/iUmE9UWBQb644ubo=
+github.com/yasyf/daemonkit v0.34.1-0.20261028043932-567e3df37f44 h1:NPyWTgt38SYt3KtwG9YJMQEKX21iAC16LnRQPdhcjP4=
+github.com/yasyf/daemonkit v0.34.1-0.20261028043932-567e3df37f44/go.mod h1:hEUZvGh+jCBOJmltSQa3QZR0kqV6G/ApJoViU1aAMps=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
 golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/text v0.14.0 h1:ScX5w1eTa3QqT8oi6+ziP7dTV1S2+ALU0bI+0zXKWiQ=

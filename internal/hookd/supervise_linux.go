@@ -36,6 +36,7 @@ func superviseHost(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer closeDaemonClient(client)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	supervised := make(chan error, 1)
