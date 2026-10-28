@@ -138,7 +138,10 @@ func openSupervisedHost() (*daemonkit.Client, error) {
 }
 
 func servingProgram() (daemonkit.Program, error) {
-	return daemonkit.Stable(version.Running(Build))
+	if Build == "0.0.0" {
+		return daemonkit.Stable(version.Running("dev"))
+	}
+	return daemonkit.Stable(Build)
 }
 
 // ensureSupervisedHost converges the label's supervisor on this build,
