@@ -430,6 +430,33 @@ def anchored(candidate: str) -> bool:
     return os.path.isabs(os.path.expanduser(candidate))
 
 
+def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
+    cwd, git_dir = call.cwd or session_cwd, None
+    options = iter(call.leading_options)
+    for token in options:
+        if token == "-C":
+            hop = next(options, None)
+        elif token.startswith("-C"):
+            hop = token[2:]
+        elif token == "--git-dir":
+            git_dir = next(options, None)
+            continue
+        elif token.startswith("--git-dir="):
+            git_dir = token.removeprefix("--git-dir=")
+            continue
+        else:
+            if token in COMMAND_VALUE_FLAGS["git"]:
+                next(options, None)
+            continue
+        if hop is not None:
+            path = Path(os.path.expanduser(hop))
+            cwd = path if path.is_absolute() else (cwd / path if cwd else None)
+    if git_dir is None:
+        return cwd, None
+    path = Path(os.path.expanduser(git_dir))
+    return cwd, path if path.is_absolute() else (cwd / path if cwd else None)
+
+
 def cd_operand(call: Call) -> tuple[str, ...]:
     words = call.command.words[1:]
     if len(words) != 1 or words[0].value is not None or call.occurrence.host is not None:

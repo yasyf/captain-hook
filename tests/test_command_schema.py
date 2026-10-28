@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,13 @@ from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 from captain_hook.types import Event
 from tests.test_cmd import evt_for
+
+CLUSTERED = CommandSchema(
+    "tool",
+    operands=(Operand("operands", count="*"),),
+    options=(Option("flag", ("-n", "-i"), bool), Option("context", ("-C",))),
+    clustered_values=True,
+)
 
 
 @pytest.mark.parametrize(
@@ -80,6 +88,35 @@ def test_unbindable_git_push_option_is_incomplete_without_guessing(command: str)
     arguments = GIT_PUSH.bind(evt_for(command).cmd.call("git"))
     assert not arguments.complete
     assert "force" not in arguments.values
+
+
+@pytest.mark.parametrize(
+    ("command", "flags", "context"),
+    [
+        pytest.param("tool -nC3 x", (True,), ("3",), id="attached-value"),
+        pytest.param("tool -niC 3 x", (True, True), ("3",), id="separate-value"),
+        pytest.param("tool -in x", (True, True), (), id="flags-only"),
+    ],
+)
+def test_clustered_values_read_a_cluster_like_getopt(
+    command: str, flags: tuple[bool, ...], context: tuple[str, ...]
+) -> None:
+    arguments = CLUSTERED.bind(evt_for(command).cmd.call("tool"))
+    assert arguments.values["flag"] == flags
+    assert arguments.values.get("context", ()) == context
+    assert arguments.values["operands"] == ("x",)
+    assert arguments.complete
+
+
+@pytest.mark.parametrize("command", ["tool -nX3 x", "tool -nC"])
+def test_clustered_values_stay_incomplete_without_guessing(command: str) -> None:
+    assert not CLUSTERED.bind(evt_for(command).cmd.call("tool")).complete
+
+
+def test_cluster_values_need_the_opt_in() -> None:
+    arguments = replace(CLUSTERED, clustered_values=False).bind(evt_for("tool -nC3 x").cmd.call("tool"))
+    assert not arguments.complete
+    assert "context" not in arguments.values
 
 
 def test_attached_short_values_stay_off_for_find_style_flags() -> None:

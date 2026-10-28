@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition, FileFixture, Input
+from captain_hook.cmd import git_location
 from captain_hook.util.vcs import graphite_lane, graphite_lane_of_git_dir
 
 if TYPE_CHECKING:
@@ -16,31 +16,6 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
 
 FIXTURE_GITDIR = Path(__file__).parents[1] / "gitdir"
-
-
-def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
-    cwd, git_dir = call.cwd or session_cwd, None
-    options = iter(call.leading_options)
-    for token in options:
-        if token == "-C":
-            hop = next(options, None)
-        elif token.startswith("-C"):
-            hop = token[2:]
-        elif token == "--git-dir":
-            git_dir = next(options, None)
-            continue
-        elif token.startswith("--git-dir="):
-            git_dir = token.removeprefix("--git-dir=")
-            continue
-        else:
-            continue
-        if hop is not None:
-            path = Path(os.path.expanduser(hop))
-            cwd = path if path.is_absolute() else (cwd / path if cwd else None)
-    if git_dir is None:
-        return cwd, None
-    path = Path(os.path.expanduser(git_dir))
-    return cwd, path if path.is_absolute() else (cwd / path if cwd else None)
 
 
 def graphite_owns(call: Call, session_cwd: Path | None) -> bool:
