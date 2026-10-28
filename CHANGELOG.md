@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The packaged macOS host installs under a symlinked home directory.** `installedApplicationPath`
+  refused a home whose path resolved through a symlink, and a `~/Applications` or host state
+  directory (`~/Library/Caches/captain-hook/host-v1`) that was a symlink. Same-user local processes
+  are trusted, so these checks guarded nothing. Both directories are now created with `MkdirAll`.
+
 - **Any process running as the same user can now connect to the daemon.** Connections and spawned
   workers no longer require peer or child verification. Package installation still verifies the app's
   signature, and Linux development rebuilds use the executable's modification time as their build

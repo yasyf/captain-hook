@@ -1,7 +1,6 @@
 package hookd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,13 +33,7 @@ func resolvePaths() (paths, error) {
 }
 
 func (p paths) ensure() error {
-	if info, err := os.Lstat(p.dir); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return errors.New("captain: host state path is not a real directory")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("captain: inspect host state: %w", err)
-	} else if err := os.MkdirAll(p.dir, 0o700); err != nil {
+	if err := os.MkdirAll(p.dir, 0o700); err != nil {
 		return fmt.Errorf("captain: create host state: %w", err)
 	}
 	if err := os.Chmod(p.dir, 0o700); err != nil {
