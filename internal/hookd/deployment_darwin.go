@@ -50,32 +50,11 @@ func installedApplicationPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("captain package: resolve user home: %w", err)
 	}
-	resolved, err := filepath.EvalSymlinks(home)
-	if err != nil || resolved != home {
-		return "", errors.New("captain package: user home must be a canonical real directory")
-	}
 	applications := filepath.Join(home, "Applications")
-	if err := ensureRealDirectory(applications); err != nil {
-		return "", err
+	if err := os.MkdirAll(applications, 0o755); err != nil {
+		return "", fmt.Errorf("captain package: create %q: %w", applications, err)
 	}
 	return filepath.Join(applications, helperApplicationLeaf), nil
-}
-
-func ensureRealDirectory(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(path, 0o755); err != nil {
-			return fmt.Errorf("captain package: create %q: %w", path, err)
-		}
-		info, err = os.Lstat(path)
-	}
-	if err != nil {
-		return fmt.Errorf("captain package: inspect %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("captain package: %q is not a real directory", path)
-	}
-	return nil
 }
 
 func packagedApplicationPath() (string, error) {
