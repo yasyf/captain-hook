@@ -33,6 +33,7 @@ HOST_SCHEMA = "captain.transcript/1"
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
 CLEANUP_SECONDS = 5
+CURSOR_CONSUMING_OPERATIONS = frozenset({"resume", "submit_classifier"})
 GRAPH_WORK_SECONDS = 0.75
 GATE_EVENTS = frozenset({"Stop", "SubagentStop", "UserPromptSubmit"})
 GATE_WORK_SECONDS = 5.0
@@ -481,7 +482,7 @@ class SnapshotClient:
             ):
                 observed |= summed_usage(observed, result["usage"])
                 raise EvidenceIncomplete("deadline", "lease expired at the foreground transcript deadline")
-            if result.get("status") != "retained_limit":
+            if result.get("status") != "retained_limit" or operation in CURSOR_CONSUMING_OPERATIONS:
                 return with_observed_usage(result, observed)
             if retry_until is None:
                 horizon = int(request.get("deadline_unix_ms", admission_deadline_unix_ms))
