@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/ebitengine/purego v0.10.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/yasyf/daemonkit v0.34.1-0.20261028043932-567e3df37f44
+	github.com/yasyf/daemonkit v0.35.1
 	golang.org/x/sys v0.47.0
 )
 
@@ -13,3 +13,5 @@ require (
 	golang.org/x/text v0.14.0 // indirect
 	howett.net/plist v1.0.1 // indirect
 )
+
+toolchain go1.26.10

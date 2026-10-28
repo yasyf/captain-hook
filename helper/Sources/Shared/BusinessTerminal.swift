@@ -1,9 +1,5 @@
 import Foundation
 
-// Daemonkit v0.21 wraps every business-lane reply in this envelope: a product
-// failure is delivered as data so the session's own error keeps meaning the
-// session failed. Body is base64 in the JSON because Go marshals `[]byte` that
-// way, which is exactly what JSONDecoder's default data strategy reads.
 struct BusinessTerminal: Decodable, Equatable, Sendable {
     let body: Data?
     let error: ProductError?
