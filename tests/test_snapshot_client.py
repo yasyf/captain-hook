@@ -1170,6 +1170,31 @@ def test_a_lease_dropped_before_a_widened_window_is_reacquired(monkeypatch):
     assert client._leases == {session.lease}
 
 
+def test_a_lease_the_owner_dropped_before_a_retain_is_reacquired_once():
+    operations = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        operations.append((request["operation"], request.get("handle", {}).get("lease_id")))
+        if request["operation"] == "retain" and request["handle"]["lease_id"] == "first":
+            reason = "lease does not belong to this claimant or generation"
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "stale_handle", reason)}
+        if request["operation"] == "acquire":
+            lease = "first" if operations.count(("acquire", None)) == 1 else "second"
+            return response(request, {"kind": "acquired", "description": description(lease)})
+        return response(request, {"kind": "acquired", "description": description("retained")})
+
+    client = SnapshotClient(exchange)
+    client.bind_tool_registry({})
+    session = client.acquire("/tmp/fixture.jsonl")
+
+    retained = session.retain()
+
+    assert operations == [("acquire", None), ("retain", "first"), ("acquire", None), ("retain", "second")]
+    assert session.lease.handle == description("second")["handle"]
+    assert retained.lease.handle == description("retained")["handle"]
+
+
 def test_a_lease_whose_transcript_was_replaced_is_not_reacquired(monkeypatch):
     clock = SimpleNamespace(now=100.0)
     monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: clock.now)

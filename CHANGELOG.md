@@ -610,6 +610,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A transcript lease that expires before a retain no longer fails the whole dispatch.** A lease
+  lives until the foreground deadline it was acquired under. Once a mandatory hook widened the
+  window to 15 s, a sibling hook that retained the request's transcript after that first deadline
+  got `stale_handle: lease does not belong to this claimant or generation`. The error came from a
+  `skip_if` condition, and `stale_handle` was not a fail-open status, so every hook on the `Stop`
+  event was dropped with `dispatch failed`. A retain answered with `stale_handle` now acquires a
+  fresh lease on the same transcript and retries once, as a renewal already did. `stale_handle` and
+  `stale_cursor` are now fail-open statuses. A condition or handler whose lease or cursor expires
+  skips only its own hook, which is named in the session's skipped-hooks line, and the other hooks
+  still decide the event.
+
 - **`capt-hook lint` flags a `.jsonl` string only when it names a transcript.** The transcript-read
   rule matched every string constant containing `.jsonl`. A hook that appends to its own capture
   log, such as `owner-prompts.jsonl`, failed lint as a hand-rolled transcript read, so hooks split

@@ -114,6 +114,29 @@ def test_condition_evidence_failure_skips_only_that_hook(leased_event):
     assert evt.ctx.transcript.pins.pending == 0
 
 
+def test_a_stale_lease_in_a_skip_condition_skips_only_that_hook(leased_event):
+    evt, _, released = leased_event
+
+    class Stale(CustomCondition):
+        def check(self, evt):
+            raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+
+    @on(Event.PostToolUse, skip_if=[Stale()])
+    def first(evt):
+        raise AssertionError("handler must not run")
+
+    @on(Event.PostToolUse)
+    def second(evt):
+        return evt.warn("second still runs")
+
+    overrides = reqenv.RequestOverrides(env={}, cwd="/tmp", client_ppid=1, session_id="s")
+    with reqenv.use_request(overrides):
+        envelope = dispatch(Event.PostToolUse, evt)
+    assert envelope["hookSpecificOutput"]["additionalContext"] == "second still runs"
+    assert overrides.evidence_gaps == ["first: stale_handle: lease does not belong to this claimant or generation"]
+    assert evt.ctx.transcript.pins.pending == 0
+
+
 def test_handler_evidence_failure_skips_only_that_hook(leased_event):
     evt, loaded, released = leased_event
 

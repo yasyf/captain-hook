@@ -502,7 +502,18 @@ def test_snapshot_capacity_failure_allows_hook_without_traceback(status: str) ->
 
 @pytest.mark.parametrize(
     "status",
-    ["incomplete", "source_limit", "entry_limit", "output_limit", "deadline", "cancelled", "changed", "missing"],
+    [
+        "incomplete",
+        "source_limit",
+        "entry_limit",
+        "output_limit",
+        "deadline",
+        "cancelled",
+        "changed",
+        "missing",
+        "stale_handle",
+        "stale_cursor",
+    ],
 )
 def test_bounded_graph_evidence_fails_open_without_traceback(status: str) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
@@ -577,7 +588,7 @@ def test_user_prompt_transcript_missing_fails_open_without_traceback(
         after()
 
 
-@pytest.mark.parametrize("status", ["invalid_request", "parse_error", "permission_denied", "stale_handle"])
+@pytest.mark.parametrize("status", ["invalid_request", "parse_error", "permission_denied"])
 def test_invalid_evidence_remains_visible(status: str, logcap: Any) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise EvidenceIncomplete(status, "invalid transcript evidence")
