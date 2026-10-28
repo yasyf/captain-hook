@@ -13,6 +13,9 @@ from captain_hook.packs import manager
 from captain_hook.types import Event
 from tests.test_cmd import evt_for
 
+ORCA_UUID = "7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"
+LINKED_UUID = "0b9e4d22-8a71-4c3f-b5e6-91d0c7a3f258"
+
 
 @pytest.fixture
 def performance(isolate_modules: None) -> None:
@@ -36,6 +39,14 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (root / ".claude" / "scratch" / "notes.log").write_text("needle\n")
     (lane := root / ".claude" / "worktrees" / "captain-hook" / "lane" / "src").mkdir(parents=True)
     (lane.parent / ".git").write_text("gitdir: ../actual")
+    (root / ".claude" / "worktrees" / "README").write_text("pool notes\n")
+    (local := root / "project" / ".claude" / "worktrees" / "lane" / "src").mkdir(parents=True)
+    (local.parent / ".git").write_text("gitdir: ../../../.git/worktrees/lane")
+    (local.parents[1] / "stale").mkdir()
+    (adopted := root / "repos" / "orca" / "workspaces" / ORCA_UUID / "captain-hook" / "lane" / "src").mkdir(
+        parents=True
+    )
+    (adopted.parent / ".git").mkdir()
     monkeypatch.setenv("HOME", str(root))
     return root
 
@@ -46,6 +57,37 @@ def linked_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (link := tmp_path.resolve() / "linked-home").symlink_to(real.parent)
     monkeypatch.setenv("HOME", str(link))
     return link
+
+
+@pytest.fixture
+def relocated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    (real := tmp_path.resolve() / "Volumes" / "data" / "user" / "project").mkdir(parents=True)
+    (users := tmp_path.resolve() / "Users").mkdir()
+    (link := users / "user").symlink_to(real.parent)
+    monkeypatch.setenv("HOME", str(link))
+    return link
+
+
+@pytest.fixture
+def relocated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    (lane := tmp_path.resolve() / "elsewhere" / "worktrees" / "captain-hook" / "lane").mkdir(parents=True)
+    (lane / ".git").write_text("gitdir: ../actual")
+    (claude := tmp_path.resolve() / "home" / ".claude").mkdir(parents=True)
+    (claude / "worktrees").symlink_to(lane.parents[1])
+    monkeypatch.setenv("HOME", str(claude.parent))
+    return claude.parent
+
+
+@pytest.fixture
+def linked_aggregates(home: Path, tmp_path: Path) -> Path:
+    (aggregate := tmp_path.resolve() / "outside" / "aggregate" / "captain-hook" / "lane").mkdir(parents=True)
+    (checkout := tmp_path.resolve() / "outside" / "checkout" / "src").mkdir(parents=True)
+    (checkout.parent / ".git").mkdir()
+    pool = home / "repos" / "orca" / "workspaces"
+    (pool / LINKED_UUID).symlink_to(aggregate.parents[1])
+    (pool / ORCA_UUID / "linked-repo").symlink_to(aggregate.parent)
+    (pool / ORCA_UUID / "linked-checkout").symlink_to(checkout.parent)
+    return pool
 
 
 @pytest.fixture
@@ -149,6 +191,11 @@ def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Pat
         pytest.param("rg needle <explicit.log", id="redirected-stdin"),
         pytest.param("rg needle <<<'needle here'", id="here-string"),
         pytest.param("rg --files .", id="file-listing"),
+        pytest.param("rg --files", id="file-listing-implicit-cwd"),
+        pytest.param("rg --files -g AGENTS.md .", id="file-listing-filename-glob"),
+        pytest.param("rg --files internal/focused", id="file-listing-subtree"),
+        pytest.param("rg --type-list", id="type-list"),
+        pytest.param("rg --help", id="help"),
         pytest.param("rg -e needle explicit.log", id="regexp-role-keeps-file"),
         pytest.param("grep -r -e needle internal", id="regexp-role-subtree"),
         pytest.param("rg -- -needle internal", id="end-of-options-pattern"),
@@ -222,6 +269,148 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
 @pytest.mark.parametrize(
     "command",
     [
+        pytest.param(
+            "rg --files -g AGENTS.md -g CLAUDE.md ~/.claude/worktrees/captain-hook/lane "
+            "~/.claude/worktrees/captain-hook ~/.claude/worktrees",
+            id="instruction-listing-over-checkout-and-pools",
+        ),
+        pytest.param("rg --files ~/.claude/worktrees/captain-hook", id="worktree-pool"),
+        pytest.param("rg --files -g AGENTS.md ~/.claude/worktrees/captain-hook", id="worktree-pool-is-no-pattern"),
+        pytest.param("rg --files ~/.claude/worktrees", id="whole-pool"),
+        pytest.param("rg --files -g AGENTS.md ~/.claude/worktrees", id="whole-pool-filename-glob"),
+        pytest.param("rg --files --glob=CLAUDE.md ~/.claude/worktrees", id="whole-pool-joined-long-glob"),
+        pytest.param("rg --files -gAGENTS.md ~/.claude/worktrees", id="whole-pool-joined-short-glob"),
+        pytest.param("rg --files -g AGENTS.md ~/.orca/workspaces/captain-hook", id="orca-workspace-pool"),
+        pytest.param("rg --files ~", id="home"),
+        pytest.param("rg --files -g '*.py' ~", id="home-filename-glob"),
+        pytest.param("rg --files -tpy ~", id="home-type-filter"),
+        pytest.param('rg --files "$HOME"', id="home-variable"),
+        pytest.param("cd ~ && rg --files", id="implicit-cwd-home"),
+        pytest.param(
+            "rg --files ~/.claude/worktrees/captain-hook/lane/src ~/.claude/worktrees", id="safe-sibling-beside-pool"
+        ),
+        pytest.param("rg --type-list --files ~", id="later-files-mode"),
+        pytest.param("rg --generate=man --files ~", id="files-after-generate"),
+        pytest.param("rg --generate man --files ~", id="files-after-separate-generate"),
+        pytest.param("rg --files --type-list --files ~", id="last-of-repeated-modes"),
+        pytest.param("rg --files --type-list -nC3 --files ~", id="files-hidden-past-incomplete-binding"),
+        pytest.param("rg --files ~ --type-list -nC3 --files", id="root-before-incomplete-binding"),
+        pytest.param('rg --files -g AGENTS.md "$POOL"', id="unresolved-root"),
+        pytest.param("rg --files /", id="filesystem-root"),
+        pytest.param("rg --files {home.parent}", id="home-parent"),
+        pytest.param("rg --files ~/..", id="tilde-parent"),
+        pytest.param("rg --files ~/.claude", id="claude-dir"),
+        pytest.param("rg --files -g AGENTS.md ~/.claude", id="claude-dir-filename-glob"),
+        pytest.param("rg --files ~/.orca", id="orca-dir"),
+        pytest.param("cd ~/.claude && rg --files", id="implicit-cwd-claude-dir"),
+        pytest.param("rg --files ~/.claude/worktrees/README ~/.claude/worktrees", id="explicit-file-beside-pool"),
+        pytest.param(
+            "rg --files -g AGENTS.md ~/.claude/worktrees/README ~/.claude/worktrees/captain-hook",
+            id="explicit-file-beside-repo-aggregate",
+        ),
+        pytest.param("rg --files ~/project/.claude/worktrees", id="project-local-pool"),
+        pytest.param("rg --files -g AGENTS.md ~/project/.claude/worktrees", id="project-local-pool-filename-glob"),
+        pytest.param("rg --files ~/project/.claude/worktrees/stale", id="project-local-unmarked-child"),
+        pytest.param("cd ~/project/.claude/worktrees && rg --files", id="implicit-cwd-project-local-pool"),
+        pytest.param("rg --files ~/repos/orca/workspaces", id="adopted-pool"),
+        pytest.param("rg --files -g AGENTS.md ~/repos/orca/workspaces", id="adopted-pool-filename-glob"),
+        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}", id="adopted-uuid-aggregate"),
+        pytest.param("rg --files -tmd ~/repos/orca/workspaces/{uuid}", id="adopted-uuid-type-filter"),
+        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}/captain-hook", id="adopted-repo-aggregate"),
+        pytest.param(
+            "rg --files -g AGENTS.md -g CLAUDE.md ~/repos/orca/workspaces/{uuid}/captain-hook",
+            id="adopted-repo-aggregate-filename-glob",
+        ),
+        pytest.param("cd ~/repos/orca/workspaces/{uuid} && rg --files", id="implicit-cwd-adopted-uuid"),
+        pytest.param(
+            "rg --files ~/repos/orca/workspaces/{uuid}/captain-hook/lane ~/repos/orca/workspaces/{uuid}/captain-hook",
+            id="adopted-checkout-beside-repo-aggregate",
+        ),
+        pytest.param("rg --files ~/repos/orca", id="adopted-pool-parent"),
+        pytest.param("rg --files ~/repos", id="adopted-pool-grandparent"),
+    ],
+)
+def test_blocks_listing_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command.format(home=home, uuid=ORCA_UUID), tmp_path.resolve(), tmp_path) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("rg --files ~/.claude/worktrees/captain-hook/lane", id="single-checkout-in-pool"),
+        pytest.param(
+            "rg --files -g AGENTS.md -g CLAUDE.md ~/.claude/worktrees/captain-hook/lane",
+            id="instruction-listing-single-checkout",
+        ),
+        pytest.param("rg --files ~/.claude/worktrees/captain-hook/lane/src", id="checkout-subtree"),
+        pytest.param("rg --files ~/.claude/scratch", id="scratch-root"),
+        pytest.param("rg --files ~/.claude/scratch/release-v3", id="scratch-project"),
+        pytest.param("rg --files ~/.config", id="home-child-without-pool"),
+        pytest.param("rg --files /tmp/scratch-lane", id="temp-lane"),
+        pytest.param("rg --files '~'", id="quoted-tilde"),
+        pytest.param("rg --files --help ~", id="help"),
+        pytest.param("rg --files --version ~", id="version"),
+        pytest.param("rg --files --type-list ~", id="later-type-list-mode"),
+        pytest.param("rg --files --generate=man ~", id="later-generate-mode"),
+        pytest.param("rg --files --generate man ~", id="later-separate-generate-mode"),
+        pytest.param("rg --files ~/.claude/worktrees/README", id="explicit-file-in-pool"),
+        pytest.param('rg --files "$HOME/.claude/worktrees/README"', id="explicit-file-in-pool-home-variable"),
+        pytest.param("rg --files ~/project/.claude/worktrees/lane", id="project-local-checkout"),
+        pytest.param(
+            "rg --files -g AGENTS.md ~/project/.claude/worktrees/lane", id="project-local-checkout-filename-glob"
+        ),
+        pytest.param("rg --files ~/project/.claude/worktrees/lane/src", id="project-local-checkout-subtree"),
+        pytest.param("cd ~/project/.claude/worktrees/lane && rg --files", id="implicit-cwd-project-local-checkout"),
+        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}/captain-hook/lane", id="adopted-checkout"),
+        pytest.param(
+            "rg --files -g AGENTS.md ~/repos/orca/workspaces/{uuid}/captain-hook/lane/src",
+            id="adopted-checkout-subtree",
+        ),
+        pytest.param(
+            "cd ~/repos/orca/workspaces/{uuid}/captain-hook/lane && rg --files", id="implicit-cwd-adopted-checkout"
+        ),
+    ],
+)
+def test_allows_listing_below_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command.format(uuid=ORCA_UUID), tmp_path.resolve(), tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("rg --files ~/repos/orca/workspaces/{linked}", id="linked-uuid-aggregate"),
+        pytest.param(
+            "rg --files --follow -g AGENTS.md ~/repos/orca/workspaces/{linked}", id="followed-linked-uuid-aggregate"
+        ),
+        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}/linked-repo", id="linked-repo-aggregate"),
+    ],
+)
+def test_blocks_listing_at_a_linked_adopted_aggregate(
+    performance: None, linked_aggregates: Path, tmp_path: Path, command: str
+) -> None:
+    assert decision(command.format(linked=LINKED_UUID, uuid=ORCA_UUID), tmp_path.resolve(), tmp_path) == "deny"
+
+
+def test_allows_a_linked_checkout_in_the_adopted_pool(
+    performance: None, linked_aggregates: Path, tmp_path: Path
+) -> None:
+    assert (
+        decision(f"rg --files ~/repos/orca/workspaces/{ORCA_UUID}/linked-checkout", tmp_path.resolve(), tmp_path)
+        is None
+    )
+
+
+def test_listing_follows_the_working_directory(performance: None, home: Path, tmp_path: Path) -> None:
+    pool = home / ".claude" / "worktrees"
+    assert decision("rg --files", home, tmp_path / "home") == "deny"
+    assert decision("rg --files -g AGENTS.md", pool, tmp_path / "pool") == "deny"
+    assert decision("rg --files -g AGENTS.md .", pool / "captain-hook", tmp_path / "repo-pool") == "deny"
+    assert decision("rg --files -g AGENTS.md", pool / "captain-hook" / "lane", tmp_path / "checkout") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         pytest.param("sh -c 'cd ~ && git grep needle'", id="nested-cd-home-git-grep"),
         pytest.param("cd ~ && git grep needle", id="cd-home-git-grep"),
         pytest.param("git -C ~ grep needle", id="git-c-home"),
@@ -246,6 +435,81 @@ def test_allows_search_below_a_symlinked_home(
     assert decision(command, tmp_path.resolve(), tmp_path) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("rg --files -g AGENTS.md ~", id="tilde"),
+        pytest.param("cd ~ && rg --files", id="cd-home-implicit-cwd"),
+        pytest.param("rg --files {real}", id="canonical-path"),
+        pytest.param("rg --files ~/..", id="tilde-parent"),
+        pytest.param("rg --files {real.parent}", id="canonical-parent"),
+        pytest.param("rg --files ~/.claude", id="tilde-claude-dir"),
+        pytest.param("rg --files {real}/repos/orca/workspaces", id="canonical-adopted-pool"),
+        pytest.param("rg --files {real}/repos", id="canonical-adopted-pool-ancestor"),
+    ],
+)
+def test_blocks_listing_at_a_symlinked_home(performance: None, linked_home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command.format(real=linked_home.resolve()), tmp_path.resolve(), tmp_path) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("rg --files ~/project", id="tilde-subdirectory"),
+        pytest.param("cd ~/project && rg --files", id="cd-home-subdirectory"),
+        pytest.param("rg --files {real}/project", id="canonical-subdirectory"),
+    ],
+)
+def test_allows_listing_below_a_symlinked_home(
+    performance: None, linked_home: Path, tmp_path: Path, command: str
+) -> None:
+    assert decision(command.format(real=linked_home.resolve()), tmp_path.resolve(), tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("rg --files {home.parent}", id="lexical-parent"),
+        pytest.param("rg --files --hidden --follow {home.parent}", id="lexical-parent-followed"),
+        pytest.param("rg --files -g AGENTS.md {home.parent}", id="lexical-parent-filename-glob"),
+        pytest.param("rg --files {real.parent}", id="resolved-parent"),
+        pytest.param("rg --files ~/..", id="tilde-parent"),
+    ],
+)
+def test_blocks_listing_above_a_relocated_home(
+    performance: None, relocated_home: Path, tmp_path: Path, command: str
+) -> None:
+    listing = command.format(home=relocated_home, real=relocated_home.resolve())
+    assert decision(listing, tmp_path.resolve(), tmp_path) == "deny"
+
+
+def test_allows_listing_below_a_relocated_home(performance: None, relocated_home: Path, tmp_path: Path) -> None:
+    assert decision("rg --files ~/project", tmp_path.resolve(), tmp_path) is None
+    assert decision("cd ~/project && rg --files", tmp_path.resolve(), tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("rg --files ~/.claude", id="lexical-parent"),
+        pytest.param("rg --files -g AGENTS.md ~/.claude", id="lexical-parent-filename-glob"),
+        pytest.param("cd ~/.claude && rg --files", id="implicit-cwd-lexical-parent"),
+        pytest.param("rg --files ~/.claude/worktrees", id="linked-pool"),
+        pytest.param("rg --files ~/.claude/worktrees/captain-hook", id="linked-pool-repo-aggregate"),
+        pytest.param("rg --files {pool.parent}", id="resolved-parent"),
+    ],
+)
+def test_blocks_listing_above_a_relocated_pool(
+    performance: None, relocated_pool: Path, tmp_path: Path, command: str
+) -> None:
+    listing = command.format(pool=(relocated_pool / ".claude" / "worktrees").resolve())
+    assert decision(listing, tmp_path.resolve(), tmp_path) == "deny"
+
+
+def test_allows_a_checkout_in_a_relocated_pool(performance: None, relocated_pool: Path, tmp_path: Path) -> None:
+    assert decision("rg --files ~/.claude/worktrees/captain-hook/lane", tmp_path.resolve(), tmp_path) is None
+
+
 def test_match_supplies_the_ugrep_pattern(performance: None, repo: Path, tmp_path: Path) -> None:
     assert decision("ugrep -r --match /", repo / "internal" / "focused", tmp_path) == "deny"
     assert decision("ugrep -r --match .", repo / "internal" / "focused", tmp_path) is None
@@ -267,6 +531,8 @@ def test_classifies_roots_without_walking(
     assert decision("rg needle internal/focused", repo, tmp_path) is None
     assert decision("git grep needle", repo, tmp_path / "git") == "deny"
     assert decision("git grep needle internal/focused", repo, tmp_path) is None
+    assert decision("rg --files -g AGENTS.md . internal/focused", repo, tmp_path) is None
+    assert decision("rg --files ~", repo, tmp_path / "home") == "deny"
 
 
 def test_git_grep_follows_its_own_directory(performance: None, repo: Path, tmp_path: Path) -> None:

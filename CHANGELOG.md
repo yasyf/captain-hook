@@ -54,13 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached through `cd`, `sudo`, `timeout`, `sh -c`, and pipelines. Named files, a deeper directory,
   and a positive filename glob such as `--include='*.py'`, `-g '*.json'`, or `-t py` still run. A bare
   `*` or `**` glob, a negative glob, `--max-count`, `--max-depth`, and a trailing `| head` do not
-  bound the search. `rg` reading piped or redirected stdin and `rg --files` still run.
+  bound the search. `rg` reading piped or redirected stdin still runs, and `rg --files` has its own
+  listing rule.
 - **A raw `git cat-file -e` warns once.** Each probe can lazily fetch a missing object from a promisor
   remote in its own process. `git --no-lazy-fetch cat-file -e` and `GIT_NO_LAZY_FETCH=1` still run,
   and the message points at `git --no-lazy-fetch cat-file --batch-check` and `test -e`.
 
 ### Changed
 
+- **`rg --files` at `~`, a worktree pool, or a directory above either is blocked, filename filters
+  included.** The performance pack blocks a file listing rooted at HOME, at a `.claude/worktrees` or
+  `.orca/workspaces` pool, at `~/repos/orca/workspaces` or its `<UUID>` and `<UUID>/<repo>`
+  aggregates, or at a parent of HOME or of those pools, such as `/`, `/Users`, `~/.claude`, `~/.orca`,
+  or `~/repos`. `-g`, `--glob`, `-t`, and `--type` filters do not exempt it. One checkout inside a
+  pool, its subtrees, a regular file, `~/.claude/scratch`, and `rg --files .` at a repository root
+  still run, as do `--help`, `--version`, and a `--type-list` or `--generate` written after
+  `--files`.
 - **The packaged macOS host installs under a symlinked home directory.** `installedApplicationPath`
   refused a home whose path resolved through a symlink, and a `~/Applications` or host state
   directory (`~/Library/Caches/captain-hook/host-v1`) that was a symlink. Same-user local processes

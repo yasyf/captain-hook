@@ -65,7 +65,10 @@ class Arguments:
     so a policy can name exactly what stopped the binding. ``dashdash`` counts the positional
     words read before an end-of-options ``--``, or is None when none was written, so a program
     that gives the separator its own meaning, such as ``git grep`` reading revisions before it
-    and pathspecs after, can split its operands.
+    and pathspecs after, can split its operands. ``order`` names the role of every option
+    word read, once per occurrence and in the order written, so a policy can apply a program's
+    last-wins precedence across roles, such as ripgrep honoring whichever of ``--files``,
+    ``--type-list``, and ``--generate`` comes last.
     """
 
     words: dict[str, tuple[Word, ...]]
@@ -76,6 +79,7 @@ class Arguments:
     call: Call
     unread: tuple[Word, ...] = ()
     dashdash: int | None = None
+    order: tuple[str, ...] = ()
 
     def paths(self, name: str) -> Targets:
         """Return the named role as path targets with the invocation's working directory.
@@ -143,6 +147,7 @@ class CommandSchema:
         positional: list[Word] = []
         unread: tuple[Word, ...] = ()
         dashdash: int | None = None
+        order: list[str] = []
         accept_operands = True
         accept_options = True
         complete = not call.substituted
@@ -183,12 +188,14 @@ class CommandSchema:
                 flags, valued = cluster
                 for option in flags:
                     values.setdefault(option.name, []).append(True)
+                    order.append(option.name)
                     if self.options_end_operands and not option.prefix:
                         accept_operands = False
                 if valued is None:
                     continue
                 flag, inline = valued
             if accept_options and (option := aliases.get(flag)) is not None and not (option.first and index):
+                order.append(option.name)
                 if self.options_end_operands and not option.prefix:
                     accept_operands = False
                 if option.until:
@@ -252,6 +259,7 @@ class CommandSchema:
             call,
             unread,
             dashdash,
+            tuple(order),
         )
 
 
