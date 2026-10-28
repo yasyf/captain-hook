@@ -22,9 +22,11 @@ from captain_hook.packs import manager, plugins
 from captain_hook.review.fix import (
     COMPLIANCE_RE,
     HOOK_COMPLAINT,
+    NAMED_HOOK_WINDOW_MS,
     classify_marker,
     classify_user_marker,
     fingerprint_of,
+    fire_message_target,
     iter_hook_complaint_signals,
     named_hook_target,
     resolve_target,
@@ -47,7 +49,7 @@ from tests.review_helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from cc_transcript.decisions import DecisionLog
     from cc_transcript.models import TranscriptEvent
@@ -577,6 +579,72 @@ class TestNamedHookTarget:
     async def test_fileless_decision_is_excluded(self, decisions: DecisionLog) -> None:
         await seed_decision(decisions, kind="task_tracking:nudge_abc12345", source_file="")
         assert await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+
+
+@pytest.mark.parametrize(
+    ("target", "text"),
+    [(named_hook_target, TASK_TRACKING_COMPLAINT), (fire_message_target, NUDGE_MESSAGE)],
+    ids=["named-hook", "fire-message"],
+)
+class TestDecisionWindowAttribution:
+    @pytest.mark.parametrize("offset", [-NAMED_HOOK_WINDOW_MS, NAMED_HOOK_WINDOW_MS])
+    async def test_inclusive_boundary_excludes_just_outside_ambiguity(
+        self,
+        decisions: DecisionLog,
+        target: Callable[[str, DecisionLog, SessionId, int], Awaitable[Decision | None]],
+        text: str,
+        offset: int,
+    ) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_target", ts_ms=BASE_MS + offset)
+        outside_offset = offset + (-1 if offset < 0 else 1)
+        await seed_decision(decisions, kind="task_tracking:gate_outside", ts_ms=BASE_MS + outside_offset)
+        fire = await target(text, decisions, SessionId("sess-1"), BASE_MS)
+        assert fire is not None
+        assert fire.kind == "task_tracking:nudge_target"
+        assert fire.ts_ms == BASE_MS + offset
+
+    @pytest.mark.parametrize(
+        ("first_offset", "second_offset"),
+        [(-1_000, 1_000), (0, 0)],
+        ids=["earlier-timestamp", "earlier-insertion"],
+    )
+    async def test_equal_distance_preserves_stable_order(
+        self,
+        decisions: DecisionLog,
+        target: Callable[[str, DecisionLog, SessionId, int], Awaitable[Decision | None]],
+        text: str,
+        first_offset: int,
+        second_offset: int,
+    ) -> None:
+        first_message = NUDGE_MESSAGE + " first"
+        await seed_decision(
+            decisions,
+            kind="task_tracking:nudge_target",
+            ts_ms=BASE_MS + first_offset,
+            tool_digest=None,
+            message=first_message,
+        )
+        await seed_decision(
+            decisions,
+            kind="task_tracking:nudge_target",
+            ts_ms=BASE_MS + second_offset,
+            tool_digest=None,
+            message=NUDGE_MESSAGE + " second",
+        )
+        fire = await target(text, decisions, SessionId("sess-1"), BASE_MS)
+        assert fire is not None
+        assert fire.message == first_message
+        assert fire.ts_ms == BASE_MS + first_offset
+
+    async def test_all_in_window_kinds_remain_ambiguous(
+        self,
+        decisions: DecisionLog,
+        target: Callable[[str, DecisionLog, SessionId, int], Awaitable[Decision | None]],
+        text: str,
+    ) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_first", ts_ms=BASE_MS - 1_000)
+        await seed_decision(decisions, kind="task_tracking:gate_second", ts_ms=BASE_MS + 1_000)
+        assert await target(text, decisions, SessionId("sess-1"), BASE_MS) is None
 
 
 class TestDetector:

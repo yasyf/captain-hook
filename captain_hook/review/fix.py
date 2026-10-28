@@ -352,9 +352,10 @@ async def decision_named(
 ) -> Decision | None:
     matched = [
         decision
-        for decision in await decisions.for_session(session_id)
+        for decision in await decisions.for_session_between(
+            session_id, near_ts_ms - NAMED_HOOK_WINDOW_MS, near_ts_ms + NAMED_HOOK_WINDOW_MS
+        )
         if decision.source_file
-        and abs(decision.ts_ms - near_ts_ms) <= NAMED_HOOK_WINDOW_MS
         and (stem := hook_stem(decision.kind)) is not None
         and name_slug(stem) in names
     ]
@@ -379,10 +380,11 @@ async def fire_message_target(
     words = content_words(text)
     matched = [
         decision
-        for decision in await decisions.for_session(session_id)
+        for decision in await decisions.for_session_between(
+            session_id, near_ts_ms - NAMED_HOOK_WINDOW_MS, near_ts_ms + NAMED_HOOK_WINDOW_MS
+        )
         if decision.source_file
         and decision.message
-        and abs(decision.ts_ms - near_ts_ms) <= NAMED_HOOK_WINDOW_MS
         and len(words & content_words(decision.message)) >= FIRE_MESSAGE_OVERLAP
     ]
     if len({decision.kind for decision in matched}) != 1:
