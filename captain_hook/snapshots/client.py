@@ -214,12 +214,14 @@ FAIL_OPEN_EVIDENCE_STATUSES = frozenset(
         "missing",
         "retained_limit",
         "lease_limit",
+        "stale_handle",
+        "stale_cursor",
     }
 )
 
 
 def fails_open(exc: EvidenceIncomplete) -> bool:
-    return isinstance(exc, GraphEvidenceExpired) or exc.status in FAIL_OPEN_EVIDENCE_STATUSES
+    return exc.status in FAIL_OPEN_EVIDENCE_STATUSES
 
 
 def encode_frame(message: Mapping[str, object]) -> bytes:
@@ -682,12 +684,20 @@ class Lease:
                     self.expires_unix_ms = result["data"]["expires_unix_ms"]
             return self.handle.copy()
 
+    def reclaim(self, client: SnapshotClient, stale: Mapping[str, str]) -> dict[str, str]:
+        with self.guard:
+            if self.closed or self.released:
+                raise EvidenceIncomplete("stale_handle", "preparation lease was already released")
+            if self.handle == stale:
+                self._reacquire(client)
+            return self.handle.copy()
+
     def _reacquire(self, client: SnapshotClient) -> None:
         """Replace a lease the owner no longer holds with a fresh one on the same transcript, under *client*'s window.
 
         A lease is capped at the foreground deadline it was acquired under, so once a hook widens that window
         (:func:`foreground_evidence`) and retries, the owner has already dropped the lease and answers its renewal
-        with ``stale_handle``.
+        or retain with ``stale_handle``.
         """
         description = client.acquired(
             self.description["canonical_path"], classifier=self.description["classifier"], tail_bytes=self.tail_bytes
@@ -1156,7 +1166,13 @@ class RemoteSession:
 
     def retain(self) -> RemoteSession:
         client = CURRENT_CLIENT.get() or self.client
-        data = list(client.pages("retain", handle=self.lease.require(client)))
+        handle = self.lease.require(client)
+        try:
+            data = list(client.pages("retain", handle=handle))
+        except EvidenceIncomplete as exc:
+            if exc.status != "stale_handle":
+                raise
+            data = list(client.pages("retain", handle=self.lease.reclaim(client, handle)))
         if len(data) != 1 or data[0].get("kind") != "acquired":
             raise SnapshotProtocolError("retain completed without one leased description")
         lease = Lease(client, data[0]["description"], tail_bytes=self.tail_bytes)

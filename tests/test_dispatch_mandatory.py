@@ -1389,7 +1389,7 @@ class TestMandatorySkip:
 
         @on(Event.PreToolUse)
         def advisory(evt: Any) -> None:
-            raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+            raise EvidenceIncomplete("invalid_request", "advisory evidence is invalid")
 
         response = self.respond()
         assert response.exit == 0
@@ -1399,7 +1399,7 @@ class TestMandatorySkip:
             "text": "hello",
             "ticket_id": "2c810ca88b5d",
         }
-        assert "lease does not belong to this claimant or generation" in response.stderr
+        assert "advisory evidence is invalid" in response.stderr
 
     def test_a_recovered_ticket_rewrite_stands_on_the_ticket_it_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ticket_declare, "DECLARED", {})
@@ -1434,7 +1434,7 @@ class TestMandatorySkip:
 
         @on(Event.PreToolUse)
         def advisory(evt: Any) -> None:
-            raise EvidenceIncomplete("stale_handle", "lease does not belong to this claimant or generation")
+            raise EvidenceIncomplete("invalid_request", "advisory evidence is invalid")
 
         envelope = replied(self.respond(payload=GRANTED_SLACK))
         assert envelope["hookSpecificOutput"]["updatedInput"]["ticket_id"] == ticket.id
