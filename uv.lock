@@ -279,7 +279,7 @@ requires-dist = [
     { name = "capt-hook", marker = "extra == 'dev'" },
     { name = "cc-transcript", extras = ["judge"], specifier = "==14.45.8" },
     { name = "click", specifier = ">=8" },
-    { name = "filelock", specifier = ">=3" },
+    { name = "filelock", specifier = ">=3.24.0" },
     { name = "funcy", specifier = ">=2.0" },
     { name = "hatchling", marker = "extra == 'dev'", specifier = ">=1.27" },
     { name = "jsonschema", specifier = ">=4.26" },
