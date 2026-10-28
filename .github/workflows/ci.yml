@@ -165,7 +165,7 @@ jobs:
           cat ~/.cache/captain-hook/host-v1/capt-hookd.log || true
 
   helper-test:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v7
 
@@ -189,7 +189,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
   test:
-    runs-on: ${{ matrix.os == 'macos-15' && matrix.shard == 0 && 'macos-15-intel' || matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-15' && 'macos-15-intel' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -216,7 +216,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           shard-count: ${{ matrix.os == 'macos-15' && '2' || '8' }}
           shard-index: ${{ matrix.shard }}
-          workers: ${{ matrix.os == 'macos-15' && '3' || '0' }}
+          workers: ${{ matrix.os == 'macos-15' && '1' || '0' }}
 
       - name: Build + smoke-test wheel in a fresh venv
         if: matrix.shard == 0
