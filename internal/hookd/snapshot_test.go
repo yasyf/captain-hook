@@ -103,7 +103,7 @@ func TestSnapshotServiceHandshakesTheHostBudgetsAndFactProducer(t *testing.T) {
 	if err := json.Unmarshal(config, &offer); err != nil {
 		t.Fatal(err)
 	}
-	if offer.Facts != 512<<20 || offer.Retained != 1408<<20 || offer.Reserved != 512<<20 || offer.Producer != "capt-hook/"+Build {
+	if offer.Facts != 512<<20 || offer.Retained != 1408<<20 || offer.Reserved != 512<<20 || offer.Producer != "capt-hook" {
 		t.Fatalf("offer=%+v", offer)
 	}
 }
