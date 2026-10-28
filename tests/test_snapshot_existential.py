@@ -177,6 +177,7 @@ def test_delegated_source_edit_avoids_later_native_fact_pages(tmp_path, monkeypa
         return exchange(wrapper)
 
     fixture.client._exchange = record
+    fixture.client._cleanup_exchange = record
     try:
         transcript = fixture.load(root).with_registered_sources(GraphSources(thread_ids=ids, roots=(tmp_path,)))
         try:
