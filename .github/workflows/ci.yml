@@ -189,7 +189,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
   test:
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-15' && matrix.shard == 0 && 'macos-15-intel' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
