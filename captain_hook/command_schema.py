@@ -260,11 +260,7 @@ def short_cluster(
 ) -> tuple[list[Option], tuple[str, str | None] | None] | None:
     options = [aliases.get(f"-{letter}") for letter in letters]
     count = next(
-        (
-            index
-            for index, option in enumerate(options)
-            if option is None or option.type is not bool or option.first
-        ),
+        (index for index, option in enumerate(options) if option is None or option.type is not bool or option.first),
         len(options),
     )
     flags = [aliases[f"-{letter}"] for letter in letters[:count]]

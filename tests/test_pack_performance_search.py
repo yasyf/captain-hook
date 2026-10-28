@@ -41,6 +41,14 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def linked_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    (real := tmp_path.resolve() / "real-home" / "project").mkdir(parents=True)
+    (link := tmp_path.resolve() / "linked-home").symlink_to(real.parent)
+    monkeypatch.setenv("HOME", str(link))
+    return link
+
+
+@pytest.fixture
 def indexed(git_repo: Path) -> Path:
     root = git_repo.resolve()
     (focused := root / "internal" / "focused").mkdir(parents=True)
@@ -160,7 +168,7 @@ def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Pat
         pytest.param("git grep -e needle -- ':(glob)**/*.py'", id="git-grep-long-magic-glob"),
         pytest.param("git grep needle -- :/internal", id="git-grep-top-relative-subtree"),
         pytest.param("git grep -- needle internal", id="git-grep-separator-before-pattern-subtree"),
-        pytest.param("SPEC=internal; git grep needle -- \"$SPEC\"", id="git-grep-expanded-subtree"),
+        pytest.param('SPEC=internal; git grep needle -- "$SPEC"', id="git-grep-expanded-subtree"),
         pytest.param("git grep -nC3 needle -- internal/focused", id="git-grep-cluster-value-subtree"),
         pytest.param("git grep -nC 3 needle -- internal/focused", id="git-grep-cluster-separate-value-subtree"),
         pytest.param("git grep needle -- internal/focused/../focused", id="git-grep-parent-back-into-subtree"),
@@ -185,7 +193,7 @@ def test_allows_bounded_search_at_repo_root(
         pytest.param("cd ~/.claude/scratch/release-v3 && grep -rn needle .", id="cd-before-call"),
         pytest.param(
             'cd ~/.claude/scratch/durable-agents-rebuild && grep -rl "backup in cloud storage" . '
-            '2>/dev/null | grep -v node_modules | head -3',
+            "2>/dev/null | grep -v node_modules | head -3",
             id="incident-recursive-scratch-pipeline",
         ),
         pytest.param("rg needle ~/.claude/worktrees/captain-hook", id="worktree-pool"),
@@ -208,6 +216,33 @@ def test_blocks_search_at_home_roots(performance: None, home: Path, tmp_path: Pa
     ],
 )
 def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command, tmp_path.resolve(), tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("sh -c 'cd ~ && git grep needle'", id="nested-cd-home-git-grep"),
+        pytest.param("cd ~ && git grep needle", id="cd-home-git-grep"),
+        pytest.param("git -C ~ grep needle", id="git-c-home"),
+        pytest.param("cd ~ && rg needle .", id="cd-home-rg"),
+        pytest.param("sh -c 'cd ~ && grep -rn needle .'", id="nested-cd-home-grep"),
+    ],
+)
+def test_blocks_search_at_a_symlinked_home(performance: None, linked_home: Path, tmp_path: Path, command: str) -> None:
+    assert decision(command, tmp_path.resolve(), tmp_path) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("sh -c 'cd ~/project && git grep needle'", id="nested-cd-home-subdirectory-git-grep"),
+        pytest.param("cd ~/project && rg needle .", id="cd-home-subdirectory-rg"),
+    ],
+)
+def test_allows_search_below_a_symlinked_home(
+    performance: None, linked_home: Path, tmp_path: Path, command: str
+) -> None:
     assert decision(command, tmp_path.resolve(), tmp_path) is None
 
 
@@ -284,6 +319,13 @@ def test_explicit_git_dir_searches_the_whole_index(indexed: Path) -> None:
         pytest.param(
             "git --git-dir={root}/.git grep --cached needle -- ':(glob)internal/..'", id="git-dir-magic-parent"
         ),
+        pytest.param("env 'GIT_DIR={root}/.git' git grep --cached needle", id="git-dir-quoted-env-wrapper"),
+        pytest.param("GIT_DIR={root}/.git sh -c 'git grep --cached needle'", id="git-dir-inherited-by-payload"),
+        pytest.param(
+            'GIT_DIR={root}/.git sh -c "git grep --cached needle"', id="git-dir-inherited-by-double-quoted-payload"
+        ),
+        pytest.param("env GIT_DIR={root}/.git sh -c 'git grep --cached needle'", id="git-dir-inherited-through-env"),
+        pytest.param("export GIT_DIR={root}/.git; sh -c 'git grep --cached needle'", id="git-dir-exported-to-payload"),
     ],
 )
 def test_blocks_git_grep_from_a_subtree_with_an_explicit_git_dir(
@@ -317,6 +359,7 @@ def test_blocks_git_grep_over_an_explicit_work_tree(
             "git --git-dir={root}/.git grep --cached needle -- internal/focused/../focused",
             id="git-dir-parent-back-into-subtree",
         ),
+        pytest.param("GIT_DIR={root}/.git; sh -c 'git grep --cached needle'", id="unexported-assignment-stays-local"),
     ],
 )
 def test_allows_scoped_git_grep_in_a_real_repository(

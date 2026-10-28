@@ -21,13 +21,14 @@ from captain_hook import (
     Tool,
     hook,
 )
+from captain_hook.bindings import dequote
 from captain_hook.cmd import git_location
 from captain_hook.command_schema import glob_prefix
 from captain_hook.util.scratch import TEMP_ROOTS
 from captain_hook.util.vcs import is_repo_root
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
     from cc_transcript.command import Word
 
@@ -623,12 +624,20 @@ def names_files(target: Target) -> bool:
             return False
 
 
+def at_home(target: Target) -> bool:
+    if target.value is None:
+        return False
+    path = Path(os.path.expanduser(target.value) if target.raw.startswith("~") else target.value)
+    root = path if path.is_absolute() else None if target.cwd is None else target.cwd / path
+    return root is not None and glob_prefix(root).resolve() == Path.home().resolve()
+
+
 def broad(target: Target) -> bool:
     path = target.path
     return (
         not names_files(target)
         and not (path is not None and path.is_file())
-        and (BROAD_ROOTS(target) or (path is not None and is_repo_root(glob_prefix(path))))
+        and (BROAD_ROOTS(target) or at_home(target) or (path is not None and is_repo_root(glob_prefix(path))))
     )
 
 
@@ -707,9 +716,7 @@ def pathspec_magic(value: str) -> tuple[frozenset[str], str]:
 
 def top_broad(target: Target) -> bool:
     return (
-        target.value is None
-        or os.path.isabs(os.path.expanduser(target.value))
-        or not narrows(target.value.strip("/"))
+        target.value is None or os.path.isabs(os.path.expanduser(target.value)) or not narrows(target.value.strip("/"))
     )
 
 
@@ -726,14 +733,25 @@ def pathspec_broad(target: Target, *, relocated: bool) -> bool | None:
     return top_broad(spec) if relocated else broad(spec)
 
 
+def host_calls(call: Call) -> Iterator[Call]:
+    while (host := call.occurrence.host) is not None:
+        call = next(candidate for candidate in call.cmd.calls() if candidate.occurrence.index == host.index)
+        yield call
+
+
+def assigned_names(call: Call) -> set[str]:
+    wrapped = call.source.words[: len(call.source.words) - len(call.command.words)]
+    return {name for name, _ in call.source.env} | {dequote(word.raw).partition("=")[0] for word in wrapped}
+
+
 def git_relocated(call: Call) -> bool:
     scope, _ = call.cmd.scope_for(call, call.command.words[0])
-    wrapped = call.source.words[: len(call.source.words) - len(call.command.words)]
+    environment = (
+        assigned_names(call) | {name for host in host_calls(call) for name in assigned_names(host)} | scope.exported
+    )
     return not (
         GIT_LOCATION_OPTIONS.isdisjoint(option.partition("=")[0] for option in call.leading_options)
-        and GIT_LOCATION_VARIABLES.isdisjoint(
-            {name for name, _ in call.source.env} | {word.raw.partition("=")[0] for word in wrapped} | scope.exported
-        )
+        and GIT_LOCATION_VARIABLES.isdisjoint(environment)
     )
 
 
@@ -858,7 +876,7 @@ hook(
         Input(command="ugrep -rl needle ~/.claude/scratch/release-v3"): Block(),
         Input(
             command='grep -rl "backup in cloud storage" ~/.claude/scratch/durable-agents-rebuild '
-            '2>/dev/null | grep -v node_modules | head -3'
+            "2>/dev/null | grep -v node_modules | head -3"
         ): Block(),
         Input(command="grep -r -e needle /"): Block(),
         Input(command="grep -r -f patterns.txt ~"): Block(),
@@ -923,6 +941,8 @@ hook(
             cwd="/srv/demo/internal/focused",
         ): Block(),
         Input(command="git grep needle -- src/..", cwd="/Users/alice"): Block(),
+        Input(command="env 'GIT_DIR=/srv/demo/.git' git grep needle", cwd="/srv/demo/internal/focused"): Block(),
+        Input(command="GIT_DIR=/srv/demo/.git sh -c 'git grep needle'", cwd="/srv/demo/internal/focused"): Block(),
         Input(command="git grep -nC3 needle", cwd="/Users/alice"): Block(),
         Input(command="git grep -nC 3 needle -- .", cwd="/Users/alice"): Block(),
         Input(command="git grep -nOvim needle -- src", cwd="/Users/alice"): Block(),
