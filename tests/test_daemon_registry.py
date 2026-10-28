@@ -113,6 +113,10 @@ def stalled_walk(root: Path, ledger: Path) -> None:
     registry._language_markers(root, since=time.monotonic())
 
 
+def state_env() -> dict[str, str]:
+    return {"CAPTAIN_HOOK_STATE_DIR": os.environ["CAPTAIN_HOOK_STATE_DIR"]}
+
+
 def generation(cli_state: CliState) -> registry.LanguageGeneration:
     return registry.LanguageGeneration.model_validate_json(registry.marker_path(cli_state.root).read_text())
 
@@ -142,7 +146,9 @@ def test_unchanged_tree_twice_is_equal(project: CliState) -> None:
 
 def test_registry_build_marks_the_bound_request_warm_up(project: CliState) -> None:
     reg = Registry(project)
-    requests = [reqenv.RequestOverrides(env={}, cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(2)]
+    requests = [
+        reqenv.RequestOverrides(env=state_env(), cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(2)
+    ]
     for overrides in requests:
         with reqenv.use_request(overrides):
             reg.get()
@@ -505,17 +511,24 @@ def test_a_killed_walker_publishes_nothing_and_frees_the_lock(project: CliState,
 def test_a_stopped_request_leaves_a_live_holders_lock_without_walking(
     project: CliState, tmp_path: Path, walks: list[Path], stop: str
 ) -> None:
+    held = registry.marker_path(project.root)
     (ledger := tmp_path / "ledger").touch()
     holder = spawn(stalled_walk, project.root, ledger)
     await_ledger(ledger, "walk", 1, [holder])
     abandon = threading.Event()
     deadline_unix_ms = int((time.time() + 1.0) * 1000) if stop == "deadline" else 0
     overrides = reqenv.RequestOverrides(
-        env={}, cwd=str(project.root), client_ppid=1, session_id="s", deadline_unix_ms=deadline_unix_ms, abandon=abandon
+        env=state_env(),
+        cwd=str(project.root),
+        client_ppid=1,
+        session_id="s",
+        deadline_unix_ms=deadline_unix_ms,
+        abandon=abandon,
     )
 
     def wait() -> tuple[str, ...]:
         with reqenv.use_request(overrides):
+            assert registry.marker_path(project.root) == held
             return registry._language_markers(project.root, since=time.monotonic())
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -529,7 +542,7 @@ def test_a_stopped_request_leaves_a_live_holders_lock_without_walking(
                 waiter.result(timeout=30)
             assert holder.is_alive()
             assert walks == []
-            assert not registry.marker_path(project.root).exists()
+            assert not held.exists()
         finally:
             holder.kill()
             holder.join(timeout=30)
@@ -892,7 +905,9 @@ def test_a_persistently_unreadable_roster_is_served_as_service_time_not_warm_up(
 
     monkeypatch.setattr(plugins, "resolve_plugin_packs", unreadable)
     reg = Registry(project)
-    requests = [reqenv.RequestOverrides(env={}, cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(3)]
+    requests = [
+        reqenv.RequestOverrides(env=state_env(), cwd=str(project.root), client_ppid=1, session_id="s") for _ in range(3)
+    ]
     for overrides in requests:
         with reqenv.use_request(overrides):
             assert not reg.get().cacheable
