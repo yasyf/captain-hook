@@ -324,7 +324,6 @@ class SnapshotClient:
         *,
         cleanup_exchange: Callable[[dict[str, object]], dict[str, Any]] | None = None,
         preparation_seconds: float = 120,
-        warm_scheduler: Callable[[SnapshotClient, GraphSources], None] | None = None,
         root_warm_scheduler: Callable[[SnapshotClient, Path, Mapping[str, str], int | None], None] | None = None,
         defer_cleanup: bool = False,
         foreground_seconds: float | None = None,
@@ -334,7 +333,6 @@ class SnapshotClient:
         self._leases: set[Lease] = set()
         self._graphs: set[PreparedGraphEvidence] = set()
         self._preparation_seconds = preparation_seconds
-        self._warm_scheduler = warm_scheduler
         self._root_warm_scheduler = root_warm_scheduler
         self._defer_cleanup = defer_cleanup
         self._deferred_cursors: set[tuple[str, str | None]] = set()
@@ -383,19 +381,6 @@ class SnapshotClient:
             for name, kind, fields in self._tool_registry
         ]
 
-    def registered_warm_demand(self, sources: GraphSources) -> dict[str, object]:
-        return {
-            "schema": HOST_SCHEMA,
-            "request": {
-                "schema": CORE_SCHEMA,
-                "operation": "warm_registered",
-                "classifier": NATIVE_CLASSIFIER,
-                **sources.wire(),
-                "limits": graph_limits(),
-            },
-            "tool_registry": self.tool_registry(),
-        }
-
     def root_warm_demand(self, path: Path, classifier: Mapping[str, str], tail_bytes: int | None) -> dict[str, object]:
         return {
             "schema": HOST_SCHEMA,
@@ -409,10 +394,6 @@ class SnapshotClient:
             },
             "tool_registry": self.tool_registry(),
         }
-
-    def schedule_graph_warm(self, sources: GraphSources) -> None:
-        if self._warm_scheduler is not None:
-            self._warm_scheduler(self, sources)
 
     def schedule_root_warm(self, path: str | Path, classifier: Mapping[str, str], tail_bytes: int | None) -> None:
         if classifier["id"] != "captain-configured" and self._root_warm_scheduler is not None:
@@ -1028,7 +1009,6 @@ class PreparedGraphEvidence:
                 yield from self.answer(session, query, observers=observers)
         except EvidenceIncomplete as exc:
             if exc.status in {"incomplete", "deadline"}:
-                session.client.schedule_graph_warm(self.sources)
                 session.client.schedule_root_warm(session.path, session.classifier, session.tail_bytes)
             if exc.status in {"stale_handle", "stale_cursor"}:
                 raise GraphEvidenceExpired(exc.status, exc.reason) from exc

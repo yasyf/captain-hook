@@ -95,16 +95,45 @@ def test_incomplete_preparation_is_shared_without_a_second_read():
     assert [operation for operation, _ in client.requests] == ["prepare_graph"]
 
 
-def test_incomplete_graph_enqueues_registered_sources_for_warming():
-    client = RecordingClient(fail_prepare=True)
-    queued = []
-    client._warm_scheduler = lambda source_client, sources: queued.append((source_client, sources))
+@pytest.mark.parametrize(
+    ("operation", "status", "reason"),
+    [
+        ("prepare_graph", "incomplete", "source budget exhausted"),
+        ("query_graph", "incomplete", "prepared graph expired"),
+        ("query_graph", "deadline", "prepared graph expired"),
+    ],
+)
+def test_incomplete_graph_posts_only_its_current_root_warm_demand(operation, status, reason):
+    from tests.test_worker_graph_warming import close, frames, root_demand, service, warm_frame
+
+    worker = service()
+    client = RecordingClient(fail_prepare=operation == "prepare_graph")
+    client.fail_query = status if operation == "query_graph" else None
+    client._root_warm_scheduler = worker.schedule_root_warm
     session = session_with_sources(client, 918)
+    try:
+        with pytest.raises(EvidenceIncomplete, match=reason) as incomplete:
+            session.has_edit_to("src/**")
 
-    with pytest.raises(EvidenceIncomplete, match="source budget exhausted"):
-        session.has_edit_to("src/**")
+        assert incomplete.value.status == status
+        assert frames(worker) == [warm_frame(root_demand(str(session.path), session.classifier, session.tail_bytes))]
+        assert client.requests[0][0] == "prepare_graph"
+        assert client.requests[0][1]["thread_ids"] == [f"thread-{index}" for index in range(918)]
+    finally:
+        close(worker)
 
-    assert queued == [(client, session.graph.sources)]
+
+def test_cold_registered_foreground_query_does_not_require_speculative_work():
+    client = RecordingClient()
+    client._root_warm_scheduler = lambda *_: pytest.fail("foreground query scheduled root prefetch")
+    session = session_with_sources(client, 3)
+
+    assert session.has_read("README.md") is False
+
+    assert [operation for operation, _ in client.requests] == ["prepare_graph", "query_graph"]
+    assert client.requests[0][1]["thread_ids"] == ["thread-0", "thread-1", "thread-2"]
+    assert client.requests[0][1]["active_since_unix_ms"] == session.graph.sources.active_since_unix_ms
+    assert client.requests[1][1]["query"] == {"kind": "has_read", "pattern": "README.md", "subagents": True}
 
 
 @pytest.mark.parametrize("provider,tail_bytes", [("claude", HOOK_TAIL_BYTES), ("codex", None)])

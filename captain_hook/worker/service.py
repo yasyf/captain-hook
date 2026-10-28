@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import BinaryIO
 
-    from captain_hook.snapshots.client import GraphSources, SnapshotClient
+    from captain_hook.snapshots.client import SnapshotClient
 
     type Background = Callable[[], None]
     type Dispatch = Callable[[EventRequest], tuple[EventResponse, Background | None]]
@@ -159,7 +159,6 @@ class WorkerService:
                 request.id, value, expires_unix_ms=foreground.foreground_deadline_unix_ms
             ),
             cleanup_exchange=cleanup,
-            warm_scheduler=self.schedule_graph_warm,
             root_warm_scheduler=self.schedule_root_warm,
             defer_cleanup=True,
             foreground_seconds=foreground_seconds(request.event),
@@ -167,7 +166,6 @@ class WorkerService:
         background_client = SnapshotClient(
             lambda value: self.snapshot_exchange(0, value),
             cleanup_exchange=cleanup,
-            warm_scheduler=self.schedule_graph_warm,
             root_warm_scheduler=self.schedule_root_warm,
         )
 
@@ -259,11 +257,6 @@ class WorkerService:
             self._outstanding -= 1
             if self._outstanding == 0:
                 self._guard.notify_all()
-
-    def schedule_graph_warm(self, client: SnapshotClient, sources: GraphSources) -> None:
-        if not sources.thread_ids and not sources.direct_paths:
-            return
-        self._post_warm_demand(client.registered_warm_demand(sources))
 
     def schedule_root_warm(
         self, client: SnapshotClient, path: Path, classifier: Mapping[str, str], tail_bytes: int | None

@@ -77,6 +77,10 @@ def registered_demand(thread_ids, *, roots=(), direct_paths=(), active_since_uni
     }
 
 
+def post_registered_demand(worker, source_client, sources):
+    worker._post_warm_demand(registered_demand(tool_registry=source_client.tool_registry(), **sources.wire()))
+
+
 def root_demand(path, classifier, tail_bytes):
     return {
         "schema": "captain.transcript/1",
@@ -103,7 +107,7 @@ def test_repeated_events_post_one_demand_for_a_scope(monkeypatch):
     at(monkeypatch, 1000)
     try:
         for _ in range(20):
-            worker.schedule_graph_warm(client(), sources)
+            post_registered_demand(worker, client(), sources)
         assert frames(worker) == [
             warm_frame(
                 registered_demand(
@@ -143,9 +147,9 @@ def test_changed_scope_posts_its_own_demand(monkeypatch, changed, expected):
     worker = service()
     at(monkeypatch, 1000)
     try:
-        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",)))
-        worker.schedule_graph_warm(client(), changed)
-        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",)))
+        post_registered_demand(worker, client(), GraphSources(thread_ids=("one",)))
+        post_registered_demand(worker, client(), changed)
+        post_registered_demand(worker, client(), GraphSources(thread_ids=("one",)))
         assert frames(worker) == [warm_frame(registered_demand(["one"])), warm_frame(expected)]
     finally:
         close(worker)
@@ -157,15 +161,15 @@ def test_scope_is_demanded_again_only_after_the_renewal_interval(monkeypatch):
     demand = warm_frame(registered_demand(["one"]))
     try:
         at(monkeypatch, 1000)
-        worker.schedule_graph_warm(client(), sources)
+        post_registered_demand(worker, client(), sources)
         at(monkeypatch, 1000 + WARM_DEMAND_SECONDS - 1)
-        worker.schedule_graph_warm(client(), sources)
+        post_registered_demand(worker, client(), sources)
         assert frames(worker) == [demand]
         at(monkeypatch, 1000 + WARM_DEMAND_SECONDS)
-        worker.schedule_graph_warm(client(), sources)
+        post_registered_demand(worker, client(), sources)
         assert frames(worker) == [demand, demand]
         at(monkeypatch, 1000 + 2 * WARM_DEMAND_SECONDS - 1)
-        worker.schedule_graph_warm(client(), sources)
+        post_registered_demand(worker, client(), sources)
         assert frames(worker) == [demand, demand]
     finally:
         close(worker)
@@ -177,8 +181,8 @@ def test_demand_carries_the_foreground_tool_registry(monkeypatch):
     source_client.bind_tool_registry({"custom_write": ("Write", {"file": "path"})})
     at(monkeypatch, 1000)
     try:
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",)))
-        worker.schedule_graph_warm(client(), GraphSources(thread_ids=("one",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("one",)))
+        post_registered_demand(worker, client(), GraphSources(thread_ids=("one",)))
         assert frames(worker) == [
             warm_frame(
                 registered_demand(
@@ -197,7 +201,7 @@ def test_demand_carries_the_foreground_tool_registry(monkeypatch):
 def test_root_and_registered_scopes_post_their_own_demands(monkeypatch, tmp_path):
     worker = service()
     source_client = SnapshotClient(
-        lambda _: {}, warm_scheduler=worker.schedule_graph_warm, root_warm_scheduler=worker.schedule_root_warm
+        lambda _: {}, root_warm_scheduler=worker.schedule_root_warm
     )
     source_client.bind_tool_registry({})
     path = tmp_path / "root.jsonl"
@@ -207,23 +211,13 @@ def test_root_and_registered_scopes_post_their_own_demands(monkeypatch, tmp_path
         source_client.schedule_root_warm(str(path), {"id": "captain-configured", "version": "policy"}, None)
         source_client.schedule_root_warm(str(path), {"id": "captain-lane", "version": "1"}, None)
         source_client.schedule_root_warm(path, {"id": "native", "version": "1"}, None)
-        source_client.schedule_graph_warm(GraphSources(thread_ids=("one",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("one",)))
         assert frames(worker) == [
             warm_frame(root_demand(str(path), {"id": "native", "version": "1"}, 4 * 1024 * 1024)),
             warm_frame(root_demand(str(path), {"id": "captain-lane", "version": "1"}, None)),
             warm_frame(root_demand(str(path), {"id": "native", "version": "1"}, None)),
             warm_frame(registered_demand(["one"])),
         ]
-    finally:
-        close(worker)
-
-
-def test_sources_without_members_post_nothing():
-    worker = service()
-    try:
-        worker.schedule_graph_warm(client(), GraphSources(roots=(Path("/sessions"),), active_since_unix_ms=1))
-        assert frames(worker) == []
-        assert worker._warm_demands == {}
     finally:
         close(worker)
 
@@ -237,7 +231,7 @@ def test_demand_is_posted_only_within_its_frame_bound(excess, posted):
     smallest = json.dumps(registered_demand([], direct_paths=["/"]), sort_keys=True, separators=(",", ":"))
     path = "/" + "p" * (MAX_WARM_DEMAND_BYTES - len(smallest) + excess)
     try:
-        worker.schedule_graph_warm(client(), GraphSources(direct_paths=(Path(path),)))
+        post_registered_demand(worker, client(), GraphSources(direct_paths=(Path(path),)))
         assert frames(worker) == ([warm_frame(registered_demand([], direct_paths=[path]))] if posted else [])
     finally:
         close(worker)
@@ -249,10 +243,10 @@ def test_full_demand_table_stays_bounded_and_evicted_scope_posts_again(monkeypat
     at(monkeypatch, 1000)
     try:
         for index in range(MAX_WARM_DEMANDS + 1):
-            worker.schedule_graph_warm(source_client, GraphSources(thread_ids=(str(index),)))
+            post_registered_demand(worker, source_client, GraphSources(thread_ids=(str(index),)))
         assert len(worker._warm_demands) == MAX_WARM_DEMANDS
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("2",)))
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("2",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("0",)))
         assert len(worker._warm_demands) == MAX_WARM_DEMANDS
         assert [frame["snapshot"]["request"]["thread_ids"] for frame in frames(worker)] == [
             *([str(index)] for index in range(MAX_WARM_DEMANDS + 1)),
@@ -268,11 +262,11 @@ def test_renewed_scope_outlives_older_scopes_in_a_full_demand_table(monkeypatch)
     try:
         at(monkeypatch, 1000)
         for index in range(MAX_WARM_DEMANDS):
-            worker.schedule_graph_warm(source_client, GraphSources(thread_ids=(str(index),)))
+            post_registered_demand(worker, source_client, GraphSources(thread_ids=(str(index),)))
         at(monkeypatch, 1000 + WARM_DEMAND_SECONDS)
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",)))
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("new",)))
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("0",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("0",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("new",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("0",)))
         assert len(worker._warm_demands) == MAX_WARM_DEMANDS
         assert [frame["snapshot"]["request"]["thread_ids"] for frame in frames(worker)] == [
             *([str(index)] for index in range(MAX_WARM_DEMANDS)),
@@ -289,7 +283,7 @@ def test_worker_posts_demand_without_stepping_the_warm_itself(monkeypatch, tmp_p
     at(monkeypatch, 1000)
     try:
         worker.schedule_root_warm(source_client, tmp_path / "root.jsonl", {"id": "native", "version": "1"}, None)
-        worker.schedule_graph_warm(source_client, GraphSources(thread_ids=("one",)))
+        post_registered_demand(worker, source_client, GraphSources(thread_ids=("one",)))
         posted = frames(worker)
         assert [frame["op"] for frame in posted] == ["snapshot_warm", "snapshot_warm"]
         assert [set(frame) for frame in posted] == [{"protocol", "op", "snapshot"}] * 2
