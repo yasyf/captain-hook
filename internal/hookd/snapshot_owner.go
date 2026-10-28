@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -27,6 +28,27 @@ type snapshotPending struct {
 	settled   func()
 }
 
+type snapshotOwnerLog struct {
+	writer io.Writer
+	pid    int
+	start  string
+	known  bool
+}
+
+func (l snapshotOwnerLog) failure(at time.Time, cause string, pending int) {
+	fmt.Fprintf(l.writer, "captain: snapshot_owner_failure time=%s pid=%d process_start=%s metadata_known=%t identity_source=point_probe_only cause=%s pending=%d\n", at.UTC().Format(time.RFC3339Nano), l.pid, l.start, l.known, cause, pending)
+}
+
+func (l snapshotOwnerLog) terminal(at time.Time, exit daemonkit.Exit) {
+	fmt.Fprintf(l.writer, "captain: snapshot_owner_exit time=%s pid=%d process_start=%s metadata_known=%t identity_source=point_probe_only exit_code=%d signal=%d\n", at.UTC().Format(time.RFC3339Nano), l.pid, l.start, l.known, exit.Code, exit.Signal)
+}
+
+type snapshotOwnerFailure struct {
+	at      time.Time
+	cause   string
+	pending int
+}
+
 type snapshotOwner struct {
 	cancelGrace time.Duration
 	conn        net.Conn
@@ -37,6 +59,7 @@ type snapshotOwner struct {
 	nextID      uint64
 	closed      bool
 	err         error
+	failure     snapshotOwnerFailure
 }
 
 func handshakeSnapshotOwner(ctx context.Context, conn net.Conn, config json.RawMessage) (*snapshotOwner, error) {
@@ -132,7 +155,7 @@ func (o *snapshotOwner) call(ctx context.Context, request json.RawMessage, callC
 	err = o.write(writeCtx, frame)
 	stopWrite()
 	if err != nil {
-		o.fail(err)
+		o.fail(err, "request_write")
 		return nil, err
 	}
 	select {
@@ -146,7 +169,7 @@ func (o *snapshotOwner) call(ctx context.Context, request json.RawMessage, callC
 			err = o.write(cancelCtx, cancelFrame)
 		}
 		if err != nil {
-			o.fail(err)
+			o.fail(err, "cancellation_write")
 		}
 		go o.awaitCancellation(id, pending.done)
 		return nil, ctx.Err()
@@ -157,33 +180,33 @@ func (o *snapshotOwner) readLoop() {
 	for {
 		frame, err := wireproto.DecodeFrameLimit(o.conn, snapshots.MaxFrameBytes)
 		if err != nil {
-			o.fail(err)
+			o.fail(err, "response_read")
 			return
 		}
 		if frame.ID == 0 || frame.ParentID != 0 || frame.Build != "" || frame.Request != nil || frame.Response != nil || frame.Adopt != nil || len(frame.SnapshotContext)+len(frame.SnapshotConfig) != 0 {
-			o.fail(errors.New("captain: invalid snapshot owner response frame"))
+			o.fail(errors.New("captain: invalid snapshot owner response frame"), "invalid_response_frame")
 			return
 		}
 		result := snapshotResult{}
 		switch frame.Op {
 		case wireproto.OpSnapshotResult:
 			if frame.Error != "" {
-				o.fail(errors.New("captain: snapshot result contains error"))
+				o.fail(errors.New("captain: snapshot result contains error"), "result_contains_error")
 				return
 			}
 			if err := snapshots.Validate("host-response", frame.Snapshot); err != nil {
-				o.fail(err)
+				o.fail(err, "invalid_host_response")
 				return
 			}
 			result.body = frame.Snapshot
 		case wireproto.OpError:
 			if frame.Error == "" || len(frame.Snapshot) != 0 {
-				o.fail(errors.New("captain: invalid snapshot owner error"))
+				o.fail(errors.New("captain: invalid snapshot owner error"), "invalid_error_frame")
 				return
 			}
 			result.err = errors.New(frame.Error)
 		default:
-			o.fail(errors.New("captain: invalid snapshot owner operation"))
+			o.fail(errors.New("captain: invalid snapshot owner operation"), "invalid_response_operation")
 			return
 		}
 		var wrapper struct {
@@ -191,7 +214,7 @@ func (o *snapshotOwner) readLoop() {
 		}
 		if frame.Op == wireproto.OpSnapshotResult {
 			if err := json.Unmarshal(result.body, &wrapper); err != nil {
-				o.fail(err)
+				o.fail(err, "invalid_result_metadata")
 				return
 			}
 		}
@@ -199,7 +222,7 @@ func (o *snapshotOwner) readLoop() {
 		pending, ok := o.pending[frame.ID]
 		if ok && frame.Op == wireproto.OpSnapshotResult && wrapper.Response.ID != pending.requestID {
 			o.mu.Unlock()
-			o.fail(errors.New("captain: snapshot response id mismatch"))
+			o.fail(errors.New("captain: snapshot response id mismatch"), "response_id_mismatch")
 			return
 		}
 		if ok {
@@ -207,7 +230,7 @@ func (o *snapshotOwner) readLoop() {
 		}
 		o.mu.Unlock()
 		if !ok {
-			o.fail(errors.New("captain: unknown snapshot owner request id"))
+			o.fail(errors.New("captain: unknown snapshot owner request id"), "unknown_response_id")
 			return
 		}
 		close(pending.done)
@@ -229,21 +252,22 @@ func (o *snapshotOwner) awaitCancellation(id uint64, done <-chan struct{}) {
 		o.mu.Unlock()
 		return
 	}
-	o.failLocked(errors.New("captain: snapshot owner failed to acknowledge cancellation"))
+	o.failLocked(errors.New("captain: snapshot owner failed to acknowledge cancellation"), "cancellation_ack_timeout")
 }
 
-func (o *snapshotOwner) fail(err error) {
+func (o *snapshotOwner) fail(err error, cause string) {
 	o.mu.Lock()
-	o.failLocked(err)
+	o.failLocked(err, cause)
 }
 
-func (o *snapshotOwner) failLocked(err error) {
+func (o *snapshotOwner) failLocked(err error, cause string) {
 	if o.closed {
 		o.mu.Unlock()
 		return
 	}
 	o.closed, o.err = true, err
 	pending := o.pending
+	o.failure = snapshotOwnerFailure{at: time.Now(), cause: cause, pending: len(pending)}
 	o.pending = make(map[uint64]snapshotPending)
 	o.mu.Unlock()
 	_ = o.conn.Close()
@@ -256,8 +280,17 @@ func (o *snapshotOwner) failLocked(err error) {
 	}
 }
 
+func (o *snapshotOwner) exited(exit daemonkit.Exit, log snapshotOwnerLog) {
+	o.fail(fmt.Errorf("captain: snapshot owner exited: %v", exit), "child_exit")
+	o.mu.Lock()
+	failure := o.failure
+	o.mu.Unlock()
+	log.failure(failure.at, failure.cause, failure.pending)
+	log.terminal(time.Now(), exit)
+}
+
 func (o *snapshotOwner) stop(ctx context.Context) error {
-	o.fail(net.ErrClosed)
+	o.fail(net.ErrClosed, "service_stop")
 	if o.child == nil {
 		return nil
 	}
@@ -482,13 +515,19 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 	if err != nil {
 		return nil, s.manager.stopChild(child, errors.New("captain: snapshot owner pipe"), err)
 	}
+	row, known := newProcSource().probe(child.PID())
+	start := "unknown"
+	if known {
+		start = fmt.Sprintf("%d.%06d", row.StartUnix, row.StartUsec)
+	}
+	log := snapshotOwnerLog{writer: s.manager.logWriter, pid: child.PID(), start: start, known: known}
 	owner, err := handshakeSnapshotOwner(ctx, conn, s.config)
 	if err != nil {
 		_ = conn.Close()
 		return nil, s.manager.stopChild(child, errors.New("captain: snapshot owner handshake"), err)
 	}
 	owner.child = child
-	go func() { exit := <-child.Done(); owner.fail(fmt.Errorf("captain: snapshot owner exited: %v", exit)) }()
+	go func() { owner.exited(<-child.Done(), log) }()
 	return owner, nil
 }
 
