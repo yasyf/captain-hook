@@ -597,9 +597,9 @@ func TestHostFactProducerReadsTheHostEnvironment(t *testing.T) {
 	tests := []struct {
 		name, reuse, want string
 	}{
-		{"unset", "", "capt-hook/" + Build},
+		{"unset", "", "capt-hook"},
 		{"off", "0", ""},
-		{"on", "1", "capt-hook/" + Build},
+		{"on", "1", "capt-hook"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -608,6 +608,18 @@ func TestHostFactProducerReadsTheHostEnvironment(t *testing.T) {
 				t.Fatalf("hostFactProducer = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestHostFactProducerIsStableAcrossBuilds(t *testing.T) {
+	t.Setenv("CAPT_HOOK_PREPARED_FACT_REUSE", "")
+	previous := Build
+	t.Cleanup(func() { Build = previous })
+	for _, build := range []string{"0.0.0", "12.106.13", "12.106.14"} {
+		Build = build
+		if got := hostFactProducer(); got != "capt-hook" {
+			t.Fatalf("hostFactProducer for build %q = %q, want capt-hook", build, got)
+		}
 	}
 }
 

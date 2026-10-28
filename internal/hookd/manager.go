@@ -59,7 +59,7 @@ func hostFactProducer() string {
 	if os.Getenv("CAPT_HOOK_PREPARED_FACT_REUSE") == "0" {
 		return ""
 	}
-	return "capt-hook/" + Build
+	return "capt-hook"
 }
 
 var errWorkerManagerClosed = errors.New("captain: worker manager is closed")
