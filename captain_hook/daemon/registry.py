@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
+import math
+import sys
 import threading
+import time
 from dataclasses import dataclass, replace
+from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from filelock import FileLock
+from pydantic import BaseModel, ConfigDict
+
 from captain_hook import app
 from captain_hook.daemon.tree import DirectoryTreeCache
+from captain_hook.durable import project_key
 from captain_hook.packs import manager, plugins
 from captain_hook.util import reqenv
-from captain_hook.util.caching import LRUDict, StampedCache
+from captain_hook.util.caching import LRUDict, StampedCache, once
+from captain_hook.util.fs import atomic_write
+from captain_hook.util.paths import resolve_state_dir
 
 if TYPE_CHECKING:
     from captain_hook.cli import CliState, ToolReg
@@ -19,6 +30,8 @@ BUILD_RETRIES = 3
 MARKER_TTL = 30.0
 PLUGIN_TTL = 30.0
 MAX_WALK_ROOTS = 32
+ANY_AGE = -math.inf
+LINUX_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
@@ -27,7 +40,6 @@ MarkerStamp = tuple[StatEntry | None, StatEntry | None]
 RosterEntry = StatEntry | int | None
 RosterStamp = tuple[tuple[Path, RosterEntry], ...]
 
-MARKER_WALKS: StampedCache[Path, MarkerStamp, tuple[str, ...]] = StampedCache(MAX_WALK_ROOTS)
 PLUGIN_WALKS: StampedCache[Path, RosterStamp, tuple[PluginTree, ...] | str] = StampedCache(MAX_WALK_ROOTS)
 HOOK_TREES = DirectoryTreeCache(MAX_WALK_ROOTS)
 
@@ -44,9 +56,77 @@ def _hooks_tree(hooks: str, *, fresh: bool = False) -> tuple[HookEntry, ...]:
     return HOOK_TREES.entries(root, fresh=fresh) if (root := Path(hooks)).is_dir() else ()
 
 
-def _language_markers(root: Path, *, fresh: bool) -> tuple[str, ...]:
+class LanguageGeneration(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
+
+    stamp: MarkerStamp
+    computed_at: float
+    languages: tuple[str, ...]
+
+    def current(self, stamp: MarkerStamp, floor: float, now: float) -> bool:
+        return self.stamp == stamp and floor <= self.computed_at and now - self.computed_at < MARKER_TTL
+
+
+@once
+def marker_build() -> str:
+    return installed_version("capt-hook")
+
+
+@once
+def boot_id() -> str:
+    match sys.platform:
+        case "darwin":
+            return darwin_boot_session()
+        case "linux":
+            return LINUX_BOOT_ID.read_text().strip()
+        case platform:
+            raise RuntimeError(f"capt-hook has no boot id source on {platform}")
+
+
+def darwin_boot_session() -> str:
+    libc = ctypes.CDLL(None, use_errno=True)
+    size = ctypes.c_size_t(64)
+    session = ctypes.create_string_buffer(size.value)
+    if libc.sysctlbyname(b"kern.bootsessionuuid", session, ctypes.byref(size), None, ctypes.c_size_t(0)):
+        raise OSError(ctypes.get_errno(), "sysctlbyname(kern.bootsessionuuid) failed")
+    return session.value.decode()
+
+
+def marker_path(root: Path) -> Path:
+    return resolve_state_dir() / "hooks" / "language-markers" / marker_build() / boot_id() / f"{project_key(root)}.json"
+
+
+def marker_lock(path: Path) -> FileLock:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return FileLock(str(path.with_name(f"{path.name}.lock")))
+
+
+def request_stopped() -> bool:
+    return reqenv.abandon_signal().is_set() or reqenv.deadline_within(0)
+
+
+def shared_generation(path: Path, stamp: MarkerStamp, floor: float) -> LanguageGeneration | None:
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return None
+    entry = LanguageGeneration.model_validate_json(text)
+    return entry if entry.current(stamp, floor, time.monotonic()) else None
+
+
+def _language_markers(root: Path, *, since: float) -> tuple[str, ...]:
     stamp = (_stat_entry(root), _stat_entry(root / ".gitignore"))
-    return MARKER_WALKS.get(root, stamp, MARKER_TTL, lambda: tuple(sorted(manager.detect_languages(root))), fresh=fresh)
+    if (hit := shared_generation(path := marker_path(root), stamp, since)) is not None:
+        return hit.languages
+    with marker_lock(path).acquire(cancel_check=request_stopped):
+        if (hit := shared_generation(path, stamp, since)) is not None:
+            return hit.languages
+        computed_at = time.monotonic()
+        entry = LanguageGeneration(
+            stamp=stamp, computed_at=computed_at, languages=tuple(sorted(manager.detect_languages(root)))
+        )
+        atomic_write(path, entry.model_dump_json())
+    return entry.languages
 
 
 def _plugin_trees(root: Path, *, fresh: bool = False) -> tuple[PluginTree, ...] | str:
@@ -88,7 +168,8 @@ class Fingerprint:
 
     @classmethod
     def compute(cls, cli_state: CliState, *, fresh: bool = False) -> Fingerprint:
-        return cls.with_languages(cli_state, _language_markers(cli_state.root, fresh=fresh), fresh=fresh)
+        since = time.monotonic() if fresh else ANY_AGE
+        return cls.with_languages(cli_state, _language_markers(cli_state.root, since=since), fresh=fresh)
 
     @classmethod
     def with_languages(cls, cli_state: CliState, languages: tuple[str, ...], *, fresh: bool) -> Fingerprint:
@@ -120,6 +201,7 @@ class Registry:
         self._build_lock = threading.Lock()
 
     def get(self) -> RegistrySnapshot:
+        requested = time.monotonic()
         if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
             self._reconcile_tools(hit)
             return hit
@@ -128,7 +210,7 @@ class Registry:
                 reqenv.warmed("registry")
                 self._reconcile_tools(hit)
                 return hit
-            snapshot = self._build()
+            snapshot = self._build(requested)
             if snapshot.cacheable:
                 self._cache[snapshot.fingerprint] = snapshot
                 reqenv.warmed("registry")
@@ -144,10 +226,10 @@ class Registry:
 
         reconcile_pack_tools(snapshot.tools)
 
-    def _build(self) -> RegistrySnapshot:
+    def _build(self, requested: float) -> RegistrySnapshot:
         # Retry a discovery whose stable inputs moved under it (a torn mid-rewrite read); serve the latest.
-        for _ in range(BUILD_RETRIES):
-            languages = _language_markers(self._cli_state.root, fresh=True)
+        for attempt in range(BUILD_RETRIES):
+            languages = _language_markers(self._cli_state.root, since=time.monotonic() if attempt else requested)
             before = Fingerprint.with_languages(self._cli_state, languages, fresh=True)
             latest = self._discover_once(before, languages)
             if Fingerprint.with_languages(self._cli_state, languages, fresh=True) == before:

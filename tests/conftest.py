@@ -15,7 +15,7 @@ from loguru import logger
 from captain_hook import decisions, heartbeat
 from captain_hook.app import reset
 from captain_hook.context import READY_BACKENDS, UNSUPPORTED_MODELS
-from captain_hook.daemon.registry import MARKER_WALKS, PLUGIN_WALKS
+from captain_hook.daemon.registry import PLUGIN_WALKS
 from captain_hook.durable import DurableStore
 from captain_hook.orca import run_coordinator
 from captain_hook.review.repo import resolve_repo_key
@@ -109,7 +109,6 @@ def clear_global_caches():
         model_sha256,
         resolve_repo_key,
         _cold_claude_argv,
-        MARKER_WALKS,
         PLUGIN_WALKS,
     )
     for cached in caches:
