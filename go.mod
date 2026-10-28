@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/ebitengine/purego v0.10.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/yasyf/daemonkit v0.35.1
+	github.com/yasyf/daemonkit v0.35.2
 	golang.org/x/sys v0.47.0
 )
 
