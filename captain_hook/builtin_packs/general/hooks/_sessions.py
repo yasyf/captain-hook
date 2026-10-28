@@ -406,12 +406,9 @@ INLINE_COMMANDS = {
     "ps -E -ww -o lstart=,command= -p 31337": (
         f"Thu Jan  1 00:00:00 2026 sleep 60 CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
     ),
-    **{
-        f"ps -E -ww -o lstart=,command= -p {pid}": (
-            f"Thu Jan  1 00:00:00 2026 python3 server.py CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
-        )
-        for pid in (18400, 18500)
-    },
+    "ps -E -ww -o lstart=,command= -p 18400": (
+        f"Thu Jan  1 00:00:00 2026 python3 server.py --config test.json CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
+    ),
     "ps -E -ww -o lstart=,command= -p 18100": (
         "Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json "
         f"CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
