@@ -57,7 +57,7 @@ func fakeSnapshotOwner(t *testing.T, frames chan<- wireproto.Frame) (*snapshotOw
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	owner, err := handshakeSnapshotOwner(ctx, client, config)
+	owner, err := handshakeSnapshotOwner(ctx, client, config, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestSnapshotServiceHandshakesTheHostBudgetsAndFactProducer(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := handshakeSnapshotOwner(ctx, client, service.config); err != nil {
+	if _, err := handshakeSnapshotOwner(ctx, client, service.config, nil); err != nil {
 		t.Fatal(err)
 	}
 	config := <-offered
@@ -431,7 +431,7 @@ func TestSnapshotOwnerWritesTheSingleRequestEncoding(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	owner, err := handshakeSnapshotOwner(ctx, client, config)
+	owner, err := handshakeSnapshotOwner(ctx, client, config, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
