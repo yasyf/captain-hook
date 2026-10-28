@@ -404,6 +404,8 @@ def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungra
             pattern="ownership of pid 18100"
         ),
         guarded(command="kill 18200", session_id=INLINE_SESSION): Block(pattern="an ancestor of a protected process"),
+        guarded(command="kill 18400", session_id=INLINE_SESSION): Allow(),
+        guarded(command="kill 18500", session_id=INLINE_SESSION): Block(pattern="an ancestor of a protected process"),
         guarded(command="kill 18100"): Block(pattern="ownership of pid 18100"),
         guarded(command="kill 18100", commands=DESK_COMMANDS): Allow(),
         guarded(command="kill -9 18100", commands=DESK_COMMANDS): Allow(),
