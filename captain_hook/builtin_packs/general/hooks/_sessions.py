@@ -256,6 +256,10 @@ INLINE_TABLE = (
     "18100     1 18100  501 Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json\n"
     f"18101 18100 18100  501 Thu Jan  1 00:00:00 2026 {INLINE_ORCA_CLI} orchestration worker-list --json\n"
     "18200     1 18200  501 Thu Jan  1 00:00:00 2026 python3 serve-wrapper.py\n"
+    "18400 14575 18400  501 Thu Jan  1 00:00:00 2026 python3 server.py --config test.json\n"
+    "18401 18400 18400  501 Thu Jan  1 00:00:00 2026 claude -p --no-session-persistence curate\n"
+    "18500 14575 18500  501 Thu Jan  1 00:00:00 2026 python3 server.py --config live.json\n"
+    "18501 18500 18500  501 Thu Jan  1 00:00:00 2026 claude -p curate\n"
     "18300     1 18300  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node "
     "/Users/dev/.live-dashboard/0.5.2/server.js\n"
     "18301     1 18301  501 Thu Jan  1 00:00:00 2026 /Users/dev/.local/share/mise/installs/node/22.0.0/bin/node "
@@ -402,6 +406,9 @@ INLINE_COMMANDS = {
     "ps -E -ww -o lstart=,command= -p 31337": (
         f"Thu Jan  1 00:00:00 2026 sleep 60 CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
     ),
+    "ps -E -ww -o lstart=,command= -p 18400": (
+        f"Thu Jan  1 00:00:00 2026 python3 server.py --config test.json CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
+    ),
     "ps -E -ww -o lstart=,command= -p 18100": (
         "Thu Jan  1 00:00:00 2026 python3 desk-runner.py run --config runner.json "
         f"CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
@@ -472,6 +479,13 @@ def is_agent(row: ProcessRow) -> bool:
     return proc.is_claude(row.command.split()) or row.argv0 in {"claude", "codex"}
 
 
+def one_shot(row: ProcessRow) -> bool:
+    tokens = row.command.split()
+    if proc.is_claude(tokens):
+        return not {"-p", "--print"}.isdisjoint(tokens) and "--no-session-persistence" in tokens
+    return row.argv0 == "codex" and "exec" in tokens and "--ephemeral" in tokens
+
+
 def lone_codex_session(row: ProcessRow, table: ProcessTable) -> bool:
     return row.argv0 == "codex" and not any(process_class(below) for below in table.descendants(row.pid))
 
@@ -540,7 +554,7 @@ class Ownership:
         protected = frozenset(
             pid
             for row in table.rows.values()
-            if process_class(row) is not None
+            if process_class(row) is not None and not one_shot(row)
             for pid in (row.pid, *(ancestor.pid for ancestor in table.ancestors(row.pid)))
         )
         return cls(table, table.nearest(start, is_agent), protected)
