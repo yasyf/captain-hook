@@ -80,10 +80,16 @@ runs:
         CAPTAIN_TEST_EVENT_PYTHON: ${{ github.workspace }}/.venv/bin/python
       run: go test ./internal/hookd -run TestMonitorRealPythonWorkerAbandonsTheJudgeBeforeItsSignal -count=1 -v
 
+    - name: Test foreground graph latency in its own process
+      if: runner.os == 'macOS' && inputs.shard-index == '0'
+      shell: bash
+      run: uv run --no-sync pytest -n 0 -s "tests/test_snapshot_client.py::test_foreground_graph_latency_stays_bounded_while_registry_warms"
+
     - name: Test
       shell: bash
       env:
         CAPTAIN_CI_TEST_SHARD_COUNT: ${{ inputs.shard-count }}
         CAPTAIN_CI_TEST_SHARD_INDEX: ${{ inputs.shard-index }}
         CAPTAIN_CI_TEST_WORKERS: ${{ inputs.workers }}
-      run: uv run --no-sync pytest -n "$CAPTAIN_CI_TEST_WORKERS" --durations=20
+        CAPTAIN_CI_TEST_DESELECT: ${{ runner.os == 'macOS' && inputs.shard-index == '0' && 'tests/test_snapshot_client.py::test_foreground_graph_latency_stays_bounded_while_registry_warms' || '' }}
+      run: uv run --no-sync pytest -n "$CAPTAIN_CI_TEST_WORKERS" --durations=20 ${CAPTAIN_CI_TEST_DESELECT:+--deselect "$CAPTAIN_CI_TEST_DESELECT"}

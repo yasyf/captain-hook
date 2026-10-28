@@ -12,15 +12,28 @@ nothing.
 from __future__ import annotations
 
 import sys
+import time
 
 import pytest
 
-from bench.measure import Command, Measurement, Window, measure
+from bench.measure import Command, Measurement, Window, measure, spawn
 
 BUDGET_S = 60.0
 
 # The counter is a Darwin sysctl; there is no unprivileged equivalent to fall back to.
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS exec counter")
+
+
+def spanned(monkeypatch: pytest.MonkeyPatch, label: str, argv: tuple[str, ...]) -> tuple[Measurement, list[float]]:
+    spans: list[float] = []
+
+    def timed_spawn(command: Command, stdin: int, sink: int) -> None:
+        started = time.perf_counter_ns()
+        spawn(command, stdin, sink)
+        spans.append((time.perf_counter_ns() - started) / 1e6)
+
+    monkeypatch.setattr("bench.measure.spawn", timed_spawn)
+    return measure(label, Command(argv), budget_s=BUDGET_S), spans
 
 
 @pytest.mark.parametrize(
@@ -41,14 +54,19 @@ def test_harness_counts_execs_correctly(argv: tuple[str, ...], expected: int) ->
     )
 
 
-def test_harness_detects_a_planted_regression() -> None:
-    clean = measure("clean", Command(("/bin/bash", "-c", "/usr/bin/true")), budget_s=BUDGET_S)
-    extra = measure("extra-exec", Command(("/bin/bash", "-c", "/usr/bin/true; /usr/bin/true")), budget_s=BUDGET_S)
-    planted = measure("planted", Command(("/bin/bash", "-c", "/bin/sleep 0.005; /usr/bin/true")), budget_s=BUDGET_S)
+def test_harness_detects_a_planted_regression(monkeypatch: pytest.MonkeyPatch) -> None:
+    clean, clean_spans = spanned(monkeypatch, "clean", ("/bin/bash", "-c", "/usr/bin/true"))
+    extra, extra_spans = spanned(monkeypatch, "extra-exec", ("/bin/bash", "-c", "/usr/bin/true; /usr/bin/true"))
+    planted, planted_spans = spanned(monkeypatch, "planted", ("/bin/bash", "-c", "/bin/sleep 0.005; /usr/bin/true"))
     assert clean.execs == 2
     assert extra.execs == clean.execs + 1
     assert planted.execs == clean.execs + 1
-    assert planted.ms_min - extra.ms_min >= 3
+    for measurement, spans in ((clean, clean_spans), (extra, extra_spans), (planted, planted_spans)):
+        assert len(spans[1:]) == len(measurement.active)
+        assert not [
+            (window.ms, span) for window, span in zip(measurement.active, spans[1:], strict=True) if window.ms < span
+        ]
+    assert not [span for span in planted_spans if span < 5]
 
 
 def test_harness_refuses_a_count_no_quiet_window_confirmed() -> None:
