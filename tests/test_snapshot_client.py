@@ -744,6 +744,51 @@ def test_a_failed_resume_records_its_request_context_without_private_values(logc
         assert value not in logcap.text
 
 
+def test_a_retained_limit_resume_raises_that_refusal_without_replaying_its_consumed_cursor(logcap):
+    cursor = "consumed-resume-cursor"
+    consumed = set()
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        match request["operation"]:
+            case "acquire":
+                return response(request, {"kind": "strings", "values": ["first"]}, cursor=cursor)
+            case "resume" if request["cursor"] in consumed:
+                return {
+                    "schema": HOST_SCHEMA,
+                    "response": failure(request["id"], "stale_cursor", "cursor expired or belongs to another owner"),
+                }
+            case "resume":
+                consumed.add(request["cursor"])
+                usage = {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096}
+                return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy", usage)}
+            case _:
+                pytest.fail("unexpected snapshot request")
+
+    client = SnapshotClient(exchange, foreground_seconds=5)
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete) as caught:
+        client.acquire("/tmp/root.jsonl")
+
+    assert (caught.value.status, caught.value.reason) == ("retained_limit", "busy")
+    assert [request["operation"] for request in requests] == ["acquire", "resume"]
+    assert [request for request in requests if cursor in (request.get("cursor"), request.get("token"))] == [requests[1]]
+    assert not client._leases
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot request failed")]
+    for field in (
+        "status='retained_limit'",
+        "operation='resume'",
+        f"request_id='{requests[1]['id']}'",
+        "'source_bytes_read': 7",
+        "'prepared_cache_bytes_read': 4096",
+        "'requests_failed': 1",
+    ):
+        assert field in record.message
+
+
 def test_exitstack_lease_cleanup_retries_retained_limit():
     requests = []
 
@@ -1056,6 +1101,64 @@ def test_classifier_callback_failure_releases_its_cursor(monkeypatch):
         client.classify(session, callback, {"id": "configured", "version": "fixture"})
     assert cleanup[0]["kind"] == "cursor"
     session.release()
+
+
+def test_a_retained_limit_classifier_submit_raises_that_refusal_without_replaying_its_consumed_cursor(monkeypatch):
+    from tests.test_classifiers import user_event
+
+    module = SimpleNamespace(
+        decode_projection=lambda schema, records, *, tool_registry: [user_event("message")],
+        SnapshotIncomplete=type("SnapshotIncomplete", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "cc_transcript.snapshots", module)
+    cursor = "consumed-classifier-cursor"
+    consumed = set()
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        match request["operation"]:
+            case "prepare_classifier":
+                return response(
+                    request,
+                    {
+                        "kind": "classification",
+                        "record_schema": "cc-transcript.event/1",
+                        "records_json": ["owned fixture"],
+                        "event_start": 0,
+                    },
+                    cursor=cursor,
+                )
+            case "submit_classifier" if request["cursor"] in consumed:
+                return {
+                    "schema": HOST_SCHEMA,
+                    "response": failure(request["id"], "stale_cursor", "classifier cursor expired or was consumed"),
+                }
+            case "submit_classifier":
+                consumed.add(request["cursor"])
+                return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+            case "release":
+                return response(request, {"kind": "released", "released": True})
+            case _:
+                pytest.fail("unexpected snapshot request")
+
+    client = SnapshotClient(exchange)
+    session = RemoteSession(
+        client, Lease(client, description()), Path("/tmp/fixture.jsonl"), {"id": "native", "version": "1"}
+    )
+
+    with pytest.raises(EvidenceIncomplete) as caught:
+        client.classify(session, lambda _: True, {"id": "configured", "version": "fixture"})
+    session.release()
+
+    assert (caught.value.status, caught.value.reason) == ("retained_limit", "busy")
+    assert [request["operation"] for request in requests] == ["prepare_classifier", "submit_classifier", "release"]
+    assert [request for request in requests if cursor in (request.get("cursor"), request.get("token"))] == [requests[1]]
+    assert requests[1]["labels"] == [True]
+    assert (requests[2]["kind"], requests[2]["token"]) == ("lease", "lease")
+    assert session.lease.released
+    assert not client._leases
 
 
 def test_tool_registry_is_captured_once_and_cannot_change_during_preparation():
