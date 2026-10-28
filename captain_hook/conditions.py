@@ -388,9 +388,11 @@ class EditedSource(CustomCondition):
             if isinstance(transcript, RemoteSession)
             else (transcript.predicate_inputs,)
         )
-        return any(has_source_edit(window) for window in root_inputs) or any(
-            has_source_edit(window) for window in transcript.deep_inputs()
-        )
+        if any(has_source_edit(window) for window in root_inputs):
+            return True
+        if isinstance(transcript, RemoteSession):
+            return transcript.any_deep_input(has_source_edit)
+        return any(has_source_edit(window) for window in transcript.deep_inputs())
 
 
 class Redirects(CustomCommandLineCondition):

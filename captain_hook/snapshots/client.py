@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import accumulate, islice
@@ -25,6 +25,7 @@ from capt_hook_client.client import HOST
 if TYPE_CHECKING:
     from cc_transcript.activity import ToolUse
     from cc_transcript.ids import ToolUseId
+    from cc_transcript.query import PredicateInputs
     from cc_transcript.render import Budget
 
 CORE_SCHEMA = "cc-transcript.snapshot/1"
@@ -507,6 +508,11 @@ class SnapshotClient:
                         usage=result.get("usage"),
                     ).info("snapshot request failed")
                     raise EvidenceIncomplete(str(status), str(result.get("reason")))
+                if status == "ok":
+                    if result.get("complete") is not True or cursor is not None:
+                        raise SnapshotProtocolError("complete snapshot result has invalid continuation")
+                elif not isinstance(cursor, str) or not cursor:
+                    raise EvidenceIncomplete("incomplete", str(result.get("reason")))
                 if (data := result.get("data")) is not None:
                     if not isinstance(data, dict):
                         raise SnapshotProtocolError("snapshot data must be an object")
@@ -515,11 +521,7 @@ class SnapshotClient:
                         raise EvidenceIncomplete("output_limit", "snapshot result exceeds cumulative projection bound")
                     yield data
                 if status == "ok":
-                    if result.get("complete") is not True or cursor is not None:
-                        raise SnapshotProtocolError("complete snapshot result has invalid continuation")
                     return
-                if not isinstance(cursor, str) or not cursor:
-                    raise EvidenceIncomplete("incomplete", str(result.get("reason")))
                 operation, arguments = "resume", {"cursor": cursor}
                 result = self.call("resume", cursor=cursor)
                 cursor = result.get("cursor")
@@ -974,18 +976,21 @@ class PreparedGraphEvidence:
     def answer(
         self, session: RemoteSession, query: Mapping[str, object], *, observers: Sequence[Mapping[str, object]] = ()
     ) -> list[dict[str, Any]]:
+        return list(self._answer_pages(session, query, observers=observers))
+
+    def _answer_pages(
+        self, session: RemoteSession, query: Mapping[str, object], *, observers: Sequence[Mapping[str, object]] = ()
+    ) -> Iterator[dict[str, Any]]:
         handle = self.require(session)
         try:
-            return list(
-                session.client.pages(
-                    "query_graph",
-                    handle=handle.wire(),
-                    selectors=[dict(selector) for selector in session.selectors],
-                    query=dict(query),
-                    deadline_unix_ms=graph_deadline(session.client),
-                    limits=graph_limits(),
-                    **({"observers": [dict(observer) for observer in observers]} if observers else {}),
-                )
+            yield from session.client.pages(
+                "query_graph",
+                handle=handle.wire(),
+                selectors=[dict(selector) for selector in session.selectors],
+                query=dict(query),
+                deadline_unix_ms=graph_deadline(session.client),
+                limits=graph_limits(),
+                **({"observers": [dict(observer) for observer in observers]} if observers else {}),
             )
         except EvidenceIncomplete as exc:
             if exc.status == "stale_handle":
@@ -995,6 +1000,38 @@ class PreparedGraphEvidence:
                         self.outcome = None
                         self.lapses += 1
                         self.client._graphs.discard(self)
+            raise
+
+    def any_input(self, session: RemoteSession, predicate: Callable[[PredicateInputs], bool]) -> bool:
+        from cc_transcript.snapshots import SnapshotIncomplete, decode_projection
+
+        def attempt() -> bool:
+            with closing(self._answer_pages(session, {"kind": "deep_predicate_inputs", "order": "forward"})) as pages:
+                for data in pages:
+                    if data.get("kind") != "records":
+                        raise SnapshotProtocolError("predicate inputs returned an unexpected projection")
+                    try:
+                        inputs = decode_projection(
+                            data["record_schema"], data["records_json"], tool_registry=session.client.tool_registry()
+                        )
+                    except SnapshotIncomplete as exc:
+                        raise EvidenceIncomplete(exc.status, exc.reason) from exc
+                    if any(predicate(window) for window in inputs):
+                        return True
+            return False
+
+        try:
+            try:
+                return attempt()
+            except EvidenceIncomplete as exc:
+                if exc.status != "stale_handle":
+                    raise
+                return attempt()
+        except EvidenceIncomplete as exc:
+            if exc.status in {"incomplete", "deadline"}:
+                session.client.schedule_root_warm(session.path, session.classifier, session.tail_bytes)
+            if exc.status in {"stale_handle", "stale_cursor"}:
+                raise GraphEvidenceExpired(exc.status, exc.reason) from exc
             raise
 
     def query_pages(
@@ -1450,6 +1487,9 @@ class RemoteSession:
 
     def deep_inputs(self) -> Iterator[Any]:
         yield from self.query({"kind": "deep_predicate_inputs", "order": "forward"})
+
+    def any_deep_input(self, predicate: Callable[[PredicateInputs], bool]) -> bool:
+        return self.graph.any_input(self, predicate)
 
     def has_tool(self, name: str, *, subagents: bool = True) -> bool:
         return self.query(tool_predicate("has_tool", name, subagents=subagents))
