@@ -8,7 +8,9 @@ state dir, so the throttle stamp never leaks across tests.
 
 from __future__ import annotations
 
+import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -22,6 +24,11 @@ from captain_hook.update import updater
 @pytest.fixture(autouse=True)
 def homebrew_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
+
+
+@pytest.fixture(autouse=True)
+def alias_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(updater, "physical", lambda candidate: candidate)
 
 
 @pytest.fixture
@@ -60,11 +67,17 @@ def stub_converging(monkeypatch: pytest.MonkeyPatch, before: str, after: str, *,
     return host
 
 
-def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any) -> list[list[str]]:
+def record_brew(
+    monkeypatch: pytest.MonkeyPatch, returncode: Any, *, candidate: str | None = None, kegs: tuple[str, ...] = ()
+) -> list[list[str]]:
     calls: list[list[str]] = []
 
     def fake_run(argv: list[str], **_: Any) -> SimpleNamespace:
         calls.append(argv)
+        if argv == VERSION and candidate is not None:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"schema": 1, "build": candidate}) + "\n", stderr="")
+        if argv == LIST and kegs:
+            return SimpleNamespace(returncode=0, stdout=f"captain-hook {' '.join(kegs)}\n", stderr="")
         prefix = argv[:2] == PREFIX[:2]
         rc = 0 if prefix else returncode(argv) if callable(returncode) else returncode
         return SimpleNamespace(returncode=rc, stdout=CELLAR if prefix else "", stderr="brew error")
@@ -74,11 +87,15 @@ def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any) -> list[list[s
 
 
 CELLAR = "/opt/homebrew/opt/captain-hook"
+REAL_PHYSICAL = updater.physical
 UPGRADE = ["brew", "upgrade", "--formula", updater.FORMULA]
 REINSTALL = ["brew", "reinstall", "--formula", updater.FORMULA]
 INSTALL = ["brew", "install", "--formula", updater.FORMULA]
+LIST = ["brew", "list", "--versions", updater.FORMULA]
 PREFIX = ["brew", "--prefix", updater.FORMULA]
 PACKAGE_INSTALL = [f"{CELLAR}/{updater.CELLAR_HOST}", "package-install"]
+VERSION = [f"{CELLAR}/{updater.CELLAR_HOST}", "version"]
+ESCALATED_WITHOUT_INSTALL = [UPGRADE, PREFIX, VERSION, REINSTALL, PREFIX, VERSION, INSTALL, PREFIX, VERSION]
 
 
 def lanes(calls: list[list[str]]) -> list[list[str]]:
@@ -112,6 +129,114 @@ def test_run_update_upgrades_when_host_is_older(
     assert notes == [
         {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 2.0.0."}
     ]
+
+
+def test_run_update_settles_without_package_install_once_the_host_reaches_the_release(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v22.0.0")
+    calls = record_brew(monkeypatch, 0, candidate="22.0.0", kegs=("18.0.0", "19.0.0", "21.0.0", "22.0.0"))
+    stub_converging(monkeypatch, "21.0.0", "22.0.0", on="upgrade")
+
+    updater.run_update()
+
+    assert calls == [UPGRADE]
+    assert notes == [
+        {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 22.0.0."}
+    ]
+
+
+@pytest.mark.parametrize("host", ["22.0.0", "21.0.0"], ids=["host-equals-candidate", "host-older-than-candidate"])
+def test_run_update_never_package_installs_a_candidate_short_of_the_release(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]], host: str
+) -> None:
+    stub_release(monkeypatch, "v23.0.0")
+    stub_installed(monkeypatch, host)
+    calls = record_brew(monkeypatch, 0, candidate="22.0.0")
+
+    updater.run_update()
+
+    assert calls == ESCALATED_WITHOUT_INSTALL
+    assert [n["kind"] for n in notes] == ["update_failed"]
+    assert updater.escalations("v23.0.0") == 1
+
+
+@pytest.mark.parametrize(
+    ("returncode", "candidate"),
+    [
+        pytest.param(0, None, id="empty-reply"),
+        pytest.param(lambda argv: 1 if argv == VERSION else 0, None, id="version-exits-nonzero"),
+        pytest.param(0, "2.0.0-rc.1", id="unparseable-build"),
+    ],
+)
+def test_run_update_never_package_installs_a_candidate_whose_version_is_unread(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]], returncode: Any, candidate: str | None
+) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    calls = record_brew(monkeypatch, returncode, candidate=candidate)
+
+    updater.run_update()
+
+    assert calls == ESCALATED_WITHOUT_INSTALL
+    assert [n["kind"] for n in notes] == ["update_failed"]
+
+
+def test_run_update_package_installs_the_candidate_that_reaches_the_release(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+
+    def landing(argv: list[str]) -> int:
+        if argv == PACKAGE_INSTALL:
+            stub_installed(monkeypatch, "2.0.0")
+        return 0
+
+    calls = record_brew(monkeypatch, landing, candidate="2.0.0")
+
+    updater.run_update()
+
+    assert calls == [UPGRADE, PREFIX, VERSION, PACKAGE_INSTALL]
+    assert notes == [
+        {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 2.0.0."}
+    ]
+
+
+def test_run_update_versions_and_installs_the_keg_it_resolved_while_the_alias_repoints(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]], tmp_path: Path
+) -> None:
+    kegs = {version: tmp_path / "Cellar" / version for version in ("22.0.0", "23.0.0")}
+    for keg in kegs.values():
+        (keg / updater.CELLAR_HOST).parent.mkdir(parents=True)
+        (keg / updater.CELLAR_HOST).touch()
+    alias = tmp_path / "opt"
+    alias.symlink_to(kegs["23.0.0"])
+    pinned = str((kegs["23.0.0"] / updater.CELLAR_HOST).resolve())
+    monkeypatch.setattr(updater, "physical", REAL_PHYSICAL)
+    stub_release(monkeypatch, "v23.0.0")
+    stub_installed(monkeypatch, "22.0.0")
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_: Any) -> SimpleNamespace:
+        calls.append(argv)
+        match argv:
+            case [_, "--prefix", _]:
+                return SimpleNamespace(returncode=0, stdout=f"{alias}\n", stderr="")
+            case [_, "version"]:
+                alias.unlink()
+                alias.symlink_to(kegs["22.0.0"])
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"schema": 1, "build": "23.0.0"}), stderr="")
+            case [_, "package-install"]:
+                stub_installed(monkeypatch, "23.0.0")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    updater.run_update()
+
+    assert calls == [UPGRADE, PREFIX, [pinned, "version"], [pinned, "package-install"]]
+    assert [n["kind"] for n in notes] == ["update_installed"]
 
 
 def test_run_update_escalates_when_upgrade_exits_clean_without_converging(
@@ -384,27 +509,24 @@ def test_a_converged_host_drops_the_deferral(monkeypatch: pytest.MonkeyPatch) ->
 def test_run_update_deploys_the_cellar_after_every_brew_lane(
     monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
 ) -> None:
-    """PIN: brew only fills the Cellar; ``package-install`` is what lands and activates the app.
-
-    The formula cannot run it — Homebrew's post-install sandbox denies the
-    ``~/Library/LaunchAgents`` write — so the updater and ``capt-hook helper install`` share
-    :func:`~captain_hook.update.updater.deploy` and run it outside that sandbox.
-    """
     stub_release(monkeypatch, "v2.0.0")
     stub_installed(monkeypatch, "1.0.0")
-    calls = record_brew(monkeypatch, 0)
+    calls = record_brew(monkeypatch, 0, candidate="2.0.0")
 
     updater.run_update()
 
     assert calls == [
         UPGRADE,
         PREFIX,
+        VERSION,
         PACKAGE_INSTALL,
         REINSTALL,
         PREFIX,
+        VERSION,
         PACKAGE_INSTALL,
         INSTALL,
         PREFIX,
+        VERSION,
         PACKAGE_INSTALL,
     ]
     assert [n["kind"] for n in notes] == ["update_failed"]

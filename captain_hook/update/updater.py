@@ -5,7 +5,7 @@ Wired as a sibling of the review dispatcher on the async SessionStart path
 the dispatch only guards, throttles via the shared :func:`_claim_stamp`, and detaches
 ``capt-hook update run``. The detached child (:func:`run_update`) compares the latest
 ``yasyf/captain-hook`` release against the installed signed host and, when the host is older,
-runs ``brew upgrade --formula`` and then :func:`deploy` — escalating to an exact formula
+runs ``brew upgrade --formula`` and then :func:`converge` — escalating to an exact formula
 reinstall/install to repair a broken Cellar — then posts a success or failure banner. Every
 failure is a notification or a breadcrumb; nothing here raises into the dispatch or sets an
 exit code.
@@ -26,6 +26,7 @@ interactive session picks that deferral up and converges.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -129,15 +130,29 @@ def deploy(target: str, *, stream: bool = False) -> str | None:
     host ping is announced before it runs, and every failure that lands in the update log is printed
     to stderr as well.
     """
+    if (candidate := cellar_host(stream=stream)) is None:
+        return None
+    return land(candidate, target, stream=stream)
+
+
+def cellar_host(*, stream: bool = False) -> Path | None:
     try:
         prefix = subprocess.run(
             ["brew", "--prefix", FORMULA], capture_output=True, text=True, timeout=BREW_TIMEOUT, check=False
         )
-        if prefix.returncode != 0:
-            breadcrumb(exit_reason("brew --prefix", prefix), echo=stream)
-            return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        breadcrumb(f"package-install errored: {exc}", echo=stream)
+        return None
+    if prefix.returncode != 0:
+        breadcrumb(exit_reason("brew --prefix", prefix), echo=stream)
+        return None
+    return Path(prefix.stdout.strip()) / CELLAR_HOST
+
+
+def land(candidate: Path, target: str, *, stream: bool = False) -> str | None:
+    try:
         landed = subprocess.run(
-            [str(Path(prefix.stdout.strip()) / CELLAR_HOST), "package-install"],
+            [str(candidate), "package-install"],
             capture_output=not stream,
             text=True,
             timeout=BREW_TIMEOUT,
@@ -151,6 +166,57 @@ def deploy(target: str, *, stream: bool = False) -> str | None:
     if stream:
         print("Waiting for the host to answer a ping...", file=sys.stderr)
     return host_at_least(target)
+
+
+def candidate_build(candidate: Path) -> str | None:
+    try:
+        reported = subprocess.run(
+            [str(candidate), "version"], capture_output=True, text=True, timeout=BREW_TIMEOUT, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        breadcrumb(f"candidate version errored: {exc}")
+        return None
+    if reported.returncode != 0:
+        breadcrumb(exit_reason("candidate version", reported))
+        return None
+    try:
+        reply = json.loads(reported.stdout)
+    except ValueError:
+        reply = None
+    match reply:
+        case {"schema": 1, "build": str(build)}:
+            return build
+        case _:
+            breadcrumb(f"candidate version unreadable: {reported.stdout.strip()[:200]}")
+            return None
+
+
+def physical(candidate: Path) -> Path | None:
+    try:
+        return candidate.resolve(strict=True)
+    except OSError as exc:
+        breadcrumb(f"candidate path unresolved: {exc}")
+        return None
+
+
+def converge(target: str) -> str | None:
+    if (host := host_at_least(target)) is not None:
+        return host
+    if (
+        (alias := cellar_host()) is None
+        or (candidate := physical(alias)) is None
+        or (build := candidate_build(candidate)) is None
+    ):
+        breadcrumb(f"package-install skip: no readable Cellar candidate for {target}")
+        return None
+    try:
+        reaches = version_tuple(build) >= version_tuple(target)
+    except ValueError:
+        reaches = False
+    if not reaches:
+        breadcrumb(f"package-install skip: Cellar candidate {build} not proven to reach {target}")
+        return None
+    return land(candidate, target)
 
 
 def pending() -> str | None:
@@ -243,13 +309,13 @@ def run_update(*, apply: bool = True) -> None:
         breadcrumb(f"update stalled: host {installed} short of {latest} after {spent} escalations")
         return
     brew(["upgrade", "--formula", FORMULA])
-    if (host := deploy(latest)) is not None:
+    if (host := converge(latest)) is not None:
         settled(installed, host)
         return
     record_escalation(latest, spent + 1)
     for lane in ("reinstall", "install"):
         brew([lane, "--formula", FORMULA])
-        if (host := deploy(latest)) is not None:
+        if (host := converge(latest)) is not None:
             settled(installed, host)
             return
     breadcrumb(f"update failed: host {installed} did not reach {latest}")

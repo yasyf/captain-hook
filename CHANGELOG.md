@@ -624,6 +624,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The automatic update no longer re-installs a host build that cannot reach the release.** It
+  settles without installing when the host already runs the release, and otherwise installs the
+  Homebrew build only when that build's own `version` reports the release or newer.
+
 - **A transcript lease that expires before a retain no longer fails the whole dispatch.** A lease
   lives until the foreground deadline it was acquired under. Once a mandatory hook widened the
   window to 15 s, a sibling hook that retained the request's transcript after that first deadline
