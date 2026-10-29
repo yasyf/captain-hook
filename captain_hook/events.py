@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, overload
@@ -147,6 +147,7 @@ class BaseHookEvent:
 
     _raw: dict[str, Any]
     ctx: HookContext
+    _resources: dict[tuple[type, int], object] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
     def event(self) -> Event:
