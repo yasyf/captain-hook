@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from collections.abc import Sequence
@@ -12,6 +14,21 @@ from typing import Any, cast, overload
 
 from captain_hook.util import reqenv
 from captain_hook.util.caching import ttl_cache
+
+type StatStamp = tuple[int, int, int, int, int, int]
+type DirectoryStamp = tuple[StatStamp, StatStamp | None]
+
+
+def stat_stamp(value: os.stat_result) -> StatStamp:
+    return value.st_dev, value.st_ino, value.st_mode, value.st_mtime_ns, value.st_ctime_ns, value.st_size
+
+
+def directory_stamp(path: Path, *, root: bool) -> DirectoryStamp:
+    entry = path.lstat()
+    target = path.stat() if root and stat.S_ISLNK(entry.st_mode) else None
+    if not stat.S_ISDIR((target or entry).st_mode):
+        raise NotADirectoryError(errno.ENOTDIR, "hook tree directory changed type", str(path))
+    return stat_stamp(entry), stat_stamp(target) if target is not None else None
 
 
 def resolve_binary(name: str, *, extra_dirs: Sequence[Path] = ()) -> str | None:
