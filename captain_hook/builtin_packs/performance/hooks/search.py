@@ -36,10 +36,16 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Scalar
 
-POOLS = (".claude/worktrees", ".orca/workspaces")
+POOLS = (".claude/worktrees", ".orca/workspaces", "repos/claude/worktrees")
 HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2}
-POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in POOLS), unresolved=True)
-POOL_MEMBERS = PathMatches(tuple(f"**/{pool}/*" for pool in POOLS))
+POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in HOME_POOL_LEVELS), unresolved=True)
+POOL_MEMBERS = PathMatches(
+    tuple(
+        f"**/{pool}{'/*' * level}"
+        for pool, levels in HOME_POOL_LEVELS.items()
+        for level in range(1, levels + 1)
+    )
+)
 BROAD_ROOTS = PathMatches(
     (
         "/",
@@ -956,6 +962,13 @@ hook(
         Input(command="rg --type-add 'mine:*' -tmine needle ~"): Block(),
         Input(command="rg -e needle -e other ~"): Block(),
         Input(command="rg needle ~/.claude/worktrees/captain-hook"): Block(),
+        Input(command="rg needle ~/repos/claude/worktrees"): Block(),
+        Input(command="rg needle ~/repos/claude/worktrees/captain-hook"): Block(),
+        Input(command="rg needle ~/repos/orca/workspaces"): Block(),
+        Input(command="rg needle ~/repos/orca/workspaces/7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"): Block(),
+        Input(
+            command="rg needle ~/repos/orca/workspaces/7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17/captain-hook"
+        ): Block(),
         Input(command="ugrep -rn needle ~/.orca/workspaces/captain-hook"): Block(),
         Input(command="rg needle src; rg needle /", cwd="/repo"): Block(),
         Input(command='rg needle "$ROOT"'): Block(),
@@ -1089,6 +1102,9 @@ hook(
         Input(command="cd ~/.claude && rg --files"): Block(),
         Input(command="rg --files .claude/worktrees", cwd="/repo"): Block(),
         Input(command="rg --files -g AGENTS.md .claude/worktrees/stale", cwd="/repo"): Block(),
+        Input(command="rg --files ~/repos/claude/worktrees"): Block(),
+        Input(command="rg --files -g AGENTS.md ~/repos/claude/worktrees/captain-hook"): Block(),
+        Input(command="rg --files ~/repos/claude/worktrees/captain-hook/lane"): Allow(),
         Input(command="rg --files ~/repos/orca/workspaces"): Block(),
         Input(command="rg --files ~/repos/orca/workspaces/7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"): Block(),
         Input(
