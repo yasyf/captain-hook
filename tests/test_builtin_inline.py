@@ -17,7 +17,11 @@ from pathlib import Path
 import pytest
 
 import captain_hook
+from captain_hook import Event
+from captain_hook.dispatch import dispatch
 from captain_hook.hook_lint import lint_paths
+from captain_hook.util.builds import LOAD_PER_CORE
+from tests.helpers import make_pre_tool_event
 
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
@@ -54,3 +58,32 @@ def test_builtin_pack_inline_tests(dotted: str) -> None:
     load_builtin_module(dotted)
 
     assert_inline_tests(dotted)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("go build ./next/...", id="bare-wildcard-build"),
+        pytest.param(
+            "/Users/dev/.local/share/mise/installs/go/1.26.9/bin/go build ./...", id="absolute-wildcard-build"
+        ),
+        pytest.param("go vet ./next/internal/iris/", id="bare-vet"),
+        pytest.param(
+            "env CGO_ENABLED=1 timeout 600 /Users/dev/.local/share/mise/installs/go/1.26.9/bin/go vet ./...",
+            id="absolute-cgo-vet",
+        ),
+    ],
+)
+def test_pressure_admission_blocks_repeated_local_builds(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(LOAD_PER_CORE, "0")
+    load_builtin_module("captain_hook.builtin_packs.performance.hooks.admission")
+
+    for _ in range(2):
+        result = dispatch(
+            Event.PreToolUse, make_pre_tool_event(tool_input={"command": command}), session_dir=tmp_path
+        )
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "CI builds and tests" in result["hookSpecificOutput"]["permissionDecisionReason"]
