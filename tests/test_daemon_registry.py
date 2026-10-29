@@ -332,6 +332,22 @@ def test_shared_language_generation_expires_at_the_ttl_without_restamping(
     assert generation(project).computed_at == 1_000.0 + registry.MARKER_TTL
 
 
+def test_complete_language_generation_renews_without_a_project_walk(
+    project: CliState, clock: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for relative in ("services/api/go.mod", "packages/lib/pyproject.toml"):
+        (marker := project.root / relative).parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("x\n")
+    assert registry._language_markers(project.root, since=registry.ANY_AGE) == ("go", "python")
+    walked: list[Path] = []
+    real = manager.os.walk
+    monkeypatch.setattr(manager.os, "walk", lambda root: (walked.append(root), real(root))[1])
+    clock[0] += registry.MARKER_TTL
+    assert registry._language_markers(project.root, since=registry.ANY_AGE) == ("go", "python")
+    assert walked == []
+    assert generation(project).computed_at == clock[0]
+
+
 def test_root_and_root_gitignore_stamps_invalidate_inside_the_ttl(
     project: CliState, clock: list[float], walks: list[Path]
 ) -> None:
