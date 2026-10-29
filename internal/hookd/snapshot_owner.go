@@ -450,12 +450,12 @@ func (s *snapshotService) call(ctx context.Context, request json.RawMessage, cal
 		s.warm.charge(decodeWarmReply(body, err))
 		return body, err
 	}
-	slots, queue := s.reviewSlots, s.reviewQueue
-	if callContext.Admission == "hook" {
-		slots, queue = s.hookSlots, s.hookQueue
-	}
-	if metadata.Operation == "release" {
+	slots, queue := s.hookSlots, s.hookQueue
+	switch {
+	case metadata.Operation == "release":
 		slots, queue = s.releaseSlots, s.releaseQueue
+	case metadata.Operation == "prepare_review", metadata.Operation == "prepare_corrections", callContext.Admission != "hook":
+		slots, queue = s.reviewSlots, s.reviewQueue
 	}
 	return s.admit(ctx, slots, queue, request, callContext)
 }
