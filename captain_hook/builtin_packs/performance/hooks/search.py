@@ -734,7 +734,7 @@ def grep_searches_broadly(arguments: Arguments) -> bool:
     return recursive(arguments) and (
         not (roots := named_roots(arguments)).complete
         or any(
-            target.has_glob or not ((path := target.path) is not None and path.is_file())
+            target.value != "-" and (target.has_glob or not ((path := target.path) is not None and path.is_file()))
             for target in roots or (Target(".", ".", arguments.cwd),)
         )
     )
@@ -961,6 +961,7 @@ hook(
         Input(command="grep -rn --include='*' needle infra/", cwd="/repo"): Block(),
         Input(command="grep -r -e needle internal", cwd="/repo"): Block(),
         Input(command="grep -rn needle internal/f*", cwd="/repo"): Block(),
+        Input(command="grep -rn needle - infra/", cwd="/repo"): Block(),
         Input(command="grep -Rni needle ~"): Block(),
         Input(command="grep -d recurse needle /"): Block(),
         Input(command="grep -rn -- needle /tmp/scratch-lane"): Block(),
@@ -1030,6 +1031,7 @@ hook(
         Input(command="git grep -nC 3 needle -- .", cwd="/Users/alice"): Block(),
         Input(command="git grep -nOvim needle -- src", cwd="/Users/alice"): Block(),
         Input(command="grep -n needle explicit.log", cwd="/repo"): Allow(),
+        Input(command="grep -rn needle -", cwd="/repo"): Allow(),
         Input(command="rg needle config.toml tests/test_specific.py", cwd="/repo"): Allow(),
         Input(command="ugrep -rn needle ~/.claude/scratch/release-v3/specific-lane"): Allow(),
         Input(command="grep -rn --include='*.py' needle ~"): Allow(),

@@ -123,6 +123,8 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
         pytest.param("grep -r -e needle internal", id="regexp-role-subtree"),
         pytest.param("grep -rn -m1 needle internal", id="subtree-max-count-is-no-bound"),
         pytest.param("grep -rn needle explicit.log infra/", id="file-does-not-hide-directory"),
+        pytest.param("grep -rn needle - infra/", id="stdin-does-not-hide-directory"),
+        pytest.param("grep -rn --bogus-flag needle -", id="stdin-does-not-hide-incomplete-arguments"),
         pytest.param("grep -rn needle infra/*", id="subtree-universal-glob"),
         pytest.param("grep -rn needle internal/f*", id="glob-matches-directory"),
         pytest.param("grep -rn needle *.log", id="recursive-file-glob"),
@@ -195,6 +197,8 @@ def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Pat
     [
         pytest.param("grep -n needle explicit.log", id="not-recursive"),
         pytest.param("grep -rn needle explicit.log", id="recursive-existing-file"),
+        pytest.param("grep -rn needle -", id="explicit-stdin"),
+        pytest.param("grep -rn needle - explicit.log", id="stdin-and-existing-file"),
         pytest.param("grep -rIn needle explicit.log", id="binary-skip-existing-file"),
         pytest.param("grep -rn --include='*.py' needle internal/f*", id="include-bounds-directory-glob"),
         pytest.param("grep -rIn --include='*.py' needle infra/", id="subtree-narrow-include"),
@@ -546,6 +550,9 @@ def test_classifies_roots_without_walking(
     assert decision("grep -rn needle *", repo, tmp_path / "star") == "deny"
     assert decision("grep -rn needle infra/", repo, tmp_path / "infra") == "deny"
     assert decision("grep -rn needle explicit.log", repo, tmp_path / "file") is None
+    assert decision("grep -rn needle -", repo, tmp_path / "stdin") is None
+    assert decision("grep -rn needle - infra/", repo, tmp_path / "stdin-directory") == "deny"
+    assert decision("grep -rn needle - explicit.log", repo, tmp_path / "stdin-file") is None
     assert decision("grep -rn needle infra/*.py", repo, tmp_path / "glob") == "deny"
     assert decision("grep -rn needle internal/f*", repo, tmp_path / "directory-glob") == "deny"
     assert decision("grep -rn --include='*.py' needle internal/f*", repo, tmp_path / "bounded-glob") is None
@@ -678,6 +685,9 @@ def test_blocks_successive_searches_in_one_session(performance: None, repo: Path
         pytest.param("grep -rn --include='*.py' needle infra/", None, id="narrow-include"),
         pytest.param("grep -rn --include='*.py' needle internal/f*", None, id="include-bound-glob"),
         pytest.param("grep -rn needle explicit.log", None, id="named-file"),
+        pytest.param("grep -rn needle -", None, id="explicit-stdin"),
+        pytest.param("grep -rn needle - infra/", "deny", id="stdin-directory"),
+        pytest.param("grep -rn needle - explicit.log", None, id="stdin-file"),
     ],
 )
 def test_recursive_grep_cli_requires_a_filename_bound(repo: Path, command: str, expected: str | None) -> None:
@@ -712,6 +722,9 @@ def test_recursive_grep_cli_requires_a_filename_bound(repo: Path, command: str, 
         pytest.param("grep -rn --include='*.py' needle infra/", None, id="narrow-include"),
         pytest.param("grep -rn --include='*.py' needle internal/f*", None, id="include-bound-glob"),
         pytest.param("grep -rn needle explicit.log", None, id="named-file"),
+        pytest.param("grep -rn needle -", None, id="explicit-stdin"),
+        pytest.param("grep -rn needle - infra/", "deny", id="stdin-directory"),
+        pytest.param("grep -rn needle - explicit.log", None, id="stdin-file"),
     ],
 )
 def test_recursive_grep_uses_the_current_command_without_history(
