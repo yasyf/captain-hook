@@ -546,10 +546,14 @@ def ran_any_command(
 ) -> bool:
     from cc_transcript.query import any_inputs
 
+    def matches(inputs: PredicateInputs) -> bool:
+        return any(inputs_ran(inputs, argv) for argv in argvs)
+
     if isinstance(t, RemoteSession):
-        windows = t.deep_inputs() if subagents else t.query({"kind": "predicate_inputs", "order": "forward"})
-        return any(inputs_ran(inputs, argv) for inputs in windows for argv in argvs)
-    return any_inputs(t, lambda inputs: any(inputs_ran(inputs, argv) for argv in argvs), subagents=subagents)
+        if subagents:
+            return t.any_deep_input(matches)
+        return any(map(matches, t.query({"kind": "predicate_inputs", "order": "forward"})))
+    return any_inputs(t, matches, subagents=subagents)
 
 
 def ran_any_in_run(run: Sequence[RanCommand], evt: BaseHookEvent) -> bool:

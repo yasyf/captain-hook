@@ -572,7 +572,9 @@ def test_the_plan_recurses_with_each_combinators_own_meaning():
 
 
 def test_a_command_under_or_sends_the_inputs_walk_the_plan_leaves_out():
-    client = ObservingClient({"kind": "strings", "values": []})
+    client = ObservingClient(
+        {"kind": "records", "record_schema": "cc-transcript.predicate-inputs/1", "records_json": []}
+    )
     evt = make_pre_tool_event(ctx=build_ctx(transcript=root_session(client)))
     condition = Or(RanCommand("git", "push"))
 
