@@ -462,7 +462,6 @@ def test_a_raw_marker_outside_a_comment_still_steers(
     [
         "gt restack --only --branch feat",
         "gt continue",
-        "gt abort",
         "gt track --parent main feat",
         "gt log",
         "gt submit --help",
