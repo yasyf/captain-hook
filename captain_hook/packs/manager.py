@@ -384,9 +384,13 @@ def language_evidence(root: Path) -> LanguageEvidence:
         for relative, required in _witness_directories(witnesses).items():
             path = root / relative
             before = directory_stamp(path, root=not relative)
+            remaining = set(required)
             with os.scandir(path) as entries:
-                names = {entry.name for entry in entries}
-            if not required <= names or directory_stamp(path, root=not relative) != before:
+                for entry in entries:
+                    remaining.discard(entry.name)
+                    if not remaining:
+                        break
+            if remaining or directory_stamp(path, root=not relative) != before:
                 return evidence
             stamps.append((relative, before))
         certified = LanguageEvidence(witnesses, tuple(stamps))
