@@ -121,6 +121,41 @@ def test_authoritative_discovery_still_raises_reachable_ignore_errors(tmp_path: 
         manager.language_evidence(tmp_path)
 
 
+def test_stale_witness_pattern_error_is_recomputed_from_authoritative_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    complete_markers(tmp_path)
+    (tmp_path / "go.mod").touch()
+    (tmp_path / "pyproject.toml").touch()
+    (tmp_path / ".gitignore").write_text("/go.mod\n/pyproject.toml\n")
+    evidence = manager.language_evidence(tmp_path)
+    (tmp_path / ".gitignore").write_text("")
+    real = manager.descend_spec
+
+    def invalid_old_pattern(
+        parent: manager.GitIgnoreSpec | None, own: list[str], relative: str
+    ) -> manager.GitIgnoreSpec | None:
+        if relative == "services/api":
+            raise ValueError("invalid old-path gitignore pattern")
+        return real(parent, own, relative)
+
+    monkeypatch.setattr(manager, "descend_spec", invalid_old_pattern)
+    assert not evidence.valid(tmp_path)
+    assert manager.language_evidence(tmp_path).languages == ("go", "python")
+
+
+def test_unrelated_programming_value_error_is_not_hidden(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    complete_markers(tmp_path)
+    evidence = manager.language_evidence(tmp_path)
+
+    def programming_error(path: Path, *, root: bool) -> manager.DirectoryStamp:
+        raise ValueError("unrelated programming error")
+
+    monkeypatch.setattr(manager, "directory_stamp", programming_error)
+    with pytest.raises(ValueError, match="unrelated programming error"):
+        evidence.valid(tmp_path)
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read execute-only directories")
 def test_execute_only_ancestor_is_not_a_valid_walk_witness(tmp_path: Path) -> None:
     go, _ = complete_markers(tmp_path)

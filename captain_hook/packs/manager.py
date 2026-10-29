@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pathspec import GitIgnoreSpec
-from pathspec.patterns.gitignore import GitIgnorePatternError
 
 from captain_hook.util.fs import DirectoryStamp, directory_stamp
 
@@ -358,7 +357,10 @@ class LanguageEvidence:
                     or (spec is not None and spec.match_file(f"{relative}/"))
                 ):
                     return False
-                specs[relative] = descend_spec(spec, gitignore_lines(path / ".gitignore"), relative)
+                try:
+                    specs[relative] = descend_spec(spec, gitignore_lines(path / ".gitignore"), relative)
+                except ValueError:
+                    return False
             for _, relative in self.witnesses:
                 path = root / relative
                 path.lstat()
@@ -369,7 +371,7 @@ class LanguageEvidence:
                 if spec is not None and spec.match_file(relative):
                     return False
             return all(directory_stamp(root / path, root=not path) == stamp for path, stamp in self.directories)
-        except (OSError, UnicodeDecodeError, GitIgnorePatternError):
+        except (OSError, UnicodeDecodeError):
             return False
 
 
@@ -395,7 +397,7 @@ def language_evidence(root: Path) -> LanguageEvidence:
             stamps.append((relative, before))
         certified = LanguageEvidence(witnesses, tuple(stamps))
         return certified if certified.valid(root) else evidence
-    except (OSError, UnicodeDecodeError, GitIgnorePatternError):
+    except (OSError, UnicodeDecodeError):
         return evidence
 
 
