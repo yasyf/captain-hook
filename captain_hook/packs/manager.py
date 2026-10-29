@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pathspec import GitIgnoreSpec
+from pathspec.patterns.gitignore import GitIgnorePatternError
+
+from captain_hook.util.fs import DirectoryStamp, directory_stamp
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -272,10 +275,14 @@ def detect_languages(root: Path) -> frozenset[str]:
     file is itself checked against the accumulated spec, so an individually-ignored ``go.mod`` never
     counts. Each language short-circuits on its first surviving marker; the walk stops once all are found.
     """
+    return frozenset(_language_witnesses(root))
+
+
+def _language_witnesses(root: Path) -> dict[str, str]:
     if root == Path.home():
-        return frozenset()
+        return {}
     pending = dict(LANGUAGE_MARKERS)
-    found: set[str] = set()
+    found: dict[str, str] = {}
     specs: dict[str, GitIgnoreSpec | None] = {}
     for dirpath, dirnames, filenames in os.walk(root):
         rel = os.path.relpath(dirpath, root)
@@ -286,11 +293,15 @@ def detect_languages(root: Path) -> frozenset[str]:
             rel_dir,
         )
         for lang, markers in list(pending.items()):
-            if any(
-                m in filenames and (spec is None or not spec.match_file(f"{rel_dir}/{m}" if rel_dir else m))
-                for m in markers
+            if marker := next(
+                (
+                    m
+                    for m in markers
+                    if m in filenames and (spec is None or not spec.match_file(f"{rel_dir}/{m}" if rel_dir else m))
+                ),
+                None,
             ):
-                found.add(lang)
+                found[lang] = (Path(dirpath) / marker).relative_to(root).as_posix()
                 del pending[lang]
         if not pending:
             break
@@ -300,7 +311,88 @@ def detect_languages(root: Path) -> frozenset[str]:
             if d not in {".git", ".jj", ".hg", ".svn"}
             and not (spec is not None and spec.match_file(f"{rel_dir}/{d}/" if rel_dir else f"{d}/"))
         ]
-    return frozenset(found)
+    return found
+
+
+def _witness_directories(witnesses: tuple[tuple[str, str], ...]) -> dict[str, set[str]]:
+    directories: dict[str, set[str]] = {}
+    for language, relative in witnesses:
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts or path.name not in LANGUAGE_MARKERS[language]:
+            raise ValueError("invalid language marker witness")
+        parent = ""
+        for component in path.parts:
+            directories.setdefault(parent, set()).add(component)
+            parent = f"{parent}/{component}" if parent else component
+    return directories
+
+
+@dataclass(frozen=True, slots=True)
+class LanguageEvidence:
+    witnesses: tuple[tuple[str, str], ...]
+    directories: tuple[tuple[str, DirectoryStamp], ...]
+
+    @property
+    def languages(self) -> tuple[str, ...]:
+        return tuple(language for language, _ in self.witnesses)
+
+    def valid(self, root: Path) -> bool:
+        if root == Path.home() or set(self.languages) != LANGUAGE_MARKERS.keys():
+            return False
+        required = _witness_directories(self.witnesses)
+        stamps = dict(self.directories)
+        if stamps.keys() != required.keys():
+            return False
+        try:
+            specs: dict[str, GitIgnoreSpec | None] = {}
+            for relative in sorted(stamps, key=lambda name: len(Path(name).parts)):
+                path = root / relative
+                if directory_stamp(path, root=not relative) != stamps[relative]:
+                    return False
+                with os.scandir(path):
+                    pass
+                parent = Path(relative).parent.as_posix()
+                spec = specs.get("" if parent == "." else parent)
+                if relative and (
+                    path.name in {".git", ".jj", ".hg", ".svn"}
+                    or (spec is not None and spec.match_file(f"{relative}/"))
+                ):
+                    return False
+                specs[relative] = descend_spec(spec, gitignore_lines(path / ".gitignore"), relative)
+            for _, relative in self.witnesses:
+                path = root / relative
+                path.lstat()
+                if path.is_dir():
+                    return False
+                parent = path.parent.relative_to(root).as_posix()
+                spec = specs["" if parent == "." else parent]
+                if spec is not None and spec.match_file(relative):
+                    return False
+            return all(directory_stamp(root / path, root=not path) == stamp for path, stamp in self.directories)
+        except (OSError, UnicodeDecodeError, GitIgnorePatternError):
+            return False
+
+
+def language_evidence(root: Path) -> LanguageEvidence:
+    """Discover nonignored language markers and certify their directory entries for bounded renewal."""
+    witnesses = tuple(sorted(_language_witnesses(root).items()))
+    evidence = LanguageEvidence(witnesses, ())
+    if set(evidence.languages) != LANGUAGE_MARKERS.keys():
+        return evidence
+    try:
+        stamps: list[tuple[str, DirectoryStamp]] = []
+        for relative, required in _witness_directories(witnesses).items():
+            path = root / relative
+            before = directory_stamp(path, root=not relative)
+            with os.scandir(path) as entries:
+                names = {entry.name for entry in entries}
+            if not required <= names or directory_stamp(path, root=not relative) != before:
+                return evidence
+            stamps.append((relative, before))
+        certified = LanguageEvidence(witnesses, tuple(stamps))
+        return certified if certified.valid(root) else evidence
+    except (OSError, UnicodeDecodeError, GitIgnorePatternError):
+        return evidence
 
 
 def builtins_for(languages: Iterable[str]) -> tuple[str, ...]:

@@ -86,9 +86,9 @@ def spawn(target: Callable[..., None], *args: object) -> BaseProcess:
 
 
 def cold_registry_languages(root: Path, ledger: Path, results: Queue[list[str]]) -> None:
-    real_detect, real_clock = manager.detect_languages, time.monotonic
+    real_detect, real_clock = manager.language_evidence, time.monotonic
 
-    def walk(path: Path) -> frozenset[str]:
+    def walk(path: Path) -> manager.LanguageEvidence:
         record(ledger, "walk")
         return real_detect(path)
 
@@ -97,19 +97,19 @@ def cold_registry_languages(root: Path, ledger: Path, results: Queue[list[str]])
         record(ledger, "clock")
         return now
 
-    manager.detect_languages = walk
+    manager.language_evidence = walk
     registry.time = SimpleNamespace(monotonic=clock)
     snapshot = Registry(CliState(root=root, hooks=str(root / ".claude" / "hooks"))).get()
     results.put(sorted({pack.name for pack in snapshot.resolved} & manager.LANGUAGE_MARKERS.keys()))
 
 
 def stalled_walk(root: Path, ledger: Path) -> None:
-    def stall(path: Path) -> frozenset[str]:
+    def stall(path: Path) -> manager.LanguageEvidence:
         record(ledger, "walk")
         time.sleep(600)
         raise AssertionError("the walker outlived its kill")
 
-    manager.detect_languages = stall
+    manager.language_evidence = stall
     registry._language_markers(root, since=time.monotonic())
 
 
@@ -131,8 +131,8 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 @pytest.fixture
 def walks(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     seen: list[Path] = []
-    real = manager.detect_languages
-    monkeypatch.setattr(manager, "detect_languages", lambda root: (seen.append(root), real(root))[1])
+    real = manager.language_evidence
+    monkeypatch.setattr(manager, "language_evidence", lambda root: (seen.append(root), real(root))[1])
     return seen
 
 
@@ -233,8 +233,8 @@ def test_language_marker_change_changes_fingerprint(project: CliState) -> None:
 
 def test_unchanged_root_walks_for_language_markers_once(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     walks: list[Path] = []
-    real = manager.detect_languages
-    monkeypatch.setattr(manager, "detect_languages", lambda root: (walks.append(root), real(root))[1])
+    real = manager.language_evidence
+    monkeypatch.setattr(manager, "language_evidence", lambda root: (walks.append(root), real(root))[1])
     reg = Registry(project)
     reg.get()
     walks.clear()
@@ -245,8 +245,8 @@ def test_unchanged_root_walks_for_language_markers_once(project: CliState, monke
 
 def test_cold_registry_walks_for_language_markers_once(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     walks: list[Path] = []
-    real = manager.detect_languages
-    monkeypatch.setattr(manager, "detect_languages", lambda root: (walks.append(root), real(root))[1])
+    real = manager.language_evidence
+    monkeypatch.setattr(manager, "language_evidence", lambda root: (walks.append(root), real(root))[1])
     Registry(project).get()
     assert walks == [project.root]
 
@@ -454,12 +454,18 @@ def test_an_unreadable_boot_id_fails_loudly(
     [
         pytest.param("{", id="truncated"),
         pytest.param(
-            '{"stamp": [null, null], "computed_at": 1000.0, "languages": [], "owner": "x"}', id="unknown-field"
+            '{"stamp": [null, null], "computed_at": 1000.0, "witnesses": [], "directories": [], "owner": "x"}',
+            id="unknown-field",
         ),
-        pytest.param('{"stamp": [null, null], "computed_at": "1000", "languages": []}', id="string-clock"),
-        pytest.param('{"stamp": [null, null], "computed_at": 1000.0}', id="missing-languages"),
+        pytest.param(
+            '{"stamp": [null, null], "computed_at": "1000", "witnesses": [], "directories": []}', id="string-clock"
+        ),
+        pytest.param('{"stamp": [null, null], "computed_at": 1000.0}', id="missing-witnesses"),
         *(
-            pytest.param(f'{{"stamp": [null, null], "computed_at": {clock}, "languages": []}}', id=f"clock-{clock}")
+            pytest.param(
+                f'{{"stamp": [null, null], "computed_at": {clock}, "witnesses": [], "directories": []}}',
+                id=f"clock-{clock}",
+            )
             for clock in ("Infinity", "-Infinity", "NaN", "1e999")
         ),
     ],
@@ -493,12 +499,12 @@ def test_concurrent_rewrites_never_expose_a_torn_generation(project: CliState, m
 def test_a_failed_walk_publishes_nothing_and_frees_the_lock(
     project: CliState, monkeypatch: pytest.MonkeyPatch, error: type[BaseException]
 ) -> None:
-    real = manager.detect_languages
+    real = manager.language_evidence
 
-    def interrupted(root: Path) -> frozenset[str]:
+    def interrupted(root: Path) -> manager.LanguageEvidence:
         raise error("walk interrupted")
 
-    monkeypatch.setattr(manager, "detect_languages", interrupted)
+    monkeypatch.setattr(manager, "language_evidence", interrupted)
     with pytest.raises(error):
         registry._language_markers(project.root, since=time.monotonic())
     path = registry.marker_path(project.root)
@@ -506,7 +512,7 @@ def test_a_failed_walk_publishes_nothing_and_frees_the_lock(
     assert list(path.parent.glob("*.tmp")) == []
     with registry.marker_lock(path).acquire(timeout=0):
         pass
-    monkeypatch.setattr(manager, "detect_languages", real)
+    monkeypatch.setattr(manager, "language_evidence", real)
     assert registry._language_markers(project.root, since=time.monotonic()) == ()
 
 
@@ -664,9 +670,9 @@ def test_local_hook_edit_reaches_the_next_snapshot(project: CliState, tmp_path: 
 def test_concurrent_fingerprints_walk_each_input_once(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     marker_walks: list[Path] = []
     roster_reads: list[Path] = []
-    real_detect, real_roster = manager.detect_languages, plugins.enabled_plugins
+    real_detect, real_roster = manager.language_evidence, plugins.enabled_plugins
 
-    def slow_detect(root: Path) -> set[str]:
+    def slow_detect(root: Path) -> manager.LanguageEvidence:
         marker_walks.append(root)
         time.sleep(0.05)
         return real_detect(root)
@@ -676,7 +682,7 @@ def test_concurrent_fingerprints_walk_each_input_once(project: CliState, monkeyp
         time.sleep(0.05)
         return real_roster(root)
 
-    monkeypatch.setattr(manager, "detect_languages", slow_detect)
+    monkeypatch.setattr(manager, "language_evidence", slow_detect)
     monkeypatch.setattr(plugins, "enabled_plugins", slow_roster)
     start = threading.Barrier(12)
 
