@@ -559,6 +559,7 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
     assert "snapshot request completed: operation='query_graph' request_id='request-1'" in record.message
     assert f"pid={os.getpid()} status={status!r}" in record.message
     assert "query_kind='has_tool' observer_kinds=('has_override',) selector_count=1" in record.message
+    assert "execution_path='core_request' cursor_in_sha256=None cursor_out_sha256=None" in record.message
     for key in (
         "source_opens",
         "source_bytes_read",
@@ -569,16 +570,137 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
         "discovery_entries_examined",
         "prepared_cache_reads",
         "prepared_cache_bytes_read",
+        "activity_lifts",
+        "cache_hits",
+        "inflight_joins",
+        "generations_published",
+        "generations_invalidated",
+        "nonincremental_lowering_calls",
+        "nonincremental_lowering_source_bytes",
     ):
         assert f"{key}={usage[key]}" in record.message
     for forbidden in ("private", "resource_sha256", "response reason", "max_read_bytes"):
         assert forbidden not in record.message
 
 
+@pytest.mark.parametrize("owned", [False, True], ids=["core-fresh", "owned-producer"])
+def test_owner_resume_distinguishes_identical_core_and_owned_usage(logcap, owned):
+    cursor = "private consumed cursor"
+    next_cursor = "private returned cursor"
+    root_cause_usage = {
+        "activity_lifts": 11,
+        "cache_hits": 13,
+        "inflight_joins": 17,
+        "generations_published": 19,
+        "generations_invalidated": 23,
+        "nonincremental_lowering_calls": 29,
+        "nonincremental_lowering_source_bytes": 31_337,
+    }
+    response = failure(
+        "request-1", "incomplete", "private reason", {"source_bytes_read": 4096, "cold_parses": 2} | root_cause_usage
+    )
+    response["cursor"] = next_cursor
+    before = json.dumps(response, sort_keys=True)
+    page = {
+        "field": "candidates_json",
+        "records_json": ["private transcript payload"],
+        "metadata": {"kind": "review"},
+        "complete": False,
+        "cursor": next_cursor,
+        "usage": response["usage"],
+    }
+
+    def native_call(*_, **__):
+        assert not owned
+        return response
+
+    owner = owner_with(native_call)
+    owner.store.resume_projection = lambda *_, **__: page if owned else None
+    body = request(operation="resume", cursor=cursor)["snapshot"]["request"]
+
+    result = owner.call(body, context(), object(), [])
+
+    assert result == (owner._page(page, "request-1") if owned else response)
+    assert result["usage"] is response["usage"]
+    assert json.dumps(response, sort_keys=True) == before
+    [record] = logcap.records
+    path = "owned_projection" if owned else "core_request"
+    assert f"execution_path={path!r}" in record.message
+    assert "source_bytes_read=4096" in record.message
+    assert "cold_parses=2" in record.message
+    counters = " ".join(f"{key}={value}" for key, value in root_cause_usage.items())
+    assert f"prepared_cache_bytes_read=0 {counters} execution_path={path!r}" in record.message
+    for key, value in root_cause_usage.items():
+        assert result["usage"][key] == value
+    assert f"cursor_in_sha256='{hashlib.sha256(cursor.encode()).hexdigest()}'" in record.message
+    assert f"cursor_out_sha256='{hashlib.sha256(next_cursor.encode()).hexdigest()}'" in record.message
+    assert "private" not in record.message
+    assert "execution_path" not in result
+    assert "cursor_in_sha256" not in result
+    assert "cursor_out_sha256" not in result
+
+
+def test_owner_zero_byte_cursor_origin_link_and_terminal_are_logged(logcap):
+    cursors = ("private first cursor", "private second cursor")
+    responses = [
+        {
+            "schema": CORE_SCHEMA,
+            "id": f"request-{index}",
+            "status": "incomplete" if cursor is not None else "ok",
+            "complete": cursor is None,
+            "data": None,
+            "cursor": cursor,
+            "reason": None,
+            "usage": empty_usage(),
+        }
+        for index, cursor in enumerate((*cursors, None), 1)
+    ]
+    pending = iter(responses)
+    owner = owner_with(lambda *_, **__: next(pending))
+    owner.store.resume_projection = lambda *_, **__: None
+    bodies = [
+        request(operation="query_graph", query={"kind": "has_skill", "values": ["private skill"]}),
+        request(frame_id=2, operation="resume", cursor=cursors[0]),
+        request(frame_id=3, operation="resume", cursor=cursors[1]),
+    ]
+
+    results = [owner.call(body["snapshot"]["request"], context(), object(), []) for body in bodies]
+
+    assert results == responses
+    assert all(result["usage"] is response["usage"] for result, response in zip(results, responses, strict=True))
+    assert len(logcap.records) == 3
+    origin, link, terminal = [record.message for record in logcap.records]
+    first, second = [hashlib.sha256(cursor.encode()).hexdigest() for cursor in cursors]
+    assert "operation='query_graph'" in origin
+    assert "query_kind='has_skill' observer_kinds=() selector_count=0" in origin
+    assert f"cursor_in_sha256=None cursor_out_sha256='{first}'" in origin
+    assert f"cursor_in_sha256='{first}' cursor_out_sha256='{second}'" in link
+    assert f"cursor_in_sha256='{second}' cursor_out_sha256=None" in terminal
+    for record in logcap.records:
+        assert "execution_path='core_request'" in record.message
+        assert "source_bytes_read=0" in record.message
+        assert "prepared_cache_bytes_read=0" in record.message
+        assert "private" not in record.message
+
+
+def test_owner_completion_preserves_response_identity(logcap):
+    owner = owner_with(lambda *_, **__: pytest.fail("native store was called"))
+    body = request(operation="resume", cursor="private cursor")["snapshot"]["request"]
+    response = failure("request-1", "ok", "private reason")
+    before = json.dumps(response, sort_keys=True)
+
+    assert owner._completed(body, response, time.monotonic(), execution_path="core_request") is response
+    assert json.dumps(response, sort_keys=True) == before
+    [record] = logcap.records
+    assert "private" not in record.message
+
+
 @pytest.mark.parametrize("examined", [0, 1_000_000])
 def test_owner_zero_payload_reads_skip_log_metadata_work(logcap, examined):
     class Request(dict):
         def get(self, key, default=None):
+            if key == "cursor":
+                return super().get(key, default)
             pytest.fail(f"zero-read request examined logging metadata: {key}")
 
     body = Request(request(operation="discover")["snapshot"]["request"])
@@ -588,20 +710,28 @@ def test_owner_zero_payload_reads_skip_log_metadata_work(logcap, examined):
     assert logcap.records == []
 
 
-def test_owner_failed_read_retains_one_failure_record(logcap):
+@pytest.mark.parametrize("operation", ["acquire", "resume"])
+def test_owner_failed_read_retains_one_failure_record(logcap, operation):
     from cc_transcript.snapshots import SnapshotIncomplete
 
     def native_call(*_, **__):
         raise SnapshotIncomplete("cancelled", "private reason", usage={"source_bytes_read": 4096}, work={})
 
-    body = request(operation="acquire")["snapshot"]["request"]
-    response = owner_with(native_call).call(body, context(), object(), [])
+    fields = {"cursor": "private consumed cursor"} if operation == "resume" else {}
+    body = request(operation=operation, **fields)["snapshot"]["request"]
+    owner = owner_with(native_call)
+    owner.store.resume_projection = lambda *_, **__: None
+    response = owner.call(body, context(), object(), [])
 
     assert response["status"] == "cancelled"
     [record] = logcap.records
     assert "snapshot request failed:" in record.message
     assert "source_bytes_read=4096" in record.message
+    assert "execution_path='unknown_error'" in record.message
+    digest = hashlib.sha256(fields["cursor"].encode()).hexdigest() if fields else None
+    assert f"cursor_in_sha256={digest!r} cursor_out_sha256=None" in record.message
     assert "private reason" not in record.message
+    assert "private consumed cursor" not in record.message
 
 
 def test_owner_missing_failure_renders_safe_context_through_its_message(logcap):
@@ -628,7 +758,8 @@ def test_owner_missing_failure_renders_safe_context_through_its_message(logcap):
     assert re.fullmatch(
         "INFO captain_hook\\.snapshots\\.worker: snapshot request failed: operation='acquire' request_id='request-1' "
         f"deadline_unix_ms=12345 resource_kind='path' resource_count=1 resource_sha256='{digest}' "
-        "status='missing' elapsed_ms=\\d+\\.\\d discovery_entries_examined=3 source_opens=1\n",
+        "status='missing' elapsed_ms=\\d+\\.\\d discovery_entries_examined=3 source_opens=1 "
+        "execution_path='unknown_error' cursor_in_sha256=None cursor_out_sha256=None\n",
         logcap.text,
     )
     for forbidden in (private, "os error", "sk-fixture-secret", "native", "max_read_bytes"):
@@ -650,7 +781,8 @@ def test_owner_failure_without_counters_renders_them_unknown_and_no_handle(logca
     assert re.fullmatch(
         "INFO captain_hook\\.snapshots\\.worker: snapshot request failed: operation='prepare_review' "
         "request_id='request-2' deadline_unix_ms=None resource_kind='view' resource_count=None resource_sha256=None "
-        "status='invalid_request' elapsed_ms=\\d+\\.\\d usage='unknown'\n",
+        "status='invalid_request' elapsed_ms=\\d+\\.\\d usage='unknown' "
+        "execution_path='unknown_error' cursor_in_sha256=None cursor_out_sha256=None\n",
         logcap.text,
     )
     assert "lease-fixture-secret" not in logcap.text

@@ -13,7 +13,7 @@ import traceback
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 
 from loguru import logger
 
@@ -51,6 +51,7 @@ OWNER_ADMISSION = {
 MAX_REGISTRY_GENERATIONS = 64
 
 RegistryKey = tuple[str, str, bytes]
+ExecutionPath = Literal["core_request", "owned_projection", "other_operation"]
 
 
 def read_frame(stream: BinaryIO, record_bytes: Callable[[int], None] | None = None) -> dict[str, Any] | None:
@@ -71,6 +72,10 @@ def read_frame(stream: BinaryIO, record_bytes: Callable[[int], None] | None = No
 
 def canonical(value: object) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+
+
+def cursor_digest(cursor: str | None) -> str | None:
+    return hashlib.sha256(cursor.encode()).hexdigest() if cursor is not None else None
 
 
 def registry_key(tool_registry: list[dict[str, Any]], context: CallContext) -> RegistryKey:
@@ -198,32 +203,54 @@ class Owner:
             self.registry_generations[key] = generation
         return generation
 
-    def _completed(self, request: dict[str, Any], response: dict[str, Any], started: float) -> dict[str, Any]:
+    def _completed(
+        self, request: dict[str, Any], response: dict[str, Any], started: float, *, execution_path: ExecutionPath
+    ) -> dict[str, Any]:
         usage = response["usage"]
-        if usage["source_bytes_read"] or usage["prepared_cache_bytes_read"]:
-            fields = {
-                "operation": request["operation"],
-                "request_id": request["id"],
-                "pid": os.getpid(),
-                "status": response["status"],
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
-                "query_kind": request.get("query", {}).get("kind"),
-                "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
-                "selector_count": len(request.get("selectors", [])),
-            } | {
-                key: usage[key]
-                for key in (
-                    "source_opens",
-                    "source_bytes_read",
-                    "bytes_decoded",
-                    "events_parsed",
-                    "cold_parses",
-                    "append_parses",
-                    "discovery_entries_examined",
-                    "prepared_cache_reads",
-                    "prepared_cache_bytes_read",
-                )
-            }
+        if (
+            usage["source_bytes_read"]
+            or usage["prepared_cache_bytes_read"]
+            or request.get("cursor") is not None
+            or response["cursor"] is not None
+        ):
+            fields = (
+                {
+                    "operation": request["operation"],
+                    "request_id": request["id"],
+                    "pid": os.getpid(),
+                    "status": response["status"],
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                    "query_kind": request.get("query", {}).get("kind"),
+                    "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
+                    "selector_count": len(request.get("selectors", [])),
+                }
+                | {
+                    key: usage[key]
+                    for key in (
+                        "source_opens",
+                        "source_bytes_read",
+                        "bytes_decoded",
+                        "events_parsed",
+                        "cold_parses",
+                        "append_parses",
+                        "discovery_entries_examined",
+                        "prepared_cache_reads",
+                        "prepared_cache_bytes_read",
+                        "activity_lifts",
+                        "cache_hits",
+                        "inflight_joins",
+                        "generations_published",
+                        "generations_invalidated",
+                        "nonincremental_lowering_calls",
+                        "nonincremental_lowering_source_bytes",
+                    )
+                }
+                | {
+                    "execution_path": execution_path,
+                    "cursor_in_sha256": cursor_digest(request.get("cursor")),
+                    "cursor_out_sha256": cursor_digest(response["cursor"]),
+                }
+            )
             logger.info("snapshot request completed: {}", " ".join(f"{key}={value!r}" for key, value in fields.items()))
         return response
 
@@ -238,9 +265,14 @@ class Owner:
                 if request["operation"] == "resume":
                     page = self.store.resume_projection(request["cursor"], context=context, cancellation=token)
                     if page is not None:
-                        return self._completed(request, self._page(page, request["id"]), started)
+                        return self._completed(
+                            request, self._page(page, request["id"]), started, execution_path="owned_projection"
+                        )
                 return self._completed(
-                    request, dict(self.store.request(request, context=context, cancellation=token)), started
+                    request,
+                    dict(self.store.request(request, context=context, cancellation=token)),
+                    started,
+                    execution_path="core_request",
                 )
             if request["operation"] == "prepare_classifier":
                 return self._completed(
@@ -257,6 +289,7 @@ class Owner:
                         request["id"],
                     ),
                     started,
+                    execution_path="other_operation",
                 )
             if request["operation"] == "submit_classifier":
                 return self._completed(
@@ -271,6 +304,7 @@ class Owner:
                         request["id"],
                     ),
                     started,
+                    execution_path="other_operation",
                 )
             if request["operation"] == "prepare_hook_view":
                 with self.store.borrow_snapshot(
@@ -297,6 +331,7 @@ class Owner:
                         "usage": usage,
                     },
                     started,
+                    execution_path="other_operation",
                 )
             if request["policy"] != {"id": "captain-review", "version": "1"}:
                 raise EvidenceIncomplete("invalid_request", "unregistered Captain evidence policy")
@@ -325,7 +360,7 @@ class Owner:
                     usage=usage,
                     work=dict(snapshot.work),
                 )
-            return self._completed(request, self._page(page, request["id"]), started)
+            return self._completed(request, self._page(page, request["id"]), started, execution_path="owned_projection")
         except self.incomplete_type as exc:
             status, reason, usage = exc.status, exc.reason, dict(exc.usage)
         except EvidenceIncomplete as exc:
@@ -334,6 +369,11 @@ class Owner:
             request_metadata(request)
             | {"status": status, "elapsed_ms": round((time.monotonic() - started) * 1000, 1)}
             | ({key: usage[key] for key in empty_usage() if key in usage} if usage else {"usage": "unknown"})
+            | {
+                "execution_path": "unknown_error",
+                "cursor_in_sha256": cursor_digest(request.get("cursor")),
+                "cursor_out_sha256": None,
+            }
         )
         logger.info("snapshot request failed: {}", " ".join(f"{key}={value!r}" for key, value in fields.items()))
         return failure(request["id"], status, reason, usage)
