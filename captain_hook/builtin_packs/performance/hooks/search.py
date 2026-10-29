@@ -933,10 +933,9 @@ hook(
         ),
     ],
     message=(
-        "A recursive `grep` over a directory reads every file under it, even below a repository root. "
-        "Use named files or `--include='*.py'`. For `ugrep`, `rg`, or `git grep` at /, a home, a repository root, "
-        "a worktree pool, or a scratch project, search a deeper directory or named files, narrow it with "
-        "`--include='*.py'`, `-g '*.py'`, or a `-- '*.py'` pathspec, or run `ccx code grep <text> <dir>`."
+        "A recursive `grep` over a directory reads every file under it; bound `grep` by filename and scope other "
+        "searches below broad roots. Name files, use `--include='*.py'`, `-g '*.py'`, or `-- '*.py'`, or run "
+        "`ccx code grep` with scoped paths."
     ),
     block=True,
     max_fires=None,
