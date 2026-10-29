@@ -624,6 +624,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A hook-triggered review or corrections preparation now waits on the review lane.** The host
+  admitted a `prepare_review` or `prepare_corrections` sent during a hook event on one of its four
+  hook slots, but the snapshot owner runs both on its two review threads, so the extra requests
+  waited inside the owner. Cancelling one of those requests could not settle until a review thread
+  freed, and after 5 s the host failed the whole owner with `cancellation_ack_timeout`. Both
+  operations now wait for the host's single review slot whatever event sent them, so cancelling one
+  while it waits returns at once without reaching the owner, and the hook slots stay free for hook
+  work.
+
 - **The automatic update no longer re-installs a host build that cannot reach the release.** It
   settles without installing when the host already runs the release, and otherwise installs the
   Homebrew build only when that build's own `version` reports the release or newer.
