@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import gc
 import importlib
 import json
 import os
 import subprocess
 import sys
+import threading
+import weakref
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from contextvars import copy_context
+from copy import copy
 from datetime import UTC, datetime, timedelta
+from inspect import signature
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -36,7 +44,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
 )
 from captain_hook.context import HookContext
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
-from captain_hook.events import PreToolUseEvent
+from captain_hook.events import BaseHookEvent, PreToolUseEvent
 from captain_hook.loader import discover_pack
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import EvidenceIncomplete
@@ -52,6 +60,9 @@ from captain_hook.util import proc, reqenv
 from captain_hook.util.proc import ProcessRow, ProcessTable
 from tests.test_dispatch_snapshot_leases import LeasedFixture
 from tests.test_proc import row, table
+
+if TYPE_CHECKING:
+    from cc_transcript.command import CommandLine
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 SESSIONS_MODULE = "captain_hook.builtin_packs.general.hooks.sessions"
@@ -1387,6 +1398,163 @@ class TestSnapshotBudget:
         assert scans[0] is scans[2]
         assert scans[1] is not scans[0]
         assert seen == [2.0, 2.0]
+
+
+class ScanPayload(dict[str, Any]):
+    pass
+
+
+class TestScanLifetime:
+    def test_owned_resources_do_not_change_event_construction_repr_or_equality(self) -> None:
+        evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        other = type(evt)(evt._raw, evt.ctx)
+        Scan.of(evt)
+        assert tuple(signature(type(evt)).parameters) == ("_raw", "ctx")
+        assert evt == other
+        assert "_resources=" not in repr(evt)
+
+    def test_changing_a_forks_raw_payload_keeps_both_live_scans_separate(self) -> None:
+        evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        fork = copy(evt)
+        first = Scan.of(evt)
+        fork._raw = input_to_event(
+            Event.PreToolUse, Input(command="renice -n 5 -p 31337", cwd="/w", session_id="s1")
+        )._raw
+        fork.__dict__.pop("input", None)
+        fork.__dict__.pop("cmd", None)
+        second = Scan.of(fork)
+        assert first is not second
+        assert first.raw is evt._raw
+        assert second.raw is fork._raw
+        assert Scan.of(evt) is first
+        assert Scan.of(fork) is second
+
+    def test_scan_ownership_does_not_form_an_event_reference_cycle(self) -> None:
+        evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        event = weakref.ref(evt)
+        scan = weakref.ref(Scan.of(evt))
+        del evt
+        assert event() is None
+        assert scan() is None
+
+    @pytest.mark.parametrize("bound", [False, True], ids=["unbound", "request"])
+    def test_serial_forks_share_the_parent_operation_owner(self, bound: bool) -> None:
+        evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        with reqenv.use_request(overrides()) if bound else nullcontext():
+            first = copy(evt)
+            retained = weakref.ref(Scan.of(first))
+            del first
+            gc.collect()
+            assert retained() is not None
+            second = copy(evt)
+            assert Scan.of(second) is retained()
+            del second
+        del evt
+        gc.collect()
+        assert retained() is None
+
+    def test_shallow_forks_own_the_shared_scan_until_the_last_event_is_released(self) -> None:
+        evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        scan = Scan.of(evt)
+        retained = weakref.ref(scan)
+        fork = copy(evt)
+        del evt, scan
+        gc.collect()
+        assert retained() is not None
+        assert Scan.of(fork) is retained()
+        del fork
+        gc.collect()
+        assert retained() is None
+
+    @pytest.mark.parametrize("bound", [False, True], ids=["unbound", "request"])
+    def test_finished_events_do_not_retain_payloads(self, bound: bool) -> None:
+        def finish() -> weakref.ReferenceType[ScanPayload]:
+            evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+            raw = ScanPayload(evt._raw, unused="x" * 1024 * 1024)
+            evt._raw = raw
+            payload = weakref.ref(raw)
+            with reqenv.use_request(overrides()) if bound else nullcontext():
+                assert Scan.of(evt).raw is evt._raw
+            return payload
+
+        payload = finish()
+        gc.collect()
+        assert payload() is None
+
+    @pytest.mark.parametrize("bound", [False, True], ids=["unbound", "request"])
+    def test_live_events_keep_their_scan_without_count_eviction(
+        self, bound: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed: list[str] = []
+        original = _sessions.safe_parse_command_line
+
+        def parse(command: str) -> CommandLine | None:
+            parsed.append(command)
+            return original(command)
+
+        monkeypatch.setattr(_sessions, "safe_parse_command_line", parse)
+        events = [
+            input_to_event(Event.PreToolUse, Input(command=f"kill {31337 + index}", cwd="/w", session_id="s1"))
+            for index in range(32)
+        ]
+        with reqenv.use_request(overrides()) if bound else nullcontext():
+            first = Scan.of(events[0])
+            for evt in events[1:]:
+                Scan.of(evt)
+            assert Scan.of(events[0]) is first
+        assert len(parsed) == len(events)
+
+    @pytest.mark.parametrize("bound", [False, True], ids=["unbound", "request"])
+    def test_concurrent_forks_share_one_scan_and_guarded_fact_read(
+        self, bound: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed: list[str] = []
+        observed: list[float] = []
+        original = _sessions.safe_parse_command_line
+        entered, release = threading.Event(), threading.Event()
+
+        def parse(command: str) -> CommandLine | None:
+            parsed.append(command)
+            entered.set()
+            assert release.wait(10)
+            return original(command)
+
+        monkeypatch.setattr(_sessions, "safe_parse_command_line", parse)
+        monkeypatch.setattr(proc, "process_table", lambda **kw: (observed.append(kw["timeout"]), MAC)[1])
+        evt = input_to_event(Event.PreToolUse, Input(command="kill 31337", cwd="/w", session_id="s1"))
+        forks = [copy(evt) for _ in range(8)]
+        with (
+            reqenv.use_request(overrides()) if bound else nullcontext(),
+            ThreadPoolExecutor(max_workers=8) as pool,
+        ):
+            pending = [pool.submit(copy_context().run, Scan.of, fork) for fork in forks]
+            assert entered.wait(10)
+            release.set()
+            scans = [future.result(timeout=10) for future in pending]
+            for scan in scans:
+                assert scan.facts.ownership is scan.facts.ownership
+        assert all(scan is scans[0] for scan in scans)
+        assert parsed == ["kill 31337"]
+        assert observed == [2.0]
+
+    def test_request_payloads_remain_independent_during_fanout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(proc, "process_table", lambda **kw: MAC)
+        events = [
+            input_to_event(Event.PreToolUse, Input(command=command, cwd="/w", session_id=session))
+            for command, session in [("kill 31337", "s1"), ("renice -n 5 -p 31337", "s2")]
+        ]
+
+        def scan(evt: BaseHookEvent) -> Scan:
+            with reqenv.use_request(overrides()):
+                result = Scan.of(evt)
+                assert result.facts.ownership is result.facts.ownership
+                return result
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(scan, events))
+        assert results[0] is not results[1]
+        assert [result.facts.session for result in results] == ["s1", "s2"]
+        assert [result.raw for result in results] == [evt._raw for evt in events]
 
 
 @pytest.fixture

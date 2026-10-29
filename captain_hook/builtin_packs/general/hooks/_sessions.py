@@ -7,7 +7,6 @@ import re
 import shlex
 import subprocess
 import threading
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial, reduce
@@ -15,6 +14,7 @@ from itertools import product
 from math import prod
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, ClassVar
+from weakref import WeakValueDictionary
 
 from cc_transcript.activity import ToolUse
 from cc_transcript.tools import BashCall
@@ -173,7 +173,6 @@ DRIVE_ENV = re.compile(rf"(?<!\S){DRIVE_VAR}=(\S*)")
 LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
-SCAN_CACHE_LIMIT = 16
 IDLE_WAIT_MS = 1000
 SCREEN_LINES = 40
 PROMPT_WINDOW = 8
@@ -1018,10 +1017,10 @@ def names_a_guarded_program(evt: BaseHookEvent) -> bool:
     return any(names_guarded(text) for text in candidate_texts(evt))
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class Scan:
     LOCK: ClassVar[threading.Lock] = threading.Lock()
-    CACHE: ClassVar[OrderedDict[int, Scan]] = OrderedDict()
+    CACHE: ClassVar[WeakValueDictionary[int, Scan]] = WeakValueDictionary()
     raw: object
     facts: Facts = field(default_factory=Facts)
     calls: list[Call] = field(default_factory=list)
@@ -1036,9 +1035,7 @@ class Scan:
             if scan is None or scan.raw is not evt._raw:
                 facts = Facts(evt._raw.get("session_id"), Spawns.load(evt).records.values())
                 scan = cls.CACHE[id(evt._raw)] = cls(evt._raw, facts)
-            cls.CACHE.move_to_end(id(evt._raw))
-            while len(cls.CACHE) > SCAN_CACHE_LIMIT:
-                cls.CACHE.popitem(last=False)
+            evt._resources[cls, id(evt._raw)] = scan
         with scan.guard:
             if not scan.scanned:
                 for text in filter(names_guarded, candidate_texts(evt)):
