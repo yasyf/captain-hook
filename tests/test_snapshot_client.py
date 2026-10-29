@@ -324,10 +324,39 @@ def test_native_root_warming_reuses_source_and_append_facts(tmp_path, monkeypatc
 
 
 def test_foreground_graph_latency_stays_bounded_while_registry_warms(tmp_path, monkeypatch):
+    import importlib.metadata
+    import os
+
+    import cc_transcript._native as native
+
+    import captain_hook.snapshots.worker as worker
     from captain_hook.testing.snapshots import FixtureOwner
     from tests.helpers import raw_text
     from tests.test_snapshot_fixture_owner import write_messages
 
+    version = importlib.metadata.version("cc-transcript")
+    module_path = Path(native.__file__).resolve()
+    worker_path = Path(worker.__file__).resolve()
+    provenance = {
+        "sdk_version": version,
+        "native_path": str(module_path),
+        "native_sha256": hashlib.sha256(module_path.read_bytes()).hexdigest(),
+        "worker_path": str(worker_path),
+        "worker_sha256": hashlib.sha256(worker_path.read_bytes()).hexdigest(),
+        "python": sys.version,
+        "consumer_requires": importlib.metadata.requires("capt-hook"),
+    }
+    assert any(
+        requirement.replace(" ", "") == "cc-transcript[judge]==" + version
+        for requirement in provenance["consumer_requires"]
+    )
+    assert version == os.environ["CAPTAIN_ABBA_VERSION"]
+    assert provenance["native_sha256"] == os.environ["CAPTAIN_ABBA_NATIVE_SHA256"]
+    assert provenance["worker_sha256"] == "c9ac72248ae9713118436b54bd22958a003d3db20cd53f5239d415d3f90e9a03"
+    assert module_path.is_relative_to(Path(sys.prefix).resolve())
+    assert worker_path == Path("captain_hook/snapshots/worker.py").resolve()
+    diagnostic_samples = []
+    samples = []
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     source = tmp_path / "root.jsonl"
     write_messages(source, raw_text("user", "root"))
@@ -350,23 +379,40 @@ def test_foreground_graph_latency_stays_bounded_while_registry_warms(tmp_path, m
         pytest.fail("registered fixture did not finish warming")
 
     try:
-        samples = []
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(warm)
             start_together.wait()
-            for _ in range(30):
+            for ordinal in range(30):
+                wall_start_ns = time.time_ns()
+                status = "ok"
                 started = time.perf_counter()
                 session = fixture.load(source).with_registered_sources(sources)
+                loaded = time.perf_counter()
                 try:
                     try:
                         assert session.has_edit_to("src/**") is False
                     except EvidenceIncomplete as exc:
+                        status = exc.status
                         assert exc.status in {"incomplete", "deadline"} or (
                             isinstance(exc, GraphEvidenceExpired) and exc.status in {"stale_cursor", "stale_handle"}
                         )
                 finally:
+                    queried = time.perf_counter()
                     session.release()
-                samples.append(time.perf_counter() - started)
+                finished = time.perf_counter()
+                samples.append(finished - started)
+                diagnostic_samples.append(
+                    {
+                        "ordinal": ordinal + 1,
+                        "start_ns": wall_start_ns,
+                        "end_ns": time.time_ns(),
+                        "load_seconds": loaded - started,
+                        "query_seconds": queried - loaded,
+                        "release_seconds": finished - queried,
+                        "total_seconds": finished - started,
+                        "status": status,
+                    }
+                )
             future.result(timeout=30)
         p95 = sorted(samples)[28]
         print(f"prepared graph foreground p95_ms={p95 * 1000:.1f}")
@@ -392,6 +438,15 @@ def test_foreground_graph_latency_stays_bounded_while_registry_warms(tmp_path, m
         assert requests.count("prepare_graph") == 1
         assert requests.count("query_graph") == 2
     finally:
+        receipt = {
+            "variant": os.environ["CAPTAIN_ABBA_VARIANT"],
+            "provenance": provenance,
+            "samples": diagnostic_samples,
+            "p95_seconds": sorted(samples)[28] if len(samples) == 30 else None,
+            "sample_count": len(samples),
+        }
+        Path(os.environ["CAPTAIN_ABBA_RECEIPT"]).write_text(json.dumps(receipt, sort_keys=True) + "\n")
+        print("CAPTAIN_ABBA_RECEIPT=" + json.dumps(receipt, sort_keys=True))
         warm_client.close()
         fixture.close()
 
