@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import NoReturn
@@ -11,6 +12,7 @@ from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 from captain_hook.types import Event
+from tests.helpers import run_cli
 from tests.test_cmd import evt_for
 
 ORCA_UUID = "7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"
@@ -27,6 +29,7 @@ def repo(tmp_path: Path) -> Path:
     root = tmp_path.resolve() / "repo"
     (root / ".git").mkdir(parents=True)
     (root / "internal" / "focused").mkdir(parents=True)
+    (root / "infra").mkdir()
     (root / "explicit.log").write_text("needle\n")
     return root
 
@@ -113,6 +116,18 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
     [
         pytest.param("grep -R -n needle .", id="grep-dot"),
         pytest.param("grep -rn needle", id="grep-implicit-cwd"),
+        pytest.param(r'grep -rn "CCI_RELAY_URL\s*=" infra/', id="observed-infra-search"),
+        pytest.param("grep -rIn needle infra/", id="binary-skip-is-no-bound"),
+        pytest.param("grep -rn --include='*' needle infra/", id="subtree-bare-include"),
+        pytest.param("grep -rn --exclude-dir=vendor needle infra/", id="subtree-exclusion-only"),
+        pytest.param("grep -r -e needle internal", id="regexp-role-subtree"),
+        pytest.param("grep -rn -m1 needle internal", id="subtree-max-count-is-no-bound"),
+        pytest.param("grep -rn needle explicit.log infra/", id="file-does-not-hide-directory"),
+        pytest.param("grep -rn needle infra/*", id="subtree-universal-glob"),
+        pytest.param("grep -rn needle internal/f*", id="glob-matches-directory"),
+        pytest.param("grep -rn needle *.log", id="recursive-file-glob"),
+        pytest.param("grep -rn needle infra/*.py", id="subtree-file-glob"),
+        pytest.param("sh -c 'cd infra && grep -rn needle .'", id="nested-subtree"),
         pytest.param("rg needle .", id="rg-dot"),
         pytest.param("rg needle", id="rg-implicit-cwd"),
         pytest.param("rg --max-count 1 needle .", id="max-count-is-no-bound"),
@@ -179,6 +194,10 @@ def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Pat
     "command",
     [
         pytest.param("grep -n needle explicit.log", id="not-recursive"),
+        pytest.param("grep -rn needle explicit.log", id="recursive-existing-file"),
+        pytest.param("grep -rIn needle explicit.log", id="binary-skip-existing-file"),
+        pytest.param("grep -rn --include='*.py' needle internal/f*", id="include-bounds-directory-glob"),
+        pytest.param("grep -rIn --include='*.py' needle infra/", id="subtree-narrow-include"),
         pytest.param("grep -rn --include='*.py' needle .", id="narrow-include"),
         pytest.param("grep -rn --include='*.py' --include='*.json' needle .", id="every-include-narrows"),
         pytest.param("rg -g'*.json' needle .", id="narrow-glob"),
@@ -197,9 +216,7 @@ def test_blocks_search_at_repo_root(performance: None, repo: Path, tmp_path: Pat
         pytest.param("rg --type-list", id="type-list"),
         pytest.param("rg --help", id="help"),
         pytest.param("rg -e needle explicit.log", id="regexp-role-keeps-file"),
-        pytest.param("grep -r -e needle internal", id="regexp-role-subtree"),
         pytest.param("rg -- -needle internal", id="end-of-options-pattern"),
-        pytest.param("grep -rn -m1 needle internal", id="attached-value"),
         pytest.param("ugrep -g 'internal/*.py' needle .", id="ugrep-path-glob"),
         pytest.param("ugrep -r -tpy,json needle .", id="ugrep-type-list"),
         pytest.param("ugrep -r -Opy needle .", id="ugrep-extension"),
@@ -527,6 +544,11 @@ def test_classifies_roots_without_walking(
     monkeypatch.setattr("captain_hook.util.vcs.scanned_names", walk)
     assert decision("rg needle .", repo, tmp_path / "dot") == "deny"
     assert decision("grep -rn needle *", repo, tmp_path / "star") == "deny"
+    assert decision("grep -rn needle infra/", repo, tmp_path / "infra") == "deny"
+    assert decision("grep -rn needle explicit.log", repo, tmp_path / "file") is None
+    assert decision("grep -rn needle infra/*.py", repo, tmp_path / "glob") == "deny"
+    assert decision("grep -rn needle internal/f*", repo, tmp_path / "directory-glob") == "deny"
+    assert decision("grep -rn --include='*.py' needle internal/f*", repo, tmp_path / "bounded-glob") is None
     assert decision("rg needle internal/*", repo, tmp_path) is None
     assert decision("rg needle internal/focused", repo, tmp_path) is None
     assert decision("git grep needle", repo, tmp_path / "git") == "deny"
@@ -644,3 +666,73 @@ def test_blocks_successive_searches_in_one_session(performance: None, repo: Path
     assert decision("grep -rl needle .", repo, tmp_path) == "deny"
     assert decision("rg other .", repo, tmp_path) == "deny"
     assert decision("rg needle internal/focused", repo, tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        pytest.param(r'grep -rn "CCI_RELAY_URL\s*=" infra/', "deny", id="observed-argv"),
+        pytest.param("grep -rIn needle infra/", "deny", id="binary-skip"),
+        pytest.param("grep -rn --include='*' needle infra/", "deny", id="universal-include"),
+        pytest.param("grep -rn needle internal/f*", "deny", id="directory-glob"),
+        pytest.param("grep -rn --include='*.py' needle infra/", None, id="narrow-include"),
+        pytest.param("grep -rn --include='*.py' needle internal/f*", None, id="include-bound-glob"),
+        pytest.param("grep -rn needle explicit.log", None, id="named-file"),
+    ],
+)
+def test_recursive_grep_cli_requires_a_filename_bound(repo: Path, command: str, expected: str | None) -> None:
+    result = run_cli(
+        "run",
+        "PreToolUse",
+        root_dir=str(repo),
+        stdin_data=json.dumps(
+            {
+                "session_id": "recursive-grep",
+                "cwd": str(repo),
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            }
+        ),
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout) if result.stdout.strip() else {}
+    decision = output.get("hookSpecificOutput", {})
+    assert decision.get("permissionDecision") == expected
+    if expected == "deny":
+        assert "A recursive `grep` over a directory" in decision["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        pytest.param(r'grep -rn "CCI_RELAY_URL\s*=" infra/', "deny", id="directory"),
+        pytest.param("grep -rIn needle infra/", "deny", id="binary-skip"),
+        pytest.param("grep -rn needle internal/f*", "deny", id="directory-glob"),
+        pytest.param("grep -rn --include='*.py' needle infra/", None, id="narrow-include"),
+        pytest.param("grep -rn --include='*.py' needle internal/f*", None, id="include-bound-glob"),
+        pytest.param("grep -rn needle explicit.log", None, id="named-file"),
+    ],
+)
+def test_recursive_grep_uses_the_current_command_without_history(
+    performance: None, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str, expected: str | None
+) -> None:
+    from captain_hook.cli import dispatch_event
+
+    monkeypatch.setattr(
+        "captain_hook.transcripts.registered_sources", lambda _: pytest.fail("registered history was read")
+    )
+    output, _ = dispatch_event(
+        repo,
+        Event.PreToolUse,
+        {
+            "session_id": "recursive-grep",
+            "cwd": str(repo),
+            "transcript_path": str(tmp_path / "unread-history.jsonl"),
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        },
+        session_dir=tmp_path / "session",
+        transcript_loader=lambda _: pytest.fail("history loader was called"),
+    )
+    assert (output or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
