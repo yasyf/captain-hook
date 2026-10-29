@@ -57,7 +57,11 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   Neither can a marker on a repo Graphite has no access to: with ccx on PATH the pack reads
   `ccx vcs lane --json` and stands down wherever ccx reports a lane other than `gt`, five-minute
   cached per repository so a linked worktree and its main checkout read one verdict.
-  Every hook notes or rewrites, and each note fires at most once per agent; none refuses a command.
+  Every hook but one notes or rewrites, and each note fires at most once per agent. That one refuses
+  `gt move` and `gt abort` every time, `# ccx:raw` and `CAPT_HOOK_CCX_RAW=1` included, because an
+  abort puts every branch in the repository back where the interrupted gt command found it and
+  rewinds other worktrees' stacks. It names `ccx vcs stack rebase --parent <branch>=<parent>` and
+  `ccx vcs stack abort` instead.
   Raw `git commit`/`git push`/branch writes get a note naming `ccx vcs ship`. Its presubmit review
   reminder quiets once a cc-review
   pass has run or the session's dispatch prompt contains a whole `ccx: role=fix` line. Any
