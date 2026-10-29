@@ -536,6 +536,74 @@ def owner_with(native_call):
     return owner
 
 
+@pytest.mark.parametrize("counter", ["source_bytes_read", "prepared_cache_bytes_read"])
+@pytest.mark.parametrize("status", ["ok", "incomplete"])
+def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, counter, status):
+    import os
+
+    usage = empty_usage() | {counter: 4096, "discovery_entries_examined": 3}
+    response = failure("request-1", status, "private response reason", usage)
+    body = request(
+        operation="query_graph",
+        query={"kind": "has_tool", "pattern": "private tool pattern"},
+        observers=[{"kind": "has_override", "texts": ["private override text"]}],
+        selectors=[{"kind": "last_tool_call", "name": "private selector"}],
+        path="/Users/private/transcript.jsonl",
+    )["snapshot"]["request"]
+    owner = owner_with(lambda *_, **__: response)
+
+    assert owner.call(body, context(), object(), []) == response
+
+    [record] = logcap.records
+    assert record.levelno == 20
+    assert "snapshot request completed: operation='query_graph' request_id='request-1'" in record.message
+    assert f"pid={os.getpid()} status={status!r}" in record.message
+    assert "query_kind='has_tool' observer_kinds=('has_override',) selector_count=1" in record.message
+    for key in (
+        "source_opens",
+        "source_bytes_read",
+        "bytes_decoded",
+        "events_parsed",
+        "cold_parses",
+        "append_parses",
+        "discovery_entries_examined",
+        "prepared_cache_reads",
+        "prepared_cache_bytes_read",
+    ):
+        assert f"{key}={usage[key]}" in record.message
+    for forbidden in ("private", "resource_sha256", "response reason", "max_read_bytes"):
+        assert forbidden not in record.message
+
+
+@pytest.mark.parametrize("examined", [0, 1_000_000])
+def test_owner_zero_payload_reads_skip_log_metadata_work(logcap, examined):
+    class Request(dict):
+        def get(self, key, default=None):
+            pytest.fail(f"zero-read request examined logging metadata: {key}")
+
+    body = Request(request(operation="discover")["snapshot"]["request"])
+    response = failure("request-1", "ok", "fixture", {"discovery_entries_examined": examined})
+
+    assert owner_with(lambda *_, **__: response).call(body, context(), object(), []) == response
+    assert logcap.records == []
+
+
+def test_owner_failed_read_retains_one_failure_record(logcap):
+    from cc_transcript.snapshots import SnapshotIncomplete
+
+    def native_call(*_, **__):
+        raise SnapshotIncomplete("cancelled", "private reason", usage={"source_bytes_read": 4096}, work={})
+
+    body = request(operation="acquire")["snapshot"]["request"]
+    response = owner_with(native_call).call(body, context(), object(), [])
+
+    assert response["status"] == "cancelled"
+    [record] = logcap.records
+    assert "snapshot request failed:" in record.message
+    assert "source_bytes_read=4096" in record.message
+    assert "private reason" not in record.message
+
+
 def test_owner_missing_failure_renders_safe_context_through_its_message(logcap):
     from cc_transcript.snapshots import SnapshotIncomplete
 

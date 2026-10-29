@@ -198,6 +198,35 @@ class Owner:
             self.registry_generations[key] = generation
         return generation
 
+    def _completed(self, request: dict[str, Any], response: dict[str, Any], started: float) -> dict[str, Any]:
+        usage = response["usage"]
+        if usage["source_bytes_read"] or usage["prepared_cache_bytes_read"]:
+            fields = {
+                "operation": request["operation"],
+                "request_id": request["id"],
+                "pid": os.getpid(),
+                "status": response["status"],
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                "query_kind": request.get("query", {}).get("kind"),
+                "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
+                "selector_count": len(request.get("selectors", [])),
+            } | {
+                key: usage[key]
+                for key in (
+                    "source_opens",
+                    "source_bytes_read",
+                    "bytes_decoded",
+                    "events_parsed",
+                    "cold_parses",
+                    "append_parses",
+                    "discovery_entries_examined",
+                    "prepared_cache_reads",
+                    "prepared_cache_bytes_read",
+                )
+            }
+            logger.info("snapshot request completed: {}", " ".join(f"{key}={value!r}" for key, value in fields.items()))
+        return response
+
     def call(
         self, request: dict[str, Any], context: CallContext, token: Any, tool_registry: list[dict[str, Any]]
     ) -> dict[str, Any]:
@@ -209,29 +238,39 @@ class Owner:
                 if request["operation"] == "resume":
                     page = self.store.resume_projection(request["cursor"], context=context, cancellation=token)
                     if page is not None:
-                        return self._page(page, request["id"])
-                return dict(self.store.request(request, context=context, cancellation=token))
+                        return self._completed(request, self._page(page, request["id"]), started)
+                return self._completed(
+                    request, dict(self.store.request(request, context=context, cancellation=token)), started
+                )
             if request["operation"] == "prepare_classifier":
-                return self._classification(
-                    self.store.prepare_classifier(
-                        request["handle"],
-                        request["classifier"],
-                        context=context,
-                        cancellation=token,
-                        limits=request["limits"],
-                        deadline_unix_ms=request["deadline_unix_ms"],
+                return self._completed(
+                    request,
+                    self._classification(
+                        self.store.prepare_classifier(
+                            request["handle"],
+                            request["classifier"],
+                            context=context,
+                            cancellation=token,
+                            limits=request["limits"],
+                            deadline_unix_ms=request["deadline_unix_ms"],
+                        ),
+                        request["id"],
                     ),
-                    request["id"],
+                    started,
                 )
             if request["operation"] == "submit_classifier":
-                return self._classification(
-                    self.store.submit_classifier(
-                        request["cursor"],
-                        request["labels"],
-                        context=context,
-                        cancellation=token,
+                return self._completed(
+                    request,
+                    self._classification(
+                        self.store.submit_classifier(
+                            request["cursor"],
+                            request["labels"],
+                            context=context,
+                            cancellation=token,
+                        ),
+                        request["id"],
                     ),
-                    request["id"],
+                    started,
                 )
             if request["operation"] == "prepare_hook_view":
                 with self.store.borrow_snapshot(
@@ -245,16 +284,20 @@ class Owner:
                         classifier = self._hook_classifier(snapshot, request)
                     finally:
                         usage = dict(snapshot.usage)
-                return {
-                    "schema": CORE_SCHEMA,
-                    "id": request["id"],
-                    "status": "ok",
-                    "complete": True,
-                    "data": {"kind": "classifier", "classifier": classifier},
-                    "cursor": None,
-                    "reason": None,
-                    "usage": usage,
-                }
+                return self._completed(
+                    request,
+                    {
+                        "schema": CORE_SCHEMA,
+                        "id": request["id"],
+                        "status": "ok",
+                        "complete": True,
+                        "data": {"kind": "classifier", "classifier": classifier},
+                        "cursor": None,
+                        "reason": None,
+                        "usage": usage,
+                    },
+                    started,
+                )
             if request["policy"] != {"id": "captain-review", "version": "1"}:
                 raise EvidenceIncomplete("invalid_request", "unregistered Captain evidence policy")
             with self.store.borrow_snapshot(
@@ -282,7 +325,7 @@ class Owner:
                     usage=usage,
                     work=dict(snapshot.work),
                 )
-            return self._page(page, request["id"])
+            return self._completed(request, self._page(page, request["id"]), started)
         except self.incomplete_type as exc:
             status, reason, usage = exc.status, exc.reason, dict(exc.usage)
         except EvidenceIncomplete as exc:
