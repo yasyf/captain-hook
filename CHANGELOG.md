@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Monitor command with a block-buffered pipe stage draws a warning.** `cut`, `sed`, `awk`, `tr`,
+  `head`, `tail`, and `grep` hold their output until they exit when it goes to a pipe. A pipeline such as
+  `cci watch ... | grep --line-buffered ... | cut -c1-600` then delivers no event while the stream stays
+  open. The general pack warns after the Monitor starts when such a stage ends the command or sits in a
+  pipeline with a line-buffered stage. It tells the agent to `TaskStop` the Monitor and restart it
+  without the stage, or with `stdbuf -oL`, `sed -u`, `awk` with `fflush()`, or
+  `grep --line-buffered -oE '^.{1,N}'` to truncate.
 - **The graphite pack blocks `gt move` and `gt abort`, and `# ccx:raw` does not lift the block.** An
   abort puts every branch in the repository back where the interrupted gt command found it, so it
   rewinds and deletes branches of unrelated stacks in other worktrees. The block names
