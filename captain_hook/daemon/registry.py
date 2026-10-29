@@ -20,7 +20,7 @@ from captain_hook.durable import project_key
 from captain_hook.packs import manager, plugins
 from captain_hook.util import reqenv
 from captain_hook.util.caching import LRUDict, StampedCache, once
-from captain_hook.util.fs import atomic_write
+from captain_hook.util.fs import DirectoryStamp, atomic_write
 from captain_hook.util.paths import resolve_state_dir
 
 if TYPE_CHECKING:
@@ -61,7 +61,16 @@ class LanguageGeneration(BaseModel):
 
     stamp: MarkerStamp
     computed_at: float
-    languages: tuple[str, ...]
+    witnesses: tuple[tuple[str, str], ...]
+    directories: tuple[tuple[str, DirectoryStamp], ...]
+
+    @property
+    def evidence(self) -> manager.LanguageEvidence:
+        return manager.LanguageEvidence(self.witnesses, self.directories)
+
+    @property
+    def languages(self) -> tuple[str, ...]:
+        return tuple(language for language, _ in self.witnesses)
 
     def current(self, stamp: MarkerStamp, floor: float, now: float) -> bool:
         return self.stamp == stamp and floor <= self.computed_at and now - self.computed_at < MARKER_TTL
@@ -105,25 +114,32 @@ def request_stopped() -> bool:
     return reqenv.abandon_signal().is_set() or reqenv.deadline_within(0)
 
 
-def shared_generation(path: Path, stamp: MarkerStamp, floor: float) -> LanguageGeneration | None:
+def shared_generation(path: Path) -> LanguageGeneration | None:
     try:
         text = path.read_text()
     except FileNotFoundError:
         return None
-    entry = LanguageGeneration.model_validate_json(text)
-    return entry if entry.current(stamp, floor, time.monotonic()) else None
+    return LanguageGeneration.model_validate_json(text)
 
 
 def _language_markers(root: Path, *, since: float) -> tuple[str, ...]:
     stamp = (_stat_entry(root), _stat_entry(root / ".gitignore"))
-    if (hit := shared_generation(path := marker_path(root), stamp, since)) is not None:
+    if (hit := shared_generation(path := marker_path(root))) is not None and hit.current(
+        stamp, since, time.monotonic()
+    ):
         return hit.languages
     with marker_lock(path).acquire(cancel_check=request_stopped):
-        if (hit := shared_generation(path, stamp, since)) is not None:
+        if (hit := shared_generation(path)) is not None and hit.current(stamp, since, time.monotonic()):
             return hit.languages
         computed_at = time.monotonic()
+        evidence = hit.evidence if hit is not None else None
+        if evidence is None or not evidence.valid(root):
+            evidence = manager.language_evidence(root)
         entry = LanguageGeneration(
-            stamp=stamp, computed_at=computed_at, languages=tuple(sorted(manager.detect_languages(root)))
+            stamp=stamp,
+            computed_at=computed_at,
+            witnesses=evidence.witnesses,
+            directories=evidence.directories,
         )
         atomic_write(path, entry.model_dump_json())
     return entry.languages
