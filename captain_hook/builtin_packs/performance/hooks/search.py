@@ -731,7 +731,13 @@ def recursive(arguments: Arguments) -> bool:
 
 
 def grep_searches_broadly(arguments: Arguments) -> bool:
-    return recursive(arguments) and searches_broadly(named_roots(arguments), arguments.cwd)
+    return recursive(arguments) and (
+        not (roots := named_roots(arguments)).complete
+        or any(
+            target.value != "-" and (target.has_glob or not ((path := target.path) is not None and path.is_file()))
+            for target in roots or (Target(".", ".", arguments.cwd),)
+        )
+    )
 
 
 def ugrep_searches_broadly(arguments: Arguments) -> bool:
@@ -927,9 +933,9 @@ hook(
         ),
     ],
     message=(
-        "A recursive `grep`, `ugrep`, `rg`, or `git grep` at /, a home, a repository root, a worktree pool, or a "
-        "scratch project reads every file under it. Search a deeper directory or named files, narrow it with "
-        "`--include='*.py'`, `-g '*.py'`, or a `-- '*.py'` pathspec, or run `ccx code grep <text> <dir>`."
+        "A recursive `grep` over a directory reads every file under it; bound `grep` by filename and scope other "
+        "searches below broad roots. Name files, use `--include='*.py'`, `-g '*.py'`, or `-- '*.py'`, or run "
+        "`ccx code grep` with scoped paths."
     ),
     block=True,
     max_fires=None,
@@ -949,6 +955,12 @@ hook(
         Input(command="env X=1 timeout 10 ugrep -rn needle /Users/alice"): Block(),
         Input(command="sh -c 'cd / && ugrep -rn needle .'"): Block(),
         Input(command="grep -rn needle /Users/alice | head -1"): Block(),
+        Input(command=r'grep -rn "CCI_RELAY_URL\s*=" infra/', cwd="/repo"): Block(),
+        Input(command="grep -rIn needle infra/", cwd="/repo"): Block(),
+        Input(command="grep -rn --include='*' needle infra/", cwd="/repo"): Block(),
+        Input(command="grep -r -e needle internal", cwd="/repo"): Block(),
+        Input(command="grep -rn needle internal/f*", cwd="/repo"): Block(),
+        Input(command="grep -rn needle - infra/", cwd="/repo"): Block(),
         Input(command="grep -Rni needle ~"): Block(),
         Input(command="grep -d recurse needle /"): Block(),
         Input(command="grep -rn -- needle /tmp/scratch-lane"): Block(),
@@ -1018,15 +1030,18 @@ hook(
         Input(command="git grep -nC 3 needle -- .", cwd="/Users/alice"): Block(),
         Input(command="git grep -nOvim needle -- src", cwd="/Users/alice"): Block(),
         Input(command="grep -n needle explicit.log", cwd="/repo"): Allow(),
+        Input(command="grep -rn needle -", cwd="/repo"): Allow(),
         Input(command="rg needle config.toml tests/test_specific.py", cwd="/repo"): Allow(),
         Input(command="ugrep -rn needle ~/.claude/scratch/release-v3/specific-lane"): Allow(),
         Input(command="grep -rn --include='*.py' needle ~"): Allow(),
+        Input(command="grep -rIn --include='*.py' needle infra/", cwd="/repo"): Allow(),
         Input(command="grep -rn --include='*.py' --include='*.json' needle ~"): Allow(),
         Input(command="rg -g'*.json' needle ~"): Allow(),
         Input(command="rg -tpy needle ~"): Allow(),
         Input(command="ugrep -r -tpy,json needle ~"): Allow(),
         Input(command="ugrep -g 'src/*.py' needle ~"): Allow(),
-        Input(command="grep -rn needle *.py", cwd="/"): Allow(),
+        Input(command="grep -rn needle *.py", cwd="/"): Block(),
+        Input(command="grep -rn --include='*.py' needle internal/f*", cwd="/repo"): Allow(),
         Input(command="cat explicit.log | rg needle"): Allow(),
         Input(command="rg needle <explicit.log"): Allow(),
         Input(command="cat explicit.log | ugrep needle"): Allow(),
@@ -1036,7 +1051,8 @@ hook(
         Input(command="echo 'ugrep -rn needle /'"): Allow(),
         Input(command="rg '/' src", cwd="/repo"): Allow(),
         Input(command="rg -e / src", cwd="/repo"): Allow(),
-        Input(command="grep -rn -- '~' src", cwd="/repo"): Allow(),
+        Input(command="grep -rn -- '~' -", cwd="/repo"): Allow(),
+        Input(command="grep -rn -- '~' src", cwd="/repo"): Block(),
         Input(command="ugrep needle /"): Allow(),
         Input(command="git grep needle -- src", cwd="/Users/alice"): Allow(),
         Input(command="git grep -c needle -- src", cwd="/Users/alice"): Allow(),
