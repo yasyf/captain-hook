@@ -236,6 +236,13 @@ class Owner:
                         "discovery_entries_examined",
                         "prepared_cache_reads",
                         "prepared_cache_bytes_read",
+                        "activity_lifts",
+                        "cache_hits",
+                        "inflight_joins",
+                        "generations_published",
+                        "generations_invalidated",
+                        "nonincremental_lowering_calls",
+                        "nonincremental_lowering_source_bytes",
                     )
                 }
                 | {

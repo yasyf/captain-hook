@@ -570,6 +570,13 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
         "discovery_entries_examined",
         "prepared_cache_reads",
         "prepared_cache_bytes_read",
+        "activity_lifts",
+        "cache_hits",
+        "inflight_joins",
+        "generations_published",
+        "generations_invalidated",
+        "nonincremental_lowering_calls",
+        "nonincremental_lowering_source_bytes",
     ):
         assert f"{key}={usage[key]}" in record.message
     for forbidden in ("private", "resource_sha256", "response reason", "max_read_bytes"):
@@ -580,8 +587,20 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
 def test_owner_resume_distinguishes_identical_core_and_owned_usage(logcap, owned):
     cursor = "private consumed cursor"
     next_cursor = "private returned cursor"
-    response = failure("request-1", "incomplete", "private reason", {"source_bytes_read": 4096, "cold_parses": 2})
+    root_cause_usage = {
+        "activity_lifts": 11,
+        "cache_hits": 13,
+        "inflight_joins": 17,
+        "generations_published": 19,
+        "generations_invalidated": 23,
+        "nonincremental_lowering_calls": 29,
+        "nonincremental_lowering_source_bytes": 31_337,
+    }
+    response = failure(
+        "request-1", "incomplete", "private reason", {"source_bytes_read": 4096, "cold_parses": 2} | root_cause_usage
+    )
     response["cursor"] = next_cursor
+    before = json.dumps(response, sort_keys=True)
     page = {
         "field": "candidates_json",
         "records_json": ["private transcript payload"],
@@ -603,11 +622,16 @@ def test_owner_resume_distinguishes_identical_core_and_owned_usage(logcap, owned
 
     assert result == (owner._page(page, "request-1") if owned else response)
     assert result["usage"] is response["usage"]
+    assert json.dumps(response, sort_keys=True) == before
     [record] = logcap.records
     path = "owned_projection" if owned else "core_request"
     assert f"execution_path={path!r}" in record.message
     assert "source_bytes_read=4096" in record.message
     assert "cold_parses=2" in record.message
+    counters = " ".join(f"{key}={value}" for key, value in root_cause_usage.items())
+    assert f"prepared_cache_bytes_read=0 {counters} execution_path={path!r}" in record.message
+    for key, value in root_cause_usage.items():
+        assert result["usage"][key] == value
     assert f"cursor_in_sha256='{hashlib.sha256(cursor.encode()).hexdigest()}'" in record.message
     assert f"cursor_out_sha256='{hashlib.sha256(next_cursor.encode()).hexdigest()}'" in record.message
     assert "private" not in record.message
