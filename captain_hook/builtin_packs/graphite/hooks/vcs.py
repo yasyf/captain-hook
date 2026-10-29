@@ -8,6 +8,7 @@ from captain_hook import (
     Allow,
     Annotated,
     BaseHookEvent,
+    Block,
     CommandSchema,
     CustomCommandLineCondition,
     Event,
@@ -159,6 +160,27 @@ hook(
         in_graphite_repo("ccx vcs ship -m x --no-push --draft"): Allow(),
         in_graphite_repo("gt submit"): Allow(),
         Input(command="gt submit --draft", cwd="/"): Allow(),
+    },
+)
+
+
+hook(  # capt-hook: no-escape a gt abort rewrites every lane's branches, so no single command can vouch for it
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), GraphiteRuns(("gt", "abort"), ("gt", "move"))],
+    skip_if=[HasFlag("--help", "-h")],
+    message=(
+        "`gt move` and `gt abort` are blocked because an abort resets every branch in the repository, "
+        "other lanes' too, to where the interrupted command found it. "
+        "Run `ccx vcs stack rebase --parent <branch>=<parent>` or `ccx vcs stack abort` instead."
+    ),
+    block=True,
+    tests={
+        in_graphite_repo("gt abort --force"): Block(pattern="ccx vcs stack abort"),
+        in_graphite_repo("gt move --onto dev --no-interactive  # ccx:raw"): Block(pattern="--parent"),
+        in_graphite_repo("gt abort", env={"CAPT_HOOK_CCX_RAW": "1"}): Block(pattern="every branch"),
+        in_graphite_repo("gt log"): Allow(),
+        in_graphite_repo("gt move --help"): Allow(),
+        Input(command="gt abort", cwd="/"): Allow(),
     },
 )
 

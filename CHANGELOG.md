@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The graphite pack blocks `gt move` and `gt abort`, and `# ccx:raw` does not lift the block.** An
+  abort puts every branch in the repository back where the interrupted gt command found it, so it
+  rewinds and deletes branches of unrelated stacks in other worktrees. The block names
+  `ccx vcs stack rebase --parent <branch>=<parent>` and `ccx vcs stack abort`.
 - **`git log --all -S` or `-G` with no pathspec or lower date bound draws a warning.** Such a search
   reads content across every ref's history and can keep fetching missing objects from a promisor
   remote. The performance pack warns once per session and names the bounds that scope it: `--
