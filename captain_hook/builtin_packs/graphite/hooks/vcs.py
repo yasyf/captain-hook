@@ -318,9 +318,14 @@ def requests_landing_fields(call: Call) -> bool:
     return arguments.values.get("words", ())[:2] == ("pr", "view") and not LANDING_FIELDS.isdisjoint(requested)
 
 
+class LandingStateQuery(CustomCommandLineCondition):
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return any(requests_landing_fields(call) for call in evt.cmd.calls("gh"))
+
+
 @on(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), CcxInstalled()],
+    only_if=[Tool("Bash"), CcxInstalled(), LandingStateQuery()],
     skip_if=[RanCommand("ccx", "vcs", "pr", "status"), RanCommand("ccx", "vcs", "status")],
     max_fires=1,
     transcript_events=MAX_TRANSCRIPT_EVENTS,

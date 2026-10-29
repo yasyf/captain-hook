@@ -13,11 +13,14 @@ from unittest import mock
 import pytest
 
 import captain_hook
+from captain_hook.app import get_hook_candidates
+from captain_hook.conditions import matches_conditions
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch
 from captain_hook.hook_lint import copy_violations
 from captain_hook.loader import discover_pack
 from captain_hook.testing.helpers import input_to_event, stubbed_commands
 from captain_hook.testing.types import Input
+from captain_hook.transcripts import LazyTranscript, TranscriptPins
 from captain_hook.types import Event
 from captain_hook.util import reqenv
 from tests.helpers import raw_text, raw_tool_msg
@@ -674,6 +677,66 @@ def test_landing_nudge_stays_quiet_off_its_shape(
     assert dispatch_command("gh pr view 42 --json state", git_repo, tmp_path) is None
     ran = [raw_tool_msg("Bash", {"command": "ccx vcs pr status 42"})]
     assert dispatch_command("gh pr view 42 --json state", gt_repo, tmp_path, transcript=ran) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf unrelated",
+        "gh pr view 42 --json title,body",
+        "gh issue view 42 --json state",
+        "echo 'gh pr view 42 --json state'",
+    ],
+)
+def test_unrelated_commands_skip_landing_transcript_preparation(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    event = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(gt_repo)))
+    entry = next(
+        entry
+        for entry in get_hook_candidates(event, async_=False)
+        if entry.handler is not None and entry.handler.__name__ == "landing_state_through_ccx"
+    )
+
+    def load():
+        raise AssertionError("landing evidence was read")
+
+    event.ctx.transcript = LazyTranscript(TranscriptPins(load), seed=True)
+    try:
+        assert matches_conditions(entry.spec, event) is False
+    finally:
+        event.ctx.transcript.release()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr view 42 --json state,mergedAt",
+        "gh --repo owner/repo pr view 42 --json=mergeable",
+        "gh pr view 42 --help --json state",
+    ],
+)
+def test_landing_shape_still_checks_existing_transcript_history(
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    event = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(gt_repo)))
+    entry = next(
+        entry
+        for entry in get_hook_candidates(event, async_=False)
+        if entry.handler is not None and entry.handler.__name__ == "landing_state_through_ccx"
+    )
+
+    def load():
+        raise AssertionError("landing evidence was read")
+
+    event.ctx.transcript = LazyTranscript(TranscriptPins(load), seed=True)
+    try:
+        with pytest.raises(AssertionError, match="landing evidence was read"):
+            matches_conditions(entry.spec, event)
+    finally:
+        event.ctx.transcript.release()
 
 
 def test_landing_nudge_needs_ccx(isolate_modules: None, gt_repo: Path, tmp_path: Path) -> None:
