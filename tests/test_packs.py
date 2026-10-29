@@ -36,6 +36,7 @@ GENERAL_HOOKS = {
     "tickets",
     "hook_files",
     "models",
+    "monitors",
     "plain_english",
     "plans",
     "prompts",
