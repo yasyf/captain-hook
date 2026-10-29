@@ -16,14 +16,12 @@ HEALTHY = {LOAD_PER_CORE: "1000000"}
     Event.PreToolUse,
     only_if=[Tool("Bash")],
     tests={
-        Input(command="go test ./...", env=SATURATED): Block(pattern="CI builds and tests"),
+        Input(command="go test ./...", env=SATURATED): Block(pattern="load gate"),
         Input(command="go test ./...", env=HEALTHY): Allow(),
         Input(command="go build ./next/...", env=SATURATED): Block(),
         Input(command="go build -o /dev/null ./next/cmd/runtime-api ./next/internal/iris", env=SATURATED): Block(),
         Input(command="go vet ./next/internal/iris/", env=SATURATED): Block(),
-        Input(
-            command="/Users/dev/.local/share/mise/installs/go/1.26.9/bin/go build ./...", env=SATURATED
-        ): Block(),
+        Input(command="/Users/dev/.local/share/mise/installs/go/1.26.9/bin/go build ./...", env=SATURATED): Block(),
         Input(
             command="env CGO_ENABLED=1 timeout 600 /Users/dev/.local/share/mise/installs/go/1.26.9/bin/go vet ./...",
             env=SATURATED,
@@ -42,6 +40,11 @@ HEALTHY = {LOAD_PER_CORE: "1000000"}
 def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
     if not any(is_local_build(call) for call in evt.cmd.calls()):
         return None
-    if not HostLoad.sample().saturated:
+    host = HostLoad.sample()
+    if not host.saturated:
         return None
-    return evt.block("CI builds and tests; do not run local builds or tests.")
+    return evt.block(
+        f"Host load is {host.load / host.cores:.2f} per core, at or above the {host.limit:g} limit; "
+        "this is a load gate, not a ban on local builds. "
+        "Rerun the same command once load drops; CI still grades tests."
+    )

@@ -66,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The local-build admission block says the host is saturated, not that local builds are banned.**
+  The performance pack's block on a local `go build`, `go vet`, `go test`, or `cargo` build read as a
+  blanket ban, so agents stopped running the builds and vets a repo allows. It now names the
+  1-minute load per core and the `HOOKS_ADMISSION_LOAD_PER_CORE` limit, calls itself a load gate,
+  and says the same command runs once load drops while CI still grades tests. When it blocks is
+  unchanged.
 - **`rg --files` at `~`, a worktree pool, or a directory above either is blocked, filename filters
   included.** The performance pack blocks a file listing rooted at HOME, at a `.claude/worktrees` or
   `.orca/workspaces` pool, at `~/repos/orca/workspaces` or its `<UUID>` and `<UUID>/<repo>`

@@ -81,9 +81,7 @@ def test_pressure_admission_blocks_repeated_local_builds(
     load_builtin_module("captain_hook.builtin_packs.performance.hooks.admission")
 
     for _ in range(2):
-        result = dispatch(
-            Event.PreToolUse, make_pre_tool_event(tool_input={"command": command}), session_dir=tmp_path
-        )
+        result = dispatch(Event.PreToolUse, make_pre_tool_event(tool_input={"command": command}), session_dir=tmp_path)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "CI builds and tests" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "load gate" in result["hookSpecificOutput"]["permissionDecisionReason"]
