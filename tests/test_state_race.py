@@ -268,7 +268,7 @@ class TestNlpLoadRace:
         assert loads == [resource]
         assert len({id(value) for value in seen}) == 1
 
-    def test_readers_during_a_warm_up_wait_for_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_readers_during_the_first_load_wait_for_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import spacy
 
         from captain_hook.state import NlpResources
@@ -292,11 +292,11 @@ class TestNlpLoadRace:
         monkeypatch.setattr(model_cache, "ensure_wn_lexicon", lambda: slow_load("wn"))
 
         resources = NlpResources()
-        warm = threading.Thread(target=resources.warm)
-        warm.start()
+        first = threading.Thread(target=lambda: resources.spacy)
+        first.start()
         time.sleep(0.01)
         seen = resources.spacy
-        warm.join()
+        first.join()
 
         assert loads == ["spacy"]
         assert seen is pipeline

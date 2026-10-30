@@ -128,6 +128,20 @@ func TestSnapshotBlockedFirstExitLogDoesNotRetainCallQueueOrStop(t *testing.T) {
 		owner.exited(daemonkit.Exit{Code: -1, Signal: 9}, snapshotOwnerLog{writer: writer, pid: 143, start: "unknown"})
 		close(finished)
 	}()
+	var prefix [1]byte
+	started := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(reader, prefix[:])
+		started <- err
+	}()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("first exit log did not start")
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- owner.stop(ctx) }()
 	select {
@@ -156,8 +170,8 @@ func TestSnapshotBlockedFirstExitLogDoesNotRetainCallQueueOrStop(t *testing.T) {
 	}
 	read := make(chan logRead, 1)
 	go func() {
-		data, err := io.ReadAll(io.LimitReader(reader, 1537))
-		read <- logRead{data, err}
+		data, err := io.ReadAll(io.LimitReader(reader, 1536))
+		read <- logRead{append(prefix[:], data...), err}
 	}()
 	var events []string
 	select {

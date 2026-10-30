@@ -112,7 +112,6 @@ def test_runtime_freezes_both_clients_from_request_registry(monkeypatch):
         registry_factory=lambda _: SimpleNamespace(get=lambda: snapshot),
         dispatcher=dispatch,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     try:
         response, after = runtime.dispatch(request())

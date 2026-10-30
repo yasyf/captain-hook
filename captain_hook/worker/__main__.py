@@ -154,7 +154,7 @@ def evaluate_actor(provider: str) -> None:
     bound_transcript_parse_pool()
     skip_bundled_cli_version_probe()
     install_context_io()
-    runtime = ProductRuntime(install_writer=False, nlp_warmer=lambda: None)
+    runtime = ProductRuntime(install_writer=False)
     try:
         with client_scope(defer_cleanup=True, event=request.id) as client:
             token = BACKGROUND_SNAPSHOT_CLIENT.set(client)
