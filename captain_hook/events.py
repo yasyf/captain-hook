@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from captain_hook.primitives.llm import TJudge
     from captain_hook.prompt import Prompt
     from captain_hook.signals.nlp import NlpSignal
-    from captain_hook.tasks import Tasks
+    from captain_hook.tasks import Task, Tasks
     from captain_hook.types import HookResult, Signal, Signals
 
 T = TypeVar("T", bound=ToolCallBase)
@@ -186,6 +186,15 @@ class BaseHookEvent:
         from captain_hook.tasks import Tasks as T
 
         return T.for_session(T.list_id(self.session_id, self.transcript_path))
+
+    def task(self, task_id: str) -> Task | None:
+        """Read one current native task without loading the session's other task records.
+
+        The task's native file name and stored id must match ``task_id``.
+        """
+        from captain_hook.tasks import Tasks as T
+
+        return T.native_task(self.session_id, task_id, transcript_path=self.transcript_path)
 
     @cached_property
     def skip_permissions(self) -> bool:

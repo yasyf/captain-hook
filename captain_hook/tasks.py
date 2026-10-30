@@ -13,6 +13,7 @@ from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_claude_config_dir
 
 UNSAFE_LIST_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+INVALID_TASK_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -95,14 +96,7 @@ class Tasks(Sequence[Task]):
         Claude Code names the store dir either by the exact session id (legacy) or
         ``session-<first-8-chars>`` (current); an exact-id dir wins over the truncated one.
         """
-        if not session_id:
-            return cls()
-        base = root or cls.resolve_root()
-        list_dir = next(
-            (d for name in (session_id, f"session-{session_id[:8]}") if (d := base / name).is_dir()),
-            None,
-        )
-        if list_dir is None:
+        if (list_dir := cls.directory(session_id, root=root)) is None:
             return cls()
         tasks: list[Task] = []
         for path in list_dir.glob("*.json"):
@@ -111,6 +105,45 @@ class Tasks(Sequence[Task]):
             except (OSError, ValueError):
                 logger.bind(path=str(path)).opt(exception=True).warning("failed to read task file")
         return cls(tuple(sorted(tasks, key=lambda t: (not t.id.isdigit(), int(t.id) if t.id.isdigit() else 0, t.id))))
+
+    @classmethod
+    def directory(cls, session_id: str, *, root: Path | None = None) -> Path | None:
+        if not session_id:
+            return None
+        base = root or cls.resolve_root()
+        return next(
+            (d for name in (session_id, f"session-{session_id[:8]}") if (d := base / name).is_dir()),
+            None,
+        )
+
+    @classmethod
+    def native_task(
+        cls, session_id: str, task_id: str, *, transcript_path: Path | None = None, root: Path | None = None
+    ) -> Task | None:
+        """Read one native task whose file name and stored id match ``task_id``.
+
+        Each call reads the current file. Missing tasks return ``None``; malformed
+        JSON and unreadable files are reported as for :meth:`for_session`.
+        Task ids must be nonempty path components, and mismatched stored ids raise
+        ``ValueError``. Arbitrary file-name/id mappings remain supported by
+        :meth:`for_session` and :meth:`get`, rather than this native-store query.
+        """
+        if not task_id or INVALID_TASK_ID.search(task_id):
+            raise ValueError(f"invalid native task id {task_id!r}")
+        if (directory := cls.directory(cls.list_id(session_id, transcript_path), root=root)) is None:
+            return None
+        path = directory / f"{task_id}.json"
+        try:
+            raw = json.loads(path.read_text())
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            logger.bind(path=str(path)).opt(exception=True).warning("failed to read task file")
+            return None
+        task = Task.from_raw(raw)
+        if task.id != task_id:
+            raise ValueError(f"native task id {task.id!r} does not match file id {task_id!r}")
+        return task
 
     @overload
     def __getitem__(self, index: int) -> Task: ...

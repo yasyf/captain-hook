@@ -626,9 +626,8 @@ def input_to_event(
     if inp.tasks is not None:
         from captain_hook.tasks import Task, Tasks
 
-        # Pre-populate the `tasks` cached_property so hooks that read `evt.tasks` see the
-        # injected list in inline tests — no native task store / session_id required.
         evt.__dict__["tasks"] = Tasks(tuple(Task.from_raw(t) for t in inp.tasks))
+        evt.__dict__["task"] = evt.__dict__["tasks"].get
 
     if inp.skip_permissions is not None:
         # Pre-populate the `skip_permissions` cached_property so the test never hits the

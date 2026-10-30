@@ -347,3 +347,111 @@ class TestEventTasks:
             background = StopEvent(_raw=event._raw, ctx=MagicMock())
             assert background.tasks[0].status == "completed"
             assert first.tasks[0].status == "pending"
+    def test_selected_event_reads_current_native_task(self, tasks_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        write_task(tasks_root / "shared", "1", "pending")
+        monkeypatch.setenv("CLAUDE_CODE_TASK_LIST_ID", "shared")
+        evt = StopEvent(_raw={"session_id": "s"}, ctx=MagicMock())
+        assert evt.task("1").status == "pending"
+        write_task(tasks_root / "shared", "1", "completed")
+        assert evt.task("1").status == "completed"
+
+
+class TestNativeTask:
+    def test_reads_only_selected_record(self, tasks_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        for index in range(64):
+            write_task(tasks_root / "s", str(index), "pending")
+        original = Path.read_text
+        reads: list[Path] = []
+
+        def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+            reads.append(path)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read_text)
+        assert Tasks.for_session("s").get("17").id == "17"
+        assert len(reads) == 64
+        print(f"existing_general_query_json_reads={len(reads)}")
+        reads.clear()
+        monkeypatch.setattr(Path, "glob", MagicMock(side_effect=AssertionError("selected query enumerated")))
+        assert Tasks.native_task("s", "17").id == "17"
+        assert reads == [tasks_root / "s" / "17.json"]
+
+    @pytest.mark.parametrize("task_id", ["", ".", "..", "../1", "/1", "a/b", "a\\b", "a\x00b"])
+    def test_rejects_path_ids_before_reading(self, tasks_root: Path, monkeypatch: pytest.MonkeyPatch, task_id: str) -> None:
+        read = MagicMock(side_effect=AssertionError("invalid id reached filesystem"))
+        monkeypatch.setattr(Path, "read_text", read)
+        monkeypatch.setattr(Tasks, "list_id", MagicMock(side_effect=AssertionError("invalid id resolved task list")))
+        with pytest.raises(ValueError, match="invalid native task id"):
+            Tasks.native_task("s", task_id)
+        read.assert_not_called()
+
+    def test_missing_store_and_record(self, tasks_root: Path) -> None:
+        assert Tasks.native_task("s", "1") is None
+        (tasks_root / "s").mkdir(parents=True)
+        assert Tasks.native_task("s", "1") is None
+        assert Tasks.native_task("", "1") is None
+
+    def test_fresh_reads_observe_changes_and_deletion(self, tasks_root: Path) -> None:
+        write_task(tasks_root / "s", "1", "pending")
+        assert Tasks.native_task("s", "1").status == "pending"
+        write_task(tasks_root / "s", "1", "completed")
+        assert Tasks.native_task("s", "1").status == "completed"
+        (tasks_root / "s" / "1.json").unlink()
+        assert Tasks.native_task("s", "1") is None
+
+    def test_exact_store_wins_and_truncated_store_is_supported(self, tasks_root: Path) -> None:
+        session = "c7b2de52-4222-4089-a2a2-14f3e9844d8f"
+        write_task(tasks_root / "session-c7b2de52", "1", "pending")
+        assert Tasks.native_task(session, "1").status == "pending"
+        write_task(tasks_root / session, "1", "completed")
+        assert Tasks.native_task(session, "1").status == "completed"
+        write_task(tasks_root / "session-c7b2de52", "2", "pending")
+        assert Tasks.native_task(session, "2") is None
+
+    def test_explicit_root(self, tmp_path: Path) -> None:
+        write_task(tmp_path / "s", "1", "pending")
+        assert Tasks.native_task("s", "1", root=tmp_path).id == "1"
+
+    def test_mismatched_id_is_not_a_native_record(self, tasks_root: Path) -> None:
+        write_task(tasks_root / "s", "1", "pending", id="2")
+        assert Tasks.for_session("s").get("2").id == "2"
+        with pytest.raises(ValueError, match="does not match file id"):
+            Tasks.native_task("s", "1")
+        assert Tasks.native_task("s", "2") is None
+
+    def test_selected_symlink_uses_existing_read_authority(self, tasks_root: Path, tmp_path: Path) -> None:
+        write_task(tmp_path / "outside", "1", "pending")
+        (tasks_root / "s").mkdir(parents=True)
+        (tasks_root / "s" / "1.json").symlink_to(tmp_path / "outside" / "1.json")
+        assert Tasks.native_task("s", "1") == Tasks.for_session("s").get("1")
+        (tasks_root / "alias").symlink_to(tasks_root / "s", target_is_directory=True)
+        assert Tasks.native_task("alias", "1").id == "1"
+
+    def test_selected_json_and_io_errors_are_reported(self, tasks_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook import tasks as module
+
+        (tasks_root / "s").mkdir(parents=True)
+        (tasks_root / "s" / "1.json").write_text("{bad")
+        logger = MagicMock()
+        monkeypatch.setattr(module, "logger", logger)
+        assert Tasks.native_task("s", "1") is None
+        logger.bind.return_value.opt.return_value.warning.assert_called_once_with("failed to read task file")
+        logger.reset_mock()
+        monkeypatch.setattr(Path, "read_text", MagicMock(side_effect=PermissionError("denied")))
+        assert Tasks.native_task("s", "1") is None
+        logger.bind.return_value.opt.return_value.warning.assert_called_once_with("failed to read task file")
+
+    def test_malformed_structure_remains_visible(self, tasks_root: Path) -> None:
+        (tasks_root / "s").mkdir(parents=True)
+        (tasks_root / "s" / "1.json").write_text("[]")
+        with pytest.raises(AttributeError):
+            Tasks.native_task("s", "1")
+
+    def test_inline_task_fixture_supports_selected_reads(self) -> None:
+        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.testing.types import Input
+        from captain_hook.types import Event
+
+        event = input_to_event(Event.Stop, Input(tasks=[{"id": "1", "status": "pending"}]))
+        assert event.task("1") == event.tasks.get("1")
+        assert event.task("2") is None
