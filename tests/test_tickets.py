@@ -374,7 +374,13 @@ class TestBoard:
         wide = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=200)
         assert [touch.tool for touch in wide.touches] == ["slack_thread"]
 
-    def test_answer_uses_keep_last_duplicate_and_result_order(self) -> None:
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [((0, 0, 0), (2, 1)), ((0, 2, 3), (1, 2)), ((0, 3, 2), (2, 1))],
+    )
+    def test_answer_uses_keep_last_duplicate_and_result_order(
+        self, seconds: tuple[int, int, int], expected: tuple[int, int]
+    ) -> None:
         from captain_hook import T
         from captain_hook.testing.helpers import fixture_session
         from captain_hook.tickets.context import ordered_uses
@@ -383,12 +389,20 @@ class TestBoard:
         second = T.tool("AskUserQuestion", id="second", questions=[])
         turns = [
             turn
-            for tool, result in ((first, "old"), (second, "middle"), (first, "new"))
-            for turn in fixture_session([T.user("start"), T.assistant(tool), T.user(T.result(result, of=tool))]).turns
+            for (tool, result), second_at in zip(
+                ((first, "old"), (second, "middle"), (first, "new")), seconds, strict=True
+            )
+            for turn in fixture_session(
+                [
+                    T.user("start"),
+                    T.assistant(tool),
+                    T.user(T.result(result, of=tool), timestamp=f"2026-01-01T00:00:{second_at:02d}Z"),
+                ]
+            ).turns
         ]
         uses = [use for turn in turns for use in turn.tool_uses]
         assert [use.ref.tool_use_id for use in uses] == ["duplicate", "second", "duplicate"]
-        assert ordered_uses(turns) == sorted([uses[1], uses[2]], key=lambda use: use.result_ts or use.ts)
+        assert ordered_uses(turns) == [uses[index] for index in expected]
 
     def test_a_tap_on_a_cc_slack_question_card_is_an_answer_and_no_other_channel_line_is(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
