@@ -35,6 +35,7 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     git_location,
     git_probe,
     graphite_owns,
+    graphite_queue,
     in_graphite_repo,
     rebases_onto_own_upstream,
 )
@@ -354,10 +355,14 @@ class LandingStateQuery(CustomCommandLineCondition):
     tests={
         Input(command="gh pr view 42 --json state,mergedAt", cwd="/"): Allow(),
         Input(command="gh pr view 42 --json title", cwd="/"): Allow(),
+        in_graphite_repo("gh pr view 42 --json state,mergedAt", queue="trunk"): Allow(),
     },
 )
 def landing_state_through_ccx(evt: BaseHookEvent) -> HookResult | None:
-    if any(requests_landing_fields(call) and graphite_owns(call, evt.cwd) for call in evt.cmd.calls("gh")):
+    if any(
+        requests_landing_fields(call) and graphite_owns(call, evt.cwd) and graphite_queue(call, evt.cwd)
+        for call in evt.cmd.calls("gh")
+    ):
         return evt.warn(
             "Graphite's merge queue closes the pull requests it lands, so `gh pr view` misreports a landing. "
             "Run `ccx vcs pr status <n>` instead."

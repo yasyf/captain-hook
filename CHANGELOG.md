@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The graphite pack stands down in a repo whose stacks live natively on GitHub.** A repo that sets
+  `ccx.stack=github` never rides ccx's gt lane, but the pack asked `ccx vcs lane --json` to learn that,
+  and on a loaded host the probe ran past its five-second timeout and the pack stayed active. It now
+  reads `ccx.stack` from git config first and skips the probe.
+- **Graphite merge-queue warnings stay quiet on another queue.** The `gh pr view` landing warning and
+  the queued-push warning describe Graphite's queue, so they fire only when `ccx.queue` in git config,
+  else `[vcs] queue` in `.claude/ccx.toml`, is unset or `graphite`, the sources ccx reads.
+
 ### Added
 
 - **A Monitor command with a block-buffered pipe stage draws a warning.** `cut`, `sed`, `awk`, `tr`,

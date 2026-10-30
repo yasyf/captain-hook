@@ -318,6 +318,30 @@ def real_gt_repo(tmp_path: Path, nogt: str | None) -> Path:
     return repo
 
 
+@pytest.mark.parametrize("command", [param.values[0] for param in HOOK_CASES])
+def test_hooks_stay_silent_on_a_native_stack(isolate_modules: None, tmp_path: Path, command: str) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    subprocess.run(["git", "-C", str(repo), "config", "ccx.stack", "github"], check=True)
+    assert dispatch_command(command, repo, tmp_path) is None
+
+
+@pytest.mark.parametrize("command", [param.values[0] for param in HOOK_CASES])
+def test_hooks_fire_on_a_graphite_stack(isolate_modules: None, tmp_path: Path, command: str) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    subprocess.run(["git", "-C", str(repo), "config", "ccx.stack", "graphite"], check=True)
+    assert dispatch_command(command, repo, tmp_path) is not None
+
+
+def test_a_native_stack_needs_no_lane_probe(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    subprocess.run(["git", "-C", str(repo), "config", "ccx.stack", "github"], check=True)
+    with stubbed_commands({"ccx vcs lane": (124, "timed out")}):
+        assert dispatch_command("git push --force-with-lease", repo, tmp_path) is None
+
+
 @pytest.mark.parametrize(("command", "kind", "needle"), HOOK_CASES)
 def test_hooks_stay_silent_when_nogt_set(
     isolate_modules: None, tmp_path: Path, command: str, kind: str, needle: str
@@ -743,6 +767,43 @@ def test_landing_nudge_needs_ccx(isolate_modules: None, gt_repo: Path, tmp_path:
     assert dispatch_command("gh pr view 42 --json state", gt_repo, tmp_path) is None
 
 
+def set_queue(repo: Path, source: str, queue: str) -> None:
+    if source == "git-config":
+        subprocess.run(["git", "-C", str(repo), "config", "ccx.queue", queue], check=True)
+        return
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "ccx.toml").write_text(f'[vcs]\nqueue = "{queue}"\n')
+
+
+@pytest.mark.parametrize("source", ["git-config", "ccx-toml"])
+@pytest.mark.parametrize("queue", ["trunk", "github", "none"])
+def test_landing_nudge_stays_quiet_off_the_graphite_queue(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, source: str, queue: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    set_queue(repo, source, queue)
+    assert dispatch_command("gh pr view 42 --json state,mergedAt", repo, tmp_path) is None
+
+
+@pytest.mark.parametrize("source", ["git-config", "ccx-toml"])
+def test_landing_nudge_fires_on_the_graphite_queue(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, source: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    set_queue(repo, source, "graphite")
+    assert "ccx vcs pr status" in warn_context(dispatch_command("gh pr view 42 --json state", repo, tmp_path))
+
+
+def test_git_config_queue_overrides_ccx_toml(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = real_gt_repo(tmp_path, None)
+    set_queue(repo, "ccx-toml", "trunk")
+    set_queue(repo, "git-config", "graphite")
+    assert "ccx vcs pr status" in warn_context(dispatch_command("gh pr view 42 --json state", repo, tmp_path))
+
+
 ENQUEUED = "37768ef4"
 QUEUE_STATUS = "ccx vcs pr status"
 PR_LOOKUP = "gh api graphql"
@@ -816,6 +877,17 @@ def test_a_ship_onto_a_queued_pr_warns_even_at_the_enqueued_head(
     assert_fires(result, "warn", "`feat`")
     assert_fires(result, "warn", "ccx vcs stack new <name>")
     assert "--tip-only" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("source", ["git-config", "ccx-toml"])
+def test_a_push_to_a_pr_on_another_queue_is_allowed(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, source: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo, _ = queued_repo(tmp_path, "feat")
+    set_queue(repo, source, "trunk")
+    commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
+    assert dispatch_stubbed("git push", repo, tmp_path, commands) is None
 
 
 def test_a_push_to_a_pr_not_queued_is_allowed(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
