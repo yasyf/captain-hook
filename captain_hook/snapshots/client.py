@@ -5,6 +5,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -1610,6 +1611,22 @@ class RemoteToolCalls:
     name: str | None = None
     input_regex: Mapping[str, object] | None = None
     errors: Literal["exclude", "include", "only"] = "exclude"
+
+    @property
+    def items(self) -> tuple[ToolUse, ...]:
+        from cc_transcript.query import ToolCallQuery
+
+        query = ToolCallQuery(
+            tuple(self.session.query({"kind": "tool_calls", "name": self.name, "order": "forward"})),
+            include_errors=self.errors != "exclude",
+        )
+        if self.errors == "only":
+            query = query.failed()
+        if self.input_regex is not None:
+            query = query.where_input(
+                **{self.input_regex["field"]: re.compile(self.input_regex["pattern"], self.input_regex["flags"])}
+            )
+        return query.items
 
     def named(self, name: str) -> RemoteToolCalls:
         return replace(self, name=name)
