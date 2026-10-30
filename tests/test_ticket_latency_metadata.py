@@ -57,7 +57,8 @@ def test_query_kind_logs_the_plain_whitelist_literal(kind, logcap):
     with pytest.raises(EvidenceIncomplete) as caught:
         list(client.pages("query", query={"kind": PrivateKind(kind)}))
     assert caught.value.reason == "private native reason"
-    assert f"projection_kind={kind!r}" in logcap.text
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot request failed")]
+    assert f"projection_kind={kind!r}" in record.message
     assert "private-repr-sk-fixture-secret" not in logcap.text
     assert "private native reason" not in logcap.text
 
@@ -73,7 +74,8 @@ def test_unknown_query_kind_is_not_logged(query_kind, logcap):
     client = SnapshotClient(exchange)
     with pytest.raises(EvidenceIncomplete):
         list(client.pages("query", query={"kind": query_kind}))
-    assert "projection_kind=None" in logcap.text
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot request failed")]
+    assert "projection_kind=None" in record.message
     assert private not in logcap.text
 
 
