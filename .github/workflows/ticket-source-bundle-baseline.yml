@@ -1,0 +1,29 @@
+name: Ticket source bundle baseline
+
+on:
+  push:
+    branches: [diag/ticket-source-bundle-baseline]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --extra dev
+      - name: Exact source and real read baseline
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          sha256sum captain_hook/tickets/context.py tests/test_ticket_source_bundle_baseline.py
+          uv run --no-sync pytest -n 0 -s tests/test_ticket_source_bundle_baseline.py
