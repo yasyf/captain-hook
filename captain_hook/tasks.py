@@ -77,12 +77,16 @@ class Tasks(Sequence[Task]):
         """
         if explicit := reqenv.getenv("CLAUDE_CODE_TASK_LIST_ID"):
             return explicit
-        if transcript_path is not None:
-            metas = (transcript_path.with_suffix("") / "subagents").glob("agent-*.meta.json")
-            for meta in sorted(metas, key=lambda path: path.stat().st_mtime, reverse=True):
-                if team := json.loads(meta.read_text()).get("teamName"):
-                    return UNSAFE_LIST_CHARS.sub("-", team)
-        return session_id
+
+        def resolve() -> str:
+            if transcript_path is not None:
+                metas = (transcript_path.with_suffix("") / "subagents").glob("agent-*.meta.json")
+                for meta in sorted(metas, key=lambda path: path.stat().st_mtime, reverse=True):
+                    if team := json.loads(meta.read_text()).get("teamName"):
+                        return UNSAFE_LIST_CHARS.sub("-", team)
+            return session_id
+
+        return reqenv.shared((cls, session_id, transcript_path), resolve)
 
     @classmethod
     def for_session(cls, session_id: str, *, root: Path | None = None) -> Tasks:
