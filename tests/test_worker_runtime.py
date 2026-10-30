@@ -430,6 +430,39 @@ def test_nlp_resource_loads_mark_the_bound_request_warm_up(monkeypatch: pytest.M
     assert [overrides.warmups for overrides in requests] == [["spacy"], []]
 
 
+@pytest.mark.parametrize("mandatory", [False, True], ids=["ordinary", "mandatory"])
+def test_non_nlp_replies_do_not_load_nlp_resources(monkeypatch: pytest.MonkeyPatch, mandatory: bool) -> None:
+    from captain_hook import state
+
+    loaded: list[state.NlpResources] = []
+    backgrounds: list[str] = []
+
+    def spacy(resources: state.NlpResources) -> object:
+        loaded.append(resources)
+        return object()
+
+    def start(thread: threading.Thread) -> None:
+        thread.run()
+
+    monkeypatch.setattr(state.NlpResources, "spacy", property(spacy))
+    monkeypatch.setattr(threading.Thread, "start", start)
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=lambda *_, **__: (None, lambda: backgrounds.append("done")),
+        install_writer=False,
+    )
+
+    for request_id in (1, 2):
+        response, after = runtime.dispatch(request(request_id=request_id, mandatory=mandatory))
+        assert response.status == "ok"
+        assert response.warmup is False
+        assert after is not None
+        after()
+
+    assert backgrounds == ["done", "done"]
+    assert loaded == []
+
+
 def test_registry_is_reused_for_the_same_root() -> None:
     registry = FakeRegistry()
     factories = 0
