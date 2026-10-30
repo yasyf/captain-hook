@@ -50,6 +50,12 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         parents=True
     )
     (adopted.parent / ".git").mkdir()
+    (cleanup := root / ".daemonkit" / "a" / "ccx-cleanup").mkdir(parents=True)
+    (cleanup / "switch.json").write_text('{"paused":true}')
+    (job := cleanup / "jobs" / "queued-job").mkdir(parents=True)
+    (job / "job.json").write_text("{}")
+    (payload := job / "payload" / "src").mkdir(parents=True)
+    (payload.parent / ".git").write_text("gitdir: /retired")
     monkeypatch.setenv("HOME", str(root))
     return root
 
@@ -349,6 +355,17 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
         ),
         pytest.param("rg --files ~/repos/orca", id="adopted-pool-parent"),
         pytest.param("rg --files ~/repos", id="adopted-pool-grandparent"),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs", id="cleanup-queue"),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job", id="cleanup-job-root"),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup", id="cleanup-queue-parent"),
+        pytest.param(
+            "rg --files {home}/.daemonkit/a/ccx-cleanup -g '*.json' -g '*.toml'",
+            id="observed-cleanup-queue-parent-with-filename-filters",
+        ),
+        pytest.param("rg --files ~/.daemonkit/a", id="cleanup-queue-grandparent"),
+        pytest.param("rg --files ~/.daemonkit", id="cleanup-queue-ancestor"),
+        pytest.param("cd ~/.daemonkit/a/ccx-cleanup && rg --files", id="implicit-cleanup-queue-parent"),
+        pytest.param("rg --files --maxdepth 1 ~/.daemonkit/a/ccx-cleanup", id="cleanup-retains-listing-depth-policy"),
     ],
 )
 def test_blocks_listing_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
@@ -390,6 +407,13 @@ def test_blocks_listing_at_home_roots(performance: None, home: Path, tmp_path: P
         pytest.param(
             "cd ~/repos/orca/workspaces/{uuid}/captain-hook/lane && rg --files", id="implicit-cwd-adopted-checkout"
         ),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-switch-file"),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/job.json", id="cleanup-job-file"),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload", id="cleanup-one-checkout"),
+        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload/src", id="cleanup-checkout-subtree"),
+        pytest.param("rg paused ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-direct-state-search"),
+        pytest.param("cat ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-direct-state-read"),
+        pytest.param("find ~/.daemonkit/a/ccx-cleanup -maxdepth 1 -name '*.json'", id="cleanup-shallow-find"),
     ],
 )
 def test_allows_listing_below_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
@@ -537,7 +561,7 @@ def test_match_supplies_the_ugrep_pattern(performance: None, repo: Path, tmp_pat
 
 
 def test_classifies_roots_without_walking(
-    performance: None, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    performance: None, repo: Path, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def walk(*_: object, **__: object) -> NoReturn:
         raise AssertionError("the search guard walked a tree")
@@ -562,6 +586,13 @@ def test_classifies_roots_without_walking(
     assert decision("git grep needle internal/focused", repo, tmp_path) is None
     assert decision("rg --files -g AGENTS.md . internal/focused", repo, tmp_path) is None
     assert decision("rg --files ~", repo, tmp_path / "home") == "deny"
+    assert (
+        decision(
+            f"rg --files {home}/.daemonkit/a/ccx-cleanup -g '*.json' -g '*.toml'", repo, tmp_path / "cleanup"
+        )
+        == "deny"
+    )
+    assert decision("rg --files ~/.daemonkit/a/ccx-cleanup/switch.json", repo, tmp_path / "switch") is None
 
 
 def test_git_grep_follows_its_own_directory(performance: None, repo: Path, tmp_path: Path) -> None:
