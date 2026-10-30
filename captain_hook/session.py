@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -14,6 +15,7 @@ from filelock import FileLock
 from loguru import logger
 from pydantic import BaseModel
 
+from captain_hook.dispatch_metrics import active, measured_call, note_write
 from captain_hook.util.fs import atomic_write
 
 M = TypeVar("M", bound=BaseModel)
@@ -80,6 +82,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
     def __init__(self, session_dir: Path | None, model: type[M]) -> None:
         self._model = model
         self._path = (session_dir / f"{self.model_key(model)}.json") if session_dir else None
+        self._read_digest: bytes | None = None
 
     @staticmethod
     def model_key(model: type[BaseModel]) -> str:
@@ -94,10 +97,13 @@ class SessionSlot(Generic[M]):  # noqa: UP046
     @overload
     def get(self, default: M) -> M: ...
     def get(self, default: M | None = None) -> M | None:
+        self._read_digest = None
         if not self._path or not self._path.exists():
             return default
         try:
-            return self._model.model_validate_json(self._path.read_text())
+            text = self._path.read_text()
+            self._read_digest = hashlib.sha256(text.encode()).digest() if active() else None
+            return self._model.model_validate_json(text)
         except Exception:
             logger.bind(model=self._model.__name__, path=str(self._path)).opt(exception=True).warning(
                 "failed to read session state",
@@ -108,7 +114,14 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         if not self._path:
             return
         try:
-            atomic_write(self._path, obj.model_dump_json())
+            text = obj.model_dump_json()
+            digest = hashlib.sha256(text.encode()).digest() if active() else None
+            measured_call("state_write", self._model.__name__, atomic_write, self._path, text)
+            if digest is not None:
+                note_write(
+                    "uncompared" if self._read_digest is None else "same" if digest == self._read_digest else "different"
+                )
+            self._read_digest = digest
         except OSError:
             logger.bind(path=str(self._path)).opt(exception=True).warning("failed to persist session state")
 

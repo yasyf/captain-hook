@@ -18,6 +18,7 @@ from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import attributed, denies, envelope_text, format_output, mandatory_completions
+from captain_hook.dispatch_metrics import collect_submit, measured_call, note_session
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
 from captain_hook.transcripts import load_transcript
@@ -82,19 +83,23 @@ class ProductRuntime:
         started = time.perf_counter()
         abandoned: list[str] = []
         warmups: list[str] = []
-        try:
-            response, background = self._respond(request, abandoned, warmups)
-            return replace(response, warmup=bool(warmups)), background
-        finally:
-            logger.bind(
-                event=request.event,
-                root=request.root,
-                client_pid=request.client_pid,
-                queue_ms=round((started - request.received) * 1000, 1),
-                elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
-                abandoned=abandoned,
-                warmups=warmups,
-            ).info("dispatch")
+        with collect_submit(request.event, request.id) as metrics:
+            try:
+                response, background = self._respond(request, abandoned, warmups)
+                return replace(response, warmup=bool(warmups)), background
+            finally:
+                finished = time.perf_counter()
+                elapsed_ms = (finished - started) * 1000
+                logger.bind(
+                    event=request.event,
+                    root=request.root,
+                    client_pid=request.client_pid,
+                    queue_ms=round((started - request.received) * 1000, 1),
+                    elapsed_ms=round(elapsed_ms, 1),
+                    abandoned=abandoned,
+                    warmups=warmups,
+                    **(metrics.summary((finished - request.received) * 1000) if metrics is not None else {}),
+                ).info("dispatch")
 
     def _respond(
         self, request: EventRequest, abandoned: list[str], warmups: list[str]
@@ -117,6 +122,7 @@ class ProductRuntime:
         raw_dict = cast(dict[str, Any], raw) if isinstance(raw, dict) else None
         session_id = raw_dict.get("session_id") if raw_dict is not None else None
         session_id = session_id if isinstance(session_id, str) else None
+        note_session(session_id)
         scoped = _ScopedRequest(
             env=request.env,
             cwd=request.cwd,
@@ -170,7 +176,7 @@ class ProductRuntime:
         buffers: RequestBuffers,
     ) -> tuple[Background, GuardCompletion]:
         session_dir = ensure_session(_session(session_id)) if session_id else None
-        snapshot = self._registry(request.root).get()
+        snapshot = measured_call("registry", "", lambda: self._registry(request.root).get())
         if (foreground := CURRENT_CLIENT.get()) is not None:
             foreground.bind_tool_registry(snapshot.tools)
         if (background_client := BACKGROUND_SNAPSHOT_CLIENT.get()) is not None:
