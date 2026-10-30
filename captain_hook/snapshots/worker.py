@@ -214,15 +214,15 @@ class Owner:
             or response["cursor"] is not None
         ):
             fields = (
-                {
-                    "operation": request["operation"],
-                    "request_id": request["id"],
+                request_metadata(request)
+                | {
                     "pid": os.getpid(),
                     "status": response["status"],
                     "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
                     "query_kind": request.get("query", {}).get("kind"),
                     "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
                     "selector_count": len(request.get("selectors", [])),
+                    "tail_bytes": request.get("tail_bytes"),
                 }
                 | {
                     key: usage[key]
