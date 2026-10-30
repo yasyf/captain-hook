@@ -142,12 +142,12 @@ def test_structured_mcp_grep_uses_existing_scope_guard_through_dispatch(
     ("fields", "expected"),
     [
         pytest.param({"paths": ["/"]}, "deny", id="filesystem-root"),
-        pytest.param({"paths": ["~"]}, "deny", id="home"),
-        pytest.param({"repo": "~"}, "deny", id="explicit-home-repo"),
-        pytest.param({}, "deny", id="implicit-repo-root"),
+        pytest.param({"paths": ["~"]}, None, id="tilde-path-is-not-authoritative"),
+        pytest.param({"repo": "~"}, None, id="tilde-repo-is-not-authoritative"),
+        pytest.param({}, "deny", id="explicit-absolute-repo-root"),
         pytest.param({"paths": ["."]}, "deny", id="explicit-repo-root"),
         pytest.param({"paths": ["internal/focused", "."]}, "deny", id="narrow-path-does-not-hide-root"),
-        pytest.param({"paths": ["~/.claude/worktrees"]}, "deny", id="worktree-pool"),
+        pytest.param({"paths": ["~/.claude/worktrees"]}, None, id="tilde-pool-is-not-authoritative"),
         pytest.param({"paths": ["explicit.log"]}, None, id="explicit-file"),
         pytest.param({"paths": ["internal/focused"]}, None, id="focused-directory"),
         pytest.param({"paths": ["internal/focused"], "budget": 1}, None, id="bounded-path-with-output-budget"),
@@ -166,7 +166,9 @@ def test_structured_mcp_grep_uses_existing_scope_guard_through_dispatch(
 def test_structured_mcp_grep_reads_caller_fields_without_shell_reparsing(
     performance: None, repo: Path, home: Path, tmp_path: Path, fields: dict[str, object], expected: str | None
 ) -> None:
-    event = make_pre_tool_event("mcp__plugin_cc-context_cc-context__ccx_code_grep", {"text": "needle"} | fields)
+    event = make_pre_tool_event(
+        "mcp__plugin_cc-context_cc-context__ccx_code_grep", {"text": "needle", "repo": str(repo)} | fields
+    )
     event._raw["cwd"] = str(repo)
     result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
     assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
@@ -198,7 +200,7 @@ def test_structured_mcp_grep_keeps_literal_paths_and_other_tools_scoped(
         ("mcp__other__code_grep", {"text": "needle", "paths": [str(repo)]}),
         ("mcp__cc_context__ccx_code_read", {"path": str(repo)}),
     ]:
-        event = make_pre_tool_event(tool_name, fields)
+        event = make_pre_tool_event(tool_name, {"repo": str(repo)} | fields)
         event._raw["cwd"] = str(repo)
         result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
         assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
@@ -209,10 +211,17 @@ def test_structured_mcp_grep_follows_repository_path_aliases(
 ) -> None:
     alias = tmp_path / "checkout-alias"
     alias.symlink_to(repo, target_is_directory=True)
+    nested_alias = tmp_path / "entry" / "checkout"
+    nested_alias.parent.mkdir()
+    nested_alias.symlink_to(repo, target_is_directory=True)
+    (nested_alias.parent / "sibling" / ".git").mkdir(parents=True)
+    (tmp_path / "sibling").mkdir()
     for fields, expected in [
         ({"paths": [str(alias)]}, "deny"),
         ({"repo": str(alias), "paths": ["."]}, "deny"),
         ({"repo": str(alias), "paths": ["internal/focused"]}, None),
+        ({"repo": str(nested_alias), "paths": ["../sibling"]}, "deny"),
+        ({"paths": [str(nested_alias / ".." / "sibling")]}, None),
     ]:
         event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
         event._raw["cwd"] = str(repo / "internal" / "focused")
@@ -232,9 +241,51 @@ def test_structured_mcp_grep_classifies_without_walks_subprocesses_or_history(
     monkeypatch.setattr("captain_hook.util.vcs.scanned_names", forbidden)
     monkeypatch.setattr("subprocess.run", forbidden)
     monkeypatch.setattr("captain_hook.transcripts.registered_sources", forbidden)
-    for path, expected in [(str(repo), "deny"), ("~/.claude/worktrees", "deny"), ("internal/focused", None)]:
-        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle", "paths": [path]})
+    for path, expected in [(str(repo), "deny"), (str(home / ".claude/worktrees"), "deny"), ("internal/focused", None)]:
+        event = make_pre_tool_event(
+            "mcp__cc_context__ccx_code_grep", {"text": "needle", "repo": str(repo), "paths": [path]}
+        )
         event._raw["cwd"] = str(repo)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({}, id="default-workspace-is-unknown"),
+        pytest.param({"paths": ["."]}, id="relative-root-is-unknown"),
+        pytest.param({"paths": ["internal/focused"]}, id="relative-directory-is-unknown"),
+        pytest.param({"paths": ["explicit.log"]}, id="relative-file-is-unknown"),
+        pytest.param({"repo": "."}, id="relative-repo-is-unknown"),
+        pytest.param({"repo": "../..", "paths": ["."]}, id="relative-repo-and-path-unknown"),
+        pytest.param({"repo": "~", "paths": ["."]}, id="tilde-repo-is-not-expanded"),
+        pytest.param({"paths": ["~"]}, id="tilde-path-is-not-expanded"),
+        pytest.param({"paths": ["~/project"]}, id="tilde-subtree-is-not-expanded"),
+    ],
+)
+def test_structured_mcp_grep_preserves_unknown_workspace_scope(
+    performance: None, repo: Path, tmp_path: Path, fields: dict[str, object]
+) -> None:
+    for cwd in [repo, repo / "internal" / "focused"]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(cwd)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
+
+
+def test_structured_mcp_grep_classifies_absolute_operands_even_with_unknown_relative_ones(
+    performance: None, repo: Path, home: Path, tmp_path: Path
+) -> None:
+    for fields, expected in [
+        ({"paths": [str(repo), "internal/focused"]}, "deny"),
+        ({"repo": "relative-project", "paths": [str(home)]}, "deny"),
+        ({"paths": [str(repo / "internal/focused"), "."]}, None),
+        ({"repo": str(repo), "paths": ["."]}, "deny"),
+        ({"repo": str(repo), "paths": ["internal/focused"]}, None),
+    ]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(repo / "internal" / "focused")
         result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
         assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
 

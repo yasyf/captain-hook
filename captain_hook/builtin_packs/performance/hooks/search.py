@@ -727,12 +727,20 @@ class BroadMCPGrep(CustomCondition):
             return True
         if bounded(positive(tuple(globs), ("!",))):
             return False
-        root = canonical(Target(repo or ".", repo or ".", evt.cwd))
-        targets = tuple(Target(path, path, root) for path in paths)
-        roots = Targets(
-            targets,
-            complete=(root is not None or bool(targets)) and all(target.path is not None for target in targets),
+        root = Path(os.path.normpath(repo)) if os.path.isabs(repo) else None
+        resolved = tuple(path for path in paths if os.path.isabs(path)) + (
+            tuple(
+                os.path.normpath(root / path)
+                for path in paths
+                if path and not path.startswith("~") and not os.path.isabs(path)
+            )
+            if root is not None
+            else ()
         )
+        targets = tuple(Target(path, path, None) for path in resolved)
+        if not targets and (paths or root is None):
+            return False
+        roots = Targets(targets)
         return searches_broadly(roots, root) or any(map(spans_checkouts, roots))
 
 
@@ -966,12 +974,11 @@ hook(
         Input(tool="mcp__cc_context__ccx_code_grep", tool_input={"text": "needle", "paths": ["/"]}): Block(),
         Input(
             tool="mcp__plugin_cc-context_cc-context__ccx_code_grep",
-            tool_input={"text": "needle", "repo": "~"},
+            tool_input={"text": "needle", "repo": "/"},
         ): Block(),
         Input(
             tool="mcp__cc_context__ccx_code_grep",
-            tool_input={"text": "needle", "paths": ["src/specific.py"]},
-            cwd="/repo",
+            tool_input={"text": "needle", "repo": "/repo", "paths": ["src/specific.py"]},
         ): Allow(),
         Input(
             tool="mcp__cc_context__ccx_code_grep", tool_input={"text": "needle", "globs": ["*.py"]}, cwd="/repo"
