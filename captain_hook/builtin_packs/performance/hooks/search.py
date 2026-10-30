@@ -10,6 +10,7 @@ from captain_hook import (
     Block,
     CommandMatches,
     CommandSchema,
+    CustomCondition,
     Event,
     Input,
     Operand,
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
     from cc_transcript.command import Word
 
-    from captain_hook import Arguments
+    from captain_hook import Arguments, BaseHookEvent
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Scalar
 
@@ -710,6 +711,31 @@ def searches_broadly(roots: Targets, cwd: Path | None) -> bool:
     return not roots.complete or any(map(broad, roots or (Target(".", ".", cwd),)))
 
 
+class BroadMCPGrep(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        fields = evt.input.raw
+        repo = fields.get("repo", "")
+        paths = fields.get("paths", [])
+        globs = fields.get("globs", [])
+        if not (
+            isinstance(repo, str)
+            and isinstance(paths, list)
+            and all(isinstance(path, str) for path in paths)
+            and isinstance(globs, list)
+            and all(isinstance(glob, str) for glob in globs)
+        ):
+            return True
+        if bounded(positive(tuple(globs), ("!",))):
+            return False
+        root = canonical(Target(repo or ".", repo or ".", evt.cwd))
+        targets = tuple(Target(path, path, root) for path in paths)
+        roots = Targets(
+            targets,
+            complete=(root is not None or bool(targets)) and all(target.path is not None for target in targets),
+        )
+        return searches_broadly(roots, root) or any(map(spans_checkouts, roots))
+
+
 def reads_stdin(arguments: Arguments) -> bool:
     return "-" not in arguments.values.get("pattern_files", ()) and (
         source != "/dev/null"
@@ -924,6 +950,34 @@ def lists_files(arguments: Arguments) -> bool:
 def lists_home_or_pool(arguments: Arguments) -> bool:
     roots = arguments.paths("operands")
     return not roots.complete or any(map(spans_checkouts, roots or (Target(".", ".", arguments.cwd),)))
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("ccx_code_grep"), BroadMCPGrep()],
+    message=(
+        "A structured `ccx_code_grep` request over a home, repository root, or worktree pool is a broad search. "
+        "Name files or a focused directory in `paths`, or add a filename bound such as `globs: ['*.py']`. "
+        "The output `budget` does not bound the files searched."
+    ),
+    block=True,
+    max_fires=None,
+    tests={
+        Input(tool="mcp__cc_context__ccx_code_grep", tool_input={"text": "needle", "paths": ["/"]}): Block(),
+        Input(
+            tool="mcp__plugin_cc-context_cc-context__ccx_code_grep",
+            tool_input={"text": "needle", "repo": "~"},
+        ): Block(),
+        Input(
+            tool="mcp__cc_context__ccx_code_grep",
+            tool_input={"text": "needle", "paths": ["src/specific.py"]},
+            cwd="/repo",
+        ): Allow(),
+        Input(
+            tool="mcp__cc_context__ccx_code_grep", tool_input={"text": "needle", "globs": ["*.py"]}, cwd="/repo"
+        ): Allow(),
+    },
+)
 
 
 hook(

@@ -12,7 +12,7 @@ from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 from captain_hook.types import Event
-from tests.helpers import run_cli
+from tests.helpers import make_pre_tool_event, run_cli
 from tests.test_cmd import evt_for
 
 ORCA_UUID = "7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"
@@ -115,6 +115,128 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
         return None
     output = result["hookSpecificOutput"]
     return output.get("permissionDecision") if "additionalContext" not in output else "warn"
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "ccx_code_grep",
+        "mcp__cc_context__ccx_code_grep",
+        "mcp__cc-context__ccx_code_grep",
+        "mcp__plugin_cc-context_cc-context__ccx_code_grep",
+    ],
+)
+def test_structured_mcp_grep_uses_existing_scope_guard_through_dispatch(
+    performance: None, repo: Path, tmp_path: Path, tool_name: str
+) -> None:
+    event = make_pre_tool_event(tool_name, {"text": "needle", "paths": [str(repo)], "budget": 1})
+    event._raw["cwd"] = str(repo / "internal" / "focused")
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert result is not None
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "output `budget` does not bound" in output["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        pytest.param({"paths": ["/"]}, "deny", id="filesystem-root"),
+        pytest.param({"paths": ["~"]}, "deny", id="home"),
+        pytest.param({"repo": "~"}, "deny", id="explicit-home-repo"),
+        pytest.param({}, "deny", id="implicit-repo-root"),
+        pytest.param({"paths": ["."]}, "deny", id="explicit-repo-root"),
+        pytest.param({"paths": ["internal/focused", "."]}, "deny", id="narrow-path-does-not-hide-root"),
+        pytest.param({"paths": ["~/.claude/worktrees"]}, "deny", id="worktree-pool"),
+        pytest.param({"paths": ["explicit.log"]}, None, id="explicit-file"),
+        pytest.param({"paths": ["internal/focused"]}, None, id="focused-directory"),
+        pytest.param({"paths": ["internal/focused"], "budget": 1}, None, id="bounded-path-with-output-budget"),
+        pytest.param({"globs": ["*.py"]}, None, id="filename-bound"),
+        pytest.param({"paths": ["~"], "globs": ["*.py"]}, None, id="filename-bound-over-home"),
+        pytest.param({"globs": ["!*.md"]}, "deny", id="exclusions-are-not-a-bound"),
+        pytest.param({"globs": ["*.py", "**"]}, "deny", id="broad-glob-beside-narrow"),
+        pytest.param({"paths": ["."], "budget": 1}, "deny", id="output-budget-is-not-a-bound"),
+        pytest.param({"paths": ["."], "regex": True, "filesWithMatches": True}, "deny", id="output-mode-is-not-a-bound"),
+        pytest.param({"repo": ".", "paths": ["internal/focused"]}, None, id="relative-repo-and-path"),
+        pytest.param({"paths": "internal/focused"}, "deny", id="malformed-paths"),
+        pytest.param({"paths": ["internal/focused", None]}, "deny", id="incomplete-paths"),
+        pytest.param({"globs": "*.py"}, "deny", id="malformed-globs"),
+    ],
+)
+def test_structured_mcp_grep_reads_caller_fields_without_shell_reparsing(
+    performance: None, repo: Path, home: Path, tmp_path: Path, fields: dict[str, object], expected: str | None
+) -> None:
+    event = make_pre_tool_event("mcp__plugin_cc-context_cc-context__ccx_code_grep", {"text": "needle"} | fields)
+    event._raw["cwd"] = str(repo)
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_structured_mcp_grep_resolves_paths_against_explicit_repo(
+    performance: None, repo: Path, home: Path, tmp_path: Path
+) -> None:
+    (home / "explicit.log").write_text("needle\n")
+    for fields, expected in [
+        ({"repo": str(home), "paths": ["explicit.log"]}, None),
+        ({"repo": str(repo), "paths": ["."]}, "deny"),
+        ({"repo": str(repo), "paths": ["internal/focused"]}, None),
+    ]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(repo / "internal" / "focused")
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_structured_mcp_grep_keeps_literal_paths_and_other_tools_scoped(
+    performance: None, repo: Path, tmp_path: Path
+) -> None:
+    literal = repo / "explicit $literal; file.log"
+    literal.write_text("needle\n")
+    for tool_name, fields in [
+        ("mcp__cc_context__ccx_code_grep", {"text": "needle", "paths": [str(literal)]}),
+        ("mcp__cc_context__ccx_code_grep", {"text": "~ / Code", "paths": ["internal/focused"]}),
+        ("mcp__other__code_grep", {"text": "needle", "paths": [str(repo)]}),
+        ("mcp__cc_context__ccx_code_read", {"path": str(repo)}),
+    ]:
+        event = make_pre_tool_event(tool_name, fields)
+        event._raw["cwd"] = str(repo)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
+
+
+def test_structured_mcp_grep_follows_repository_path_aliases(
+    performance: None, repo: Path, tmp_path: Path
+) -> None:
+    alias = tmp_path / "checkout-alias"
+    alias.symlink_to(repo, target_is_directory=True)
+    for fields, expected in [
+        ({"paths": [str(alias)]}, "deny"),
+        ({"repo": str(alias), "paths": ["."]}, "deny"),
+        ({"repo": str(alias), "paths": ["internal/focused"]}, None),
+    ]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(repo / "internal" / "focused")
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_structured_mcp_grep_classifies_without_walks_subprocesses_or_history(
+    performance: None, repo: Path, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("structured search scope classification must not walk, spawn, or read history")
+
+    monkeypatch.setattr(Target, "expand", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.contains_repo", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.glob_matches", forbidden)
+    monkeypatch.setattr("captain_hook.util.vcs.scanned_names", forbidden)
+    monkeypatch.setattr("subprocess.run", forbidden)
+    monkeypatch.setattr("captain_hook.transcripts.registered_sources", forbidden)
+    for path, expected in [(str(repo), "deny"), ("~/.claude/worktrees", "deny"), ("internal/focused", None)]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle", "paths": [path]})
+        event._raw["cwd"] = str(repo)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
 
 
 @pytest.mark.parametrize(
