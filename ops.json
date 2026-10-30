@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"ops":[{"kind":"set_branch","branch":"perf/cleanup-payload-search-guard"}]}
+{"v":1,"lamport":4,"ops":[{"kind":"set_criterion_status","id":"a8a6ab7e27be6590a8d6d2e0de4fc352","status":"met","note":"Exact paired parser tests: baseline112474f0 produced9 intended allowed-versus-deny failures including observed filtered command and no-walk sentinel; candidate63daaaae all8 Linux shards PASS. CI41039594147/41039616287; rawlogs in cleanup-payload-search-guard-baseline-actual-failures.json."}]}
