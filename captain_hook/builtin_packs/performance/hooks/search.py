@@ -1012,7 +1012,7 @@ hook(
     only_if=[Tool("ccx_code_grep"), BroadMCPGrep()],
     message=(
         "`ccx_code_grep` over a home, repository root, pool, or ancestor of a known checkout or loaded pack "
-        "is broad; the output budget does not bound files searched. "
+        "is broad; the output `budget` does not bound files searched. "
         "Name files or a focused directory in `paths`, or add a filename bound such as `globs: ['*.py']`."
     ),
     block=True,
