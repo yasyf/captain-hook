@@ -746,7 +746,9 @@ def test_owner_slow_zero_byte_requests_log_wall_time_without_private_payload(
     owner = owner_with(native_call)
     owner.store.register_tool_registry = register
 
-    assert owner.call(body, context(), object(), []) is response
+    result = owner.call(body, context(), object(), [])
+    assert result == response
+    assert result["usage"] is response["usage"]
     assert json.dumps(response, sort_keys=True) == before
     if not logged:
         assert logcap.records == []
