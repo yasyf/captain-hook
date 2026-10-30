@@ -49,6 +49,7 @@ OWNER_ADMISSION = {
     "warm": (1, 4),
 }
 MAX_REGISTRY_GENERATIONS = 64
+SLOW_REQUEST_MS = 100
 
 RegistryKey = tuple[str, str, bytes]
 ExecutionPath = Literal["core_request", "owned_projection", "other_operation"]
@@ -207,18 +208,20 @@ class Owner:
         self, request: dict[str, Any], response: dict[str, Any], started: float, *, execution_path: ExecutionPath
     ) -> dict[str, Any]:
         usage = response["usage"]
+        elapsed_ms = (time.monotonic() - started) * 1000
         if (
             usage["source_bytes_read"]
             or usage["prepared_cache_bytes_read"]
             or request.get("cursor") is not None
             or response["cursor"] is not None
+            or elapsed_ms >= SLOW_REQUEST_MS
         ):
             fields = (
                 request_metadata(request)
                 | {
                     "pid": os.getpid(),
                     "status": response["status"],
-                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                    "elapsed_ms": round(elapsed_ms, 1),
                     "query_kind": request.get("query", {}).get("kind"),
                     "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
                     "selector_count": len(request.get("selectors", [])),

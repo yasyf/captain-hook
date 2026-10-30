@@ -699,7 +699,9 @@ def test_owner_completion_preserves_response_identity(logcap):
 
 
 @pytest.mark.parametrize("examined", [0, 1_000_000])
-def test_owner_zero_payload_reads_skip_log_metadata_work(logcap, examined):
+def test_owner_zero_payload_reads_skip_log_metadata_work(logcap, monkeypatch, examined):
+    monkeypatch.setattr("captain_hook.snapshots.worker.time.monotonic", lambda: 0)
+
     class Request(dict):
         def get(self, key, default=None):
             if key == "cursor":
@@ -711,6 +713,55 @@ def test_owner_zero_payload_reads_skip_log_metadata_work(logcap, examined):
 
     assert owner_with(lambda *_, **__: response).call(body, context(), object(), []) == response
     assert logcap.records == []
+
+
+@pytest.mark.parametrize("phase", ["registry", "native"])
+@pytest.mark.parametrize(("elapsed_ms", "logged"), [(99.999, False), (100, True), (250, True)])
+def test_owner_slow_zero_byte_requests_log_wall_time_without_private_payload(
+    logcap, monkeypatch, phase, elapsed_ms, logged
+):
+    now = 0
+    monkeypatch.setattr("captain_hook.snapshots.worker.time.monotonic", lambda: now)
+    response = failure("request-1", "ok", "private response reason", {"discovery_entries_examined": 3})
+    response["data"] = {"private": "private response payload"}
+    before = json.dumps(response, sort_keys=True)
+    body = request(
+        operation="locate",
+        roots=["/Users/private/sessions"],
+        thread_ids=["private thread"],
+    )["snapshot"]["request"]
+
+    def register(registry, *, context):
+        nonlocal now
+        if phase == "registry":
+            now = elapsed_ms / 1000
+        return "fixture"
+
+    def native_call(*_, **__):
+        nonlocal now
+        if phase == "native":
+            now = elapsed_ms / 1000
+        return response
+
+    owner = owner_with(native_call)
+    owner.store.register_tool_registry = register
+
+    assert owner.call(body, context(), object(), []) is response
+    assert json.dumps(response, sort_keys=True) == before
+    if not logged:
+        assert logcap.records == []
+        return
+    [record] = logcap.records
+    sources = {"roots": body["roots"], "thread_ids": body["thread_ids"]}
+    digest = hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest()[:16]
+    assert "snapshot request completed: operation='locate' request_id='request-1'" in record.message
+    assert f"resource_kind='roots+thread_ids' resource_count=2 resource_sha256='{digest}'" in record.message
+    assert f"status='ok' elapsed_ms={elapsed_ms:.1f}" in record.message
+    assert "source_bytes_read=0" in record.message
+    assert "prepared_cache_bytes_read=0" in record.message
+    assert "discovery_entries_examined=3" in record.message
+    assert "execution_path='core_request' cursor_in_sha256=None cursor_out_sha256=None" in record.message
+    assert "private" not in record.message
 
 
 @pytest.mark.parametrize("operation", ["acquire", "resume"])
