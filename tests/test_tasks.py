@@ -210,3 +210,25 @@ class TestEventTasks:
         evt = StopEvent(_raw={"session_id": "sess-2"}, ctx=MagicMock())
         assert not evt.tasks
         assert evt.tasks.all_completed
+
+
+class TestNativeTask:
+    def test_reads_only_selected_record(self, tasks_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        for index in range(64):
+            write_task(tasks_root / "s", str(index), "pending")
+        original = Path.read_text
+        reads: list[Path] = []
+
+        def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+            reads.append(path)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read_text)
+        assert Tasks.for_session("s").get("17").id == "17"
+        assert len(reads) == 64
+        print(f"existing_general_query_json_reads={len(reads)}")
+        reads.clear()
+        monkeypatch.setattr(Path, "glob", MagicMock(side_effect=AssertionError("selected query enumerated")))
+        assert Tasks.native_task("s", "17").id == "17"
+        assert reads == [tasks_root / "s" / "17.json"]
+
