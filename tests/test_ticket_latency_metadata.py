@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from captain_hook.conditions import UserSaid
 from captain_hook.snapshots.client import HOST_SCHEMA, EvidenceIncomplete, SnapshotClient
 from captain_hook.snapshots.worker import failure
-from captain_hook.tickets import Context
+from captain_hook.tickets import Allow, Context, Reach, Rule, Tickets
 from captain_hook.tickets import decide as deciding
 
 
@@ -98,3 +99,31 @@ def test_ticket_stage_records_duration_and_preserves_errors(fails, logcap, monke
     assert "elapsed_ms=125.0" in record.message
     for private in ("private-channel", "private-body", "private-error"):
         assert private not in logcap.text
+
+
+def test_rule_stage_timings_include_misses_and_preserve_covering_fast_path(logcap, monkeypatch):
+    ticks = iter((10.0, 10.125, 20.0, 20.25))
+    monkeypatch.setattr(deciding, "perf_counter", lambda: next(ticks))
+    ctx = Context.fake("test.stage", {"channel": "private-channel"}, said=["post it"])
+    tickets = Tickets(
+        "test.stage",
+        ("channel",),
+        Reach.PLACE,
+        rules=(Rule("miss", UserSaid("unrelated")), Rule("match", UserSaid("post it"))),
+        deny="Ask the user.",
+    )
+    verdict = tickets.decide(ctx)
+    assert isinstance(verdict, Allow)
+    assert verdict.ticket.rule == "match"
+    records = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
+    assert len(records) == 2
+    assert "stage='rule:miss'" in records[0].message
+    assert "elapsed_ms=125.0" in records[0].message
+    assert "stage='rule:match'" in records[1].message
+    assert "elapsed_ms=250.0" in records[1].message
+    covering = tickets.decide(ctx)
+    assert isinstance(covering, Allow) and not covering.minted
+    assert covering.ticket.id == verdict.ticket.id
+    assert len([record for record in logcap.records if record.message.startswith("ticket decision stage")]) == 2
+    assert "private-channel" not in logcap.text
+    assert "post it" not in logcap.text

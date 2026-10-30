@@ -12,7 +12,7 @@ from loguru import logger
 from captain_hook.tickets import store
 from captain_hook.tickets.conditions import found
 from captain_hook.tickets.context import Context
-from captain_hook.tickets.decide import Undecided
+from captain_hook.tickets.decide import Undecided, decision_stage
 from captain_hook.tickets.orca import coordinator_tree
 from captain_hook.tickets.records import Allow, Deny, Evidence, Proposal, Reach, Ticket
 
@@ -151,7 +151,8 @@ class Tickets:
         passed: list[str] = []
         for rule in self.rules:
             try:
-                evidence = found(rule.when, ctx)
+                with decision_stage(ctx, f"rule:{rule.name}"):
+                    evidence = found(rule.when, ctx)
             except Undecided as exc:
                 passed.append(f"{rule.name}: {exc}")
                 continue
