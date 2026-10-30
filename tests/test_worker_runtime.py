@@ -436,13 +436,16 @@ def test_non_nlp_replies_do_not_load_nlp_resources(monkeypatch: pytest.MonkeyPat
 
     loaded: list[state.NlpResources] = []
     backgrounds: list[str] = []
+    started: list[threading.Thread] = []
+    start_thread = threading.Thread.start
 
     def spacy(resources: state.NlpResources) -> object:
         loaded.append(resources)
         return object()
 
     def start(thread: threading.Thread) -> None:
-        thread.run()
+        started.append(thread)
+        start_thread(thread)
 
     monkeypatch.setattr(state.NlpResources, "spacy", property(spacy))
     monkeypatch.setattr(threading.Thread, "start", start)
@@ -458,6 +461,9 @@ def test_non_nlp_replies_do_not_load_nlp_resources(monkeypatch: pytest.MonkeyPat
         assert response.warmup is False
         assert after is not None
         after()
+
+    for thread in started:
+        thread.join()
 
     assert backgrounds == ["done", "done"]
     assert loaded == []
