@@ -1,1 +1,1 @@
-{"v":1,"lamport":4,"ops":[{"kind":"set_branch","branch":"perf/sdk18-cancellation-carrier"}]}
+{"v":1,"lamport":5,"ops":[{"kind":"add_comment","body":"Fresh owner sdk18_finish_fresh. Rebased private unpublished carrier onto normal17release sync main840fffda (plugin12.107.6 only). HEAD561e4ac4/tree09a28dc9; reviewed worker/test blobs9707e464/f7d57a60 unchanged. Only dirty pin18; uv.lock untouched pending official SDK18 all5public. SDK18 publisher41001759010 retains ownership; Capt18 merge/release/runtime HOLD pending17install+natural audit/root checkpoint."}]}
