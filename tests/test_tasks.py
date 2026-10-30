@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from copy import copy
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,6 +13,7 @@ import pytest
 
 from captain_hook.events import StopEvent
 from captain_hook.tasks import Task, Tasks
+from captain_hook.util import reqenv
 
 
 def write_task(list_dir: Path, task_id: str, status: str, **extra: Any) -> None:
@@ -17,6 +21,28 @@ def write_task(list_dir: Path, task_id: str, status: str, **extra: Any) -> None:
     raw: dict[str, Any] = {"id": task_id, "subject": f"task {task_id}", "status": status, "blocks": [], "blockedBy": []}
     raw |= extra
     (list_dir / f"{task_id}.json").write_text(json.dumps(raw))
+
+
+def metadata_io(monkeypatch: pytest.MonkeyPatch, directory: Path) -> dict[str, int]:
+    counts = {"stat": 0, "read": 0}
+    guard = threading.Lock()
+    original_stat, original_read = Path.stat, Path.read_text
+
+    def stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path.parent == directory and path.name.endswith(".meta.json"):
+            with guard:
+                counts["stat"] += 1
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    def read(path: Path, encoding: str | None = None, errors: str | None = None, newline: str | None = None) -> str:
+        if path.parent == directory and path.name.endswith(".meta.json"):
+            with guard:
+                counts["read"] += 1
+        return original_read(path, encoding=encoding, errors=errors, newline=newline)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "read_text", read)
+    return counts
 
 
 @pytest.fixture
@@ -167,6 +193,99 @@ class TestListId:
         monkeypatch.setenv("CLAUDE_CODE_TASK_LIST_ID", "shared")
         assert Tasks.list_id("s", transcript) == "shared"
 
+    def test_request_resolves_metadata_once_for_all_hook_copies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "s.jsonl"
+        for index in range(16):
+            self.write_meta(transcript, str(index))
+        counts = metadata_io(monkeypatch, transcript.with_suffix("") / "subagents")
+        overrides = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+
+        with reqenv.use_request(overrides):
+            assert [Tasks.list_id("s", transcript) for _ in range(4)] == ["s"] * 4
+
+        assert counts == {"stat": 16, "read": 16}
+
+    def test_concurrent_hook_copies_share_one_metadata_resolution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "s.jsonl"
+        for index in range(16):
+            self.write_meta(transcript, str(index))
+        counts = metadata_io(monkeypatch, transcript.with_suffix("") / "subagents")
+        overrides = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+        ready = threading.Barrier(4)
+
+        def resolve() -> str:
+            with reqenv.use_request(overrides):
+                ready.wait()
+                return Tasks.list_id("s", transcript)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            assert [future.result() for future in [pool.submit(resolve) for _ in range(4)]] == ["s"] * 4
+
+        assert counts == {"stat": 16, "read": 16}
+
+    def test_new_requests_resolve_the_latest_team(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "lane", teamName="first")
+        first = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+        second = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+
+        with reqenv.use_request(first):
+            assert Tasks.list_id("s", transcript) == "first"
+            self.write_meta(transcript, "lane", teamName="second")
+            assert Tasks.list_id("s", transcript) == "first"
+        with reqenv.use_request(second):
+            assert Tasks.list_id("s", transcript) == "second"
+
+    def test_unbound_calls_keep_resolving_fresh_metadata(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "lane", teamName="first")
+        assert Tasks.list_id("s", transcript) == "first"
+        self.write_meta(transcript, "lane", teamName="second")
+        assert Tasks.list_id("s", transcript) == "second"
+
+    def test_request_keeps_session_and_transcript_identities_separate(self, tmp_path: Path) -> None:
+        one, two = tmp_path / "one.jsonl", tmp_path / "two.jsonl"
+        self.write_meta(one, "lane", teamName="first")
+        self.write_meta(two, "lane", teamName="second")
+        overrides = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+
+        with reqenv.use_request(overrides):
+            assert Tasks.list_id("s", one) == "first"
+            assert Tasks.list_id("s", two) == "second"
+            assert Tasks.list_id("one", None) == "one"
+            assert Tasks.list_id("two", None) == "two"
+
+    def test_explicit_identity_does_not_enumerate_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "lane", teamName="team")
+        counts = metadata_io(monkeypatch, transcript.with_suffix("") / "subagents")
+        overrides = reqenv.RequestOverrides(
+            env={"CLAUDE_CODE_TASK_LIST_ID": "explicit"}, cwd=str(tmp_path), client_ppid=1, session_id="s"
+        )
+
+        with reqenv.use_request(overrides):
+            assert Tasks.list_id("s", transcript) == "explicit"
+        assert counts == {"stat": 0, "read": 0}
+
+    def test_failed_resolution_is_not_retained(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        self.write_meta(transcript, "lane", teamName="team")
+        meta = transcript.with_suffix("") / "subagents" / "agent-lane.meta.json"
+        meta.write_text("{")
+        overrides = reqenv.RequestOverrides(env={}, cwd=str(tmp_path), client_ppid=1, session_id="s")
+
+        with reqenv.use_request(overrides):
+            with pytest.raises(json.JSONDecodeError):
+                Tasks.list_id("s", transcript)
+            self.write_meta(transcript, "lane", teamName="repaired")
+            assert Tasks.list_id("s", transcript) == "repaired"
+
 
 class TestTasksQuerying:
     def make(self, *statuses: str) -> Tasks:
@@ -210,3 +329,21 @@ class TestEventTasks:
         evt = StopEvent(_raw={"session_id": "sess-2"}, ctx=MagicMock())
         assert not evt.tasks
         assert evt.tasks.all_completed
+
+    def test_copies_and_background_keep_task_contents_fresh(self, tasks_root: Path, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        TestListId().write_meta(transcript, "lane", teamName="team")
+        write_task(tasks_root / "team", "1", "pending")
+        event = StopEvent(_raw={"session_id": "s", "transcript_path": str(transcript)}, ctx=MagicMock())
+        first, second = copy(event), copy(event)
+        overrides = reqenv.RequestOverrides(
+            env={"CAPTAIN_HOOK_TASKS_DIR": str(tasks_root)}, cwd=str(tmp_path), client_ppid=1, session_id="s"
+        )
+
+        with reqenv.use_request(overrides):
+            assert first.tasks[0].status == "pending"
+            write_task(tasks_root / "team", "1", "completed")
+            assert second.tasks[0].status == "completed"
+            background = StopEvent(_raw=event._raw, ctx=MagicMock())
+            assert background.tasks[0].status == "completed"
+            assert first.tasks[0].status == "pending"
