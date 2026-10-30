@@ -848,7 +848,6 @@ class TestAbandonTransport:
         runtime = ProductRuntime(
             registry_factory=lambda _: FakeRegistry(app.State(hooks=hooks)),
             install_writer=False,
-            nlp_warmer=lambda: None,
         )
         env = {key: value for key, value in os.environ.items() if reqenv.is_whitelisted(key)}
         env.pop("CAPT_HOOK_TEST_NO_LIVE", None)

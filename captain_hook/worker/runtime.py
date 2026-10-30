@@ -20,7 +20,6 @@ from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import attributed, denies, envelope_text, format_output, mandatory_completions
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
-from captain_hook.state import RESOURCES
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import Event, RegisteredHook
 from captain_hook.util import reqenv
@@ -66,7 +65,6 @@ class ProductRuntime:
         dispatcher: Callable[..., tuple[Envelope | None, Background]] = dispatch_event,
         transcript_loader: Callable[..., Any] = load_transcript,
         install_writer: bool = True,
-        nlp_warmer: Callable[[], None] = RESOURCES.warm,
     ) -> None:
         self._registry_factory = registry_factory
         self._dispatcher = dispatcher
@@ -75,10 +73,6 @@ class ProductRuntime:
         self._registries_guard = threading.Lock()
         self._guarded_events: dict[str, frozenset[str]] = {}
         self._writer = decision_writer.install() if install_writer else None
-        self._nlp_warmup = threading.Thread(
-            target=_warm_nlp, args=(nlp_warmer,), name="capt-hook-nlp-warm", daemon=True
-        )
-        self._nlp_warmup_guard = threading.Lock()
 
     def guarded(self, request: EventRequest) -> bool:
         """Whether *request* takes the reserved lane: the client flagged it, or the loaded registry guards its event."""
@@ -217,13 +211,7 @@ class ProductRuntime:
         output = attributed(event, raw, output)
         if output:
             buffers.stdout.write(envelope_text(output) + "\n")
-        return lambda: self._after_reply(context, background, session_id), guard
-
-    def _after_reply(self, context: contextvars.Context, background: Background, session_id: str | None) -> None:
-        with self._nlp_warmup_guard:
-            if self._nlp_warmup.ident is None:
-                self._nlp_warmup.start()
-        context.run(_run_detached, background, session_id)
+        return lambda: context.run(_run_detached, background, session_id), guard
 
     def _registry(self, root: str) -> RegistryLike:
         with self._registries_guard:
@@ -309,13 +297,6 @@ def _run_detached(background: Background, session_id: str | None) -> None:
     late = reqenv.evidence_gaps()[replied:] + late
     if session_id and late:
         tally_fail_open(None, session_id, late)
-
-
-def _warm_nlp(warmer: Callable[[], None]) -> None:
-    try:
-        warmer()
-    except Exception:
-        logger.exception("NLP warm-up failed")
 
 
 def _session(session_id: str):

@@ -996,7 +996,6 @@ class TestGuardCompletion:
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
             install_writer=False,
-            nlp_warmer=lambda: None,
         )
         response, _ = runtime.dispatch(
             replace(
@@ -1206,7 +1205,6 @@ class TestMandatorySkip:
             registry_factory=lambda _: FakeRegistry(app.current_state()),
             transcript_loader=lambda path: None,
             install_writer=False,
-            nlp_warmer=lambda: None,
         )
         response, _ = runtime.dispatch(
             replace(

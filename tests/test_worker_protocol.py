@@ -351,7 +351,6 @@ def test_a_request_the_loaded_registry_guards_takes_the_reserved_lane() -> None:
         registry_factory=lambda _: FakeRegistry(state),
         dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     lanes: dict[int, str] = {}
 

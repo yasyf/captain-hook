@@ -87,7 +87,6 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
         dispatcher=dispatch,
         transcript_loader=transcript_loader,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request())
 
@@ -118,7 +117,6 @@ def test_dispatch_writes_a_plain_text_envelope_verbatim() -> None:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=lambda *_, **__: ("Keep the plan path.", lambda: None),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, _ = runtime.dispatch(request(event="PreCompact"))
 
@@ -136,7 +134,6 @@ def test_a_lane_bash_reply_exports_its_agent_id() -> None:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, _ = runtime.dispatch(request(payload_raw=LANE_PAYLOAD))
 
@@ -150,9 +147,7 @@ def test_a_lane_bash_skipped_mandatory_hook_still_exports_its_agent_id() -> None
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise ValueError("broken hook")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(state), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(state), dispatcher=fail, install_writer=False)
     response, _ = runtime.dispatch(request(payload_raw=LANE_PAYLOAD))
     envelope = json.loads(response.stdout.removeprefix("discovered out\n"))
 
@@ -164,9 +159,7 @@ def test_a_lane_bash_whose_evidence_fails_open_still_exports_its_agent_id() -> N
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise EvidenceIncomplete("retained_limit", "snapshot capacity occupied")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
     response, _ = runtime.dispatch(request(payload_raw=LANE_PAYLOAD))
 
     assert response.stdout == json.dumps(LANE_EXPORT) + "\n"
@@ -188,7 +181,6 @@ def runtime_with(state: app.State, complete: list[str]) -> ProductRuntime:
         registry_factory=lambda _: FakeRegistry(state),
         dispatcher=dispatch,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
 
 
@@ -311,9 +303,7 @@ def test_guard_stays_empty_when_dispatch_fails() -> None:
         reqenv.note_mandatory_completed(completion_key(state.hooks[0], 0))
         raise ValueError("broken hook")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(state), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(state), dispatcher=fail, install_writer=False)
     response, _ = runtime.dispatch(request(mandatory=True))
     assert response.exit == 1
     assert response.guard == ""
@@ -332,7 +322,6 @@ def test_a_failed_mandatory_phase_is_skipped_even_when_every_completion_was_note
         registry_factory=lambda _: FakeRegistry(state),
         dispatcher=lost_at_the_cutoff,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, _ = runtime.dispatch(request())
     assert response.exit == 0
@@ -351,7 +340,6 @@ def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) ->
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=dispatch,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     runtime.dispatch(request(payload_raw='{"session_id": "sess"}'))
     runtime.dispatch(request(event="NotAnEvent"))
@@ -368,35 +356,6 @@ def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) ->
     assert "abandoned=[]" in rejected
 
 
-def test_nlp_warms_once_after_the_first_reply_off_the_request_thread() -> None:
-    release = threading.Event()
-    warmed: list[str] = []
-
-    def warmer() -> None:
-        release.wait()
-        warmed.append(threading.current_thread().name)
-
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(),
-        dispatcher=lambda *_, **__: (None, lambda: None),
-        install_writer=False,
-        nlp_warmer=warmer,
-    )
-    _, first = runtime.dispatch(request(request_id=1))
-    assert not any(t.name == "capt-hook-nlp-warm" for t in threading.enumerate())
-
-    assert first is not None
-    first()
-    _, second = runtime.dispatch(request(request_id=2))
-    assert second is not None
-    second()
-    assert warmed == []
-
-    release.set()
-    next(t for t in threading.enumerate() if t.name == "capt-hook-nlp-warm").join()
-    assert warmed == ["capt-hook-nlp-warm"]
-
-
 def test_dispatch_reports_a_one_time_load_as_warm_up() -> None:
     class ColdRegistry(FakeRegistry):
         def get(self) -> Snapshot:
@@ -408,7 +367,6 @@ def test_dispatch_reports_a_one_time_load_as_warm_up() -> None:
         registry_factory=lambda _: ColdRegistry(),
         dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     first, _ = runtime.dispatch(request(request_id=1))
     second, _ = runtime.dispatch(request(request_id=2))
@@ -476,7 +434,6 @@ def test_registry_is_reused_for_the_same_root() -> None:
         registry_factory=factory,
         dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     runtime.dispatch(request(request_id=1))
     runtime.dispatch(request(request_id=2))
@@ -490,7 +447,6 @@ def test_invalid_event_is_a_result_error_without_dispatch() -> None:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request(event="NoSuchEvent"))
 
@@ -504,9 +460,7 @@ def test_dispatch_exception_returns_traceback_error(logcap: Any) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise ValueError("broken hook")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
     response, after = runtime.dispatch(request())
 
     assert after is None
@@ -521,9 +475,7 @@ def test_snapshot_capacity_failure_allows_hook_without_traceback(status: str) ->
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise EvidenceIncomplete(status, "snapshot capacity occupied")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
     response, after = runtime.dispatch(request())
 
     assert after is None
@@ -552,9 +504,7 @@ def test_bounded_graph_evidence_fails_open_without_traceback(status: str) -> Non
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise EvidenceIncomplete(status, "graph budget exhausted")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
     response, after = runtime.dispatch(request(event="Stop"))
 
     assert after is None
@@ -597,7 +547,6 @@ def test_user_prompt_transcript_missing_fails_open_without_traceback(
         registry_factory=lambda _: FakeRegistry(state),
         transcript_loader=load,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(
         EventRequest(
@@ -626,9 +575,7 @@ def test_invalid_evidence_remains_visible(status: str, logcap: Any) -> None:
     def fail(*_: object, **__: object) -> tuple[None, object]:
         raise EvidenceIncomplete(status, "invalid transcript evidence")
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
     response, after = runtime.dispatch(request(event="Stop"))
 
     assert after is None
@@ -646,7 +593,6 @@ def test_background_snapshot_capacity_failure_does_not_fail_worker() -> None:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=lambda *_, **__: (None, fail),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request())
 
@@ -678,7 +624,6 @@ def fail_open_runtime() -> ProductRuntime:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=spawn_refused,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
 
 
@@ -734,7 +679,6 @@ def test_a_skipped_hook_is_named_once_and_joins_the_sibling_output(tmp_path: Pat
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=skipped_one_hook,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
 
     first, after = runtime.dispatch(session_request(tmp_path, event="Stop"))
@@ -755,7 +699,6 @@ def test_a_hook_skipped_after_the_reply_is_named_on_the_next_dispatch(tmp_path: 
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=skipped_one_async_hook,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
 
     response, after = runtime.dispatch(session_request(tmp_path))
@@ -772,13 +715,11 @@ def test_each_skip_warns_once_with_its_event_and_status(tmp_path: Path, logcap: 
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=skipped_one_hook,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     background = ProductRuntime(
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=skipped_one_async_hook,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
 
     first, _ = foreground.dispatch(session_request(tmp_path, event="Stop"))
@@ -820,7 +761,6 @@ def test_expired_graph_evidence_fails_open_after_reply(status: str) -> None:
         registry_factory=lambda _: FakeRegistry(),
         dispatcher=lambda *_, **__: (None, fail),
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     response, after = runtime.dispatch(request(event="Stop"))
 
@@ -835,9 +775,7 @@ def test_hook_writes_are_captured_inside_the_product_response() -> None:
         print("hook stderr", file=sys.stderr)
         return None, lambda: None
 
-    runtime = ProductRuntime(
-        registry_factory=lambda _: FakeRegistry(), dispatcher=dispatch, install_writer=False, nlp_warmer=lambda: None
-    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=dispatch, install_writer=False)
     original_stdout, original_stderr = sys.stdout, sys.stderr
     sys.stdout = ContextIO("stdout", io.StringIO())
     sys.stderr = ContextIO("stderr", io.StringIO())

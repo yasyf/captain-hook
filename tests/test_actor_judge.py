@@ -424,7 +424,6 @@ def actor_response(root: Path, *, event: str = "PreToolUse", payload: str, manda
         registry_factory=lambda _: FakeRegistry(app.current_state()),
         transcript_loader=lambda path: None,
         install_writer=False,
-        nlp_warmer=lambda: None,
     )
     deadline = int((time.time() + 60) * 1000)
     response, _ = runtime.dispatch(
