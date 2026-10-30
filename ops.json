@@ -1,1 +1,1 @@
-{"v":1,"lamport":4,"ops":[{"kind":"renew"}]}
+{"v":1,"lamport":5,"ops":[{"kind":"set_criterion_status","id":"f301344748aefa3422feed9ea2de5c9b","status":"met","note":"SDK17 five-file GitHub/PyPI/canonical Simple receipt frozen SHA da9f406c before actual UV_NO_BUILD=1 uv lock exit0; lock proof preserves187 entries/186 names. FE/capt-sdk17-carrier-lock-proof.json and capt-sdk17-real-lock-execution.json."}]}
