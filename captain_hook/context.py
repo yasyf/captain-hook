@@ -10,6 +10,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
+from captain_hook.dispatch_metrics import measured_call
 from captain_hook.model import Model
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
@@ -387,7 +388,10 @@ class HookContext:
 
         reqenv.checkpoint()
         try:
-            return run_cli(
+            return measured_call(
+                "cli",
+                "",
+                run_cli,
                 args,
                 input=input,
                 timeout=timeout,
@@ -546,9 +550,13 @@ class HookContext:
 
         reqenv.checkpoint()
         if (judge := actor.ACTOR) is not None:
-            serving, judged, actor_env = judge.route(backend, model)
+            serving, judged, actor_env = measured_call("backend", "actor.route", judge.route, backend, model)
         else:
-            serving, judged, actor_env = backend or ready_backend(specialty, model), model, None
+            serving, judged, actor_env = (
+                backend or measured_call("backend", "ready_backend", ready_backend, specialty, model),
+                model,
+                None,
+            )
         reqenv.checkpoint()
         if reqenv.deadline_within(0):
             raise TimeoutError("the caller deadline passed before the model call")
@@ -560,15 +568,27 @@ class HookContext:
             with UNSUPPORTED_MODELS_LOCK:
                 UNSUPPORTED_MODELS.pop((specialty, model), None)
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
-        prompt = self.assemble_prompt(
-            template, args, kwargs, transcript=transcript, tool_results=tool_results, budget=budget, diff_text=diff_text
+        prompt = measured_call(
+            "llm_prepare",
+            "assemble_prompt",
+            self.assemble_prompt,
+            template,
+            args,
+            kwargs,
+            transcript=transcript,
+            tool_results=tool_results,
+            budget=budget,
+            diff_text=diff_text,
         )
         if evidence:
             self.release_preparation(prompt)
         cwd = resolve_project_dir()
         if judge is not None:
             once, limit = actor.single_attempt(attempts), actor.inference_timeout(timeout)
-            return actor.judged(
+            return measured_call(
+                "llm",
+                "actor.judged",
+                actor.judged,
                 lambda: run_spec(
                     prompt,
                     serving,
@@ -586,7 +606,10 @@ class HookContext:
         timeout = reqenv.clamp_timeout(timeout)
         try:
             if attempts is not None or tools is not None:
-                return run_spec(
+                return measured_call(
+                    "llm",
+                    "run_spec",
+                    run_spec,
                     prompt,
                     serving,
                     model,
@@ -598,7 +621,10 @@ class HookContext:
                     tools=tools,
                 )
             if response_model is not None:
-                return extract_sync(
+                return measured_call(
+                    "llm",
+                    "extract_sync",
+                    extract_sync,
                     prompt,
                     response_model,
                     backend=serving,
@@ -608,7 +634,10 @@ class HookContext:
                     cwd=cwd,
                     timeout=timeout,
                 )
-            return call_sync(
+            return measured_call(
+                "llm",
+                "call_sync",
+                call_sync,
                 prompt, backend=serving, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
             )
         except BackendCallError as exc:
@@ -640,7 +669,9 @@ class HookContext:
         if timeout <= 0:
             raise TimeoutError("the caller deadline leaves no time for the decision call")
         key = actor.ACTOR.decide_key(provider) if actor.ACTOR is not None else None
-        return decide_sync(state, questions, provider=provider, timeout=timeout, api_key=key)
+        return measured_call(
+            "decide", "decide_sync", decide_sync, state, questions, provider=provider, timeout=timeout, api_key=key
+        )
 
     def decide_verdict[M: BaseModel](
         self,

@@ -18,6 +18,7 @@ from loguru import logger
 
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
 from captain_hook.conditions import matches_conditions, planned_predicates
+from captain_hook.dispatch_metrics import measured_call
 from captain_hook.confirm import confirmed
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import (
@@ -249,7 +250,7 @@ def _execute_hook(
     store = SessionStore(hook_session_dir)
 
     if entry.spec.max_fires is None:
-        return deliver(entry, evt, run_handler(entry, evt), settle)
+        return deliver(entry, evt, measured_call("handler", entry.name, run_handler, entry, evt), settle)
 
     with store[HookState].mutate() as hook_state:
         if hook_state.fire_count >= entry.spec.max_fires:
@@ -258,7 +259,7 @@ def _execute_hook(
 
     delivered: HookResult | None = None
     try:
-        delivered = deliver(entry, evt, run_handler(entry, evt), settle)
+        delivered = deliver(entry, evt, measured_call("handler", entry.name, run_handler, entry, evt), settle)
         return delivered
     finally:
         if delivered is None:
@@ -665,7 +666,9 @@ def prepare_hook_events(
         with observing(predicate for entry in entries for predicate in planned_predicates(entry.spec)):
             for index in sorted(range(len(entries)), key=lambda index: entries[index].spec.transcript_events is None):
                 try:
-                    matched[index] = matches_conditions(entries[index].spec, forks[index])
+                    matched[index] = measured_call(
+                        "conditions", entries[index].name, matches_conditions, entries[index].spec, forks[index]
+                    )
                 except EvidenceIncomplete as exc:
                     if not (async_ or fails_open(exc)):
                         raise
@@ -763,7 +766,9 @@ def run_mandatory(
     try:
         try:
             with bound.deadline(), surfacing_handler_errors(), foreground_evidence(MANDATORY_WORK_SECONDS):
-                if skips_event(entry.spec, evt) or not matches_conditions(entry.spec, evt):
+                if skips_event(entry.spec, evt) or not measured_call(
+                    "conditions", entry.name, matches_conditions, entry.spec, evt
+                ):
                     reqenv.publish(partial(settle, None))
                 else:
                     execute_hook(entry, evt, session_dir, settle=settle)
@@ -993,12 +998,14 @@ def dispatch_hooks(
     from captain_hook.transcripts import release_transcript
 
     try:
-        entries, futures = dispatch_mandatory(evt, session_dir)
+        entries, futures = measured_call("mandatory", "", dispatch_mandatory, evt, session_dir)
     except BaseException:
         release_transcript(evt.ctx.transcript)
         raise
     if not advisory:
-        closed, forks = prepare_hook_events(evt, async_=False, mandatory=False, fail_closed=True)
+        closed, forks = measured_call(
+            "prepare", "", prepare_hook_events, evt, async_=False, mandatory=False, fail_closed=True
+        )
         for fork in forks:
             release_transcript(fork.ctx.transcript)
         unstarted: list[Future[HookResult | None]] = [Future() for _ in closed]
@@ -1007,7 +1014,7 @@ def dispatch_hooks(
         return combine(
             event, *in_registration_order(entries + closed, futures + unstarted), SYNC_DEADLINE_MARGIN_SECONDS
         )
-    matching, events = prepare_hook_events(evt, async_=False, mandatory=False)
+    matching, events = measured_call("prepare", "", prepare_hook_events, evt, async_=False, mandatory=False)
     if not matching:
         return combine(event, entries, futures, SYNC_DEADLINE_MARGIN_SECONDS)
     ranks = registration_ranks()
