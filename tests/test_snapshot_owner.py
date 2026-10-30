@@ -549,6 +549,7 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
         observers=[{"kind": "has_override", "texts": ["private override text"]}],
         selectors=[{"kind": "last_tool_call", "name": "private selector"}],
         path="/Users/private/transcript.jsonl",
+        tail_bytes=4 * 1024 * 1024,
     )["snapshot"]["request"]
     owner = owner_with(lambda *_, **__: response)
 
@@ -559,6 +560,8 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
     assert "snapshot request completed: operation='query_graph' request_id='request-1'" in record.message
     assert f"pid={os.getpid()} status={status!r}" in record.message
     assert "query_kind='has_tool' observer_kinds=('has_override',) selector_count=1" in record.message
+    assert "resource_kind='path' resource_count=1 resource_sha256='986fe0e05db49545'" in record.message
+    assert "tail_bytes=4194304" in record.message
     assert "execution_path='core_request' cursor_in_sha256=None cursor_out_sha256=None" in record.message
     for key in (
         "source_opens",
@@ -579,7 +582,7 @@ def test_owner_material_read_logs_exact_response_usage_without_payload(logcap, c
         "nonincremental_lowering_source_bytes",
     ):
         assert f"{key}={usage[key]}" in record.message
-    for forbidden in ("private", "resource_sha256", "response reason", "max_read_bytes"):
+    for forbidden in ("private", "response reason", "max_read_bytes"):
         assert forbidden not in record.message
 
 
