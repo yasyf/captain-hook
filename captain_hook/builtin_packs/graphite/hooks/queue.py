@@ -13,6 +13,8 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     git_location,
     git_probe,
     graphite_owns,
+    graphite_queue,
+    in_graphite_repo,
 )
 from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, collect_budget
 
@@ -264,6 +266,7 @@ def holds(cwd: Path, planned: list[Push]) -> list[Hold]:
         Input(command="ccx vcs stack submit", cwd="/"): Allow(),
         Input(command="gt submit", cwd="/"): Allow(),
         Input(command="git status", cwd="/"): Allow(),
+        in_graphite_repo("git push", queue="trunk"): Allow(),
     },
 )
 def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
@@ -274,6 +277,7 @@ def no_push_to_a_queued_pr(evt: BaseHookEvent) -> HookResult | None:
         if (
             (plan := planner(call)) is not None
             and graphite_owns(call, evt.cwd)
+            and graphite_queue(call, evt.cwd)
             and (cwd := lookup_dir(call, evt.cwd)) is not None
             and (planned := plan(call, evt.cwd))
         ):

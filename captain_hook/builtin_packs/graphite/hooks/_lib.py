@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
 
 FIXTURE_GITDIR = Path(__file__).parents[1] / "gitdir"
+GRAPHITE_QUEUES = frozenset({"", "graphite"})
 
 
 def graphite_owns(call: Call, session_cwd: Path | None) -> bool:
@@ -23,6 +25,30 @@ def graphite_owns(call: Call, session_cwd: Path | None) -> bool:
     if git_dir is not None:
         return graphite_lane_of_git_dir(git_dir)
     return cwd is not None and graphite_lane(cwd)
+
+
+def graphite_queue(call: Call, session_cwd: Path | None) -> bool:
+    cwd, git_dir = git_location(call, session_cwd)
+    if cwd is None:
+        return True
+    location = ["--git-dir", str(git_dir)] if git_dir is not None else []
+    probe = subprocess.run(
+        ["git", *location, "config", "--get", "ccx.queue"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return probe.stdout.strip() in GRAPHITE_QUEUES
+    root = next((ancestor for ancestor in (cwd, *cwd.parents) if (ancestor / ".git").exists()), cwd)
+    config = root / ".claude" / "ccx.toml"
+    return (
+        not config.is_file()
+        or tomllib.loads(config.read_text()).get("vcs", {}).get("queue", "").strip() in GRAPHITE_QUEUES
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,11 +170,11 @@ def force_pushes(call: Call) -> bool:
     return any((target.value or "").startswith("+") for target in call.targets.targets[1:])
 
 
-def in_graphite_repo(command: str, **fields: Any) -> Input:
+def in_graphite_repo(command: str, queue: str | None = None, **fields: Any) -> Input:
     """An inline-test input that runs ``command`` from a home directory whose ``.git`` points at a Graphite git dir."""
     return Input(
         command=f"cd ~ && {command}",
         file=FileFixture(name=".git", content=f"gitdir: {FIXTURE_GITDIR}\n", home=True),
-        commands={"ccx vcs lane": '{"lane": "gt"}'},
+        commands={"ccx vcs lane": '{"lane": "gt"}', "git config --get ccx.queue": queue if queue else (1, "")},
         **fields,
     )

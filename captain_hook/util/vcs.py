@@ -49,11 +49,10 @@ def is_graphite_repo(directory: Path) -> bool:
     return graphite_common_dir(directory) is not None
 
 
-@ttl_cache(300.0)
-def gt_disabled(common: Path) -> bool:
+def common_config(common: Path, key: str) -> str:
     try:
         probe = subprocess.run(
-            ["git", "--git-dir", str(common), "config", "--get", "ccx.nogt"],
+            ["git", "--git-dir", str(common), "config", "--get", key],
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
@@ -61,8 +60,18 @@ def gt_disabled(common: Path) -> bool:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
-    return probe.stdout.strip() in NOGT_TRUE
+        return ""
+    return probe.stdout.strip()
+
+
+@ttl_cache(300.0)
+def gt_disabled(common: Path) -> bool:
+    return common_config(common, "ccx.nogt") in NOGT_TRUE
+
+
+@ttl_cache(300.0)
+def native_stack(common: Path) -> bool:
+    return common_config(common, "ccx.stack") == "github"
 
 
 @ttl_cache(300.0)
@@ -99,7 +108,7 @@ def gt_declined(common: Path) -> bool:
 
 
 def rides_gt_lane(common: Path) -> bool:
-    return not gt_disabled(common) and not gt_declined(common)
+    return not gt_disabled(common) and not native_stack(common) and not gt_declined(common)
 
 
 def graphite_lane(directory: Path) -> bool:

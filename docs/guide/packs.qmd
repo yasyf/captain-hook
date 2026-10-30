@@ -54,6 +54,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo.
   Every hook checks for `.git/.graphite_repo_config` across worktrees and honors `ccx.nogt`.
   That git-config key opts a repo out of the gt lane, so a stale marker cannot activate the pack.
+  `ccx.stack=github` does the same, since ccx keeps that repo's stacks natively on GitHub, and the
+  pack stands down without asking ccx.
   Neither can a marker on a repo Graphite has no access to: with ccx on PATH the pack reads
   `ccx vcs lane --json` and stands down wherever ccx reports a lane other than `gt`, five-minute
   cached per repository so a linked worktree and its main checkout read one verdict.
@@ -81,7 +83,9 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   environment escape. Matching ignores case and surrounding whitespace; `0` does not count. With ccx
   on PATH, a `gh pr view --json` query for landing fields warns and names `ccx vcs pr status <n>`
   (ccx 0.64.1 or later) or `ccx vcs status`; the warning quiets after either command runs this
-  session. A push to a PR the Graphite merge queue holds gets a warning. With ccx on PATH,
+  session. Both the landing warning and the queued-push warning below fire only when the repo lands
+  through Graphite's queue, which holds when `ccx.queue` in git config, else `[vcs] queue` in
+  `.claude/ccx.toml`, is unset or `graphite`. A push to a PR the Graphite merge queue holds gets a warning. With ccx on PATH,
   `git push`, `ccx vcs push`, `ccx vcs ship`, `ccx vcs stack submit`, and `gt submit` look up
   each pushed branch's open PR and read their queue state in one `ccx vcs pr status --json` call.
   A push that would move a queued PR off the commit the queue admitted gets the warning. The queue
