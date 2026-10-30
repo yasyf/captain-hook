@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"ops":[{"kind":"set_branch","branch":"perf/task-identity-once"}]}
+{"v":1,"lamport":4,"ops":[{"kind":"set_criterion_status","id":"dbe7893dd88af2521347ece2962fd6a7","status":"met","note":"Exact f4e0f4cd/tree89d77a67 independent source review PASS; baseline41034496839 retained actual serial and concurrent64/64vs16/16 plus request-identity stability failures before authorized cancellation; raw logs and SHA256 in capt-task-identity-delivery.json."}]}
