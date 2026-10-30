@@ -290,6 +290,155 @@ def test_structured_mcp_grep_classifies_absolute_operands_even_with_unknown_rela
         assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
 
 
+@pytest.fixture
+def search_provenance(performance: None, home: Path) -> dict[str, Path]:
+    collection = home / "Code"
+    primary = collection / "monorepo"
+    git = primary / ".git"
+    worktree_git = git / "worktrees" / "amberjack"
+    worktree_git.mkdir(parents=True)
+    (worktree_git / "commondir").write_text("../..\n")
+    checkout = home / ".orca" / "workspaces" / "monorepo" / "monorepo" / "amberjack"
+    checkout.mkdir(parents=True)
+    (checkout / ".git").write_text(f"gitdir: {worktree_git}\n")
+    for directory in [checkout / ".claude", checkout / ".agents", primary / "src" / "focused"]:
+        directory.mkdir(parents=True)
+    plugins = home / ".claude" / "plugins"
+    loaded = plugins / "cache" / "fixture-marketplace" / "long-running" / "1.0" / "capt-hook" / "hooks"
+    loaded.mkdir(parents=True)
+    module = loaded / "fixture.py"
+    module.write_text(
+        "from captain_hook import Event, Tool, hook\n"
+        "hook(Event.PreToolUse, only_if=[Tool('LoadedPackFixture')], message='fixture')\n"
+    )
+    discover_pack("provenance-fixture", loaded)
+    (loaded / "focused").mkdir()
+    (collection / "collection-note.txt").write_text("fixture needle\n")
+    (plugins / "unloaded-subtree").mkdir()
+    collection_alias = home / "collection-alias"
+    collection_alias.symlink_to(collection, target_is_directory=True)
+    plugins_alias = home / "pack-alias"
+    plugins_alias.symlink_to(plugins, target_is_directory=True)
+    return {
+        "collection": collection,
+        "primary": primary,
+        "checkout": checkout,
+        "plugins": plugins,
+        "loaded": loaded,
+        "collection_alias": collection_alias,
+        "plugins_alias": plugins_alias,
+    }
+
+
+def test_structured_mcp_grep_blocks_the_captured_four_root_payload_by_known_provenance(
+    search_provenance: dict[str, Path], tmp_path: Path
+) -> None:
+    roots = search_provenance
+    event = make_pre_tool_event(
+        "mcp__plugin_cc-context_cc-context__ccx_code_grep",
+        {
+            "text": "fixture needle",
+            "paths": [
+                str(roots["collection"]),
+                str(roots["plugins"]),
+                str(roots["checkout"] / ".claude"),
+                str(roots["checkout"] / ".agents"),
+            ],
+            "budget": 3000,
+        },
+    )
+    event._raw["cwd"] = str(roots["checkout"])
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "ancestor of a known checkout or loaded pack" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("role", "suffix", "expected"),
+    [
+        pytest.param("collection", "", "deny", id="common-checkout-ancestor"),
+        pytest.param("plugins", "", "deny", id="loaded-pack-ancestor"),
+        pytest.param("primary", "", "deny", id="common-checkout-root"),
+        pytest.param("checkout", "", "deny", id="current-checkout-root"),
+        pytest.param("loaded", "", "deny", id="declared-loaded-pack-root"),
+        pytest.param("collection_alias", "", "deny", id="common-ancestor-alias"),
+        pytest.param("plugins_alias", "", "deny", id="loaded-ancestor-alias"),
+        pytest.param("checkout", ".claude", None, id="current-checkout-narrow-config"),
+        pytest.param("checkout", ".agents", None, id="current-checkout-narrow-agents"),
+        pytest.param("primary", "src/focused", None, id="common-checkout-focused-descendant"),
+        pytest.param("loaded", "focused", None, id="loaded-pack-focused-descendant"),
+        pytest.param("collection", "collection-note.txt", None, id="explicit-file-under-container"),
+        pytest.param("loaded", "fixture.py", None, id="explicit-loaded-file"),
+        pytest.param("plugins", "unloaded-subtree", None, id="unrelated-container-descendant"),
+        pytest.param("collection_alias", "monorepo/src/focused", None, id="focused-descendant-through-alias"),
+    ],
+)
+def test_known_search_provenance_distinguishes_ancestors_and_focused_paths(
+    search_provenance: dict[str, Path], tmp_path: Path, role: str, suffix: str, expected: str | None
+) -> None:
+    roots = search_provenance
+    event = make_pre_tool_event(
+        "mcp__cc_context__ccx_code_grep", {"text": "fixture needle", "paths": [str(roots[role] / suffix)]}
+    )
+    event._raw["cwd"] = str(roots["checkout"])
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_bash_search_uses_the_same_known_provenance_classifier(
+    search_provenance: dict[str, Path], tmp_path: Path
+) -> None:
+    roots = search_provenance
+    for path, expected in [
+        (roots["collection"], "deny"),
+        (roots["plugins"], "deny"),
+        (roots["primary"] / "src/focused", None),
+        (roots["checkout"] / ".claude", None),
+        (roots["loaded"] / "fixture.py", None),
+    ]:
+        assert decision(f"rg needle '{path}'", roots["checkout"], tmp_path) == expected
+    for command in [
+        f"cd '{roots['collection']}' && rg needle .",
+        f"env FIXTURE=1 rg needle '{roots['collection']}'",
+        f'''sh -c "cd '{roots['collection']}' && rg needle ."''',
+    ]:
+        assert decision(command, roots["checkout"], tmp_path) == "deny"
+
+
+def test_known_checkout_provenance_does_not_resolve_unknown_mcp_arguments(
+    search_provenance: dict[str, Path], tmp_path: Path
+) -> None:
+    for fields in [{}, {"paths": ["."]}, {"repo": ".", "paths": ["."]}, {"paths": ["~/Code"]}]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "fixture needle"} | fields)
+        event._raw["cwd"] = str(search_provenance["checkout"])
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
+
+
+def test_known_search_provenance_uses_only_metadata_and_loaded_registry(
+    search_provenance: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("provenance classification must not walk, spawn, or rediscover packs")
+
+    monkeypatch.setattr(Target, "expand", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.contains_repo", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.glob_matches", forbidden)
+    monkeypatch.setattr("captain_hook.util.vcs.scanned_names", forbidden)
+    monkeypatch.setattr("subprocess.run", forbidden)
+    monkeypatch.setattr("captain_hook.loader.discover_pack", forbidden)
+    monkeypatch.setattr("captain_hook.packs.manager.detect_languages", forbidden)
+    for role in ["collection", "plugins"]:
+        event = make_pre_tool_event(
+            "mcp__cc_context__ccx_code_grep", {"text": "fixture needle", "paths": [str(search_provenance[role])]}
+        )
+        event._raw["cwd"] = str(search_provenance["checkout"])
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 @pytest.mark.parametrize(
     "command",
     [
