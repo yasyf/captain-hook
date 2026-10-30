@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+from time import perf_counter
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -128,6 +130,17 @@ def cited(items: Sequence[Evidence], ids: Sequence[str]) -> list[Evidence]:
     ]
 
 
+@contextmanager
+def decision_stage(ctx: Context, stage: str) -> Iterator[None]:
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        logger.bind(kind=ctx.kind, stage=stage, elapsed_ms=round((perf_counter() - started) * 1000, 3)).info(
+            "ticket decision stage"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Decide(CustomTicketCondition):
     """A judge's reading of the user's words: the evidence it cites as permitting the action, if any.
@@ -173,7 +186,9 @@ class Decide(CustomTicketCondition):
     def evidence(self, ctx: Context) -> list[Evidence] | None:
         if ctx.evt is None:
             raise Undecided("the context carries no event to judge")
-        if not (items := self.items(ctx)):
+        with decision_stage(ctx, "evidence"):
+            items = self.items(ctx)
+        if not items:
             return None
         verdict = self.verdict(ctx, items)
         if not verdict.allow:
@@ -234,21 +249,22 @@ class Decide(CustomTicketCondition):
         from captain_hook.primitives.llm import llm_evaluate
 
         assert ctx.evt is not None
-        return llm_evaluate(
-            ctx.evt,
-            prompt,
-            Verdict,
-            hook=f"tickets:{ctx.kind}",
-            contexts=self.contexts,
-            specialty=self.specialty,
-            model=self.model,
-            transcript=transcript,
-            root_transcript=root_transcript,
-            tool_results=self.tool_results,
-            once_per_turn=False,
-            evidence=False,
-            backend="llm",
-        )
+        with decision_stage(ctx, "llm-with-context"):
+            return llm_evaluate(
+                ctx.evt,
+                prompt,
+                Verdict,
+                hook=f"tickets:{ctx.kind}",
+                contexts=self.contexts,
+                specialty=self.specialty,
+                model=self.model,
+                transcript=transcript,
+                root_transcript=root_transcript,
+                tool_results=self.tool_results,
+                once_per_turn=False,
+                evidence=False,
+                backend="llm",
+            )
 
     def quick(self, ctx: Context, prompt: Prompt, items: Sequence[Evidence]) -> Verdict | None:
         """Jev's allow on one evidence item, else ``None`` for the LLM."""
@@ -260,19 +276,22 @@ class Decide(CustomTicketCondition):
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         assert ctx.evt is not None
-        built = apply_contexts(prompt, ctx.evt, with_defaults(self.contexts))
+        with decision_stage(ctx, "contexts"):
+            built = apply_contexts(prompt, ctx.evt, with_defaults(self.contexts))
         if built is None or len(str(Prompt(contexts=built.contexts))) >= VERDICT_STATE_CHARS:
             return None
         try:
-            state = verdict_state(
-                ctx.evt.ctx.transcript_evidence(
-                    transcript=self.transcript, tool_results=self.tool_results, root_transcript=self.root_transcript
-                ),
-                built,
-            )
-            decision = ctx.evt.ctx.decide(
-                state, {"permits": permits_question(items)}, provider=JEV, timeout=VERDICT_TIMEOUT_SECONDS
-            )
+            with decision_stage(ctx, "transcript"):
+                state = verdict_state(
+                    ctx.evt.ctx.transcript_evidence(
+                        transcript=self.transcript, tool_results=self.tool_results, root_transcript=self.root_transcript
+                    ),
+                    built,
+                )
+            with decision_stage(ctx, "jev"):
+                decision = ctx.evt.ctx.decide(
+                    state, {"permits": permits_question(items)}, provider=JEV, timeout=VERDICT_TIMEOUT_SECONDS
+                )
         except EvidenceIncomplete:
             raise
         except (DecideError, DecideKeyMissing) as exc:

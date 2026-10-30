@@ -137,6 +137,30 @@ def graph_limits() -> dict[str, int]:
     return limits
 
 
+def output_limit_kind(reason: object) -> str | None:
+    if not isinstance(reason, str):
+        return None
+    return next(
+        (
+            label
+            for prefix, label in (
+                ("projection exceeds serialized output limit", "serialized_projection"),
+                ("activity window of ", "activity_window"),
+                ("encoded reply exceeds page bound", "encoded_page"),
+                ("response data exceeds output budget", "response_data"),
+                ("reservation output budget exhausted", "output_reservation"),
+                ("graph record exceeds remaining output budget", "graph_record"),
+                ("projection exceeds request output budget", "request_projection"),
+                ("snapshot record needs ", "snapshot_record"),
+                ("snapshot page needs ", "snapshot_page"),
+                ("snapshot page of ", "snapshot_page"),
+            )
+            if reason.startswith(prefix)
+        ),
+        None,
+    )
+
+
 def request_metadata(request: Mapping[str, object]) -> dict[str, object]:
     sources = {key: value for key in SOURCE_FIELDS if (value := request.get(key))}
     resource = (
@@ -507,6 +531,12 @@ class SnapshotClient:
                     logger.bind(
                         **request_metadata({"operation": operation, "id": result.get("id")} | arguments),
                         status=status,
+                        output_limit_kind=output_limit_kind(result.get("reason")) if status == "output_limit" else None,
+                        projection_kind=(
+                            next((kind for kind in ("turns", "events") if query.get("kind") == kind), None)
+                            if isinstance(query := arguments.get("query"), dict)
+                            else None
+                        ),
                         foreground_deadline_unix_ms=self.foreground_deadline_unix_ms,
                         output_bytes=output_bytes,
                         usage=result.get("usage"),
