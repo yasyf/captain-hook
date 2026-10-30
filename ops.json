@@ -1,1 +1,1 @@
-{"v":1,"lamport":8,"ops":[{"kind":"add_comment","body":"PR464 merged normally05:01:21Z as19e4f50e, exactreviewedtree9ae3e763. Final head413b262a had independent reviewPASS and ALL16CI41004330028 plus Documentation/GuidesPASS. Root ordering release granted. ONE normalAutobump41006086081 queued; no manualtag/dispatch. Actual Captversion/publisher/publicsignedproof/install remain pending. No localtests/builds/runtime action."}]}
+{"v":1,"lamport":9,"ops":[{"kind":"renew"}]}
