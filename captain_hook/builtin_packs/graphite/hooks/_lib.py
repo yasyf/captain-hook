@@ -45,7 +45,10 @@ def graphite_queue(call: Call, session_cwd: Path | None) -> bool:
         return probe.stdout.strip() in GRAPHITE_QUEUES
     root = next((ancestor for ancestor in (cwd, *cwd.parents) if (ancestor / ".git").exists()), cwd)
     config = root / ".claude" / "ccx.toml"
-    return not config.is_file() or tomllib.loads(config.read_text()).get("vcs", {}).get("queue", "") in GRAPHITE_QUEUES
+    return (
+        not config.is_file()
+        or tomllib.loads(config.read_text()).get("vcs", {}).get("queue", "").strip() in GRAPHITE_QUEUES
+    )
 
 
 @dataclass(frozen=True, slots=True)

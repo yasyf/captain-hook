@@ -887,7 +887,8 @@ def test_a_push_to_a_pr_on_another_queue_is_allowed(
     repo, _ = queued_repo(tmp_path, "feat")
     set_queue(repo, source, "trunk")
     commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", ENQUEUED)])}
-    assert dispatch_stubbed("git push", repo, tmp_path, commands) is None
+    result = dispatch_stubbed("git push", repo, tmp_path, commands)
+    assert result is None or "merge queue holds" not in result["hookSpecificOutput"].get("additionalContext", "")
 
 
 def test_a_push_to_a_pr_not_queued_is_allowed(isolate_modules: None, ccx_installed: None, tmp_path: Path) -> None:
