@@ -12,7 +12,7 @@ from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 from captain_hook.types import Event
-from tests.helpers import run_cli
+from tests.helpers import make_pre_tool_event, run_cli
 from tests.test_cmd import evt_for
 
 ORCA_UUID = "7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"
@@ -115,6 +115,328 @@ def decision(command: str, cwd: Path, session_dir: Path) -> str | None:
         return None
     output = result["hookSpecificOutput"]
     return output.get("permissionDecision") if "additionalContext" not in output else "warn"
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "ccx_code_grep",
+        "mcp__cc_context__ccx_code_grep",
+        "mcp__cc-context__ccx_code_grep",
+        "mcp__plugin_cc-context_cc-context__ccx_code_grep",
+    ],
+)
+def test_structured_mcp_grep_uses_existing_scope_guard_through_dispatch(
+    performance: None, repo: Path, tmp_path: Path, tool_name: str
+) -> None:
+    event = make_pre_tool_event(tool_name, {"text": "needle", "paths": [str(repo)], "budget": 1})
+    event._raw["cwd"] = str(repo / "internal" / "focused")
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert result is not None
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "output `budget` does not bound" in output["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        pytest.param({"paths": ["/"]}, "deny", id="filesystem-root"),
+        pytest.param({"paths": ["~"]}, None, id="tilde-path-is-not-authoritative"),
+        pytest.param({"repo": "~"}, None, id="tilde-repo-is-not-authoritative"),
+        pytest.param({}, "deny", id="explicit-absolute-repo-root"),
+        pytest.param({"paths": ["."]}, "deny", id="explicit-repo-root"),
+        pytest.param({"paths": ["internal/focused", "."]}, "deny", id="narrow-path-does-not-hide-root"),
+        pytest.param({"paths": ["~/.claude/worktrees"]}, None, id="tilde-pool-is-not-authoritative"),
+        pytest.param({"paths": ["explicit.log"]}, None, id="explicit-file"),
+        pytest.param({"paths": ["internal/focused"]}, None, id="focused-directory"),
+        pytest.param({"paths": ["internal/focused"], "budget": 1}, None, id="bounded-path-with-output-budget"),
+        pytest.param({"globs": ["*.py"]}, None, id="filename-bound"),
+        pytest.param({"paths": ["~"], "globs": ["*.py"]}, None, id="filename-bound-over-home"),
+        pytest.param({"globs": ["!*.md"]}, "deny", id="exclusions-are-not-a-bound"),
+        pytest.param({"globs": ["*.py", "**"]}, "deny", id="broad-glob-beside-narrow"),
+        pytest.param({"paths": ["."], "budget": 1}, "deny", id="output-budget-is-not-a-bound"),
+        pytest.param({"paths": ["."], "regex": True, "filesWithMatches": True}, "deny", id="output-mode-is-not-a-bound"),
+        pytest.param({"repo": ".", "paths": ["internal/focused"]}, None, id="relative-repo-and-path"),
+        pytest.param({"paths": "internal/focused"}, "deny", id="malformed-paths"),
+        pytest.param({"paths": ["internal/focused", None]}, "deny", id="incomplete-paths"),
+        pytest.param({"globs": "*.py"}, "deny", id="malformed-globs"),
+    ],
+)
+def test_structured_mcp_grep_reads_caller_fields_without_shell_reparsing(
+    performance: None, repo: Path, home: Path, tmp_path: Path, fields: dict[str, object], expected: str | None
+) -> None:
+    event = make_pre_tool_event(
+        "mcp__plugin_cc-context_cc-context__ccx_code_grep", {"text": "needle", "repo": str(repo)} | fields
+    )
+    event._raw["cwd"] = str(repo)
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_structured_mcp_grep_resolves_paths_against_explicit_repo(
+    performance: None, repo: Path, home: Path, tmp_path: Path
+) -> None:
+    (home / "explicit.log").write_text("needle\n")
+    for fields, expected in [
+        ({"repo": str(home), "paths": ["explicit.log"]}, None),
+        ({"repo": str(repo), "paths": ["."]}, "deny"),
+        ({"repo": str(repo), "paths": ["internal/focused"]}, None),
+    ]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(repo / "internal" / "focused")
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_structured_mcp_grep_keeps_literal_paths_and_other_tools_scoped(
+    performance: None, repo: Path, tmp_path: Path
+) -> None:
+    literal = repo / "explicit $literal; file.log"
+    literal.write_text("needle\n")
+    for tool_name, fields in [
+        ("mcp__cc_context__ccx_code_grep", {"text": "needle", "paths": [str(literal)]}),
+        ("mcp__cc_context__ccx_code_grep", {"text": "~ / Code", "paths": ["internal/focused"]}),
+        ("mcp__other__code_grep", {"text": "needle", "paths": [str(repo)]}),
+        ("mcp__cc_context__ccx_code_read", {"path": str(repo)}),
+    ]:
+        event = make_pre_tool_event(tool_name, {"repo": str(repo)} | fields)
+        event._raw["cwd"] = str(repo)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
+
+
+def test_structured_mcp_grep_follows_repository_path_aliases(
+    performance: None, repo: Path, tmp_path: Path
+) -> None:
+    alias = tmp_path / "checkout-alias"
+    alias.symlink_to(repo, target_is_directory=True)
+    nested_alias = tmp_path / "entry" / "checkout"
+    nested_alias.parent.mkdir()
+    nested_alias.symlink_to(repo, target_is_directory=True)
+    (nested_alias.parent / "sibling" / ".git").mkdir(parents=True)
+    (tmp_path / "sibling").mkdir()
+    for fields, expected in [
+        ({"paths": [str(alias)]}, "deny"),
+        ({"repo": str(alias), "paths": ["."]}, "deny"),
+        ({"repo": str(alias), "paths": ["internal/focused"]}, None),
+        ({"repo": str(nested_alias), "paths": ["../sibling"]}, "deny"),
+        ({"paths": [str(nested_alias / ".." / "sibling")]}, None),
+    ]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(repo / "internal" / "focused")
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_structured_mcp_grep_classifies_without_walks_subprocesses_or_history(
+    performance: None, repo: Path, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("structured search scope classification must not walk, spawn, or read history")
+
+    monkeypatch.setattr(Target, "expand", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.contains_repo", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.glob_matches", forbidden)
+    monkeypatch.setattr("captain_hook.util.vcs.scanned_names", forbidden)
+    monkeypatch.setattr("subprocess.run", forbidden)
+    monkeypatch.setattr("captain_hook.transcripts.registered_sources", forbidden)
+    for path, expected in [(str(repo), "deny"), (str(home / ".claude/worktrees"), "deny"), ("internal/focused", None)]:
+        event = make_pre_tool_event(
+            "mcp__cc_context__ccx_code_grep", {"text": "needle", "repo": str(repo), "paths": [path]}
+        )
+        event._raw["cwd"] = str(repo)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({}, id="default-workspace-is-unknown"),
+        pytest.param({"paths": ["."]}, id="relative-root-is-unknown"),
+        pytest.param({"paths": ["internal/focused"]}, id="relative-directory-is-unknown"),
+        pytest.param({"paths": ["explicit.log"]}, id="relative-file-is-unknown"),
+        pytest.param({"repo": "."}, id="relative-repo-is-unknown"),
+        pytest.param({"repo": "../..", "paths": ["."]}, id="relative-repo-and-path-unknown"),
+        pytest.param({"repo": "~", "paths": ["."]}, id="tilde-repo-is-not-expanded"),
+        pytest.param({"paths": ["~"]}, id="tilde-path-is-not-expanded"),
+        pytest.param({"paths": ["~/project"]}, id="tilde-subtree-is-not-expanded"),
+    ],
+)
+def test_structured_mcp_grep_preserves_unknown_workspace_scope(
+    performance: None, repo: Path, tmp_path: Path, fields: dict[str, object]
+) -> None:
+    for cwd in [repo, repo / "internal" / "focused"]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(cwd)
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
+
+
+def test_structured_mcp_grep_classifies_absolute_operands_even_with_unknown_relative_ones(
+    performance: None, repo: Path, home: Path, tmp_path: Path
+) -> None:
+    for fields, expected in [
+        ({"paths": [str(repo), "internal/focused"]}, "deny"),
+        ({"repo": "relative-project", "paths": [str(home)]}, "deny"),
+        ({"paths": [str(repo / "internal/focused"), "."]}, None),
+        ({"repo": str(repo), "paths": ["."]}, "deny"),
+        ({"repo": str(repo), "paths": ["internal/focused"]}, None),
+    ]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "needle"} | fields)
+        event._raw["cwd"] = str(repo / "internal" / "focused")
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+@pytest.fixture
+def search_provenance(performance: None, home: Path) -> dict[str, Path]:
+    collection = home / "Code"
+    primary = collection / "monorepo"
+    git = primary / ".git"
+    worktree_git = git / "worktrees" / "amberjack"
+    worktree_git.mkdir(parents=True)
+    (worktree_git / "commondir").write_text("../..\n")
+    checkout = home / ".orca" / "workspaces" / "monorepo" / "monorepo" / "amberjack"
+    checkout.mkdir(parents=True)
+    (checkout / ".git").write_text(f"gitdir: {worktree_git}\n")
+    for directory in [checkout / ".claude", checkout / ".agents", primary / "src" / "focused"]:
+        directory.mkdir(parents=True)
+    plugins = home / ".claude" / "plugins"
+    loaded = plugins / "cache" / "fixture-marketplace" / "long-running" / "1.0" / "capt-hook" / "hooks"
+    loaded.mkdir(parents=True)
+    module = loaded / "fixture.py"
+    module.write_text(
+        "from captain_hook import Event, Tool, hook\n"
+        "hook(Event.PreToolUse, only_if=[Tool('LoadedPackFixture')], message='fixture')\n"
+    )
+    discover_pack("provenance-fixture", loaded)
+    (loaded / "focused").mkdir()
+    (collection / "collection-note.txt").write_text("fixture needle\n")
+    (plugins / "unloaded-subtree").mkdir()
+    collection_alias = home / "collection-alias"
+    collection_alias.symlink_to(collection, target_is_directory=True)
+    plugins_alias = home / "pack-alias"
+    plugins_alias.symlink_to(plugins, target_is_directory=True)
+    return {
+        "collection": collection,
+        "primary": primary,
+        "checkout": checkout,
+        "plugins": plugins,
+        "loaded": loaded,
+        "collection_alias": collection_alias,
+        "plugins_alias": plugins_alias,
+    }
+
+
+def test_structured_mcp_grep_blocks_the_captured_four_root_payload_by_known_provenance(
+    search_provenance: dict[str, Path], tmp_path: Path
+) -> None:
+    roots = search_provenance
+    event = make_pre_tool_event(
+        "mcp__plugin_cc-context_cc-context__ccx_code_grep",
+        {
+            "text": "fixture needle",
+            "paths": [
+                str(roots["collection"]),
+                str(roots["plugins"]),
+                str(roots["checkout"] / ".claude"),
+                str(roots["checkout"] / ".agents"),
+            ],
+            "budget": 3000,
+        },
+    )
+    event._raw["cwd"] = str(roots["checkout"])
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "ancestor of a known checkout or loaded pack" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("role", "suffix", "expected"),
+    [
+        pytest.param("collection", "", "deny", id="common-checkout-ancestor"),
+        pytest.param("plugins", "", "deny", id="loaded-pack-ancestor"),
+        pytest.param("primary", "", "deny", id="common-checkout-root"),
+        pytest.param("checkout", "", "deny", id="current-checkout-root"),
+        pytest.param("loaded", "", "deny", id="declared-loaded-pack-root"),
+        pytest.param("collection_alias", "", "deny", id="common-ancestor-alias"),
+        pytest.param("plugins_alias", "", "deny", id="loaded-ancestor-alias"),
+        pytest.param("checkout", ".claude", None, id="current-checkout-narrow-config"),
+        pytest.param("checkout", ".agents", None, id="current-checkout-narrow-agents"),
+        pytest.param("primary", "src/focused", None, id="common-checkout-focused-descendant"),
+        pytest.param("loaded", "focused", None, id="loaded-pack-focused-descendant"),
+        pytest.param("collection", "collection-note.txt", None, id="explicit-file-under-container"),
+        pytest.param("loaded", "fixture.py", None, id="explicit-loaded-file"),
+        pytest.param("plugins", "unloaded-subtree", None, id="unrelated-container-descendant"),
+        pytest.param("collection_alias", "monorepo/src/focused", None, id="focused-descendant-through-alias"),
+    ],
+)
+def test_known_search_provenance_distinguishes_ancestors_and_focused_paths(
+    search_provenance: dict[str, Path], tmp_path: Path, role: str, suffix: str, expected: str | None
+) -> None:
+    roots = search_provenance
+    event = make_pre_tool_event(
+        "mcp__cc_context__ccx_code_grep", {"text": "fixture needle", "paths": [str(roots[role] / suffix)]}
+    )
+    event._raw["cwd"] = str(roots["checkout"])
+    result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+    assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+def test_bash_search_uses_the_same_known_provenance_classifier(
+    search_provenance: dict[str, Path], tmp_path: Path
+) -> None:
+    roots = search_provenance
+    for path, expected in [
+        (roots["collection"], "deny"),
+        (roots["plugins"], "deny"),
+        (roots["primary"] / "src/focused", None),
+        (roots["checkout"] / ".claude", None),
+        (roots["loaded"] / "fixture.py", None),
+    ]:
+        assert decision(f"rg needle '{path}'", roots["checkout"], tmp_path) == expected
+    for command in [
+        f"cd '{roots['collection']}' && rg needle .",
+        f"env FIXTURE=1 rg needle '{roots['collection']}'",
+        f'''sh -c "cd '{roots['collection']}' && rg needle ."''',
+    ]:
+        assert decision(command, roots["checkout"], tmp_path) == "deny"
+
+
+def test_known_checkout_provenance_does_not_resolve_unknown_mcp_arguments(
+    search_provenance: dict[str, Path], tmp_path: Path
+) -> None:
+    for fields in [{}, {"paths": ["."]}, {"repo": ".", "paths": ["."]}, {"paths": ["~/Code"]}]:
+        event = make_pre_tool_event("mcp__cc_context__ccx_code_grep", {"text": "fixture needle"} | fields)
+        event._raw["cwd"] = str(search_provenance["checkout"])
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
+
+
+def test_known_search_provenance_uses_only_metadata_and_loaded_registry(
+    search_provenance: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("provenance classification must not walk, spawn, or rediscover packs")
+
+    monkeypatch.setattr(Target, "expand", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.contains_repo", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.glob_matches", forbidden)
+    monkeypatch.setattr("captain_hook.util.vcs.scanned_names", forbidden)
+    monkeypatch.setattr("subprocess.run", forbidden)
+    monkeypatch.setattr("captain_hook.loader.discover_pack", forbidden)
+    monkeypatch.setattr("captain_hook.packs.manager.detect_languages", forbidden)
+    for role in ["collection", "plugins"]:
+        event = make_pre_tool_event(
+            "mcp__cc_context__ccx_code_grep", {"text": "fixture needle", "paths": [str(search_provenance[role])]}
+        )
+        event._raw["cwd"] = str(search_provenance["checkout"])
+        result = dispatch(Event.PreToolUse, event, session_dir=tmp_path / "session")
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize(

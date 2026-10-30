@@ -10,6 +10,7 @@ from captain_hook import (
     Block,
     CommandMatches,
     CommandSchema,
+    CustomCondition,
     Event,
     Input,
     Operand,
@@ -22,17 +23,18 @@ from captain_hook import (
     hook,
 )
 from captain_hook.bindings import dequote
+from captain_hook.app import current_state
 from captain_hook.cmd import git_location
 from captain_hook.command_schema import glob_prefix
 from captain_hook.util.scratch import TEMP_ROOTS
-from captain_hook.util.vcs import is_repo_root
+from captain_hook.util.vcs import common_git_dir, git_dir, is_repo_root
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
     from cc_transcript.command import Word
 
-    from captain_hook import Arguments
+    from captain_hook import Arguments, BaseHookEvent
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Scalar
 
@@ -659,12 +661,38 @@ def pool_anchors() -> dict[Path, int]:
     return {Path.home() / pool: levels for pool, levels in HOME_POOL_LEVELS.items()}
 
 
-def encloses_home_or_pool(root: Path) -> bool:
+def encloses_roots(root: Path, anchors: Iterable[Path]) -> bool:
     return root in {
         ancestor.resolve()
-        for anchor in (Path.home(), *pool_anchors())
+        for anchor in anchors
         for ancestor in (anchor, *anchor.parents, *anchor.resolve().parents)
     }
+
+
+def encloses_home_or_pool(root: Path) -> bool:
+    return encloses_roots(root, (Path.home(), *pool_anchors()))
+
+
+def known_search_roots(cwd: Path | None) -> tuple[Path, ...]:
+    checkout = (
+        next((ancestor for ancestor in (cwd, *cwd.parents) if is_repo_root(ancestor)), None)
+        if cwd is not None and cwd.is_absolute()
+        else None
+    )
+    git = git_dir(checkout) if checkout is not None else None
+    common = common_git_dir(git) if git is not None else None
+    packs = (
+        Path(registered.state_root)
+        for registered in current_state().hooks
+        if registered.pack_name is not None
+        and registered.state_root is not None
+        and Path(registered.state_root).is_absolute()
+    )
+    return tuple(dict.fromkeys((
+        *((checkout,) if checkout is not None else ()),
+        *((common.parent,) if common is not None and common.name == ".git" and common.is_dir() else ()),
+        *packs,
+    )))
 
 
 def pool_member(target: Target, lexical: Path, root: Path) -> bool:
@@ -689,12 +717,20 @@ def spans_checkouts(target: Target) -> bool:
     )
 
 
-def broad(target: Target) -> bool:
+def broad(target: Target, *, known_roots: tuple[Path, ...] | None = None) -> bool:
     path = target.path
     return (
         not names_files(target)
         and not (path is not None and path.is_file())
-        and (BROAD_ROOTS(target) or at_home(target) or (path is not None and is_repo_root(glob_prefix(path))))
+        and (
+            BROAD_ROOTS(target)
+            or at_home(target)
+            or (path is not None and is_repo_root(glob_prefix(path)))
+            or (
+                (root := canonical(target)) is not None
+                and encloses_roots(root, known_search_roots(target.cwd) if known_roots is None else known_roots)
+            )
+        )
     )
 
 
@@ -706,8 +742,44 @@ def named_roots(arguments: Arguments) -> Targets:
     )
 
 
-def searches_broadly(roots: Targets, cwd: Path | None) -> bool:
-    return not roots.complete or any(map(broad, roots or (Target(".", ".", cwd),)))
+def searches_broadly(
+    roots: Targets, cwd: Path | None, *, known_roots: tuple[Path, ...] | None = None
+) -> bool:
+    known = known_search_roots(cwd) if known_roots is None else known_roots
+    return not roots.complete or any(broad(target, known_roots=known) for target in roots or (Target(".", ".", cwd),))
+
+
+class BroadMCPGrep(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        fields = evt.input.raw
+        repo = fields.get("repo", "")
+        paths = fields.get("paths", [])
+        globs = fields.get("globs", [])
+        if not (
+            isinstance(repo, str)
+            and isinstance(paths, list)
+            and all(isinstance(path, str) for path in paths)
+            and isinstance(globs, list)
+            and all(isinstance(glob, str) for glob in globs)
+        ):
+            return True
+        if bounded(positive(tuple(globs), ("!",))):
+            return False
+        root = Path(os.path.normpath(repo)) if os.path.isabs(repo) else None
+        resolved = tuple(path for path in paths if os.path.isabs(path)) + (
+            tuple(
+                os.path.normpath(root / path)
+                for path in paths
+                if path and not path.startswith("~") and not os.path.isabs(path)
+            )
+            if root is not None
+            else ()
+        )
+        targets = tuple(Target(path, path, None) for path in resolved)
+        if not targets and (paths or root is None):
+            return False
+        roots = Targets(targets)
+        return searches_broadly(roots, root, known_roots=known_search_roots(evt.cwd)) or any(map(spans_checkouts, roots))
 
 
 def reads_stdin(arguments: Arguments) -> bool:
@@ -751,12 +823,14 @@ def ugrep_searches_broadly(arguments: Arguments) -> bool:
         recursive(arguments)
         or any(isinstance(glob, str) and "/" in glob for glob in arguments.values.get("glob", ()))
         or (roots.complete and not roots and not reads_stdin(arguments))
-    ) and searches_broadly(roots, arguments.cwd)
+    ) and searches_broadly(roots, arguments.cwd, known_roots=known_search_roots(arguments.call.cmd.cwd))
 
 
 def rg_searches_broadly(arguments: Arguments) -> bool:
     roots = named_roots(arguments)
-    return not (roots.complete and not roots and reads_stdin(arguments)) and searches_broadly(roots, arguments.cwd)
+    return not (roots.complete and not roots and reads_stdin(arguments)) and searches_broadly(
+        roots, arguments.cwd, known_roots=known_search_roots(arguments.call.cmd.cwd)
+    )
 
 
 def pathspec_magic(value: str) -> tuple[frozenset[str], str]:
@@ -783,9 +857,11 @@ def top_broad(target: Target) -> bool:
     )
 
 
-def pathspec_broad(target: Target, *, relocated: bool) -> bool | None:
+def pathspec_broad(
+    target: Target, *, relocated: bool, known_roots: tuple[Path, ...] | None = None
+) -> bool | None:
     if target.value is None:
-        return broad(target)
+        return broad(target, known_roots=known_roots)
     magic = target.value.startswith(":")
     kinds, pattern = pathspec_magic(target.value) if magic else (frozenset(), target.value)
     if "exclude" in kinds:
@@ -793,7 +869,7 @@ def pathspec_broad(target: Target, *, relocated: bool) -> bool | None:
     if "top" in kinds:
         return top_broad(Target(pattern or ".", pattern or ".", target.cwd))
     spec = Target(os.path.normpath(pattern), pattern if magic else target.raw, target.cwd)
-    return top_broad(spec) if relocated else broad(spec)
+    return top_broad(spec) if relocated else broad(spec, known_roots=known_roots)
 
 
 def host_calls(call: Call) -> Iterator[Call]:
@@ -861,8 +937,13 @@ def git_grep_searches_broadly(arguments: Arguments) -> bool:
         for target in call.word_targets(word)
     ]
     pathspecs = [target for target in targets if names_path(target)] if tail is None else targets
-    verdicts = [verdict for target in pathspecs if (verdict := pathspec_broad(target, relocated=relocated)) is not None]
-    return any(verdicts or (relocated or broad(Target(".", ".", cwd)),))
+    known = known_search_roots(call.cmd.cwd)
+    verdicts = [
+        verdict
+        for target in pathspecs
+        if (verdict := pathspec_broad(target, relocated=relocated, known_roots=known)) is not None
+    ]
+    return any(verdicts or (relocated or broad(Target(".", ".", cwd), known_roots=known),))
 
 
 def bounded(includes: tuple[Scalar | None, ...]) -> bool:
@@ -924,6 +1005,33 @@ def lists_files(arguments: Arguments) -> bool:
 def lists_home_or_pool(arguments: Arguments) -> bool:
     roots = arguments.paths("operands")
     return not roots.complete or any(map(spans_checkouts, roots or (Target(".", ".", arguments.cwd),)))
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("ccx_code_grep"), BroadMCPGrep()],
+    message=(
+        "`ccx_code_grep` over a home, repository root, pool, or ancestor of a known checkout or loaded pack "
+        "is broad; the output `budget` does not bound files searched. "
+        "Name files or a focused directory in `paths`, or add a filename bound such as `globs: ['*.py']`."
+    ),
+    block=True,
+    max_fires=None,
+    tests={
+        Input(tool="mcp__cc_context__ccx_code_grep", tool_input={"text": "needle", "paths": ["/"]}): Block(),
+        Input(
+            tool="mcp__plugin_cc-context_cc-context__ccx_code_grep",
+            tool_input={"text": "needle", "repo": "/"},
+        ): Block(),
+        Input(
+            tool="mcp__cc_context__ccx_code_grep",
+            tool_input={"text": "needle", "repo": "/repo", "paths": ["src/specific.py"]},
+        ): Allow(),
+        Input(
+            tool="mcp__cc_context__ccx_code_grep", tool_input={"text": "needle", "globs": ["*.py"]}, cwd="/repo"
+        ): Allow(),
+    },
+)
 
 
 hook(
