@@ -249,6 +249,11 @@ def use_answers(use: ToolUse) -> list[Answer]:
     return question_answers(use.ref.tool_use_id or f"{use.ts:%s}", *result, use.result_ts or use.ts)
 
 
+def ordered_uses(turns: Iterable[Turn]) -> list[ToolUse]:
+    found = {use.ref.tool_use_id or f"{use.ts}": use for turn in turns for use in turn.tool_uses}
+    return sorted(found.values(), key=lambda use: use.result_ts or use.ts)
+
+
 def board_blocks(
     blocks: list[dict[str, Any]], card: dict[str, Any] | None = None
 ) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
@@ -522,19 +527,19 @@ class TranscriptSources:
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
     def uses(self, window: int | None) -> list[ToolUse]:
-        found = {use.ref.tool_use_id or f"{use.ts}": use for turn, _ in self.turns(window) for use in turn.tool_uses}
-        return sorted(found.values(), key=lambda use: use.result_ts or use.ts)
+        return ordered_uses(turn for turn, _ in self.turns(window))
 
     def answers(self) -> list[Answer]:
         """Every answer across the tree's sessions, however far back; the window bounds words and touches only.
 
         A card tap counts only in a session whose prompts are the user's, where cc-slack delivers it.
         """
-        asked = {item.id: item for use in self.uses(None) for item in use_answers(use)}
+        turns = self.turns(None)
+        asked = {item.id: item for use in ordered_uses(turn for turn, _ in turns) for item in use_answers(use)}
         board = {item.id: item for item in board_answers(board_state(tree_of(self.evt), self.evt.cwd))}
         card = {
             item.id: item
-            for turn, prompts_are_user in self.turns(None)
+            for turn, prompts_are_user in turns
             if prompts_are_user
             for payload, at in card_taps(turn.events)
             if (item := card_answer(payload, at)) is not None

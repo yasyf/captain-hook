@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import spawnllm
+from cc_transcript.activity import Turn
 from click.testing import CliRunner
 from spawnllm import BackendCallError, Decision, LabelAnswer
 
@@ -337,6 +338,14 @@ class TestBoard:
         from captain_hook.tickets import context as sources
 
         monkeypatch.setattr(sources, "board_state", lambda tree, cwd: {})
+        reads: list[int | None] = []
+        read_turns = sources.TranscriptSources.turns
+
+        def measured_turns(provider: sources.TranscriptSources, window: int | None) -> list[tuple[Turn, bool]]:
+            reads.append(window)
+            return read_turns(provider, window)
+
+        monkeypatch.setattr(sources.TranscriptSources, "turns", measured_turns)
 
         question = "Post in C1, thread 1.2?"
         questions = [{"question": question, "options": [{"label": "Yes"}, {"label": "No"}]}]
@@ -360,9 +369,40 @@ class TestBoard:
         )
         ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=20)
         assert [item.id for item in ctx.answers] == ["ask:toolu_ask#0"]
+        assert reads == [None]
         assert ctx.touches == ()
         wide = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=200)
         assert [touch.tool for touch in wide.touches] == ["slack_thread"]
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [((0, 0, 0), (2, 1)), ((0, 2, 3), (1, 2)), ((0, 3, 2), (2, 1))],
+    )
+    def test_answer_uses_keep_last_duplicate_and_result_order(
+        self, seconds: tuple[int, int, int], expected: tuple[int, int]
+    ) -> None:
+        from captain_hook import T
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tickets.context import ordered_uses
+
+        first = T.tool("AskUserQuestion", id="duplicate", questions=[])
+        second = T.tool("AskUserQuestion", id="second", questions=[])
+        turns = [
+            turn
+            for (tool, result), second_at in zip(
+                ((first, "old"), (second, "middle"), (first, "new")), seconds, strict=True
+            )
+            for turn in fixture_session(
+                [
+                    T.user("start"),
+                    T.assistant(tool),
+                    T.user(T.result(result, of=tool), timestamp=f"2026-01-01T00:00:{second_at:02d}Z"),
+                ]
+            ).turns
+        ]
+        uses = [use for turn in turns for use in turn.tool_uses]
+        assert [use.ref.tool_use_id for use in uses] == ["duplicate", "second", "duplicate"]
+        assert ordered_uses(turns) == [uses[index] for index in expected]
 
     def test_a_tap_on_a_cc_slack_question_card_is_an_answer_and_no_other_channel_line_is(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
