@@ -1011,10 +1011,9 @@ hook(
     Event.PreToolUse,
     only_if=[Tool("ccx_code_grep"), BroadMCPGrep()],
     message=(
-        "A structured `ccx_code_grep` request over a home, repository root, worktree pool, or an ancestor of "
-        "a known checkout or loaded pack is a broad search. "
-        "Name files or a focused directory in `paths`, or add a filename bound such as `globs: ['*.py']`. "
-        "The output `budget` does not bound the files searched."
+        "`ccx_code_grep` over a home, repository root, pool, or ancestor of a known checkout or loaded pack "
+        "is broad; the output budget does not bound files searched. "
+        "Name files or a focused directory in `paths`, or add a filename bound such as `globs: ['*.py']`."
     ),
     block=True,
     max_fires=None,
