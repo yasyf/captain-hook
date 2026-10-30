@@ -36,7 +36,12 @@ if TYPE_CHECKING:
     from captain_hook.cmd import Call
     from captain_hook.command_schema import Scalar
 
-POOLS = (".claude/worktrees", ".orca/workspaces", "repos/claude/worktrees")
+POOLS = (
+    ".claude/worktrees",
+    ".orca/workspaces",
+    "repos/claude/worktrees",
+    ".daemonkit/a/ccx-cleanup/jobs",
+)
 HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2}
 POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in HOME_POOL_LEVELS), unresolved=True)
 POOL_MEMBERS = PathMatches(

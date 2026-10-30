@@ -245,7 +245,7 @@ def test_a_retain_answered_after_the_foreground_deadline_is_a_deadline_gap(
 def test_a_late_lease_skips_only_the_hook_that_read_it(
     tmp_path: Path, owner: FixtureOwner, transcript: Transcript
 ) -> None:
-    transcript.write("alpha")
+    transcript.write("alpha", count=1)
     denied = register(Event.PreToolUse, transcript, "has_command")
 
     @on(Event.PreToolUse)
@@ -257,6 +257,7 @@ def test_a_late_lease_skips_only_the_hook_that_read_it(
 
     envelope, gaps = dispatch(owner, tmp_path, Event.PreToolUse, transcript, exchange, TOOL_SECONDS)
 
+    assert "retain" in exchange.operations
     assert gaps == ["has_command: deadline: lease expired at the foreground transcript deadline"]
     assert denied == ["policy"]
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
