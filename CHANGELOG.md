@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Bash command that writes an unbraced zsh parameter before a modifier letter draws a warning.** The
+  Bash tool runs zsh, where `$N:refs/heads/x` reads `:r` as a modifier and becomes `<value>efs/heads/x`,
+  even inside double quotes. The general pack warns on `$NAME:` or `$1:` followed by a modifier letter
+  outside single quotes and heredoc bodies, and tells the agent to write `${N}:refs/heads/x`.
 - **A Monitor command with a block-buffered pipe stage draws a warning.** `cut`, `sed`, `awk`, `tr`,
   `head`, `tail`, and `grep` hold their output until they exit when it goes to a pipe. A pipeline such as
   `cci watch ... | grep --line-buffered ... | cut -c1-600` then delivers no event while the stream stays

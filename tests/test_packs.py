@@ -48,6 +48,7 @@ GENERAL_HOOKS = {
     "stops",
     "tooling",
     "tools",
+    "zsh",
 }
 PYTHON_HOOKS = {"style", "toolchain"}
 GO_HOOKS = {"toolchain"}
