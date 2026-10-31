@@ -987,5 +987,5 @@ async def test_judge_known_source_avoids_unrelated_corpus_metadata(
     assert root_normalizations == []
     assert "resolve" not in operations
     assert report.judged == len(calls) == 1
-    judged = await store.judged(role="judge", prompt_version=store.versions.create)
+    judged = await store.db.sql("SELECT fidelity FROM verdicts ORDER BY id")
     assert [row["fidelity"] for row in judged] == ["full"]
