@@ -279,6 +279,8 @@ def code_violation(node: ast.AST, path_part: bool) -> str | None:
             return "reads the transcript by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
         case ast.expr() if not path_part and names_transcript(node):
             return "reads transcript files by hand; query evt.ctx.t or use RanCommand, UsedTool, UsedSkill"
+        case ast.ExceptHandler(body=[ast.Raise()]):
+            return None
         case ast.ExceptHandler(type=None):
             return "swallows failures; let the hook raise, the dispatcher records the fault"
         case ast.ExceptHandler(type=ast.Name(id=name)) if name in BROAD_EXCEPTIONS:
