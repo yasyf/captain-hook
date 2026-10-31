@@ -1,4 +1,16 @@
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import textwrap
+from graphlib import TopologicalSorter
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
@@ -9,6 +21,15 @@ PUBLISH_DRAFT_RELEASE_REF = "54e3e194bda69896894a82c17fcdb2822beefab5"
 HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
 TAP_PUBLISH_REF = "9525763796fce4d1042cf3393d9479f791908eaa"
 PYPI_PUBLISH_REF = "dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+
+
+def workflow_job(workflow: str, name: str) -> str:
+    return re.split(r"(?m)^  \S", workflow.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+
+
+def workflow_step_script(job: str, name: str) -> str:
+    step = job.split(f"      - name: {name}\n", 1)[1]
+    return textwrap.dedent(re.split(r"(?m)^      - ", step.split("        run: |\n", 1)[1], maxsplit=1)[0])
 
 
 def test_helper_release_uses_exact_hard_cut_contract() -> None:
@@ -27,14 +48,14 @@ def test_helper_release_uses_exact_hard_cut_contract() -> None:
     assert "HOMEBREW_TAP_TOKEN:" not in helper
 
 
-def test_release_stages_and_smokes_every_asset_before_one_public_transition() -> None:
+def test_release_stages_and_smokes_every_app_asset_before_github_publication() -> None:
     workflow = WORKFLOW.read_text()
     release_tests = workflow[workflow.index("\n  release-tests:") : workflow.index("\n  build:")]
     build = workflow[workflow.index("\n  build:") : workflow.index("\n  python-assets:")]
     python_assets = workflow[workflow.index("\n  python-assets:") : workflow.index("\n  helper-version:")]
     linux_host = workflow[workflow.index("\n  linux-host:") : workflow.index("\n  stage-release:")]
     stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
-    smoke = workflow[workflow.index("\n  smoke-draft:") : workflow.index("\n  # PyPI Trusted Publishing")]
+    smoke = workflow[workflow.index("\n  smoke-draft:") : workflow.index("\n  publish-pypi:")]
     publish_pypi = workflow[workflow.index("\n  publish-pypi:") : workflow.index("\n  publish-github:")]
     publish_github = workflow[workflow.index("\n  publish-github:") : workflow.index("\n  # Consumer plugin caches")]
     sync = workflow[workflow.index("\n  sync-plugin-version:") : workflow.index("\n  helper-formula:")]
@@ -47,6 +68,9 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "name: dist" in python_assets
     assert 'test "${#assets[@]}" = 2' in python_assets
     assert "Smoke-test the built wheel" in python_assets
+    assert "name: verified-python-assets" in python_assets
+    assert "path: verified-python/*" in python_assets
+    assert python_assets.index("Smoke-test the built wheel") < python_assets.index("Record the verified Python asset manifest")
 
     assert "needs: build" in linux_host
     assert "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build" in linux_host
@@ -55,6 +79,8 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
 
     for required in (
         "needs: [build, python-assets, helper, linux-host]",
+        "name: verified-python-assets",
+        'cmp python-artifacts/captain-pypi-assets.tsv "$manifest"',
         "name: ${{ needs.helper.outputs.artifact_name }}",
         "name: linux-host",
         'linux_asset="captain-hook-${RELEASE_TAG}-linux-amd64.tar.gz"',
@@ -84,20 +110,22 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "contents: write" not in smoke
 
     for required in (
-        "needs: [build, stage-release, smoke-draft]",
-        "name: release-assets",
+        "needs: [build, python-assets]",
+        "name: verified-python-assets",
         "Resolve the exact PyPI publication state",
         "existing PyPI assets differ",
         "steps.pypi-state.outputs.publish == 'true'",
         "Verify exact PyPI publication",
         'manifest="$RUNNER_TEMP/captain-pypi-assets.tsv"',
-        'printf \'%s\\t%s\\n\' "$staged_sha" "$asset" >> "$manifest"',
+        'printf \'%s\\t%s\\n\' "$python_sha" "$asset" >> "$manifest"',
+        'cmp python-artifacts/captain-pypi-assets.tsv "$manifest"',
         f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}",
     ):
         assert required in publish_pypi
     assert "id-token: write" in publish_pypi
     assert "contents: write" not in publish_pypi
     assert "skip-existing:" not in publish_pypi
+    assert "name: release-assets" not in publish_pypi
     assert publish_pypi.count('"$RUNNER_TEMP/captain-pypi-assets.tsv"') == 3
     assert "pathlib.Path(directory).iterdir()" not in publish_pypi
     assert "if path.is_file()" not in publish_pypi
@@ -106,7 +134,7 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         "Verify exact PyPI publication"
     )
 
-    assert "needs: [build, stage-release, publish-pypi]" in publish_github
+    assert "needs: [build, stage-release, smoke-draft, publish-pypi]" in publish_github
     assert "contents: write" in publish_github
     assert "id-token: write" not in publish_github
     assert "Publish the exact already-complete GitHub draft" in publish_github
@@ -124,6 +152,83 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "gh api" not in smoke
     assert "/releases/tags/" not in draft_flow
     assert "softprops/action-gh-release" not in workflow
+
+
+def test_python_publication_remains_ready_while_the_mac_app_is_blocked() -> None:
+    workflow = WORKFLOW.read_text()
+    jobs = re.findall(r"(?m)^  ([a-z][a-z-]+):$", workflow)
+    dependencies = {}
+    for name in jobs:
+        needs = re.search(r"(?m)^    needs: ([^\n]+)$", workflow_job(workflow, name))
+        dependencies[name] = set(needs[1].strip("[]").split(", ")) if needs else set()
+    assert set.union(*dependencies.values()) <= set(jobs)
+    assert dependencies["publish-pypi"] == {"build", "python-assets"}
+    assert dependencies["python-assets"] == {"build"}
+    assert dependencies["build"] == {"release-tests"}
+    assert "smoke-draft" in dependencies["publish-github"]
+
+    graph = TopologicalSorter(dependencies)
+    graph.prepare()
+    completed = set()
+    while ready := graph.get_ready():
+        finished = set(ready) - {"helper", "smoke-draft"}
+        graph.done(*finished)
+        completed |= finished
+
+    assert {"release-tests", "build", "python-assets", "publish-pypi"} <= completed
+    assert not {"helper", "stage-release", "smoke-draft", "publish-github", "sync-plugin-version", "helper-formula"} & completed
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="The release asset scripts run on Ubuntu")
+@pytest.mark.parametrize("consumer", ["stage-release", "publish-pypi"])
+@pytest.mark.parametrize("tamper", ["unchanged", "changed-wheel", "missing-sdist", "extra-file", "changed-manifest", "missing-manifest"])
+def test_python_manifest_joins_the_actual_publication_scripts(tmp_path: Path, consumer: str, tamper: str) -> None:
+    workflow = WORKFLOW.read_text()
+    producer = tmp_path / "producer"
+    (producer / "dist").mkdir(parents=True)
+    packages = {"capt_hook-12.15.3-py3-none-any.whl": b"wheel bytes", "capt_hook-12.15.3.tar.gz": b"source bytes"}
+    for name, payload in packages.items():
+        (producer / "dist" / name).write_bytes(payload)
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    env = os.environ | {"RUNNER_TEMP": str(runner)}
+    record = workflow_step_script(workflow_job(workflow, "python-assets"), "Record the verified Python asset manifest")
+    subprocess.run(["bash", "-c", record], cwd=producer, env=env, check=True, capture_output=True, text=True)
+    artifact = producer / "verified-python"
+    manifest_name = "captain-pypi-assets.tsv"
+    assert {path.name for path in artifact.iterdir()} == set(packages) | {manifest_name}
+    assert (artifact / manifest_name).read_text() == "".join(
+        f"{hashlib.sha256(packages[name]).hexdigest()}\t{name}\n" for name in sorted(packages)
+    )
+
+    work = tmp_path / "consumer"
+    work.mkdir()
+    source = work / "python-artifacts"
+    shutil.copytree(artifact, source)
+    match tamper:
+        case "changed-wheel":
+            (source / "capt_hook-12.15.3-py3-none-any.whl").write_bytes(b"different wheel")
+        case "missing-sdist":
+            (source / "capt_hook-12.15.3.tar.gz").unlink()
+        case "extra-file":
+            (source / "unexpected.txt").write_text("extra")
+        case "changed-manifest":
+            (source / manifest_name).write_text("different manifest\n")
+        case "missing-manifest":
+            (source / manifest_name).unlink()
+
+    script = (
+        workflow_step_script(workflow_job(workflow, consumer), "Assemble the exact complete release").split("mapfile -t helper_assets", 1)[0]
+        if consumer == "stage-release"
+        else workflow_step_script(workflow_job(workflow, consumer), "Match the PyPI upload to the verified Python manifest")
+    )
+    result = subprocess.run(["bash", "-c", script], cwd=work, env=env, capture_output=True, text=True)
+    if tamper != "unchanged":
+        assert result.returncode != 0, result.stdout + result.stderr
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    destination = work / ("dist" if consumer == "stage-release" else "python-dist")
+    assert {path.name: path.read_bytes() for path in destination.iterdir()} == packages
 
 
 def test_pypi_publisher_sidecars_cannot_mutate_expected_assets(tmp_path: Path) -> None:
