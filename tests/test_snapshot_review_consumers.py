@@ -935,3 +935,57 @@ async def test_scan_refuses_an_oversized_transcript_whole_and_scans_the_rest(tmp
     assert set(await store.file_mtimes()) == {str(kept.resolve())}
     await store.set_meta(f"snapshot_discovery:{dedup_key(str(tmp_path.absolute()))}", None)
     assert await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO) == ScanReport(0, 0, 0)
+
+
+@pytest.mark.parametrize("unrelated", [0, 32, 256])
+async def test_judge_known_source_avoids_unrelated_corpus_metadata(
+    unrelated, store, settings, tmp_path, monkeypatch, native_review_owner
+):
+    from captain_hook.review.judge import judge_pass
+    from captain_hook.review.scan import scan_transcript
+    from captain_hook.snapshots import review as review_module
+    from tests.review_helpers import install_fake_embedder, install_judge, install_resolved_model
+
+    for index in range(unrelated):
+        write_transcript(tmp_path / f"unrelated-{index}.jsonl", correction_entries(session=f"other-{index}"))
+    selected = write_transcript(tmp_path / "explicit-source.jsonl", correction_entries(session="selected"))
+    await scan_transcript(store, selected, settings=settings, repo_key=REPO)
+    install_fake_embedder(monkeypatch)
+    calls = install_judge(monkeypatch, category="durable_style_rule")
+    install_resolved_model(monkeypatch)
+    operations = []
+    usage = []
+    exchange = native_review_owner.client._exchange
+
+    def counted(envelope):
+        result = exchange(envelope)
+        operations.append(envelope["request"]["operation"])
+        usage.append(result["response"]["usage"])
+        return result
+
+    file_roster_reads = []
+    root_normalizations = []
+    file_mtimes = store.file_mtimes
+    review_roots = review_module.review_roots
+
+    async def counted_roster():
+        file_roster_reads.append(True)
+        return await file_mtimes()
+
+    def counted_roots(paths):
+        root_normalizations.append(True)
+        return review_roots(paths)
+
+    monkeypatch.setattr(store, "file_mtimes", counted_roster)
+    monkeypatch.setattr(review_module, "review_roots", counted_roots)
+    monkeypatch.setattr(native_review_owner.client, "_exchange", counted)
+    report = await judge_pass(store, settings=settings)
+    examined = sum(item["discovery_entries_examined"] for item in usage)
+    print(f"known_source unrelated={unrelated} discovery_entries={examined} file_rosters={len(file_roster_reads)} root_normalizations={len(root_normalizations)} operations={operations}")
+    assert examined == 0
+    assert file_roster_reads == []
+    assert root_normalizations == []
+    assert "resolve" not in operations
+    assert report.judged == len(calls) == 1
+    judged = await store.judged(role="judge", prompt_version=store.versions.create)
+    assert [row["fidelity"] for row in judged] == ["full"]

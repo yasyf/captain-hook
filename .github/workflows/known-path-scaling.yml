@@ -1,0 +1,30 @@
+name: Known transcript path metadata scaling
+
+on:
+  push:
+    branches: [diagnostic/review-known-path-before]
+
+jobs:
+  known-path-scaling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UV_CONCURRENT_BUILDS: "2"
+      UV_CONCURRENT_DOWNLOADS: "2"
+      UV_CONCURRENT_INSTALLS: "2"
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - name: Sync pinned development environment
+        run: uv sync --locked --extra dev
+      - name: Provision isolated NLP assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run --no-sync python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
+      - name: Grade known-path metadata scaling
+        run: uv run --no-sync pytest -n 0 -s tests/test_snapshot_review_consumers.py::test_judge_known_source_avoids_unrelated_corpus_metadata
