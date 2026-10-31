@@ -163,7 +163,9 @@ def test_unread_property_rechecks_authority_after_answers(tmp_path, monkeypatch)
     try:
         ctx = Context.of(event(tmp_path, acting), "test.write", Proposal({"channel": "C1"}, {"text": "reply"}))
         assert ctx.answers
-        fixture.context["authority"] = {"kind": "restricted_roots", "roots": [], "effective_uid": fixture.context["authority"]["effective_uid"]}
+        unrelated = tmp_path / "unrelated"
+        unrelated.mkdir()
+        fixture.context["authority"] = {"kind": "restricted_roots", "roots": [str(unrelated)], "effective_uid": fixture.context["authority"]["effective_uid"]}
         with pytest.raises(EvidenceIncomplete) as failure:
             _ = ctx.said
         assert failure.value.status == "permission_denied"
