@@ -1,0 +1,29 @@
+name: Native Ticket API Source Contract
+on:
+  push:
+    branches: [ci/native-ticket-evidence-source]
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: yasyf/cc-transcript
+          ref: 82f5140d34d37c69a370993c5a8fb89cbdcc4800
+          path: sdk-source
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk-source/rust -> target
+      - run: git rev-parse HEAD && git -C sdk-source rev-parse HEAD && rustc -Vv
+      - run: uv sync --locked --extra dev
+      - run: uv pip install --python .venv/bin/python --reinstall --no-deps ./sdk-source
+      - run: uv run --no-sync pytest tests/test_ticket_native_evidence.py tests/test_tickets.py
