@@ -1102,3 +1102,10 @@ def test_recursive_grep_uses_the_current_command_without_history(
         transcript_loader=lambda _: pytest.fail("history loader was called"),
     )
     assert (output or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+@pytest.mark.parametrize("root", ["~/Code", "~/repos"])
+def test_blocks_unbounded_find_at_checkout_collections(
+    performance: None, home: Path, tmp_path: Path, root: str
+) -> None:
+    assert decision(f"find {root} -name needle", home, tmp_path) == "deny"
