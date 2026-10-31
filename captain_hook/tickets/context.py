@@ -491,39 +491,46 @@ class TranscriptSources:
         return [*([(excerpt, True)] if excerpt is not None else []), (resolved(root), True), (ctx.t, False)]
 
     def turns(self, window: int | None) -> list[tuple[Turn, bool]]:
-        return [
-            (turn, prompts_are_user)
-            for session, prompts_are_user in self.sessions()
-            for turn in (session if window is None else session.recent_messages(window)).turns
-        ]
+        from captain_hook.tickets.transcript_evidence import sessions
+
+        with sessions(self) as sources:
+            return [
+                (turn, source.prompts_are_user)
+                for source in sources
+                for turn in (source.session if window is None else source.session.recent_messages(window)).turns
+            ]
 
     def said(self) -> list[Evidence]:
+        from captain_hook.tickets.transcript_evidence import sessions
+
         items: dict[str, Evidence] = {}
-        for session, prompts_are_user in self.sessions():
-            turns = session.recent_messages(self.window).turns
-            offered = agent_before(turns) if prompts_are_user else {}
-            for turn in turns:
-                said: list[tuple[str, datetime | None, str, str]] = []
-                if prompts_are_user:
-                    words, instructed = instruction_words(turn.prompt)
-                    said.append((words, turn.started_at, "instruction" if instructed else "prompt", REPLACED))
-                said += [(text, event.meta.timestamp, "queued", "") for text, event in queued_words(turn.events)]
-                said += [
-                    (rejection_words(use), use.result_ts or use.ts, "instruction", f"{REPLACED} to {use.call.name}")
-                    for use in turn.tool_uses
-                    if prompts_are_user
-                ]
-                for text, at, source, replaced in said:
-                    if text and not machine_written(text, self.machine):
-                        detail = (
-                            f"the agent's message it answers ends: {offered[text]}"
-                            if text in offered
-                            else replaced
-                            if source == "instruction"
-                            else ""
-                        )
-                        item = said_evidence(text, at, source, detail)
-                        items[item.id] = item
+        with sessions(self) as sources:
+            for source in sources:
+                session, prompts_are_user = source.session, source.prompts_are_user
+                turns = session.recent_messages(self.window).turns
+                offered = agent_before(turns) if prompts_are_user else {}
+                for turn in turns:
+                    said: list[tuple[str, datetime | None, str, str]] = []
+                    if prompts_are_user:
+                        words, instructed = instruction_words(turn.prompt)
+                        said.append((words, turn.started_at, "instruction" if instructed else "prompt", REPLACED))
+                    said += [(text, event.meta.timestamp, "queued", "") for text, event in queued_words(turn.events)]
+                    said += [
+                        (rejection_words(use), use.result_ts or use.ts, "instruction", f"{REPLACED} to {use.call.name}")
+                        for use in turn.tool_uses
+                        if prompts_are_user
+                    ]
+                    for text, at, source, replaced in said:
+                        if text and not machine_written(text, self.machine):
+                            detail = (
+                                f"the agent's message it answers ends: {offered[text]}"
+                                if text in offered
+                                else replaced
+                                if source == "instruction"
+                                else ""
+                            )
+                            item = said_evidence(text, at, source, detail)
+                            items[item.id] = item
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
     def uses(self, window: int | None) -> list[ToolUse]:
@@ -534,16 +541,18 @@ class TranscriptSources:
 
         A card tap counts only in a session whose prompts are the user's, where cc-slack delivers it.
         """
-        turns = self.turns(None)
-        asked = {item.id: item for use in ordered_uses(turn for turn, _ in turns) for item in use_answers(use)}
+        from captain_hook.tickets.transcript_evidence import card_taps as source_card_taps, question_uses, sessions
+
+        with sessions(self) as sources:
+            asked = {item.id: item for use in question_uses(sources) for item in use_answers(use)}
+            card = {
+                item.id: item
+                for source in sources
+                if source.prompts_are_user
+                for payload, at in source_card_taps(source)
+                if (item := card_answer(payload, at)) is not None
+            }
         board = {item.id: item for item in board_answers(board_state(tree_of(self.evt), self.evt.cwd))}
-        card = {
-            item.id: item
-            for turn, prompts_are_user in turns
-            if prompts_are_user
-            for payload, at in card_taps(turn.events)
-            if (item := card_answer(payload, at)) is not None
-        }
         return [*asked.values(), *board.values(), *card.values()]
 
     def touches(self) -> list[Touch]:

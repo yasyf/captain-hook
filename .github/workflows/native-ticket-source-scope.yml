@@ -1,0 +1,16 @@
+name: Native Ticket Source Scope
+on:
+  push:
+    branches: [perf/native-ticket-evidence]
+jobs:
+  source-scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --extra dev
+      - run: uv run --no-sync pytest tests/test_ticket_native_evidence.py -k 'resident_default_loader or selected_acting_tail'
