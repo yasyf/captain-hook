@@ -217,7 +217,11 @@ class TestStaticLint:
             "try:\n    run()\nexcept Exception:\n    raise",
             "try:\n    run()\nexcept:\n    raise",
             "try:\n    run()\nexcept BaseException:\n    raise",
-            "try:\n    run()\nexcept Exception as error:\n    raise subprocess.CalledProcessError(1, argv, output.getvalue(), errors.getvalue() + traceback.format_exc()) from error",
+            (
+                "try:\n    run()\nexcept Exception as error:\n"
+                "    raise subprocess.CalledProcessError(1, argv, output.getvalue(), "
+                "errors.getvalue() + traceback.format_exc()) from error"
+            ),
             "CAPTURE_LOG = STATE_DIR / 'owner-prompts.jsonl'\nCAPTURE_LOG.open('a').write(line)",
             "open(state_dir / f'{session}.jsonl', 'a')",
             "open(Path.home().joinpath('.claude', 'captures', f'{session}.jsonl'), 'a')",
