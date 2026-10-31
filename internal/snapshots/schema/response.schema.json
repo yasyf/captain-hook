@@ -19,6 +19,53 @@
       "title": "Acquired",
       "type": "object"
     },
+    "AcquiredView": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "label": {
+          "enum": [
+            "excerpt",
+            "tail"
+          ],
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "description"
+      ],
+      "title": "AcquiredView",
+      "type": "object"
+    },
+    "AcquiredViews": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "acquired_views",
+          "title": "Kind",
+          "type": "string"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/AcquiredView"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "title": "Views",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "views"
+      ],
+      "title": "AcquiredViews",
+      "type": "object"
+    },
     "Captured": {
       "additionalProperties": false,
       "properties": {
@@ -83,6 +130,7 @@
           "discriminator": {
             "mapping": {
               "acquired": "#/$defs/Acquired",
+              "acquired_views": "#/$defs/AcquiredViews",
               "activity_probe": "#/$defs/WaitingResult",
               "captured": "#/$defs/Captured",
               "discovered": "#/$defs/Discovered",
@@ -107,6 +155,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/Acquired"
+            },
+            {
+              "$ref": "#/$defs/AcquiredViews"
             },
             {
               "$ref": "#/$defs/PreparedGraphResult"
@@ -730,6 +781,7 @@
               "discriminator": {
                 "mapping": {
                   "acquired": "#/$defs/Acquired",
+                  "acquired_views": "#/$defs/AcquiredViews",
                   "activity_probe": "#/$defs/WaitingResult",
                   "captured": "#/$defs/Captured",
                   "discovered": "#/$defs/Discovered",
@@ -754,6 +806,9 @@
               "oneOf": [
                 {
                   "$ref": "#/$defs/Acquired"
+                },
+                {
+                  "$ref": "#/$defs/AcquiredViews"
                 },
                 {
                   "$ref": "#/$defs/PreparedGraphResult"
@@ -1020,12 +1075,16 @@
         "record_schema": {
           "enum": [
             "cc-transcript.turn/1",
+            "cc-transcript.instruction-turn/1",
             "cc-transcript.event/1",
             "cc-transcript.tool-use/1",
             "cc-transcript.file-ref/1",
             "cc-transcript.predicate-inputs/1",
             "cc-transcript.sidechain/1",
-            "cc-transcript.mining-signal/1"
+            "cc-transcript.mining-signal/1",
+            "cc-transcript.meta-message/1",
+            "cc-transcript.interaction-key/1",
+            "cc-transcript.interaction-winner/1"
           ],
           "title": "Record Schema",
           "type": "string"
