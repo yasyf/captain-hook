@@ -12,7 +12,7 @@ from cc_transcript.context import ContextWindow, HydratedWindow, capture_windows
 from cc_transcript.filterspec import event_meta
 from cc_transcript.render import Budget
 
-from captain_hook.snapshots.client import CURRENT_CLIENT, DEFAULT_LIMITS, EvidenceIncomplete
+from captain_hook.snapshots.client import CURRENT_CLIENT, DEFAULT_LIMITS, NATIVE_CLASSIFIER, EvidenceIncomplete
 from captain_hook.snapshots.review import ReviewPolicy
 
 
@@ -98,7 +98,7 @@ class FixtureOwner:
         self.released.append(arguments["token"])
         return {"status": "ok"}
 
-    def acquire(self, path):
+    def acquire(self, path, *, classifier=NATIVE_CLASSIFIER):
         path = Path(path)
         token = str(len(self.snapshots))
         handle = {"owner_epoch": "fixture", "snapshot_id": str(path), "generation": token, "lease_id": token}
@@ -106,10 +106,8 @@ class FixtureOwner:
             self.snapshots[token] = FixtureSnapshot(path, handle)
         except (ValueError, KeyError) as exc:
             raise EvidenceIncomplete("parse_error", str(exc)) from exc
-        return SimpleNamespace(
-            view=lambda: {"handle": handle, "classifier": {"id": "native", "version": "1"}},
-            release=lambda: self.released.append(token),
-        )
+        lease = SimpleNamespace(require=lambda: handle, release=lambda: self.released.append(token))
+        return SimpleNamespace(view=lambda: {"handle": handle, "classifier": dict(classifier)}, lease=lease, release=lease.release)
 
     def pages(self, operation, **arguments):
         self.calls.append((operation, arguments))

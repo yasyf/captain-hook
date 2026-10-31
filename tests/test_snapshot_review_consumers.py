@@ -184,7 +184,7 @@ def test_render_groups_sessions_and_releases_before_return():
     token = CURRENT_CLIENT.set(SnapshotClient(wire))
     try:
         result = render_review_windows(
-            [window("a"), window("b"), window("a")], roots=["/fixtures"], render=render_budget()
+            [window("a"), window("b"), window("a")], source_paths=[None, None, None], roots=["/fixtures"], render=render_budget()
         )
     finally:
         CURRENT_CLIENT.reset(token)
@@ -200,7 +200,7 @@ def test_failed_session_is_not_downgraded_to_summary_or_poison_healthy_session()
     token = CURRENT_CLIENT.set(SnapshotClient(wire))
     try:
         result = render_review_windows(
-            [window("bad"), window("good"), window("gone")], roots=["/fixtures"], render=render_budget()
+            [window("bad"), window("good"), window("gone")], source_paths=[None, None, None], roots=["/fixtures"], render=render_budget()
         )
     finally:
         CURRENT_CLIENT.reset(token)
@@ -236,7 +236,7 @@ def test_partial_resolve_releases_already_issued_lease():
 
     token = CURRENT_CLIENT.set(SnapshotClient(exchange))
     try:
-        [result] = render_review_windows([window()], roots=["/fixtures"], render=render_budget())
+        [result] = render_review_windows([window()], source_paths=[None], roots=["/fixtures"], render=render_budget())
     finally:
         CURRENT_CLIENT.reset(token)
     assert isinstance(result, EvidenceIncomplete)
@@ -987,5 +987,5 @@ async def test_judge_known_source_avoids_unrelated_corpus_metadata(
     assert root_normalizations == []
     assert "resolve" not in operations
     assert report.judged == len(calls) == 1
-    judged = await store.judged(role="judge", prompt_version=store.versions.create)
+    judged = await store.db.sql("SELECT fidelity FROM verdicts ORDER BY id")
     assert [row["fidelity"] for row in judged] == ["full"]
