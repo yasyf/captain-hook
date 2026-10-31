@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 import spawnllm
-from cc_transcript.activity import Turn
 from click.testing import CliRunner
 from spawnllm import BackendCallError, Decision, LabelAnswer
 

@@ -17,7 +17,9 @@ from captain_hook.transcripts import ROOT_EXCERPT_BYTES, lazy_transcript, load_t
 
 
 def lines(messages):
-    return "".join(json.dumps(fixture_line(index, message), ensure_ascii=False) + "\n" for index, message in enumerate(messages))
+    return "".join(
+        json.dumps(fixture_line(index, message), ensure_ascii=False) + "\n" for index, message in enumerate(messages)
+    )
 
 
 def question(ident, chosen="Yes", seconds=0):
@@ -25,23 +27,28 @@ def question(ident, chosen="Yes", seconds=0):
     ask = T.tool("AskUserQuestion", id=ident, questions=questions)
     return [
         T.assistant(ask),
-        T.user(T.result(f'User has answered your questions: "Post to C1?"="{chosen}".', of=ask),
+        T.user(
+            T.result(f'User has answered your questions: "Post to C1?"="{chosen}".', of=ask),
             toolUseResult={"questions": questions, "answers": {"Post to C1?": chosen}, "annotations": {}},
-            timestamp=f"2026-01-01T00:00:{seconds:02d}Z"),
+            timestamp=f"2026-01-01T00:00:{seconds:02d}Z",
+        ),
     ]
 
 
 def event(tmp_path, acting, root=None, root_path=None):
     return PreToolUseEvent(
         _raw={"session_id": "fixture", "tool_name": "slack_reply", "tool_use_id": "current", "tool_input": {}},
-        ctx=HookContext(session=SessionStore(tmp_path), transcript=acting, settings=None,
-            root_transcript=root, root_path=root_path),
+        ctx=HookContext(
+            session=SessionStore(tmp_path), transcript=acting, settings=None, root_transcript=root, root_path=root_path
+        ),
     )
 
 
 @pytest.mark.parametrize("explicit_standard_loader", [False, True])
 @pytest.mark.parametrize("unrelated", [32, 4096])
-def test_native_answers_match_legacy_without_projecting_unrelated_calls(tmp_path, monkeypatch, unrelated, explicit_standard_loader):
+def test_native_answers_match_legacy_without_projecting_unrelated_calls(
+    tmp_path, monkeypatch, unrelated, explicit_standard_loader
+):
     from captain_hook.tickets import context as source_module
 
     monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
@@ -85,7 +92,9 @@ def test_root_window_is_shared_but_later_properties_reauthorize_current_source(t
     monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
     root_path = tmp_path / "root.jsonl"
     padding = json.dumps({"type": "queue-operation", "ignored": "x" * 1000}) + "\n"
-    root_body = padding * (ROOT_EXCERPT_BYTES // len(padding) + 20) + lines([T.user("C1 release"), *question("root-question")])
+    root_body = padding * (ROOT_EXCERPT_BYTES // len(padding) + 20) + lines(
+        [T.user("C1 release"), *question("root-question")]
+    )
     root_path.write_text(root_body)
     acting_path = tmp_path / "acting.jsonl"
     acting_path.write_text(lines([T.user("agent brief"), T.assistant(T.tool("Bash", id="touch", command="echo C1"))]))
@@ -129,16 +138,18 @@ def test_closed_source_branch_does_not_bypass_its_lifetime(tmp_path):
 
 
 def test_fixed_lease_does_not_reacquire_on_stale_reply():
-    from tests.test_snapshot_client import description, response
     from captain_hook.snapshots.client import SnapshotClient
+    from tests.test_snapshot_client import description, response
 
     requests = []
+
     def exchange(wrapper):
         request = wrapper["request"]
         requests.append(request)
         result = response(request, None)
         result["response"].update(status="stale_handle", complete=False, reason="gone")
         return result
+
     client = SnapshotClient(exchange)
     source = description()
     source["lease_expires_unix_ms"] = 0
@@ -165,7 +176,11 @@ def test_unread_property_rechecks_authority_after_answers(tmp_path, monkeypatch)
         assert ctx.answers
         unrelated = tmp_path / "unrelated"
         unrelated.mkdir()
-        fixture.context["authority"] = {"kind": "restricted_roots", "roots": [str(unrelated)], "effective_uid": fixture.context["authority"]["effective_uid"]}
+        fixture.context["authority"] = {
+            "kind": "restricted_roots",
+            "roots": [str(unrelated)],
+            "effective_uid": fixture.context["authority"]["effective_uid"],
+        }
         with pytest.raises(EvidenceIncomplete) as failure:
             _ = ctx.said
         assert failure.value.status == "permission_denied"
@@ -180,8 +195,14 @@ def test_board_wait_begins_after_all_transcript_queries_and_lease_release(tmp_pa
     from captain_hook.tickets import context as source_module
 
     path = tmp_path / "acting.jsonl"
-    payload = {"type": "slack.action", "action_ts": "1.2", "label": "No", "waits": True,
-        "question": "Post to C1?", "options": ["Yes", "No"]}
+    payload = {
+        "type": "slack.action",
+        "action_ts": "1.2",
+        "label": "No",
+        "waits": True,
+        "question": "Post to C1?",
+        "options": ["Yes", "No"],
+    }
     text = f'<channel source="{source_module.CARD_SERVER}" type="slack.action">\n{json.dumps(payload)}\n</channel>'
     path.write_text(lines([T.user("start"), *question("q"), T.user(text, isMeta=True)]))
     fixture = FixtureOwner()
@@ -210,25 +231,48 @@ def test_native_cross_source_winners_cards_and_stable_ties_match_the_original_or
     from captain_hook.tickets import context as source_module
 
     monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
-    payload = {"type": "slack.action", "action_ts": "owner-card", "label": "No", "waits": True,
-        "question": "Post to C1?", "options": ["Yes", "No"]}
+    payload = {
+        "type": "slack.action",
+        "action_ts": "owner-card",
+        "label": "No",
+        "waits": True,
+        "question": "Post to C1?",
+        "options": ["Yes", "No"],
+    }
     tap = f'<channel source="{source_module.CARD_SERVER}" type="slack.action">\n{json.dumps(payload)}\n</channel>'
-    root_messages = [T.user("owner C1"), *question("duplicate", "Yes", 1), *question("tie", "Yes", 2),
-        *question("overwritten", "Yes", 2), T.user(tap, isMeta=True),
-        T.user(tap.replace("owner-card", "tool-card"), isMeta=True, sourceToolUseID="not-owner")]
-    acting_messages = [T.user("agent brief"), *question("duplicate", "No", 2),
+    root_messages = [
+        T.user("owner C1"),
+        *question("duplicate", "Yes", 1),
+        *question("tie", "Yes", 2),
+        *question("overwritten", "Yes", 2),
+        T.user(tap, isMeta=True),
+        T.user(tap.replace("owner-card", "tool-card"), isMeta=True, sourceToolUseID="not-owner"),
+    ]
+    acting_messages = [
+        T.user("agent brief"),
+        *question("duplicate", "No", 2),
         T.assistant(T.tool("Bash", id="overwritten", command="echo C1")),
-        T.user(tap.replace("owner-card", "agent-card"), isMeta=True)]
+        T.user(tap.replace("owner-card", "agent-card"), isMeta=True),
+    ]
     root_path, acting_path = tmp_path / "root.jsonl", tmp_path / "acting.jsonl"
     root_path.write_text(lines(root_messages))
     acting_path.write_text(lines(acting_messages))
-    reference = TranscriptSources(event(tmp_path, fixture_session(acting_messages), fixture_session(root_messages), root_path), ("C1",))
+    reference = TranscriptSources(
+        event(tmp_path, fixture_session(acting_messages), fixture_session(root_messages), root_path), ("C1",)
+    )
     original = [(turn, user) for session, user in reference.sessions() for turn in session.turns]
-    asked = {answer.id: answer for use in source_module.ordered_uses(turn for turn, _ in original)
-        for answer in source_module.use_answers(use)}
-    cards = {answer.id: answer for turn, user in original if user
+    asked = {
+        answer.id: answer
+        for use in source_module.ordered_uses(turn for turn, _ in original)
+        for answer in source_module.use_answers(use)
+    }
+    cards = {
+        answer.id: answer
+        for turn, user in original
+        if user
         for value, at in source_module.card_taps(turn.events)
-        if (answer := source_module.card_answer(value, at)) is not None}
+        if (answer := source_module.card_answer(value, at)) is not None
+    }
     expected = [*asked.values(), *cards.values()]
     assert [answer.id for answer in expected] == ["ask:duplicate#0", "ask:tie#0", "card:owner-card"]
     fixture = FixtureOwner()
@@ -266,8 +310,12 @@ def test_selected_acting_tail_preserves_its_existing_scope(tmp_path, monkeypatch
     from captain_hook.tickets import context as source_module
 
     monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
-    messages = [T.user("first"), *question("older-question"), T.user("recent"),
-        T.assistant(T.tool("Bash", id="recent-touch", command="echo C1"))]
+    messages = [
+        T.user("first"),
+        *question("older-question"),
+        T.user("recent"),
+        T.assistant(T.tool("Bash", id="recent-touch", command="echo C1")),
+    ]
     assert any(source_module.use_answers(use) for turn in fixture_session(messages).turns for use in turn.tool_uses)
     path = tmp_path / "acting.jsonl"
     path.write_text(lines(messages))
@@ -335,7 +383,9 @@ def test_native_instruction_evidence_keeps_words_without_successful_tool_payload
         queries = [request["query"] for request in requests if request["operation"] == "query"]
         assert queries == [{"kind": "instruction_turns", "order": "forward"}]
         assert fixture.client.call("stats")["data"]["gauges"]["active_leases"] == 0
-        print(f"ticket_instruction_source unused_input_bytes={large_bytes} query_count={len(queries)} evidence_count={len(actual)} output_limit=4096")
+        print(
+            f"ticket_instruction_source unused_input_bytes={large_bytes} query_count={len(queries)} evidence_count={len(actual)} output_limit=4096"
+        )
     finally:
         acting.release()
         CURRENT_CLIENT.reset(token)

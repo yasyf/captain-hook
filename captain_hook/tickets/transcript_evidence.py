@@ -53,7 +53,8 @@ def instruction_turns(source: EvidenceSession, window: int) -> list[InstructionT
     if source.indexed:
         return [
             InstructionTurn(
-                row["prompt"], row["started_at"],
+                row["prompt"],
+                row["started_at"],
                 tuple((item["text"], item["ts"]) for item in row["queued"]),
                 tuple((item["name"], item["content"], item["result_ts"]) for item in row["rejections"]),
                 row["assistant_tail"],
@@ -62,18 +63,22 @@ def instruction_turns(source: EvidenceSession, window: int) -> list[InstructionT
         ]
     return [
         InstructionTurn(
-            turn.prompt, turn.started_at,
+            turn.prompt,
+            turn.started_at,
             tuple((text, event.meta.timestamp) for text, event in queued_words(turn.events)),
             tuple(
                 (use.call.name, use.result.content, use.result_ts or use.ts)
                 for use in turn.tool_uses
                 if use.result is not None and use.result.denial_kind == DENIAL_KIND_USER_REJECTED
             ),
-            next((
-                event.text.strip()[-REPLIED_SHOWN:]
-                for event in reversed(turn.events)
-                if isinstance(event, AssistantEvent) and event.text.strip()
-            ), ""),
+            next(
+                (
+                    event.text.strip()[-REPLIED_SHOWN:]
+                    for event in reversed(turn.events)
+                    if isinstance(event, AssistantEvent) and event.text.strip()
+                ),
+                "",
+            ),
         )
         for turn in session.turns
     ]
@@ -81,8 +86,11 @@ def instruction_turns(source: EvidenceSession, window: int) -> list[InstructionT
 
 def fixed_session(client: Any, description: dict[str, Any], stack: ExitStack) -> RemoteSession:
     session = RemoteSession(
-        client, FixedLease(client, description, tail_bytes=HOOK_TAIL_BYTES),
-        Path(description["canonical_path"]), description["classifier"], tail_bytes=HOOK_TAIL_BYTES,
+        client,
+        FixedLease(client, description, tail_bytes=HOOK_TAIL_BYTES),
+        Path(description["canonical_path"]),
+        description["classifier"],
+        tail_bytes=HOOK_TAIL_BYTES,
     )
     stack.callback(session.release)
     return session
@@ -111,10 +119,15 @@ def classified(session: RemoteSession, stack: ExitStack) -> RemoteSession:
         result = client.classify(session, _state.classifier, configured_classifier_policy(resolve_project_dir()))
         stack.callback(result.release)
         return result
-    prepared = list(client.pages(
-        "prepare_hook_view", domain=True, view=session.view(), cwd=resolve_project_dir(),
-        droid=reqenv.getenv("FACTORY_PROJECT_DIR") is not None,
-    ))
+    prepared = list(
+        client.pages(
+            "prepare_hook_view",
+            domain=True,
+            view=session.view(),
+            cwd=resolve_project_dir(),
+            droid=reqenv.getenv("FACTORY_PROJECT_DIR") is not None,
+        )
+    )
     if len(prepared) != 1 or prepared[0].get("kind") != "classifier":
         raise SnapshotProtocolError("hook classifier preparation returned invalid evidence")
     classifier = prepared[0]["classifier"]
@@ -148,17 +161,26 @@ def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
             raise EvidenceIncomplete("invalid_request", "ticket evidence requires an admitted snapshot client")
         output = []
         if root is not None:
-            base = fixed_session(client, client.acquired(root.path, classifier=NATIVE_CLASSIFIER, tail_bytes=HOOK_TAIL_BYTES), stack)
-            forms = list(dict.fromkeys(
-                form for needle in sources.needles if needle
-                for form in (needle, json.dumps(needle)[1:-1], json.dumps(needle, ensure_ascii=False)[1:-1])
-            ))
+            base = fixed_session(
+                client, client.acquired(root.path, classifier=NATIVE_CLASSIFIER, tail_bytes=HOOK_TAIL_BYTES), stack
+            )
+            forms = list(
+                dict.fromkeys(
+                    form
+                    for needle in sources.needles
+                    if needle
+                    for form in (needle, json.dumps(needle)[1:-1], json.dumps(needle, ensure_ascii=False)[1:-1])
+                )
+            )
             if sources.needles or root.tail_events is not None:
-                result = list(client.pages(
-                    "acquire_views", handle=base.lease.require(),
-                    excerpt={"forms": forms, "around": 2, "count": 20} if sources.needles else None,
-                    tail_events=root.tail_events,
-                ))
+                result = list(
+                    client.pages(
+                        "acquire_views",
+                        handle=base.lease.require(),
+                        excerpt={"forms": forms, "around": 2, "count": 20} if sources.needles else None,
+                        tail_events=root.tail_events,
+                    )
+                )
                 if len(result) != 1 or result[0].get("kind") != "acquired_views":
                     raise SnapshotProtocolError("ticket source selection returned no views")
                 expected = (["excerpt"] if sources.needles else []) + (["tail"] if root.tail_events else [])
@@ -170,13 +192,17 @@ def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
             if root.tail_events is None:
                 output.append(EvidenceSession(classified(base, stack), True, True))
         base = acquired_source(client, acting, stack)
-        output.append(EvidenceSession(classified(base, stack), root is None, True) if isinstance(base, RemoteSession) else EvidenceSession(base, root is None))
+        output.append(
+            EvidenceSession(classified(base, stack), root is None, True)
+            if isinstance(base, RemoteSession)
+            else EvidenceSession(base, root is None)
+        )
         yield output
 
 
 def batches(values: Sequence[str]) -> Iterator[Sequence[str]]:
     for start in range(0, len(values), 256):
-        yield values[start:start + 256]
+        yield values[start : start + 256]
 
 
 def question_uses(sources: Sequence[EvidenceSession]) -> list[ToolUse]:
@@ -199,7 +225,11 @@ def question_uses(sources: Sequence[EvidenceSession]) -> list[ToolUse]:
     winners: dict[str, tuple[int, str]] = {}
     for index, source in enumerate(sources):
         if source.indexed:
-            records = [record for batch in batches(keys) for record in source.session.query({"kind": "interaction_winners", "keys": list(batch)})]
+            records = [
+                record
+                for batch in batches(keys)
+                for record in source.session.query({"kind": "interaction_winners", "keys": list(batch)})
+            ]
             if len(records) != len(keys) or [record["key"] for record in records] != keys:
                 raise SnapshotProtocolError("interaction winners returned different keys")
             for record in records:
@@ -215,18 +245,25 @@ def question_uses(sources: Sequence[EvidenceSession]) -> list[ToolUse]:
     for index, source in enumerate(sources):
         wanted = [key for key in keys if winners.get(key) == (index, QUESTION_TOOL)]
         if source.indexed:
-            found = [use for batch in batches(wanted) for use in source.session.query({"kind": "interaction_records", "keys": list(batch)})]
+            found = [
+                use
+                for batch in batches(wanted)
+                for use in source.session.query({"kind": "interaction_records", "keys": list(batch)})
+            ]
             actual = [use.ref.tool_use_id or f"{use.ts}" for use in found]
             if actual != wanted:
                 raise SnapshotProtocolError("interaction records returned different keys")
             selected.update(zip(actual, found, strict=True))
         else:
             selected.update((key, legacy[index][key]) for key in wanted)
-    return sorted(selected.values(), key=lambda use: (use.result_ts or use.ts, first[use.ref.tool_use_id or f"{use.ts}"]))
+    return sorted(
+        selected.values(), key=lambda use: (use.result_ts or use.ts, first[use.ref.tool_use_id or f"{use.ts}"])
+    )
 
 
 def card_taps(source: EvidenceSession) -> Iterator[tuple[dict[str, Any], Any]]:
-    from captain_hook.tickets.context import card_payload, card_taps as legacy_card_taps
+    from captain_hook.tickets.context import card_payload
+    from captain_hook.tickets.context import card_taps as legacy_card_taps
 
     if not source.indexed:
         for turn in source.session.turns:
@@ -234,8 +271,10 @@ def card_taps(source: EvidenceSession) -> Iterator[tuple[dict[str, Any], Any]]:
         return
     for record in source.session.query({"kind": "meta_messages", "contains": "slack.action"}):
         trusted = (
-            record["kind"] == "user" and record["is_meta"]
-            and record["source_tool_use_id"] is None and record["source_tool_assistant_uuid"] is None
+            record["kind"] == "user"
+            and record["is_meta"]
+            and record["source_tool_use_id"] is None
+            and record["source_tool_assistant_uuid"] is None
         ) or (record["kind"] == "queued" and record["origin"] == "channel")
         if trusted and (payload := card_payload(record["text"])) is not None:
             yield payload, record["ts"]

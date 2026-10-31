@@ -148,7 +148,6 @@ def instruction_words(text: str) -> tuple[str, bool]:
     return (typed if trailer else said).strip(), True
 
 
-
 def parse_answer(payload: object) -> AskUserQuestionResult | None:
     if not isinstance(payload, dict):
         return None
@@ -540,7 +539,8 @@ class TranscriptSources:
 
         A card tap counts only in a session whose prompts are the user's, where cc-slack delivers it.
         """
-        from captain_hook.tickets.transcript_evidence import card_taps as source_card_taps, question_uses, sessions
+        from captain_hook.tickets.transcript_evidence import card_taps as source_card_taps
+        from captain_hook.tickets.transcript_evidence import question_uses, sessions
 
         with sessions(self) as sources:
             asked = {item.id: item for use in question_uses(sources) for item in use_answers(use)}

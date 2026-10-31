@@ -33,15 +33,19 @@ def test_touches_match_full_turn_oracle_without_projecting_assistant_text(tmp_pa
     question = T.tool("AskUserQuestion", id="question", questions=[])
     pending = T.tool("Bash", id="pending", command="pending")
     messages += [
-        T.assistant(first), T.user(T.result("old", of=first), timestamp="2026-01-01T00:00:01Z"),
-        T.assistant(second), T.user(T.result("failed", of=second, is_error=True), timestamp="2026-01-01T00:00:02Z"),
-        T.assistant(last), T.user(T.result("new", of=last), timestamp="2026-01-01T00:00:02Z"),
-        T.assistant(question), T.user(T.result("answer", of=question)), T.assistant(pending),
+        T.assistant(first),
+        T.user(T.result("old", of=first), timestamp="2026-01-01T00:00:01Z"),
+        T.assistant(second),
+        T.user(T.result("failed", of=second, is_error=True), timestamp="2026-01-01T00:00:02Z"),
+        T.assistant(last),
+        T.user(T.result("new", of=last), timestamp="2026-01-01T00:00:02Z"),
+        T.assistant(question),
+        T.user(T.result("answer", of=question)),
+        T.assistant(pending),
     ]
     local = fixture_session(messages)
     expected = [
-        touch_of(use) for use in ordered_uses(local.recent_messages(window).turns)
-        if use.call.name != QUESTION_TOOL
+        touch_of(use) for use in ordered_uses(local.recent_messages(window).turns) if use.call.name != QUESTION_TOOL
     ]
     assert TranscriptSources(event(tmp_path, local), (), window).touches() == expected
     path = tmp_path / "touch.jsonl"
@@ -68,7 +72,11 @@ def test_touches_match_full_turn_oracle_without_projecting_assistant_text(tmp_pa
         requests.clear()
         output_bytes.clear()
         provider = TranscriptSources(event(tmp_path, native), (), window)
-        old = [touch_of(use) for use in ordered_uses(turn for turn, _ in provider.turns(window)) if use.call.name != QUESTION_TOOL]
+        old = [
+            touch_of(use)
+            for use in ordered_uses(turn for turn, _ in provider.turns(window))
+            if use.call.name != QUESTION_TOOL
+        ]
         assert old == expected
         full_bytes = sum(output_bytes)
         requests.clear()
@@ -82,7 +90,9 @@ def test_touches_match_full_turn_oracle_without_projecting_assistant_text(tmp_pa
             assert any(touch.input.get("command") == "error" for touch in expected)
             assert any(touch.input.get("command") == "pending" for touch in expected)
             assert not any(touch.input.get("command") == "old" for touch in expected)
-        print(f"ticket_touches unrelated={unrelated} window={window} full_bytes={full_bytes} tool_bytes={projected_bytes}")
+        print(
+            f"ticket_touches unrelated={unrelated} window={window} full_bytes={full_bytes} tool_bytes={projected_bytes}"
+        )
     finally:
         native.release()
         CURRENT_CLIENT.reset(token)
@@ -93,15 +103,22 @@ def test_touch_projection_preserves_source_winners_and_timestamp_ties(tmp_path, 
     duplicate = T.tool("Bash", id="duplicate", command="old")
     other = T.tool("Bash", id="other", command="middle")
     replacement = T.tool("Bash", id="duplicate", command="new")
-    first = fixture_session([
-        T.user("root"), T.assistant(duplicate),
-        T.user(T.result("old", of=duplicate), timestamp="2026-01-01T00:00:01Z"),
-        T.assistant(other), T.user(T.result("middle", of=other), timestamp="2026-01-01T00:00:02Z"),
-    ])
-    second = fixture_session([
-        T.user("agent"), T.assistant(replacement),
-        T.user(T.result("new", of=replacement), timestamp="2026-01-01T00:00:02Z"),
-    ])
+    first = fixture_session(
+        [
+            T.user("root"),
+            T.assistant(duplicate),
+            T.user(T.result("old", of=duplicate), timestamp="2026-01-01T00:00:01Z"),
+            T.assistant(other),
+            T.user(T.result("middle", of=other), timestamp="2026-01-01T00:00:02Z"),
+        ]
+    )
+    second = fixture_session(
+        [
+            T.user("agent"),
+            T.assistant(replacement),
+            T.user(T.result("new", of=replacement), timestamp="2026-01-01T00:00:02Z"),
+        ]
+    )
     monkeypatch.setattr(TranscriptSources, "sessions", lambda self: [(first, True), (second, False)])
     provider = TranscriptSources(event(tmp_path, first), ())
     expected = [touch_of(use) for use in ordered_uses([*first.turns, *second.turns])]

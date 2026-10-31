@@ -187,8 +187,11 @@ class TranscriptSource:
 
 class TranscriptPins:
     def __init__(
-        self, load: Callable[[], Session | RemoteSession], tail: Callable[[int], Session] | None = None,
-        *, spec: TranscriptSource | None = None,
+        self,
+        load: Callable[[], Session | RemoteSession],
+        tail: Callable[[int], Session] | None = None,
+        *,
+        spec: TranscriptSource | None = None,
     ) -> None:
         self.load = load
         self.tail = tail
@@ -338,8 +341,11 @@ def lazy_transcript(
 def root_transcript(path: str | Path, events: int) -> LazyTranscript:
     """The newest ``events`` events of a lane's root session transcript, tailed on first touch."""
     return LazyTranscript(
-        TranscriptPins(partial(guarded_load, path, lambda source: tail_transcript(source, events)),
-            spec=TranscriptSource(Path(path), events) if reqenv.provider() == "claude" else None), seed=True
+        TranscriptPins(
+            partial(guarded_load, path, lambda source: tail_transcript(source, events)),
+            spec=TranscriptSource(Path(path), events) if reqenv.provider() == "claude" else None,
+        ),
+        seed=True,
     )
 
 

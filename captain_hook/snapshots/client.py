@@ -175,9 +175,12 @@ def output_limit_sizes(reason: object) -> dict[str, int | str]:
         "output_needed_bytes": int(match[1]),
         "output_budget_bytes": int(match[2]),
         "output_budget_scope": {
-            "record bound": "record", "page bound": "page", "remaining output budget": "remaining_output",
+            "record bound": "record",
+            "page bound": "page",
+            "remaining output budget": "remaining_output",
         }[match[3]],
     }
+
 
 def request_metadata(request: Mapping[str, object]) -> dict[str, object]:
     sources = {key: value for key in SOURCE_FIELDS if (value := request.get(key))}
@@ -560,8 +563,12 @@ class SnapshotClient:
                                 (
                                     kind
                                     for kind in (
-                                        "turns", "events", "interaction_keys", "interaction_winners",
-                                        "interaction_records", "meta_messages",
+                                        "turns",
+                                        "events",
+                                        "interaction_keys",
+                                        "interaction_winners",
+                                        "interaction_records",
+                                        "meta_messages",
                                     )
                                     if query.get("kind") == kind
                                 ),
@@ -808,9 +815,7 @@ class Lease:
             "release", owner_epoch=self.handle["owner_epoch"], kind="lease", token=self.handle["lease_id"]
         )
         if result.get("status") == "retained_limit":
-            logger.bind(status="retained_limit", reason=result.get("reason")).warning(
-                "snapshot lease cleanup deferred"
-            )
+            logger.bind(status="retained_limit", reason=result.get("reason")).warning("snapshot lease cleanup deferred")
             self.cleanup_pending = True
             return
         if result.get("status") not in {"ok", "stale_handle"}:
