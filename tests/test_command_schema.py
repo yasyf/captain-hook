@@ -318,12 +318,14 @@ def test_exemption_applies_only_to_its_own_invocation() -> None:
     assert not condition.check(evt_for("echo 'find / -name daemonkit'"))
 
 
-def test_performance_warning_rides_the_general_rewrite_once(isolate_modules: None, tmp_path: Path) -> None:
+def test_performance_denial_overrides_the_general_rewrite_repeatedly(isolate_modules: None, tmp_path: Path) -> None:
     for name in ("general", "performance"):
         discover_pack(name, manager.resolve_builtin(name).path)
-    first = dispatch(Event.PreToolUse, evt_for("find / -name daemonkit"), session_dir=tmp_path)
-    assert first is not None
-    assert first["hookSpecificOutput"].get("permissionDecision") != "deny"
-    assert "broad filesystem search" in first["hookSpecificOutput"]["additionalContext"]
-    second = dispatch(Event.PreToolUse, evt_for("find / -name daemonkit"), session_dir=tmp_path)
-    assert second is None or "broad filesystem search" not in second["hookSpecificOutput"].get("additionalContext", "")
+    for _ in range(2):
+        result = dispatch(Event.PreToolUse, evt_for("find / -name daemonkit"), session_dir=tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "broad filesystem search" in output["permissionDecisionReason"]
+    bounded = dispatch(Event.PreToolUse, evt_for("find / -maxdepth 2 -name daemonkit"), session_dir=tmp_path)
+    assert bounded is None or bounded["hookSpecificOutput"].get("permissionDecision") != "deny"

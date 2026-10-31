@@ -54,7 +54,7 @@ PYTHON_HOOKS = {"style", "toolchain"}
 GO_HOOKS = {"toolchain"}
 STEERING_HOOKS = {"steering", "teammates", "workarounds"}
 FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
-PERFORMANCE_HOOKS = {"admission", "filesystem", "git_objects", "resources", "search"}
+PERFORMANCE_HOOKS = {"admission", "git_objects", "resources", "search"}
 GRAPHITE_HOOKS = {"queue", "vcs"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (

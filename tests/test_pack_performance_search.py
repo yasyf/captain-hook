@@ -1102,3 +1102,133 @@ def test_recursive_grep_uses_the_current_command_without_history(
         transcript_loader=lambda _: pytest.fail("history loader was called"),
     )
     assert (output or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
+
+
+@pytest.mark.parametrize("root", ["~/Code", "~/repos"])
+def test_blocks_unbounded_find_at_checkout_collections(
+    performance: None, home: Path, tmp_path: Path, root: str
+) -> None:
+    assert decision(f"find {root} -name needle", home, tmp_path) == "deny"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        pytest.param("find ~/Code -name needle | head -1", "deny", id="output-cap"),
+        pytest.param('find "$HOME/Code" -iname needle', "deny", id="quoted-home"),
+        pytest.param("find ~/Code/* -name needle", "deny", id="all-code-checkouts"),
+        pytest.param("find ~/.claude/worktrees/captain-hook -name needle", "deny", id="claude-project-pool"),
+        pytest.param("find ~/.claude/worktrees/captain-hook/* -name needle", "deny", id="claude-project-pool-star"),
+        pytest.param("find ~/.claude/worktrees/captain-hook/lane/* -name needle", None, id="focused-claude-lane-star"),
+        pytest.param(
+            f"find ~/repos/orca/workspaces/{ORCA_UUID}/captain-hook -name needle",
+            "deny",
+            id="orca-project-pool",
+        ),
+        pytest.param(
+            f"find ~/repos/orca/workspaces/{ORCA_UUID}/captain-hook/* -name needle",
+            "deny",
+            id="orca-project-pool-star",
+        ),
+        pytest.param(
+            f"find ~/repos/orca/workspaces/{ORCA_UUID}/captain-hook/lane/* -name needle",
+            None,
+            id="focused-orca-lane-star",
+        ),
+        pytest.param("find ~/repos -type f -name '*.py'", "deny", id="filename-filter"),
+        pytest.param("find ~/repos/claude/worktrees -name needle", "deny", id="claude-pool"),
+        pytest.param("find ~/repos/orca/workspaces -name needle", "deny", id="orca-pool"),
+        pytest.param(f"find ~/repos/orca/workspaces/{ORCA_UUID} -name needle", "deny", id="orca-aggregate"),
+        pytest.param("env X=1 timeout 2 /usr/bin/find ~/Code -name needle", "deny", id="wrapper"),
+        pytest.param("sh -c 'find ~/repos -name needle'", "deny", id="shell"),
+        pytest.param("cd ~/Code && find . -name needle", "deny", id="command-cwd"),
+        pytest.param("for root in ~/Code ~/repos; do find $root -name needle; done", "deny", id="loop-roots"),
+        pytest.param("find ~/Code -maxdepth 1 $EXPR", "deny", id="unknown-expression"),
+        pytest.param("find ~/Code -maxdepth 1 -maxdepth 99", "deny", id="last-depth-unbounded"),
+        pytest.param("find ~/Code -maxdepth 0", None, id="depth-zero"),
+        pytest.param("find ~/Code -maxdepth 1 -type d", None, id="depth-one"),
+        pytest.param("find ~/repos -maxdepth 2 -name needle", None, id="depth-two"),
+        pytest.param("find ~/Code -maxdepth 99 -maxdepth 1", None, id="last-depth-bounded"),
+        pytest.param("find ~/Code/captain-hook -name needle", None, id="focused-code-checkout"),
+        pytest.param("find ~/repos/captain-hook/src -name needle", None, id="focused-repos-subpath"),
+        pytest.param("find ~/.claude/worktrees/captain-hook/lane -name needle", None, id="focused-worktree"),
+        pytest.param("find ~/Code/notes.log -name needle", None, id="explicit-file"),
+        pytest.param("find src -name needle", None, id="relative-focused-path"),
+        pytest.param("echo 'find ~/Code -name needle'", None, id="literal-text"),
+    ],
+)
+def test_find_scope_and_depth_contract(
+    performance: None, home: Path, repo: Path, tmp_path: Path, command: str, expected: str | None
+) -> None:
+    (home / "Code" / "captain-hook" / "src").mkdir(parents=True)
+    (home / "Code" / "notes.log").write_text("needle\n")
+    (home / "repos" / "captain-hook" / "src").mkdir(parents=True)
+    assert decision(command, repo, tmp_path) == expected
+
+
+def test_find_repeated_broad_commands_always_block(performance: None, home: Path, tmp_path: Path) -> None:
+    assert decision("find / -name first", home, tmp_path) == "deny"
+    assert decision("find / -name second", home, tmp_path) == "deny"
+    assert decision("find ~/Code -name third", home, tmp_path) == "deny"
+    assert decision("find ~/repos -name fourth", home, tmp_path) == "deny"
+    assert decision("find ~/Code -maxdepth 2", home, tmp_path) is None
+
+
+def test_find_follows_the_working_directory(performance: None, home: Path, tmp_path: Path) -> None:
+    (focused := home / "Code" / "captain-hook" / "src").mkdir(parents=True)
+    assert decision("find . -name needle", focused.parents[1], tmp_path / "collection") == "deny"
+    assert decision("find -name needle", focused.parents[1], tmp_path / "implicit") == "deny"
+    assert decision("find . -name needle", focused, tmp_path / "focused") is None
+
+
+def test_find_follows_a_relocated_code_collection(performance: None, home: Path, tmp_path: Path) -> None:
+    (focused := tmp_path / "dedicated" / "Code" / "captain-hook" / "src").mkdir(parents=True)
+    (home / "Code").symlink_to(focused.parents[1])
+    assert decision(f"find {focused.parents[1]} -name needle", home, tmp_path / "real-root") == "deny"
+    assert decision(f"find {home / 'Code'} -name needle", home, tmp_path / "link-root") == "deny"
+    assert decision(f"find {focused} -name needle", home, tmp_path / "focused") is None
+
+
+def test_find_classifies_without_walks_subprocesses_or_history(
+    performance: None, home: Path, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from captain_hook.cli import dispatch_event
+
+    def forbidden(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("find classification walked, launched a subprocess, or read history")
+
+    monkeypatch.setattr(Target, "expand", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.contains_repo", forbidden)
+    monkeypatch.setattr("captain_hook.cmd.glob_matches", forbidden)
+    monkeypatch.setattr("captain_hook.util.vcs.scanned_names", forbidden)
+    monkeypatch.setattr("captain_hook.transcripts.registered_sources", forbidden)
+    monkeypatch.setattr("os.walk", forbidden)
+    monkeypatch.setattr("os.scandir", forbidden)
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "check_output", forbidden)
+    for index, (command, expected) in enumerate(
+        [
+            ("find ~/Code -name needle", "deny"),
+            ("find ~/repos -name needle", "deny"),
+            ("find ~/repos/orca/workspaces -name needle", "deny"),
+            ("find internal/focused -name needle", None),
+            ("find ~/Code -maxdepth 2", None),
+        ]
+    ):
+        output, _ = dispatch_event(
+            repo,
+            Event.PreToolUse,
+            {
+                "session_id": f"find-classifier-{index}",
+                "cwd": str(repo),
+                "transcript_path": str(tmp_path / "unread-history.jsonl"),
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            },
+            session_dir=tmp_path / str(index),
+            transcript_loader=forbidden,
+        )
+        assert (output or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
