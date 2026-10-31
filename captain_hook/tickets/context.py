@@ -249,9 +249,13 @@ def use_answers(use: ToolUse) -> list[Answer]:
     return question_answers(use.ref.tool_use_id or f"{use.ts:%s}", *result, use.result_ts or use.ts)
 
 
-def ordered_uses(turns: Iterable[Turn]) -> list[ToolUse]:
-    found = {use.ref.tool_use_id or f"{use.ts}": use for turn in turns for use in turn.tool_uses}
+def ordered_calls(uses: Iterable[ToolUse]) -> list[ToolUse]:
+    found = {use.ref.tool_use_id or f"{use.ts}": use for use in uses}
     return sorted(found.values(), key=lambda use: use.result_ts or use.ts)
+
+
+def ordered_uses(turns: Iterable[Turn]) -> list[ToolUse]:
+    return ordered_calls(use for turn in turns for use in turn.tool_uses)
 
 
 def board_blocks(
@@ -527,7 +531,11 @@ class TranscriptSources:
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
     def uses(self, window: int | None) -> list[ToolUse]:
-        return ordered_uses(turn for turn, _ in self.turns(window))
+        return ordered_calls(
+            use
+            for session, _ in self.sessions()
+            for use in (session if window is None else session.recent_messages(window)).tool_calls.with_errors.items
+        )
 
     def answers(self) -> list[Answer]:
         """Every answer across the tree's sessions, however far back; the window bounds words and touches only.
