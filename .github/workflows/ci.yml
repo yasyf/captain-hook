@@ -226,7 +226,7 @@ jobs:
           git worktree add --detach "$baseline" 2068d95872684b5a6ac729b38b5b09a361709d74
           cp tests/test_ticket_latency_metadata.py "$baseline/tests/test_ticket_latency_metadata.py"
           (cd "$baseline" && uv sync --locked --extra dev)
-          if (cd "$baseline" && PYTHONPATH="$baseline:$baseline/tests" "$baseline/.venv/bin/python" -m pytest 'tests/test_ticket_latency_metadata.py::test_slack_outer_ticket_timings[mint-slack]' -n 0 -q -s) > "$RUNNER_TEMP/slack-ticket-timing-negative.log" 2>&1; then
+          if (cd "$baseline" && PYTHONPATH="$baseline:$baseline/tests" "$baseline/.venv/bin/python" -m pytest 'tests/test_ticket_latency_metadata.py::test_slack_outer_ticket_timings[mint-slack]' -n 0 -s) > "$RUNNER_TEMP/slack-ticket-timing-negative.log" 2>&1; then
             cat "$RUNNER_TEMP/slack-ticket-timing-negative.log"
             exit 1
           fi
