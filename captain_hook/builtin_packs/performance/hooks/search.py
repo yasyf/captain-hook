@@ -1395,7 +1395,7 @@ hook(
             cwd="/Users/yasyf/.claude/worktrees/monorepo/parity-audit-dev/go/ci/internal/release",
         ): Allow(),
         Input(command="find $HOME/.claude/worktrees/captain-hook/x -name daemonkit"): Allow(),
-        Input(command="find ~/.claude/worktrees/captain-hook/* -name daemonkit"): Allow(),
+        Input(command="find ~/.claude/worktrees/captain-hook/* -name daemonkit"): Block(),
         Input(command="find src -name daemonkit", cwd="/repo"): Allow(),
         Input(command="find src -newermt 2026-09-17", cwd="/repo"): Allow(),
         Input(command="find src -path / -prune", cwd="/repo"): Allow(),
