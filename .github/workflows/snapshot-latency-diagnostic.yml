@@ -1,0 +1,69 @@
+name: Snapshot latency diagnostic
+
+on:
+  push:
+    branches: [diag/snapshot-warm-latency-515]
+
+permissions:
+  contents: read
+
+jobs:
+  paired-snapshot-latency:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: 2068d95872684b5a6ac729b38b5b09a361709d74
+          path: .snapshot-baseline
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 662415974b7fe8b9b384bb79166175a5b146a01a
+          path: .snapshot-candidate
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - name: Sync exact locked environments
+        run: |
+          mkdir "$RUNNER_TEMP/snapshot-latency"
+          (cd .snapshot-baseline && uv sync --locked --extra dev)
+          (cd .snapshot-candidate && uv sync --locked --extra dev)
+      - name: Immutable baseline unchanged strict fixture
+        id: baseline
+        continue-on-error: true
+        working-directory: .snapshot-baseline
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.ci
+          SNAPSHOT_DIAGNOSTIC_SOURCE: 2068d95872684b5a6ac729b38b5b09a361709d74
+          SNAPSHOT_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/snapshot-latency/baseline.json
+        run: uv run --no-sync pytest -p snapshot_latency_diag -n 0 -s "tests/test_snapshot_client.py::test_foreground_graph_latency_stays_bounded_while_registry_warms"
+      - name: Candidate unchanged strict fixture
+        id: candidate
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        working-directory: .snapshot-candidate
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.ci
+          SNAPSHOT_DIAGNOSTIC_SOURCE: 662415974b7fe8b9b384bb79166175a5b146a01a
+          SNAPSHOT_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/snapshot-latency/candidate.json
+        run: uv run --no-sync pytest -p snapshot_latency_diag -n 0 -s "tests/test_snapshot_client.py::test_foreground_graph_latency_stays_bounded_while_registry_warms"
+      - name: Preserve paired evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: snapshot-latency-515
+          path: ${{ runner.temp }}/snapshot-latency/*.json
+          if-no-files-found: error
+      - name: Retain both strict outcomes
+        if: always()
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          CANDIDATE: ${{ steps.candidate.outcome }}
+        run: |
+          printf 'baseline=%s candidate=%s\n' "$BASELINE" "$CANDIDATE"
+          test "$BASELINE" = success
+          test "$CANDIDATE" = success
