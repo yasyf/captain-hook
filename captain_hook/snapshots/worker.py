@@ -466,6 +466,8 @@ class OwnerService:
                 self.write({"protocol": 1, "op": "error", "id": frame_id, "error": str(exc)[:4096]})
             except Exception as transport_error:
                 self.failed = transport_error
+        except BaseException:
+            os._exit(1)
         finally:
             with self.guard:
                 self.pending.pop(frame_id, None)
