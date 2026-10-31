@@ -21,7 +21,7 @@ def test_repo_hook_uses_the_installed_native_request_body_reader(tmp_path: Path,
         (f'{{"bypass_rules":true,"sha":"{head}"}} false', "Allow()"),
     ]
     fixtures = ",\n".join(
-        f"Input(tool='Read', file=FileFixture(content={body!r})): {expected}"
+        f"Input(tool='Write', file=FileFixture(content={body!r})): {expected}"
         for body, expected in cases
     )
     (hooks / "request_body.py").write_text(f'''
@@ -39,7 +39,7 @@ class NativeBypass:
 hook(
     Event.PreToolUse,
     block=True,
-    only_if=[Tool("Read"), NativeBypass()],
+    only_if=[Tool("Write"), NativeBypass()],
     message="Native async bypass requires a pushed from-owner approval naming this PR and its current full head SHA.",
     tests={{
 {fixtures}
@@ -47,7 +47,7 @@ hook(
 )
 ''')
     result = run_cli("test", "--json", hooks_dir=str(hooks), root_dir=str(tmp_path), timeout=30)
-    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     records = [json.loads(line) for line in result.stdout.splitlines()]
     assert len(records) == len(cases)
     assert all(record["status"] == "pass" for record in records), records
