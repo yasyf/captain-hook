@@ -1256,3 +1256,31 @@ def test_pushes_the_hook_must_not_read_as_no_ops(
     enqueued = heads["feat"] if command.startswith("git commit") else ENQUEUED
     commands = {PR_LOOKUP: pr_lookup(26315), QUEUE_STATUS: json.dumps([queue_report(26315, "queued", enqueued)])}
     assert_fires(dispatch_stubbed(command, repo, tmp_path, commands), "warn", "`feat`")
+
+
+@pytest.mark.parametrize(
+    ("command", "rewritten"),
+    [
+        pytest.param("git rebase origin/main # ccx:raw", "git rebase --no-update-refs origin/main # ccx:raw", id="raw"),
+        pytest.param("git rebase -i main", "git rebase --no-update-refs -i main", id="hand-run"),
+        pytest.param(
+            "git -c core.editor=true rebase main", "git -c core.editor=true rebase --no-update-refs main", id="global"
+        ),
+    ],
+)
+def test_a_rebase_moves_no_branch_but_its_own(
+    isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str, rewritten: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert rewritten_command(dispatch_command(command, gt_repo, tmp_path)) == rewritten
+
+
+@pytest.mark.parametrize(
+    "command", ["git rebase --continue", "git rebase --update-refs main", "git rebase --no-update-refs main"]
+)
+def test_a_rebase_that_states_its_refs_or_continues_runs_as_written(
+    isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command(command, gt_repo, tmp_path)
+    assert result is None or "updatedInput" not in result["hookSpecificOutput"]

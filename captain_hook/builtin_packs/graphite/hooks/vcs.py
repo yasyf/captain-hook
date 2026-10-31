@@ -54,6 +54,7 @@ HELP_FLAGS = frozenset({"--help", "-h"})
 REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
 REBASE_IDLE = frozenset({"--abort", "--quit", "--edit-todo", "--show-current-patch", "--root"})
 REBASE_GLOBALS = frozenset({"-c", "-C"})
+UPDATE_REFS = frozenset({"--update-refs", "--no-update-refs"})
 LEASE_FLAGS = frozenset({"--force-with-lease", "--force-if-includes"})
 LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
 GH_PR_VIEW = CommandSchema(
@@ -265,6 +266,21 @@ def hand_run_rebase(call: Call, evt: BaseHookEvent) -> bool:
     )
 
 
+def starts_a_rebase(call: Call, evt: BaseHookEvent) -> bool:
+    return (
+        call.name == "git"
+        and call.verb_argv[1:2] == ("rebase",)
+        and REBASE_CONTROL.isdisjoint(call.flags)
+        and UPDATE_REFS.isdisjoint(call.flags)
+    )
+
+
+def without_update_refs(call: Call) -> str:
+    raws = [word.raw for word in call.command.words[1:]]
+    verb = next(i for i, raw in enumerate(raws) if raw == "rebase" and (i == 0 or raws[i - 1] not in REBASE_GLOBALS))
+    return " ".join(["git", *raws[: verb + 1], "--no-update-refs", *raws[verb + 1 :]])
+
+
 def conflict_rebase_control(call: Call, evt: BaseHookEvent) -> bool:
     return (
         call.name == "git"
@@ -319,6 +335,33 @@ def git_rebase_through_ccx(evt: BaseHookEvent) -> HookResult | None:
     return evt.context(
         "A raw `git rebase` leaves Graphite's parent records stale. "
         "Run `ccx vcs stack rebase` to replay the stack instead."
+    )
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), GraphiteCall(starts_a_rebase)],
+    tests={Input(command="git rebase main", cwd="/"): Allow()},
+)
+def rebase_moves_only_its_own_branch(evt: BaseHookEvent) -> HookResult | None:
+    rewritten: HookResult | None = None
+    for call in evt.cmd.calls():
+        if (
+            starts_a_rebase(call, evt)
+            and graphite_owns(call, evt.cwd)
+            and (result := call.sub(call.name, without_update_refs(call), args=Targets())) is not None
+        ):
+            rewritten = result
+    if rewritten is None:
+        return None
+    return replace(
+        rewritten,
+        note=(
+            "Added `--no-update-refs` to the rebase. "
+            "With `rebase.updateRefs` on, it would also move every other local branch "
+            "that points into the commits it replays, including branches other lanes own."
+        ),
+        system_message="capt-hook added --no-update-refs to a git rebase",
     )
 
 
