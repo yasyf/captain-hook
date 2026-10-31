@@ -371,7 +371,7 @@ def card_answer(payload: dict[str, Any], at: datetime | None) -> Answer | None:
 
 
 def board_state(tree: str, cwd: Path | None) -> dict[str, Any]:
-    argv = [PRESENT, "outcomes", "--session", tree]
+    argv = [PRESENT, "outcomes", "--all", "--session", tree]
     try:
         done = subprocess.run(
             argv, capture_output=True, text=True, timeout=RULINGS_TIMEOUT, env=reqenv.env_map(), check=False, cwd=cwd

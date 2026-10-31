@@ -327,6 +327,36 @@ class TestBoard:
         assert found(UserAnswered(Holds("text")), ctx) == [approval]
         assert found(UserAnswered(Names()), ctx) is None
 
+    def test_a_submitted_board_still_yields_its_answers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import json
+        import subprocess
+
+        from captain_hook.tickets import context as sources
+        from captain_hook.tickets.conditions import approving
+        from captain_hook.tickets.context import board_answers
+
+        since_submit = {
+            "since": "last-submit",
+            "through": 4222,
+            "interactions": [
+                {
+                    "seq": 4214,
+                    "type": "triage.decided",
+                    "blockId": "merge-prs",
+                    "at": "2026-10-30T15:24:19-07:00",
+                    "payload": {"verdicts": {"45401": {"verdict": "approved", "head": "e34ab03"}}},
+                }
+            ],
+        }
+
+        def present(argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+            state = BOARD if "--all" in argv else since_submit
+            return subprocess.CompletedProcess(argv, 0, json.dumps(state), "")
+
+        monkeypatch.setattr(sources.subprocess, "run", present)
+        by_id = {item.id: item for item in board_answers(sources.board_state(TREE, None))}
+        assert approving(by_id["board:decision:gap-approval"])
+
     def test_answers_are_read_past_the_window_and_touches_within_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
