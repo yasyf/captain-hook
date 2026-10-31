@@ -180,6 +180,82 @@ async def candidate_row(store: ReviewStore, candidate_id: int) -> dict[str, obje
     return rows[0]
 
 
+@pytest.mark.parametrize("unrelated", [0, 256, 4096])
+async def test_pr_summaries_work_is_scoped_to_selected_evidence(
+    store: ReviewStore,
+    settings: ReviewSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unrelated: int,
+) -> None:
+    create = await create_candidate(store)
+    fix = await fix_candidate(store)
+    for candidate, key, occurred, confidence, summary in [
+        (create, "create-low", "2026-06-01T10:00:00+00:00", 0.8, "lower confidence"),
+        (create, "create-high", "2026-06-02T10:00:00+00:00", 0.95, "selected create"),
+        (fix, "fix-old", "2026-06-01T10:00:00+00:00", 0.99, "previous generation"),
+        (fix, "fix-current", "2026-06-03T10:00:00+00:00", 0.9, "selected fix"),
+    ]:
+        await seed(store, candidate, key, session=key, occurred=occurred)
+        await store.record_verdict(
+            DedupKey(key),
+            Verdict(confidence=confidence, summary=summary),
+            role="judge",
+            prompt_version=store.versions.of(CandidateKind.FIX if candidate == fix else CandidateKind.CREATE),
+            model="m1",
+            fidelity="full",
+        )
+    await store.db.execute(
+        "UPDATE candidates SET generation=2, resolved_at=? WHERE id=?", ("2026-06-02T00:00:00+00:00", fix)
+    )
+    await store.record_verdict(
+        DedupKey("create-high"),
+        Verdict(confidence=1, summary="wrong prompt"),
+        role="judge",
+        prompt_version="obsolete-prompt",
+        model="m1",
+        fidelity="full",
+    )
+    rows = [await candidate_row(store, create), await candidate_row(store, fix)]
+    expected = {create: "selected create", fix: "selected fix"}
+    assert await store.pr_summaries(rows, settings=settings) == expected
+
+    connection = sqlite3.connect(tmp_path / "review.db")
+    connection.row_factory = sqlite3.Row
+    try:
+        for table in ("feedback_events", "verdicts"):
+            template = dict(connection.execute(f"SELECT * FROM {table} WHERE dedup_key='create-low'").fetchone())
+            columns = [column for column in template if column != "id"]
+            connection.executemany(
+                f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                [
+                    tuple(f"unrelated-{i}" if column == "dedup_key" else template[column] for column in columns)
+                    for i in range(unrelated)
+                ],
+            )
+        connection.commit()
+        steps = 0
+
+        def progress() -> int:
+            nonlocal steps
+            steps += 100
+            return int(steps > 20000)
+
+        async def measured_sql(sql: str, params: Sequence[object] = ()) -> list[dict[str, object]]:
+            connection.set_progress_handler(progress, 100)
+            try:
+                return [dict(row) for row in connection.execute(sql, params)]
+            finally:
+                connection.set_progress_handler(None, 0)
+
+        monkeypatch.setattr(store.db, "sql", measured_sql)
+        assert await store.pr_summaries(rows, settings=settings) == expected
+        assert steps <= 20000
+        print(f"selected candidates=2 unrelated verdicts={unrelated} sqlite_vm_steps={steps}")
+    finally:
+        connection.close()
+
+
 FOREIGN_CANDIDATES_DDL = """
 CREATE TABLE candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,0 +1,24 @@
+name: Review summary scope baseline
+on:
+  push:
+    branches: [test/review-summary-scope-before]
+permissions:
+  contents: read
+jobs:
+  selected-summary-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - name: Sync exact development lock
+        run: uv sync --locked --extra dev
+      - name: Record exact baseline and runtime
+        run: |
+          git rev-parse HEAD
+          uv run --no-sync python -c "import importlib.metadata, platform; print(platform.platform()); print({p: importlib.metadata.version(p) for p in ('capt-hook', 'cc-transcript', 'spawnllm')})"
+      - name: Grade selected summaries with unrelated verdict scaling
+        run: uv run --no-sync pytest tests/test_review_store.py::test_pr_summaries_work_is_scoped_to_selected_evidence -n 0 -vv -s
