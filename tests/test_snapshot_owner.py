@@ -324,6 +324,7 @@ def test_unexpected_native_failure_fail_stops_before_dropping_the_terminal_respo
                 def call(body, context, token, registry):
                     started.set()
                     assert proceed.wait(2)
+                    print("fatal task started", flush=True)
                     raise NativePanic("fixture native invariant failure")
 
                 owner = SimpleNamespace(
@@ -363,7 +364,7 @@ def test_unexpected_native_failure_fail_stops_before_dropping_the_terminal_respo
         check=False,
     )
     assert child.returncode == 1, child.stderr
-    assert "NativePanic: fixture native invariant failure" in child.stderr
+    assert child.stdout == "fatal task started\n"
     assert "lost terminal response" not in child.stdout
 
 

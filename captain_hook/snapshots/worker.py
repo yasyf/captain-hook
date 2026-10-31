@@ -467,10 +467,7 @@ class OwnerService:
             except Exception as transport_error:
                 self.failed = transport_error
         except BaseException:
-            try:
-                traceback.print_exc(file=sys.stderr)
-            finally:
-                os._exit(1)
+            os._exit(1)
         finally:
             with self.guard:
                 self.pending.pop(frame_id, None)
