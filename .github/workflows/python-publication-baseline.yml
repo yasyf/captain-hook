@@ -1,0 +1,24 @@
+name: Python publication graph baseline
+on:
+  push:
+    branches: [test/python-publication-before]
+permissions:
+  contents: read
+jobs:
+  old-python-publication-graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - name: Sync exact development lock
+        run: uv sync --locked --extra dev
+      - name: Record exact old workflow and paired test
+        run: |
+          git rev-parse HEAD
+          sha256sum .github/workflows/release-pypi.yml tests/test_release_app_contract.py
+      - name: Reject the app-coupled Python publication graph
+        run: uv run --no-sync pytest tests/test_release_app_contract.py::test_python_publication_remains_ready_while_the_mac_app_is_blocked -n 0 -vv --tb=short
