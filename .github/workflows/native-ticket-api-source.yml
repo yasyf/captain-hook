@@ -26,4 +26,11 @@ jobs:
       - run: git rev-parse HEAD && git -C sdk-source rev-parse HEAD && rustc -Vv
       - run: uv sync --locked --extra dev
       - run: uv pip install --python .venv/bin/python --reinstall --no-deps ./sdk-source
+      - run: uv run --no-sync python -m captain_hook.snapshots.schema captain_hook/snapshots/schemas --core-directory sdk-source/cc_transcript/snapshot_schema
       - run: uv run --no-sync pytest tests/test_ticket_native_evidence.py tests/test_tickets.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-api-composed-schemas
+          path: captain_hook/snapshots/schemas/*.schema.json
+          if-no-files-found: error

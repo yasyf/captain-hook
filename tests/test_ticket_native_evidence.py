@@ -84,7 +84,7 @@ def test_root_window_is_shared_but_later_properties_reauthorize_current_source(t
 
     monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
     root_path = tmp_path / "root.jsonl"
-    padding = json.dumps({"ignored": "x" * 1000}) + "\n"
+    padding = json.dumps({"type": "queue-operation", "ignored": "x" * 1000}) + "\n"
     root_body = padding * (ROOT_EXCERPT_BYTES // len(padding) + 20) + lines([T.user("C1 release"), *question("root-question")])
     root_path.write_text(root_body)
     acting_path = tmp_path / "acting.jsonl"
