@@ -92,7 +92,7 @@ def registry_key(tool_registry: list[dict[str, Any]], context: CallContext) -> R
 
 def graph_key(request: dict[str, Any], context: CallContext) -> bytes:
     return canonical(
-        {field: request.get(field) for field in (*SOURCE_FIELDS, "active_since_unix_ms")}
+        {field: request.get(field) for field in SOURCE_FIELDS}
         | {"classifier": request["view"]["classifier"], "authority": context["authority"]}
     )
 

@@ -36,12 +36,12 @@ def prepare(frame_id, thread_ids=("thread-a", "thread-b")):
         thread_ids=list(thread_ids),
         roots=["/codex/sessions"],
         direct_paths=[],
-        active_since_unix_ms=1,
+        active_since_unix_ms=frame_id,
         deadline_unix_ms=1000 + frame_id,
     )["snapshot"]["request"]
 
 
-def test_owner_answers_a_repeat_of_a_missed_graph_without_native_work(monkeypatch):
+def test_owner_answers_a_repeat_of_a_missed_graph_without_native_work_as_its_window_moves(monkeypatch):
     clock = [100.0]
     monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
     owner, calls = owner_answering(["deadline", "deadline", "ok", "deadline"])
