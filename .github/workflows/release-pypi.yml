@@ -93,6 +93,26 @@ jobs:
           assert importlib.metadata.version("capt-hook") == sys.argv[1].removeprefix("v")
           PY
 
+      - name: Record the verified Python asset manifest
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          test "${#assets[@]}" = 2
+          mkdir verified-python
+          manifest=verified-python/captain-pypi-assets.tsv
+          : > "$manifest"
+          for asset in "${assets[@]}"; do
+            cp "dist/$asset" "verified-python/$asset"
+            python_sha="$(sha256sum "verified-python/$asset" | awk '{print $1}')"
+            printf '%s\t%s\n' "$python_sha" "$asset" >> "$manifest"
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-python-assets
+          path: verified-python/*
+          if-no-files-found: error
+
   helper-version:
     runs-on: ubuntu-latest
     outputs:
@@ -180,7 +200,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: verified-python-assets
           path: python-artifacts
 
       - uses: actions/download-artifact@v8
@@ -202,12 +222,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir dist
-          mapfile -t python_assets < <(find python-artifacts -maxdepth 1 -type f | LC_ALL=C sort)
+          mapfile -t python_assets < <(find python-artifacts -maxdepth 1 -type f ! -name captain-pypi-assets.tsv | LC_ALL=C sort)
           mapfile -t wheels < <(printf '%s\n' "${python_assets[@]}" | grep -E '\.whl$')
           mapfile -t sdists < <(printf '%s\n' "${python_assets[@]}" | grep -E '\.tar\.gz$')
           test "${#python_assets[@]}" = 2
           test "${#wheels[@]}" = 1
           test "${#sdists[@]}" = 1
+          manifest="$RUNNER_TEMP/captain-python-assets.tsv"
+          : > "$manifest"
+          for asset in "${python_assets[@]}"; do
+            python_sha="$(sha256sum "$asset" | awk '{print $1}')"
+            printf '%s\t%s\n' "$python_sha" "${asset##*/}" >> "$manifest"
+          done
+          cmp python-artifacts/captain-pypi-assets.tsv "$manifest"
           cp "${python_assets[@]}" dist/
 
           mapfile -t helper_assets < <(find helper-artifact -type f -name "$HELPER_ASSET_FILENAME")
@@ -305,11 +332,8 @@ jobs:
           done
           APP_PATH="$app" CAPT_HOOK_VERSION="${RELEASE_TAG#v}" bash helper/scripts/assert-signed-bridge.sh
 
-  # PyPI Trusted Publishing must run in this repository's workflow so its OIDC
-  # job_workflow_ref matches the configured publisher. The GitHub draft becomes
-  # public only after PyPI exposes the exact staged Python bytes.
   publish-pypi:
-    needs: [build, stage-release, smoke-draft]
+    needs: [build, python-assets]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -317,28 +341,23 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: dist
-          path: python-dist
+          name: verified-python-assets
+          path: python-artifacts
 
-      - uses: actions/download-artifact@v8
-        with:
-          name: release-assets
-          path: release-dist
-
-      - name: Match the PyPI upload to the staged release
+      - name: Match the PyPI upload to the verified Python manifest
         run: |
           set -euo pipefail
-          mapfile -t python_assets < <(find python-dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          mapfile -t python_assets < <(find python-artifacts -maxdepth 1 -type f ! -name captain-pypi-assets.tsv -printf '%f\n' | LC_ALL=C sort)
           test "${#python_assets[@]}" = 2
           manifest="$RUNNER_TEMP/captain-pypi-assets.tsv"
           : > "$manifest"
+          mkdir python-dist
           for asset in "${python_assets[@]}"; do
-            test -f "release-dist/$asset"
-            python_sha="$(sha256sum "python-dist/$asset" | awk '{print $1}')"
-            staged_sha="$(sha256sum "release-dist/$asset" | awk '{print $1}')"
-            test "$python_sha" = "$staged_sha"
-            printf '%s\t%s\n' "$staged_sha" "$asset" >> "$manifest"
+            python_sha="$(sha256sum "python-artifacts/$asset" | awk '{print $1}')"
+            printf '%s\t%s\n' "$python_sha" "$asset" >> "$manifest"
+            cp "python-artifacts/$asset" "python-dist/$asset"
           done
+          cmp python-artifacts/captain-pypi-assets.tsv "$manifest"
 
       - name: Resolve the exact PyPI publication state
         id: pypi-state
@@ -376,7 +395,7 @@ jobs:
               raise SystemExit(f"::error::existing PyPI assets differ: expected {expected}, got {actual}")
           with pathlib.Path(output).open("a") as stream:
               stream.write("publish=false\n")
-          print("PyPI already contains the exact staged Python assets")
+          print("PyPI already contains the exact verified Python assets")
           PY
 
       # v1.14.2 — its Twine 7 bump is what accepts the metadata 2.5 uv now emits; v1.14.1 rejects it.
@@ -423,7 +442,7 @@ jobs:
           PY
 
   publish-github:
-    needs: [build, stage-release, publish-pypi]
+    needs: [build, stage-release, smoke-draft, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
