@@ -7,12 +7,10 @@ from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from loguru import logger
-
 from captain_hook.tickets import store
 from captain_hook.tickets.conditions import found
 from captain_hook.tickets.context import Context
-from captain_hook.tickets.decide import Undecided, decision_stage
+from captain_hook.tickets.decide import Undecided, decision_log, decision_stage
 from captain_hook.tickets.orca import coordinator_tree
 from captain_hook.tickets.records import Allow, Deny, Evidence, Proposal, Reach, Ticket
 
@@ -139,14 +137,14 @@ class Tickets:
                 expires=created + UNCHECKED_TTL,
             )
         )
-        logger.bind(hook=self.hook, kind=self.kind, ticket=ticket.id, cause=cause).warning("unchecked ticket minted")
+        decision_log().bind(hook=self.hook, kind=self.kind, ticket=ticket.id, cause=cause).warning("unchecked ticket minted")
         return ticket
 
     def decide(self, ctx: Context) -> Allow | Deny:
         """Find the live ticket covering *ctx*'s action, else mint one from the first rule that holds, else deny."""
         action = ctx.action
         if (ticket := store.covering(self.kind, ctx.trees, action.place, action.fingerprint)) is not None:
-            logger.bind(hook=self.hook, kind=self.kind, ticket=ticket.id).info("ticket found")
+            decision_log().bind(hook=self.hook, kind=self.kind, ticket=ticket.id).info("ticket found")
             return Allow(ticket, minted=False)
         passed: list[str] = []
         for rule in self.rules:
@@ -160,7 +158,7 @@ class Tickets:
                 passed.append(f"{rule.name}: nothing found")
                 continue
             ticket = self.mint(ctx, rule.name, evidence)
-            logger.bind(hook=self.hook, kind=self.kind, rule=rule.name, ticket=ticket.id).info("ticket minted")
+            decision_log().bind(hook=self.hook, kind=self.kind, rule=rule.name, ticket=ticket.id).info("ticket minted")
             return Allow(ticket, minted=True)
         return Deny(self.deny, "; ".join(passed))
 
@@ -169,7 +167,7 @@ class Tickets:
         try:
             return self.decide(self.context(evt, action))
         except Exception as exc:
-            logger.bind(hook=self.hook, kind=self.kind).opt(exception=True).warning("ticket check failed")
+            decision_log().bind(hook=self.hook, kind=self.kind).opt(exception=True).warning("ticket check failed")
             return Deny(self.deny, f"The ticket check failed ({type(exc).__name__}: {exc}).")
 
 
