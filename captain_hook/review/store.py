@@ -1280,13 +1280,18 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{ACCEPTED_COLUMN} = 1 AND v.confi
         placeholders = ",".join("?" * len(ids))
         summary_rows = await self.db.sql(
             f"""
-WITH latest AS (
+WITH wanted AS (
+  SELECT id FROM candidates WHERE id IN ({placeholders})
+), latest AS (
   SELECT v.dedup_key, v.prompt_version, v.{ACCEPTED_COLUMN} AS accepted,
     v.{SUMMARY_COLUMN} AS summary, v.confidence,
     ROW_NUMBER() OVER (
       PARTITION BY v.dedup_key, v.prompt_version ORDER BY v.judged_at DESC, v.id DESC
     ) AS rn
   FROM {VERDICT_TABLE} v WHERE v.role = 'judge'
+    AND v.dedup_key IN (
+      SELECT dedup_key FROM candidate_observations WHERE candidate_id IN (SELECT id FROM wanted)
+    )
 )
 SELECT o.candidate_id, l.summary AS summary,
   ROW_NUMBER() OVER (PARTITION BY o.candidate_id ORDER BY l.confidence DESC, o.id DESC) AS pick
@@ -1294,10 +1299,10 @@ FROM candidate_observations o
 JOIN candidates c ON c.id = o.candidate_id
 JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
   AND l.prompt_version = CASE WHEN c.candidate_kind = ? THEN ? ELSE ? END
-WHERE o.candidate_id IN ({placeholders}) AND l.accepted = 1 AND l.confidence >= ?
+WHERE o.candidate_id IN (SELECT id FROM wanted) AND l.accepted = 1 AND l.confidence >= ?
   AND (c.generation <= 1 OR o.occurred_at > c.resolved_at)
 """,
-            (CandidateKind.FIX, self.versions.fix, self.versions.create, *ids, settings.min_judge_confidence),
+            (*ids, CandidateKind.FIX, self.versions.fix, self.versions.create, settings.min_judge_confidence),
         )
         return {int(row["candidate_id"]): str(row["summary"]) for row in summary_rows if int(row["pick"]) == 1}
 
