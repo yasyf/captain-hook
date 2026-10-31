@@ -132,6 +132,11 @@ def git_probe(call: Call, session_cwd: Path | None, *args: str) -> str | None:
     return probe.stdout.strip() if probe.returncode == 0 else None
 
 
+def partial_clone(call: Call, session_cwd: Path | None) -> bool:
+    filters = git_probe(call, session_cwd, "config", "--get-regexp", r"^remote\..+\.partialclonefilter$")
+    return filters is not None and any(line.partition(" ")[2].startswith("blob:") for line in filters.splitlines())
+
+
 def rebases_onto_own_upstream(call: Call, session_cwd: Path | None) -> bool:
     """Whether a ``git rebase`` replays the branch onto its own remote-tracking ref.
 

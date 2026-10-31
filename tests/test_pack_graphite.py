@@ -684,6 +684,104 @@ def test_conflict_workspace_runs_a_manual_rebase_control_as_written(
     assert "ccx vcs stack continue" in output["additionalContext"]
 
 
+def blob_filtered_clone(parent: Path, name: str = "partial", partial_filter: str = "blob:none") -> Path:
+    repo = parent / name
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for key, value in (
+        ("remote.origin.url", "https://example.invalid/repo.git"),
+        ("remote.origin.promisor", "true"),
+        ("remote.origin.partialclonefilter", partial_filter),
+    ):
+        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+    return repo
+
+
+@pytest.mark.parametrize(
+    ("command", "rewritten"),
+    [
+        pytest.param("git rebase origin/main", "ccx vcs rebase -- origin/main", id="upstream"),
+        pytest.param(
+            "git rebase --onto origin/dev old-base feat", "ccx vcs rebase -- --onto origin/dev old-base feat", id="onto"
+        ),
+        pytest.param(
+            "git -c rerere.enabled=false rebase --continue",
+            "ccx vcs rebase -c rerere.enabled=false -- --continue",
+            id="config-continue",
+        ),
+        pytest.param(
+            "GIT_EDITOR=true git rebase --continue", "GIT_EDITOR=true ccx vcs rebase -- --continue", id="env-continue"
+        ),
+        pytest.param(
+            'git rebase -x "make test" origin/main', 'ccx vcs rebase -- -x "make test" origin/main', id="quoted"
+        ),
+        pytest.param("git status && git rebase --skip", "git status && ccx vcs rebase -- --skip", id="second-call"),
+    ],
+)
+def test_a_partial_clone_rebase_runs_through_ccx_vcs_rebase(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str, rewritten: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command(command, blob_filtered_clone(tmp_path), tmp_path)
+    assert rewritten_command(result) == rewritten
+    assert result is not None
+    assert "# ccx:raw" in result["hookSpecificOutput"]["additionalContext"]
+    assert "capt-hook rewrote" in result["systemMessage"]
+
+
+def test_a_dash_C_rebase_of_a_partial_clone_keeps_its_directory(
+    isolate_modules: None, ccx_installed: None, git_repo: Path, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    repo = blob_filtered_clone(tmp_path)
+    result = dispatch_command(f"git -C {repo} rebase origin/main", git_repo, tmp_path)
+    assert rewritten_command(result) == f"ccx vcs rebase -C {repo} -- origin/main"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git rebase --abort",
+        "git rebase --quit",
+        "git rebase --root",
+        "git rebase -h",
+        "git rebase origin/main # ccx:raw",
+        "sudo git rebase origin/main",
+        "git --no-pager rebase origin/main",
+        "ccx vcs rebase -- origin/main",
+    ],
+)
+def test_a_partial_clone_rebase_with_nothing_to_batch_runs_as_written(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path, command: str
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command(command, blob_filtered_clone(tmp_path), tmp_path)
+    assert result is None or "updatedInput" not in result["hookSpecificOutput"]
+
+
+def test_a_rebase_outside_a_blob_filtered_clone_runs_as_written(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    full = tmp_path / "full"
+    subprocess.run(["git", "init", "-q", str(full)], check=True)
+    for repo in (full, blob_filtered_clone(tmp_path, "trees", "tree:0")):
+        assert dispatch_command("git rebase origin/main", repo, tmp_path) is None
+
+
+def test_a_partial_clone_rebase_needs_ccx(isolate_modules: None, tmp_path: Path) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command("git rebase origin/main", blob_filtered_clone(tmp_path), tmp_path) is None
+
+
+def test_a_partial_clone_conflict_workspace_runs_its_rebase_as_written(
+    isolate_modules: None, ccx_installed: None, tmp_path: Path
+) -> None:
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    workspace = blob_filtered_clone(tmp_path / "worktrees" / "repo", "conflict-feat")
+    result = dispatch_command("git rebase --continue", workspace, tmp_path)
+    assert result is None or "updatedInput" not in result["hookSpecificOutput"]
+
+
 @pytest.mark.parametrize("command", ["gh pr view 42 --json state,mergedAt", "gh pr view 42 --json=mergeable"])
 def test_landing_fields_nudge_toward_ccx_pr_status(
     isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str

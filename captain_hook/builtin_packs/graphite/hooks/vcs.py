@@ -37,6 +37,7 @@ from captain_hook.builtin_packs.graphite.hooks._lib import (
     graphite_owns,
     graphite_queue,
     in_graphite_repo,
+    partial_clone,
     rebases_onto_own_upstream,
 )
 from captain_hook.cmd import Targets
@@ -51,6 +52,8 @@ SUBMIT_FLAGS = frozenset({"--stack", "-s", "--no-edit", "-n", "--publish", "-p",
 DRAFT_FLAGS = frozenset({"--draft", "-d"})
 HELP_FLAGS = frozenset({"--help", "-h"})
 REBASE_CONTROL = frozenset({"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
+REBASE_IDLE = frozenset({"--abort", "--quit", "--edit-todo", "--show-current-patch", "--root"})
+REBASE_GLOBALS = frozenset({"-c", "-C"})
 LEASE_FLAGS = frozenset({"--force-with-lease", "--force-if-includes"})
 LANDING_FIELDS = frozenset({"state", "mergedAt", "mergeable", "mergeStateStatus", "mergeCommit"})
 GH_PR_VIEW = CommandSchema(
@@ -332,6 +335,64 @@ def git_rebase_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 def conflict_workspace_finishes_through_ccx(evt: BaseHookEvent) -> HookResult | None:
     return evt.context(
         "A ccx conflict workspace finishes its stack rebase through ccx. After `git add`, run `ccx vcs stack continue`."
+    )
+
+
+def env_prefix(call: Call) -> str | None:
+    source = call.source
+    if not source.env:
+        return ""
+    head, span = source.words[0].span, source.span
+    if call.nested or head is None or span is None:
+        return None
+    return source.raw[: head[0] - span[0]]
+
+
+def rebase_twin(call: Call, evt: BaseHookEvent) -> str | None:
+    options = call.leading_options
+    if (
+        call.verb_argv[:2] != ("git", "rebase")
+        or call.wrappers
+        or call.substituted
+        or not call.spliceable
+        or not set(options[::2]) <= REBASE_GLOBALS
+        or not (HELP_FLAGS | REBASE_IDLE).isdisjoint(call.flags)
+        or (env := env_prefix(call)) is None
+        or in_conflict_workspace(call, evt)
+        or not partial_clone(call, evt.cwd)
+    ):
+        return None
+    raws = [word.raw for word in call.command.words[1:]]
+    return " ".join([f"{env}ccx vcs rebase", *raws[: len(options)], "--", *raws[len(options) + 1 :]])
+
+
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), CcxInstalled()],
+    skip_if=[Annotated("raw")],
+    tests={
+        Input(command="git rebase main", cwd="/"): Allow(),
+        Input(command="git rebase --abort", cwd="/"): Allow(),
+    },
+)
+def partial_clone_rebases_go_through_ccx(evt: BaseHookEvent) -> HookResult | None:
+    rewritten: HookResult | None = None
+    swaps: list[str] = []
+    for call in evt.cmd.calls():
+        if (twin := rebase_twin(call, evt)) is not None and (
+            result := call.sub(call.name, twin, args=Targets())
+        ) is not None:
+            rewritten = result
+            swaps.append(f"`{call.source.raw}` → `{twin}`")
+    if rewritten is None:
+        return None
+    return replace(
+        rewritten,
+        note=(
+            "Rewrote a raw `git rebase` in a partial clone to `ccx vcs rebase`, which fetches its blobs in one batch. "
+            "End a command with `# ccx:raw` to run it as written."
+        ),
+        system_message=f"capt-hook rewrote {', '.join(swaps)}",
     )
 
 

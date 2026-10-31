@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A raw `git rebase` in a blob-filtered partial clone runs through `ccx vcs rebase`.** In a clone whose
+  remote filters blobs, git fetches the blobs a rebase merges one commit at a time and writes a promisor
+  pack for each. When ccx is on PATH, the graphite pack rewrites `git rebase`, including `--onto`,
+  `--continue`, and `--skip`, to `ccx vcs rebase -- <args>`, which fetches those blobs in one batch
+  first. Leading `-c` and `-C` options and `VAR=value` assignments carry over. It leaves `--abort`,
+  `--quit`, `--edit-todo`, `--show-current-patch`, `--root`, a ccx conflict workspace, and a command
+  ending in `# ccx:raw` as written.
+
 - **A Bash command that writes an unbraced zsh parameter before a modifier letter draws a warning.** The
   Bash tool runs zsh, where `$N:refs/heads/x` reads `:r` as a modifier and becomes `<value>efs/heads/x`,
   even inside double quotes. The general pack warns on `$NAME:` or `$1:` followed by a modifier letter
