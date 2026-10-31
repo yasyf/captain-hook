@@ -16,7 +16,9 @@ paths at the same scope of one project is a corrupt roster that raises :class:`P
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 from loguru import logger
@@ -97,12 +99,13 @@ def enablement(root: Path) -> dict[str, bool]:
     return merged
 
 
-def parse_install(pid: str, entry: object) -> EnabledPlugin | None:
-    """One ``installed_plugins.json`` install record, or ``None`` when it names no install directory."""
+def parse_install(
+    pid: str, entry: object, *, is_directory: Callable[[Path], bool] = Path.is_dir
+) -> EnabledPlugin | None:
     if not isinstance(entry, dict) or not isinstance(path := entry.get("installPath"), str) or not path:
         logger.bind(id=pid).debug(f"skipping plugin install record without an installPath: {entry!r}")
         return None
-    if not Path(path).is_dir():
+    if not is_directory(Path(path)):
         return None
     scope = entry.get("scope")
     project = entry.get("projectPath")
@@ -118,9 +121,10 @@ def scope_rank(scope: str | None) -> int:
     return SCOPE_PRECEDENCE.index(scope) if scope in SCOPE_PRECEDENCE else len(SCOPE_PRECEDENCE)
 
 
-def governs(plugin: EnabledPlugin, root: Path) -> bool:
-    """Whether an install governs ``root``: a ``user`` install governs every root, a scoped one only its project."""
-    return plugin.project_path is None or Path(plugin.project_path).resolve() == root
+def governs(
+    plugin: EnabledPlugin, root: Path, *, canonicalize: Callable[[Path], Path] = Path.resolve
+) -> bool:
+    return plugin.project_path is None or canonicalize(Path(plugin.project_path)) == root
 
 
 def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
@@ -135,12 +139,6 @@ def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
 
 
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
-    """The plugins Claude Code has installed and enabled for ``root``, one per plugin id, in id order.
-
-    Returns ``()`` when Claude Code has no ``installed_plugins.json``. Raises :class:`PluginListError`
-    when the file is not a JSON object with a ``plugins`` object, or when one id has two install paths
-    at the same scope of this project.
-    """
     if not (path := installed_plugins_path()).is_file():
         return ()
     data = read_json(path)
@@ -148,6 +146,8 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
         raise PluginListError(f"{path} is not a Claude Code plugin roster")
     resolved = root.resolve()
     enabled = enablement(root)
+    is_directory = cache(Path.is_dir)
+    canonicalize = cache(Path.resolve)
     plugins: list[EnabledPlugin] = []
     for pid, entries in sorted(installs.items()):
         if not enabled.get(pid) or not isinstance(entries, list):
@@ -155,7 +155,8 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
         governing = [
             plugin
             for entry in entries
-            if (plugin := parse_install(pid, entry)) is not None and governs(plugin, resolved)
+            if (plugin := parse_install(pid, entry, is_directory=is_directory)) is not None
+            and governs(plugin, resolved, canonicalize=canonicalize)
         ]
         if governing:
             plugins.append(pick_scoped(pid, governing))

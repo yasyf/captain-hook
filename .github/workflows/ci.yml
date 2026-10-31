@@ -218,6 +218,21 @@ jobs:
           shard-index: ${{ matrix.shard }}
           workers: ${{ matrix.os == 'macos-15' && '1' || '0' }}
 
+      - name: Verify the immutable repeated-plugin probe regression
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
+        env:
+          CAPT_PLUGIN_RESOLUTION_BASELINE: ${{ runner.temp }}/plugin-resolution-before.py
+        run: |
+          git fetch --no-tags --depth=1 origin cbf52d54cb4a02f8f4ac5dd9f98eeebb21f8ed0c
+          git show cbf52d54cb4a02f8f4ac5dd9f98eeebb21f8ed0c:captain_hook/packs/plugins.py > "$CAPT_PLUGIN_RESOLUTION_BASELINE"
+          if uv run --no-sync pytest tests/test_plugin_resolution_probes.py -n 0 -q -s -k test_repeated_plugin_paths_are_probed_once_per_resolution > "$RUNNER_TEMP/plugin-resolution-negative.log" 2>&1; then
+            cat "$RUNNER_TEMP/plugin-resolution-negative.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/plugin-resolution-negative.log"
+          grep -F 'duplicate plugin filesystem probes were repeated' "$RUNNER_TEMP/plugin-resolution-negative.log"
+          env -u CAPT_PLUGIN_RESOLUTION_BASELINE uv run --no-sync pytest tests/test_plugin_resolution_probes.py -n 0 -q -s
+
       - name: Build + smoke-test wheel in a fresh venv
         if: matrix.shard == 0
         run: |
