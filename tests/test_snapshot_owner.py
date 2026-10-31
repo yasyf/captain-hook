@@ -300,6 +300,73 @@ def test_async_cancelled_policy_sends_terminal_reply_and_preserves_other_request
             executor.shutdown()
 
 
+def test_unexpected_native_failure_fail_stops_before_dropping_the_terminal_response():
+    import subprocess
+    import textwrap
+
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""
+                import io
+                import threading
+                from types import SimpleNamespace
+                from captain_hook.snapshots.client import CORE_SCHEMA, HOST_SCHEMA
+                from captain_hook.snapshots.worker import OwnerService
+
+                class NativePanic(BaseException):
+                    pass
+
+                started = threading.Event()
+                proceed = threading.Event()
+
+                def call(body, context, token, registry):
+                    started.set()
+                    assert proceed.wait(2)
+                    raise NativePanic("fixture native invariant failure")
+
+                owner = SimpleNamespace(
+                    token_type=threading.Event,
+                    call=call,
+                    close=lambda: None,
+                    record_transport=lambda count: None,
+                    discard=lambda response, context: None,
+                )
+                service = OwnerService(io.BytesIO(), io.BytesIO(), owner)
+                service.submit({
+                    "protocol": 1,
+                    "op": "snapshot_request",
+                    "id": 1,
+                    "snapshot_context": {
+                        "claimant": "fixture",
+                        "admission": "hook",
+                        "authority": {"kind": "user", "effective_uid": "501"},
+                        "registry_generation": "fixture",
+                    },
+                    "snapshot": {
+                        "schema": HOST_SCHEMA,
+                        "tool_registry": [],
+                        "request": {"schema": CORE_SCHEMA, "id": "panic", "operation": "stats"},
+                    },
+                })
+                assert started.wait(2)
+                proceed.set()
+                threading.Event().wait(1)
+                print("lost terminal response", flush=True)
+                raise SystemExit(99)
+            """),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert child.returncode == 1, child.stderr
+    assert "NativePanic: fixture native invariant failure" in child.stderr
+    assert "lost terminal response" not in child.stdout
+
+
 def test_saturated_owner_returns_bounded_failure_without_submitting():
     output = io.BytesIO()
     owner = SimpleNamespace(record_transport=lambda count: None, discard=lambda response, ctx: None)
