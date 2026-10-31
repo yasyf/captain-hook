@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `git rebase` in a Graphite repo moves only its own branch.** With `rebase.updateRefs` on, a
+  hand-run or `# ccx:raw` rebase also moved every other local branch pointing into the commits it
+  replayed, including branches other agents were working on. The graphite pack now adds
+  `--no-update-refs` to any rebase that does not state `--update-refs` or `--no-update-refs` itself.
+
 - **The graphite pack stands down in a repo whose stacks live natively on GitHub.** A repo that sets
   `ccx.stack=github` never rides ccx's gt lane, but the pack asked `ccx vcs lane --json` to learn that,
   and on a loaded host the probe ran past its five-second timeout and the pack stayed active. It now
