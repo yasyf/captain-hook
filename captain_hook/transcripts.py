@@ -6,6 +6,7 @@ import os
 import re
 import threading
 from collections import deque
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
@@ -177,12 +178,24 @@ class TranscriptLoadError(Exception):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptSource:
+    path: Path
+    tail_events: int | None = None
+    unborn: threading.Event | None = None
+
+
 class TranscriptPins:
     def __init__(
-        self, load: Callable[[], Session | RemoteSession], tail: Callable[[int], Session] | None = None
+        self,
+        load: Callable[[], Session | RemoteSession],
+        tail: Callable[[int], Session] | None = None,
+        *,
+        spec: TranscriptSource | None = None,
     ) -> None:
         self.load = load
         self.tail = tail
+        self.spec = spec
         self.guard = threading.Lock()
         self.pending = 1
         self.source: Session | RemoteSession | None = None
@@ -202,7 +215,8 @@ class TranscriptPins:
             if self.pending == 0:
                 raise TranscriptLoadError("transcript preparation group is closed")
             if (pins := self.windows.get(count)) is None:
-                pins = self.windows[count] = TranscriptPins(partial(self.tail, count))
+                spec = TranscriptSource(self.spec.path, count, self.spec.unborn) if self.spec is not None else None
+                pins = self.windows[count] = TranscriptPins(partial(self.tail, count), spec=spec)
                 pins.pending = 0
         with pins.guard:
             pins.pending += 1
@@ -320,13 +334,18 @@ def lazy_transcript(
         return guarded_load(source, lambda _: tail_transcript(source, count), unborn=unborn)
 
     windowed = bool(path) and reqenv.provider() == "claude"
-    return LazyTranscript(TranscriptPins(load, partial(tail, path) if windowed else None), seed=True)
+    spec = TranscriptSource(Path(path), unborn=unborn) if windowed and resolve is load_transcript else None
+    return LazyTranscript(TranscriptPins(load, partial(tail, path) if windowed else None, spec=spec), seed=True)
 
 
 def root_transcript(path: str | Path, events: int) -> LazyTranscript:
     """The newest ``events`` events of a lane's root session transcript, tailed on first touch."""
     return LazyTranscript(
-        TranscriptPins(partial(guarded_load, path, lambda source: tail_transcript(source, events))), seed=True
+        TranscriptPins(
+            partial(guarded_load, path, lambda source: tail_transcript(source, events)),
+            spec=TranscriptSource(Path(path), events) if reqenv.provider() == "claude" else None,
+        ),
+        seed=True,
     )
 
 

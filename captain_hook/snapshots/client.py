@@ -175,9 +175,12 @@ def output_limit_sizes(reason: object) -> dict[str, int | str]:
         "output_needed_bytes": int(match[1]),
         "output_budget_bytes": int(match[2]),
         "output_budget_scope": {
-            "record bound": "record", "page bound": "page", "remaining output budget": "remaining_output",
+            "record bound": "record",
+            "page bound": "page",
+            "remaining output budget": "remaining_output",
         }[match[3]],
     }
+
 
 def request_metadata(request: Mapping[str, object]) -> dict[str, object]:
     sources = {key: value for key in SOURCE_FIELDS if (value := request.get(key))}
@@ -560,8 +563,12 @@ class SnapshotClient:
                                 (
                                     kind
                                     for kind in (
-                                        "turns", "events", "interaction_keys", "interaction_winners",
-                                        "interaction_records", "meta_messages",
+                                        "turns",
+                                        "events",
+                                        "interaction_keys",
+                                        "interaction_winners",
+                                        "interaction_records",
+                                        "meta_messages",
                                     )
                                     if query.get("kind") == kind
                                 ),
@@ -663,7 +670,7 @@ class SnapshotClient:
         description = data["description"]
         classified = RemoteSession(
             self,
-            Lease(self, description, tail_bytes=session.tail_bytes),
+            type(session.lease)(self, description, tail_bytes=session.tail_bytes),
             session.path,
             description["classifier"],
             tail_bytes=session.tail_bytes,
@@ -801,20 +808,33 @@ class Lease:
             if self.client._defer_cleanup:
                 self.cleanup_pending = True
                 return
-            result = self.client.call(
-                "release", owner_epoch=self.handle["owner_epoch"], kind="lease", token=self.handle["lease_id"]
-            )
-            if result.get("status") == "retained_limit":
-                logger.bind(status="retained_limit", reason=result.get("reason")).warning(
-                    "snapshot lease cleanup deferred"
-                )
-                self.cleanup_pending = True
+            self._release_owned()
+
+    def _release_owned(self) -> None:
+        result = self.client.call(
+            "release", owner_epoch=self.handle["owner_epoch"], kind="lease", token=self.handle["lease_id"]
+        )
+        if result.get("status") == "retained_limit":
+            logger.bind(status="retained_limit", reason=result.get("reason")).warning("snapshot lease cleanup deferred")
+            self.cleanup_pending = True
+            return
+        if result.get("status") not in {"ok", "stale_handle"}:
+            raise EvidenceIncomplete(str(result.get("status")), str(result.get("reason")))
+        self.released = True
+        self.cleanup_pending = False
+        self.client._leases.discard(self)
+
+
+class FixedLease(Lease):
+    def _reacquire(self, client: SnapshotClient) -> None:
+        raise EvidenceIncomplete("stale_handle", "fixed evidence generation expired")
+
+    def _release(self) -> None:
+        with self.guard:
+            if self.released:
                 return
-            if result.get("status") not in {"ok", "stale_handle"}:
-                raise EvidenceIncomplete(str(result.get("status")), str(result.get("reason")))
-            self.released = True
-            self.cleanup_pending = False
-            self.client._leases.discard(self)
+            self.closed = True
+            self._release_owned()
 
 
 @dataclass(frozen=True)
@@ -1693,7 +1713,7 @@ class RemoteToolCalls:
 
     @property
     def with_errors(self) -> RemoteToolCalls:
-        return replace(self, errors="include")
+        return self if self.errors == "only" else replace(self, errors="include")
 
     def named(self, name: str) -> RemoteToolCalls:
         return replace(self, name=name)

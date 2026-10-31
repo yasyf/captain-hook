@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from cc_transcript.activity import ToolUse, Turn
-from cc_transcript.filterspec import DENIAL_KIND_USER_REJECTED, USER_SAID_MARKER, USER_SAID_TRAILER
-from cc_transcript.models import AssistantEvent, AttachmentEvent, QueuedCommand, UserEvent
+from cc_transcript.filterspec import USER_SAID_MARKER, USER_SAID_TRAILER
+from cc_transcript.models import AttachmentEvent, QueuedCommand, UserEvent
 from cc_transcript.tools import AskUserQuestionResult, parse_tool_result
 
 from captain_hook.tickets.records import Answer, Evidence, Proposal
@@ -146,25 +146,6 @@ def instruction_words(text: str) -> tuple[str, bool]:
         return text, False
     typed, trailer, _ = said.rpartition(USER_SAID_TRAILER)
     return (typed if trailer else said).strip(), True
-
-
-def rejection_words(use: ToolUse) -> str:
-    """What the user typed when rejecting *use*, without the harness banner around it."""
-    if use.result is None or use.result.denial_kind != DENIAL_KIND_USER_REJECTED:
-        return ""
-    return instruction_words(use.result.content)[0]
-
-
-def agent_before(turns: Sequence[Turn]) -> dict[str, str]:
-    """Each turn's prompt mapped to the end of the agent message it answers."""
-    offered: dict[str, str] = {}
-    for before, turn in pairwise(turns):
-        said = [
-            event.text.strip() for event in before.events if isinstance(event, AssistantEvent) and event.text.strip()
-        ]
-        if said and turn.prompt:
-            offered[turn.prompt] = said[-1][-REPLIED_SHOWN:]
-    return offered
 
 
 def parse_answer(payload: object) -> AskUserQuestionResult | None:
@@ -495,63 +476,82 @@ class TranscriptSources:
         return [*([(excerpt, True)] if excerpt is not None else []), (resolved(root), True), (ctx.t, False)]
 
     def turns(self, window: int | None) -> list[tuple[Turn, bool]]:
-        return [
-            (turn, prompts_are_user)
-            for session, prompts_are_user in self.sessions()
-            for turn in (session if window is None else session.recent_messages(window)).turns
-        ]
+        from captain_hook.tickets.transcript_evidence import sessions
+
+        with sessions(self) as sources:
+            return [
+                (turn, source.prompts_are_user)
+                for source in sources
+                for turn in (source.session if window is None else source.session.recent_messages(window)).turns
+            ]
 
     def said(self) -> list[Evidence]:
+        from captain_hook.tickets.transcript_evidence import instruction_turns, sessions
+
         items: dict[str, Evidence] = {}
-        for session, prompts_are_user in self.sessions():
-            turns = session.recent_messages(self.window).turns
-            offered = agent_before(turns) if prompts_are_user else {}
-            for turn in turns:
-                said: list[tuple[str, datetime | None, str, str]] = []
-                if prompts_are_user:
-                    words, instructed = instruction_words(turn.prompt)
-                    said.append((words, turn.started_at, "instruction" if instructed else "prompt", REPLACED))
-                said += [(text, event.meta.timestamp, "queued", "") for text, event in queued_words(turn.events)]
-                said += [
-                    (rejection_words(use), use.result_ts or use.ts, "instruction", f"{REPLACED} to {use.call.name}")
-                    for use in turn.tool_uses
-                    if prompts_are_user
-                ]
-                for text, at, source, replaced in said:
-                    if text and not machine_written(text, self.machine):
-                        detail = (
-                            f"the agent's message it answers ends: {offered[text]}"
-                            if text in offered
-                            else replaced
-                            if source == "instruction"
-                            else ""
-                        )
-                        item = said_evidence(text, at, source, detail)
-                        items[item.id] = item
+        with sessions(self) as sources:
+            for source in sources:
+                prompts_are_user = source.prompts_are_user
+                turns = instruction_turns(source, self.window)
+                offered = {
+                    turn.prompt: before.assistant_tail
+                    for before, turn in pairwise(turns)
+                    if prompts_are_user and before.assistant_tail and turn.prompt
+                }
+                for turn in turns:
+                    said: list[tuple[str, datetime | None, str, str]] = []
+                    if prompts_are_user:
+                        words, instructed = instruction_words(turn.prompt)
+                        said.append((words, turn.started_at, "instruction" if instructed else "prompt", REPLACED))
+                    said += [(text, at, "queued", "") for text, at in turn.queued]
+                    said += [
+                        (instruction_words(content)[0], at, "instruction", f"{REPLACED} to {name}")
+                        for name, content, at in turn.rejections
+                        if prompts_are_user
+                    ]
+                    for text, at, source, replaced in said:
+                        if text and not machine_written(text, self.machine):
+                            detail = (
+                                f"the agent's message it answers ends: {offered[text]}"
+                                if text in offered
+                                else replaced
+                                if source == "instruction"
+                                else ""
+                            )
+                            item = said_evidence(text, at, source, detail)
+                            items[item.id] = item
         return sorted(items.values(), key=lambda item: item.said_at.timestamp() if item.said_at else 0.0)
 
     def uses(self, window: int | None) -> list[ToolUse]:
-        return ordered_calls(
-            use
-            for session, _ in self.sessions()
-            for use in (session if window is None else session.recent_messages(window)).tool_calls.with_errors.items
-        )
+        from captain_hook.tickets.transcript_evidence import sessions
+
+        with sessions(self) as sources:
+            return ordered_calls(
+                use
+                for source in sources
+                for use in (
+                    source.session if window is None else source.session.recent_messages(window)
+                ).tool_calls.with_errors.items
+            )
 
     def answers(self) -> list[Answer]:
         """Every answer across the tree's sessions, however far back; the window bounds words and touches only.
 
         A card tap counts only in a session whose prompts are the user's, where cc-slack delivers it.
         """
-        turns = self.turns(None)
-        asked = {item.id: item for use in ordered_uses(turn for turn, _ in turns) for item in use_answers(use)}
+        from captain_hook.tickets.transcript_evidence import card_taps as source_card_taps
+        from captain_hook.tickets.transcript_evidence import question_uses, sessions
+
+        with sessions(self) as sources:
+            asked = {item.id: item for use in question_uses(sources) for item in use_answers(use)}
+            card = {
+                item.id: item
+                for source in sources
+                if source.prompts_are_user
+                for payload, at in source_card_taps(source)
+                if (item := card_answer(payload, at)) is not None
+            }
         board = {item.id: item for item in board_answers(board_state(tree_of(self.evt), self.evt.cwd))}
-        card = {
-            item.id: item
-            for turn, prompts_are_user in turns
-            if prompts_are_user
-            for payload, at in card_taps(turn.events)
-            if (item := card_answer(payload, at)) is not None
-        }
         return [*asked.values(), *board.values(), *card.values()]
 
     def touches(self) -> list[Touch]:

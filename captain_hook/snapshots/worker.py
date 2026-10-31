@@ -21,6 +21,7 @@ from captain_hook.snapshots.client import (
     CORE_SCHEMA,
     HOST_SCHEMA,
     MAX_FRAME_BYTES,
+    SOURCE_FIELDS,
     EvidenceIncomplete,
     SnapshotProtocolError,
     encode_frame,
@@ -49,6 +50,8 @@ OWNER_ADMISSION = {
     "warm": (1, 4),
 }
 MAX_REGISTRY_GENERATIONS = 64
+MAX_GRAPH_MISSES = 64
+GRAPH_MISS_SECONDS = 60
 SLOW_REQUEST_MS = 100
 
 RegistryKey = tuple[str, str, bytes]
@@ -84,6 +87,13 @@ def registry_key(tool_registry: list[dict[str, Any]], context: CallContext) -> R
         hashlib.sha256(canonical(sorted(tool_registry, key=canonical))).hexdigest(),
         context["admission"],
         canonical(context["authority"]),
+    )
+
+
+def graph_key(request: dict[str, Any], context: CallContext) -> bytes:
+    return canonical(
+        {field: request.get(field) for field in (*SOURCE_FIELDS, "active_since_unix_ms")}
+        | {"classifier": request["view"]["classifier"], "authority": context["authority"]}
     )
 
 
@@ -128,6 +138,7 @@ class Owner:
         self.runner: asyncio.Runner | None = None
         self.registry_generations: LRUDict[RegistryKey, str] = LRUDict(MAX_REGISTRY_GENERATIONS)
         self.registry_guard = threading.Lock()
+        self.graph_misses: LRUDict[bytes, float] = LRUDict(MAX_GRAPH_MISSES)
 
     def _run_policy(self, snapshot: Any, request: dict[str, Any]) -> dict[str, Any]:
         if self.runner is None:
@@ -271,6 +282,8 @@ class Owner:
                         return self._completed(
                             request, self._page(page, request["id"]), started, execution_path="owned_projection"
                         )
+                if request["operation"] == "prepare_graph":
+                    return self._prepare_graph(request, context, token, started)
                 return self._completed(
                     request,
                     dict(self.store.request(request, context=context, cancellation=token)),
@@ -380,6 +393,27 @@ class Owner:
         )
         logger.info("snapshot request failed: {}", " ".join(f"{key}={value!r}" for key, value in fields.items()))
         return failure(request["id"], status, reason, usage)
+
+    def _prepare_graph(
+        self, request: dict[str, Any], context: CallContext, token: Any, started: float
+    ) -> dict[str, Any]:
+        key = graph_key(request, context)
+        with self.registry_guard:
+            missed = self.graph_misses.get(key)
+        if missed is not None and time.monotonic() - missed < GRAPH_MISS_SECONDS:
+            return failure(request["id"], "deadline", "these graph sources missed their deadline within a minute")
+        response = self._completed(
+            request,
+            dict(self.store.request(request, context=context, cancellation=token)),
+            started,
+            execution_path="core_request",
+        )
+        with self.registry_guard:
+            if response["status"] == "deadline":
+                self.graph_misses[key] = time.monotonic()
+            elif response["status"] == "ok":
+                self.graph_misses.pop(key, None)
+        return response
 
     def discard(self, response: dict[str, Any], context: CallContext) -> None:
         self.store.discard_response(response, context=context)

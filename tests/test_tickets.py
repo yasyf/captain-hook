@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 import spawnllm
-from cc_transcript.activity import Turn
 from click.testing import CliRunner
 from spawnllm import BackendCallError, Decision, LabelAnswer
 
@@ -338,14 +337,16 @@ class TestBoard:
         from captain_hook.tickets import context as sources
 
         monkeypatch.setattr(sources, "board_state", lambda tree, cwd: {})
-        reads: list[int | None] = []
-        read_turns = sources.TranscriptSources.turns
+        from captain_hook.tickets import transcript_evidence
 
-        def measured_turns(provider: sources.TranscriptSources, window: int | None) -> list[tuple[Turn, bool]]:
-            reads.append(window)
-            return read_turns(provider, window)
+        reads = []
+        question_uses = transcript_evidence.question_uses
 
-        monkeypatch.setattr(sources.TranscriptSources, "turns", measured_turns)
+        def measured_uses(sessions):
+            reads.append(tuple(source.session for source in sessions))
+            return question_uses(sessions)
+
+        monkeypatch.setattr(transcript_evidence, "question_uses", measured_uses)
 
         question = "Post in C1, thread 1.2?"
         questions = [{"question": question, "options": [{"label": "Yes"}, {"label": "No"}]}]
@@ -369,7 +370,7 @@ class TestBoard:
         )
         ctx = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=20)
         assert [item.id for item in ctx.answers] == ["ask:toolu_ask#0"]
-        assert reads == [None]
+        assert reads == [(transcript,)]
         assert ctx.touches == ()
         wide = Context.of(evt, "test.write", Proposal(PLACE, {"text": "x"}), window=200)
         assert [touch.tool for touch in wide.touches] == ["slack_thread"]
