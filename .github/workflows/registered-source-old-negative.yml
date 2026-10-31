@@ -1,0 +1,28 @@
+name: Registered source old negative
+on:
+  push:
+    branches: [test/registered-source-old-negative]
+permissions:
+  contents: read
+jobs:
+  old-source-negative:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - name: Sync the unchanged SDK28 source environment
+        run: uv sync --locked --extra dev
+      - name: Prove the unchanged source rereads and revalidates every call
+        run: |
+          set +e
+          uv run --no-sync pytest tests/test_registered_sources_cache.py::test_unchanged_large_registration_reads_and_validates_once -n 0 -q -s > "$RUNNER_TEMP/registration-old-negative.log" 2>&1
+          actual_status=$?
+          set -e
+          cat "$RUNNER_TEMP/registration-old-negative.log"
+          test "$actual_status" -eq 1
+          grep -F 'registered_sources entries=5523 calls=101 reads=101 validations=101' "$RUNNER_TEMP/registration-old-negative.log"
+          grep -F 'assert all(value is first' "$RUNNER_TEMP/registration-old-negative.log"
+          grep -F '1 failed' "$RUNNER_TEMP/registration-old-negative.log"
