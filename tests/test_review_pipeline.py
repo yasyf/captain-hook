@@ -80,6 +80,7 @@ from tests.review_helpers import (
     install_fake_embedder,
     install_judge,
     install_resolved_model,
+    install_triage,
     parse,
     requires_llm_backend,
     user_text,
@@ -1531,6 +1532,7 @@ class TestReviewSession:
         install_fake_embedder(monkeypatch)
         install_brain(monkeypatch)
         install_resolved_model(monkeypatch)
+        install_triage(monkeypatch)
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert report.watching is True
@@ -1570,6 +1572,7 @@ class TestReviewSession:
         install_fake_embedder(monkeypatch)
         install_brain(monkeypatch)
         install_resolved_model(monkeypatch)
+        install_triage(monkeypatch)
         proj = tmp_path / "proj"
         ended = write_transcript(proj / "ended.jsonl", correction_entries(session="ended", cwd=str(git_repo)))
         write_transcript(
