@@ -292,17 +292,19 @@ def evidence(candidate_id: int, limit: int) -> None:
     async def body(store: ReviewStore) -> dict[str, object]:
         await store.candidate(candidate_id)
         rows = await store.db.sql(
-            "SELECT e.text, e.context_json, e.occurred_at FROM candidate_observations o "
+            "SELECT e.text, e.context_json, e.occurred_at, e.payload_json FROM candidate_observations o "
             "JOIN feedback_events e ON e.dedup_key = o.dedup_key "
             "WHERE o.candidate_id = ? ORDER BY o.id LIMIT ?",
             (candidate_id, limit + 1),
         )
         selected = rows[:limit]
         windows = [ContextWindow.from_json(str(row["context_json"])) for row in selected]
+        source_paths = [json.loads(str(row["payload_json"])).get("source_path") for row in selected]
         rendered = await asyncio.to_thread(
             render_review_windows,
             windows,
-            roots=review_roots(list(await store.file_mtimes())),
+            source_paths=source_paths,
+            roots=review_roots(list(await store.file_mtimes())) if None in source_paths else [],
             render={
                 "before": asdict(CONTEXT_BUDGET),
                 "trigger": asdict(TRIGGER_BUDGET),
