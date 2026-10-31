@@ -86,7 +86,10 @@ class StampedCache[K, S, V]:
         self._entries_lock = threading.Lock()
         self._refill_lock = threading.Lock()
 
-    def get(self, key: K, stamp: S, ttl: float, compute: Callable[[], V], *, fresh: bool = False) -> V:
+    def get(
+        self, key: K, stamp: S, ttl: float, compute: Callable[[], V], *,
+        fresh: bool = False, cache_if: Callable[[V], bool] | None = None,
+    ) -> V:
         if not fresh and (hit := self._valid(key, stamp, ttl)) is not None:
             return hit.value
         with self._refill_lock:
@@ -94,8 +97,9 @@ class StampedCache[K, S, V]:
                 return hit.value
             computed_at = time.monotonic()
             value = compute()
-            with self._entries_lock:
-                self._entries[key] = Stamped(stamp, computed_at, value)
+            if cache_if is None or cache_if(value):
+                with self._entries_lock:
+                    self._entries[key] = Stamped(stamp, computed_at, value)
             return value
 
     def cache_clear(self) -> None:
