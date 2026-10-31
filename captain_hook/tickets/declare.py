@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -143,13 +144,15 @@ class Tickets:
     def decide(self, ctx: Context) -> Allow | Deny:
         """Find the live ticket covering *ctx*'s action, else mint one from the first rule that holds, else deny."""
         action = ctx.action
-        if (ticket := store.covering(self.kind, ctx.trees, action.place, action.fingerprint)) is not None:
+        with decision_stage(self.kind, "covering") if self.kind == "slack.write" else nullcontext():
+            ticket = store.covering(self.kind, ctx.trees, action.place, action.fingerprint)
+        if ticket is not None:
             decision_log().bind(hook=self.hook, kind=self.kind, ticket=ticket.id).info("ticket found")
             return Allow(ticket, minted=False)
         passed: list[str] = []
         for rule in self.rules:
             try:
-                with decision_stage(ctx, f"rule:{rule.name}"):
+                with decision_stage(ctx.kind, f"rule:{rule.name}"):
                     evidence = found(rule.when, ctx)
             except Undecided as exc:
                 passed.append(f"{rule.name}: {exc}")
@@ -157,7 +160,8 @@ class Tickets:
             if evidence is None:
                 passed.append(f"{rule.name}: nothing found")
                 continue
-            ticket = self.mint(ctx, rule.name, evidence)
+            with decision_stage(self.kind, "mint") if self.kind == "slack.write" else nullcontext():
+                ticket = self.mint(ctx, rule.name, evidence)
             decision_log().bind(hook=self.hook, kind=self.kind, rule=rule.name, ticket=ticket.id).info("ticket minted")
             return Allow(ticket, minted=True)
         return Deny(self.deny, "; ".join(passed))
@@ -165,7 +169,10 @@ class Tickets:
     def check(self, evt: BaseHookEvent, action: Proposal | None = None) -> Allow | Deny:
         """:meth:`decide` over :meth:`context`, failing closed: a store, source, or judge error denies, naming it."""
         try:
-            return self.decide(self.context(evt, action))
+            with decision_stage(self.kind, "check") if self.kind == "slack.write" else nullcontext():
+                with decision_stage(self.kind, "context") if self.kind == "slack.write" else nullcontext():
+                    ctx = self.context(evt, action)
+                return self.decide(ctx)
         except Exception as exc:
             decision_log().bind(hook=self.hook, kind=self.kind).opt(exception=True).warning("ticket check failed")
             return Deny(self.deny, f"The ticket check failed ({type(exc).__name__}: {exc}).")

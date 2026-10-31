@@ -150,13 +150,13 @@ def decision_log() -> Logger:
 
 
 @contextmanager
-def decision_stage(ctx: Context, stage: str) -> Iterator[None]:
+def decision_stage(kind: str, stage: str) -> Iterator[None]:
     started = perf_counter()
     try:
         yield
     finally:
         elapsed_ms = round((perf_counter() - started) * 1000, 3)
-        decision_log().bind(kind=ctx.kind, stage=stage, elapsed_ms=elapsed_ms).info(
+        decision_log().bind(kind=kind, stage=stage, elapsed_ms=elapsed_ms).info(
             "ticket decision stage"
         )
 
@@ -206,7 +206,7 @@ class Decide(CustomTicketCondition):
     def evidence(self, ctx: Context) -> list[Evidence] | None:
         if ctx.evt is None:
             raise Undecided("the context carries no event to judge")
-        with decision_stage(ctx, "evidence"):
+        with decision_stage(ctx.kind, "evidence"):
             items = self.items(ctx)
         if not items:
             return None
@@ -269,7 +269,7 @@ class Decide(CustomTicketCondition):
         from captain_hook.primitives.llm import llm_evaluate
 
         assert ctx.evt is not None
-        with decision_stage(ctx, "llm-with-context"):
+        with decision_stage(ctx.kind, "llm-with-context"):
             return llm_evaluate(
                 ctx.evt,
                 prompt,
@@ -296,19 +296,19 @@ class Decide(CustomTicketCondition):
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         assert ctx.evt is not None
-        with decision_stage(ctx, "contexts"):
+        with decision_stage(ctx.kind, "contexts"):
             built = apply_contexts(prompt, ctx.evt, with_defaults(self.contexts))
         if built is None or len(str(Prompt(contexts=built.contexts))) >= VERDICT_STATE_CHARS:
             return None
         try:
-            with decision_stage(ctx, "transcript"):
+            with decision_stage(ctx.kind, "transcript"):
                 state = verdict_state(
                     ctx.evt.ctx.transcript_evidence(
                         transcript=self.transcript, tool_results=self.tool_results, root_transcript=self.root_transcript
                     ),
                     built,
                 )
-            with decision_stage(ctx, "jev"):
+            with decision_stage(ctx.kind, "jev"):
                 decision = ctx.evt.ctx.decide(
                     state, {"permits": permits_question(items)}, provider=JEV, timeout=VERDICT_TIMEOUT_SECONDS
                 )
