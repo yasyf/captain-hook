@@ -212,7 +212,7 @@ async def test_pr_summaries_work_is_scoped_to_selected_evidence(
         DedupKey("create-high"),
         Verdict(confidence=1, summary="wrong prompt"),
         role="judge",
-        prompt_version="obsolete-prompt",
+        prompt_version=store.versions.create ^ 1,
         model="m1",
         fidelity="full",
     )
