@@ -1,0 +1,33 @@
+name: Broad find checkout-root correction
+
+on:
+  push:
+    branches: [fix/performance-find-block]
+
+permissions:
+  contents: read
+
+jobs:
+  find-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UV_CONCURRENT_BUILDS: "2"
+      UV_CONCURRENT_DOWNLOADS: "2"
+      UV_CONCURRENT_INSTALLS: "2"
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - name: Sync pinned development environment
+        run: uv sync --locked --extra dev
+      - name: Provision isolated NLP assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run --no-sync python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
+      - name: Grade broad-find correction and existing search contracts
+        run: uv run --no-sync pytest -n 0 -s tests/test_pack_performance_search.py 'tests/test_builtin_inline.py::test_builtin_pack_inline_tests[performance/search]' tests/test_builtin_inline.py::test_builtin_packs_meet_the_authoring_bar
