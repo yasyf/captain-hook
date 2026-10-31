@@ -447,7 +447,11 @@ class RenderedEvidence:
 
 
 def render_review_windows(
-    windows: Sequence[ContextWindow], *, roots: Sequence[str], render: Mapping[str, Any]
+    windows: Sequence[ContextWindow],
+    *,
+    source_paths: Sequence[str | None],
+    roots: Sequence[str],
+    render: Mapping[str, Any],
 ) -> list[RenderedEvidence | None | Exception]:
     from captain_hook.snapshots.client import NATIVE_CLASSIFIER, EvidenceIncomplete, Lease, SnapshotProtocolError
 
@@ -456,30 +460,33 @@ def render_review_windows(
     rendered: list[RenderedEvidence | None | Exception] = [
         SnapshotProtocolError("window was not prepared") for _ in windows
     ]
-    grouped: dict[str, list[tuple[int, ContextWindow]]] = {}
-    for index, window in enumerate(windows):
-        grouped.setdefault(window.anchor.session_id, []).append((index, window))
+    grouped: dict[tuple[str, str | None], list[tuple[int, ContextWindow]]] = {}
+    for index, (window, path) in enumerate(zip(windows, source_paths, strict=True)):
+        grouped.setdefault((window.anchor.session_id, path), []).append((index, window))
     with review_client() as client:
-        for session_id, batch in grouped.items():
+        for (session_id, path), batch in grouped.items():
             leases: list[Lease] = []
             try:
-                resolutions: list[dict[str, Any]] = []
-                for page in client.pages(
-                    "resolve", session_ids=[session_id], roots=list(roots), classifier=NATIVE_CLASSIFIER
-                ):
-                    for resolution in page["sessions"]:
-                        resolutions.append(resolution)
-                        if resolution["description"] is not None:
-                            leases.append(Lease(client, resolution["description"]))
-                if len(resolutions) != 1 or resolutions[0]["session_id"] != session_id:
-                    raise SnapshotProtocolError("resolve did not return the requested session")
-                resolution = resolutions[0]
-                if resolution["status"] == "missing":
-                    for index, _ in batch:
-                        rendered[index] = None
-                    continue
-                if resolution["status"] != "ok" or len(leases) != 1:
-                    raise EvidenceIncomplete("incomplete", "session resolution did not complete")
+                if path is not None:
+                    leases.append(client.acquire(path, classifier=NATIVE_CLASSIFIER).lease)
+                else:
+                    resolutions: list[dict[str, Any]] = []
+                    for page in client.pages(
+                        "resolve", session_ids=[session_id], roots=list(roots), classifier=NATIVE_CLASSIFIER
+                    ):
+                        for resolution in page["sessions"]:
+                            resolutions.append(resolution)
+                            if resolution["description"] is not None:
+                                leases.append(Lease(client, resolution["description"]))
+                    if len(resolutions) != 1 or resolutions[0]["session_id"] != session_id:
+                        raise SnapshotProtocolError("resolve did not return the requested session")
+                    resolution = resolutions[0]
+                    if resolution["status"] == "missing":
+                        for index, _ in batch:
+                            rendered[index] = None
+                        continue
+                    if resolution["status"] != "ok" or len(leases) != 1:
+                        raise EvidenceIncomplete("incomplete", "session resolution did not complete")
                 for offset in range(0, len(batch), 256):
                     selected = batch[offset : offset + 256]
                     outputs = [
@@ -511,7 +518,7 @@ def render_review_windows(
                             raise SnapshotProtocolError("hydrate returned invalid availability")
             except EvidenceIncomplete as exc:
                 for index, _ in batch:
-                    rendered[index] = exc
+                    rendered[index] = None if path is not None and exc.status == "missing" else exc
             finally:
                 for lease in leases:
                     lease.release()

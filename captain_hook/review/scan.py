@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -408,7 +408,11 @@ async def ingest(
     from captain_hook.snapshots.review import decode_candidate, record_correction_drafts
 
     repo_key = repo_key or prepared["repo_key"]
-    kept = [decode_candidate(raw) for raw in prepared["candidates_json"]]
+    kept = [
+        (replace(candidate, payload=dict(candidate.payload or {}) | {"source_path": prepared["canonical_path"]}), rule)
+        for raw in prepared["candidates_json"]
+        for candidate, rule in [decode_candidate(raw)]
+    ]
     async with store.db.transaction():
         ingested_at = now()
         inserted = len(await store.db.insert_candidates([event_row(candidate, ingested_at) for candidate, _ in kept]))

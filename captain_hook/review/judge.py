@@ -297,10 +297,12 @@ async def judge_pass(
     )
     from captain_hook.snapshots.review import RenderedEvidence, render_review_windows, review_roots
 
+    source_paths = [json.loads(str(row["payload_json"])).get("source_path") for row in dispatch]
     windows = await asyncio.to_thread(
         render_review_windows,
         [ContextWindow.from_json(str(row["context_json"])) for row in dispatch],
-        roots=review_roots(list(await store.file_mtimes())),
+        source_paths=source_paths,
+        roots=review_roots(list(await store.file_mtimes())) if None in source_paths else [],
         render={"before": asdict(CONTEXT_BUDGET), "trigger": asdict(TRIGGER_BUDGET), "after": asdict(CONTEXT_BUDGET)},
     )
     rendered = {
