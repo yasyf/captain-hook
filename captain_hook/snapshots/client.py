@@ -161,6 +161,24 @@ def output_limit_kind(reason: object) -> str | None:
     )
 
 
+def output_limit_sizes(reason: object) -> dict[str, int | str]:
+    if not isinstance(reason, str):
+        return {}
+    match = re.match(
+        r"^snapshot (?:record|page) needs ([0-9]{1,20}) bytes, over the ([0-9]{1,20})-byte "
+        r"(record bound|page bound|remaining output budget)(?:$|: )",
+        reason,
+    )
+    if match is None:
+        return {}
+    return {
+        "output_needed_bytes": int(match[1]),
+        "output_budget_bytes": int(match[2]),
+        "output_budget_scope": {
+            "record bound": "record", "page bound": "page", "remaining output budget": "remaining_output",
+        }[match[3]],
+    }
+
 def request_metadata(request: Mapping[str, object]) -> dict[str, object]:
     sources = {key: value for key in SOURCE_FIELDS if (value := request.get(key))}
     resource = (
@@ -372,6 +390,10 @@ class SnapshotClient:
         self._guard = threading.Lock()
         self._tool_registry: tuple[tuple[str, str, tuple[tuple[str, str], ...] | None], ...] | None = None
 
+    @property
+    def request_prefix(self) -> str:
+        return self._prefix
+
     def bind_tool_registry(self, tools: Mapping[str, tuple[str, Mapping[str, str] | None]]) -> None:
         if len(tools) > 256:
             raise EvidenceIncomplete("source_limit", "tool registry exceeds its entry bound")
@@ -532,8 +554,19 @@ class SnapshotClient:
                         **request_metadata({"operation": operation, "id": result.get("id")} | arguments),
                         status=status,
                         output_limit_kind=output_limit_kind(result.get("reason")) if status == "output_limit" else None,
+                        **(output_limit_sizes(result.get("reason")) if status == "output_limit" else {}),
                         projection_kind=(
-                            next((kind for kind in ("turns", "events") if query.get("kind") == kind), None)
+                            next(
+                                (
+                                    kind
+                                    for kind in (
+                                        "turns", "events", "interaction_keys", "interaction_winners",
+                                        "interaction_records", "meta_messages",
+                                    )
+                                    if query.get("kind") == kind
+                                ),
+                                None,
+                            )
                             if isinstance(query := arguments.get("query"), dict)
                             else None
                         ),

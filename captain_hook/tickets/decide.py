@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from functools import cache
+from importlib.metadata import version
 from time import perf_counter
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -20,6 +23,7 @@ from captain_hook.tickets.conditions import CustomTicketCondition, UserAnswered,
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
+    from loguru import Logger
     from spawnllm import Decision, TModel, TSpecialty
 
     from captain_hook.contexts import PromptContext
@@ -130,13 +134,29 @@ def cited(items: Sequence[Evidence], ids: Sequence[str]) -> list[Evidence]:
     ]
 
 
+@cache
+def decision_build() -> str:
+    return version("capt-hook")
+
+
+def decision_log() -> Logger:
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+
+    client = CURRENT_CLIENT.get()
+    return logger.bind(
+        capt_build=decision_build(), worker_pid=os.getpid(),
+        request_prefix=client.request_prefix if client is not None else None,
+    )
+
+
 @contextmanager
 def decision_stage(ctx: Context, stage: str) -> Iterator[None]:
     started = perf_counter()
     try:
         yield
     finally:
-        logger.bind(kind=ctx.kind, stage=stage, elapsed_ms=round((perf_counter() - started) * 1000, 3)).info(
+        elapsed_ms = round((perf_counter() - started) * 1000, 3)
+        decision_log().bind(kind=ctx.kind, stage=stage, elapsed_ms=elapsed_ms).info(
             "ticket decision stage"
         )
 
