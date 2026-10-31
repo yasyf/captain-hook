@@ -382,6 +382,7 @@ class HookContext:
         input: str | None = None,
         timeout: int = 30,
         env: dict[str, str] | None = None,
+        cwd: str | None = None,
         throw: bool = True,
     ) -> str | None:
         from spawnllm.proc import run_cli
@@ -396,7 +397,7 @@ class HookContext:
                 input=input,
                 timeout=timeout,
                 env=reqenv.env_map() | (env or {}),
-                cwd=resolve_project_dir() or reqenv.cwd(),
+                cwd=(resolve_project_dir() or reqenv.cwd()) if cwd is None else cwd,
                 checkpoint=reqenv.checkpoint,
             )
         except (OSError, subprocess.SubprocessError):
