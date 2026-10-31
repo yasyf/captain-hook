@@ -26,5 +26,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: uv run --no-sync python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
-      - name: Grade known-path metadata scaling
-        run: uv run --no-sync pytest -n 0 -s tests/test_snapshot_review_consumers.py::test_judge_known_source_avoids_unrelated_corpus_metadata
+      - name: Grade corrected review integration cases
+        run: uv run --no-sync pytest -n 0 -s tests/test_review_pipeline.py::TestReviewSession::test_unknown_repo_auto_enrolls_and_runs tests/test_review_pipeline.py::TestReviewSession::test_parent_dir_scan_sweeps_open_sibling_sessions
