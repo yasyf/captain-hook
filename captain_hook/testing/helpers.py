@@ -158,11 +158,14 @@ def seeded_session_dir(seen: dict[str, list[str]] | None, state: list[BaseModel]
 
 @contextmanager
 def stubbed_commands(commands: dict[str, str | tuple[int, str]] | None) -> Iterator[None]:
+    from spawnllm import proc
+
     if not commands:
         yield
         return
     prefixes = sorted(((tuple(key.split()), stdout) for key, stdout in commands.items()), key=lambda p: -len(p[0]))
     real_run = subprocess.run
+    real_cli = proc.run_cli
 
     def run(
         args: str | Sequence[str | os.PathLike[str]], *pargs: Any, **kwargs: Any
@@ -182,7 +185,13 @@ def stubbed_commands(commands: dict[str, str | tuple[int, str]] | None) -> Itera
                 )
         return real_run(args, *pargs, **kwargs)
 
-    with mock.patch.object(subprocess, "run", run):
+    def run_cli(args: list[str], **kwargs: Any) -> str:
+        argv = tuple(args)
+        if any(argv[: len(prefix)] == prefix for prefix, _ in prefixes):
+            kwargs["checkpoint"] = None
+        return real_cli(args, **kwargs)
+
+    with mock.patch.object(subprocess, "run", run), mock.patch.object(proc, "run_cli", run_cli):
         yield
 
 

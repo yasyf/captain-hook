@@ -397,6 +397,7 @@ class HookContext:
                 timeout=timeout,
                 env=reqenv.env_map() | (env or {}),
                 cwd=resolve_project_dir() or reqenv.cwd(),
+                checkpoint=reqenv.checkpoint,
             )
         except (OSError, subprocess.SubprocessError):
             if throw:
