@@ -1,0 +1,18 @@
+name: Touch input payload diagnostic
+on:
+  push:
+    branches: [diag/touch-input-cost]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --extra dev
+      - run: uv run --no-sync pytest tests/test_ticket_touch_input_cost_baseline.py -n 0 -q -s
