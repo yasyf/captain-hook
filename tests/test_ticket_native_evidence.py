@@ -325,7 +325,7 @@ def test_native_instruction_evidence_keeps_words_without_successful_tool_payload
             baseline = fixture.load(path)
             try:
                 with pytest.raises(EvidenceIncomplete) as refused:
-                    baseline.recent_messages(60).turns
+                    tuple(baseline.recent_messages(60).query({"kind": "turns", "order": "forward"}))
                 assert refused.value.status == "output_limit"
             finally:
                 baseline.release()
