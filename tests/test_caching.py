@@ -201,3 +201,23 @@ class TestStampedCache:
 
         assert calls == [1]
         assert values == [1] * 12
+
+
+def test_stamped_cache_returns_unadmitted_values_without_remembering_them():
+    cache: StampedCache[str, int, int] = StampedCache(1)
+    values = iter([1, 2, 3])
+    assert cache.get("k", 1, 10, lambda: next(values), cache_if=lambda value: value > 1) == 1
+    assert cache.get("k", 1, 10, lambda: next(values), cache_if=lambda value: value > 1) == 2
+    assert cache.get("k", 1, 10, lambda: next(values), cache_if=lambda _: False) == 2
+
+
+def test_stamped_cache_admission_runs_outside_its_entries_lock():
+    cache: StampedCache[str, int, int] = StampedCache(1)
+
+    def admit(value):
+        acquired = cache._entries_lock.acquire(blocking=False)
+        assert acquired
+        cache._entries_lock.release()
+        return value == 1
+
+    assert cache.get("k", 1, 10, lambda: 1, cache_if=admit) == 1

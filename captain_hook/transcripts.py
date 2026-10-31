@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -17,6 +18,7 @@ from cc_transcript.ids import SessionId
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.state import RegisteredTranscript, RegisteredTranscripts, UnbornTranscript
 from captain_hook.util import reqenv
+from captain_hook.util.caching import StampedCache
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 ROOT_TAIL_EVENTS = 256
 ROOT_EXCERPT_BYTES = 16 * 1024 * 1024
+REGISTERED_SOURCES: StampedCache[tuple[Path, Path], tuple[int, int, int, int, int], GraphSources | None] = StampedCache(1)
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -464,17 +467,39 @@ def register_transcript(
     return entry
 
 
+def registered_sources_stamp(path: Path) -> tuple[int, int, int, int, int] | None:
+    try:
+        stamp = path.stat()
+    except OSError:
+        return None
+    return stamp.st_dev, stamp.st_ino, stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns
+
+
 def registered_sources(session_dir: Path | None) -> GraphSources:
     from cc_transcript.codex import sessions_root
 
     from captain_hook.snapshots.client import GraphSources
 
-    entries = SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
-    return GraphSources(
-        thread_ids=tuple(dict.fromkeys(entry.thread_id for entry in entries if entry.thread_id)),
-        roots=(sessions_root(),) if any(entry.thread_id for entry in entries) else (),
-        direct_paths=tuple(dict.fromkeys(Path(entry.path) for entry in entries if entry.path)),
-    )
+    slot = SessionSlot(session_dir, RegisteredTranscripts)
+    root = sessions_root()
+
+    def read() -> GraphSources | None:
+        registered = slot.get()
+        if registered is None:
+            return None
+        entries = registered.entries
+        return GraphSources(
+            thread_ids=tuple(dict.fromkeys(entry.thread_id for entry in entries if entry.thread_id)),
+            roots=(root,) if any(entry.thread_id for entry in entries) else (),
+            direct_paths=tuple(dict.fromkeys(Path(entry.path) for entry in entries if entry.path)),
+        )
+
+    if (path := slot.path) is None or (stamp := registered_sources_stamp(path)) is None:
+        return read() or GraphSources()
+    return REGISTERED_SOURCES.get(
+        (path, root), stamp, math.inf, read,
+        cache_if=lambda value: value is not None and registered_sources_stamp(path) == stamp,
+    ) or GraphSources()
 
 
 def record_unborn(session_dir: Path | None, path: str) -> None:
