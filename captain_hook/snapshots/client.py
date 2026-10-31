@@ -1658,6 +1658,10 @@ class RemoteToolCalls:
             )
         return query.items
 
+    @property
+    def with_errors(self) -> RemoteToolCalls:
+        return replace(self, errors="include")
+
     def named(self, name: str) -> RemoteToolCalls:
         return replace(self, name=name)
 
