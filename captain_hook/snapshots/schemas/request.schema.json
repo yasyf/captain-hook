@@ -65,6 +65,74 @@
       "title": "Acquire",
       "type": "object"
     },
+    "AcquireViews": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcerptSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "handle": {
+          "$ref": "#/$defs/Handle"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "acquire_views",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "tail_events": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 256,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tail Events"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "handle"
+      ],
+      "title": "AcquireViews",
+      "type": "object"
+    },
     "ActivityProbe": {
       "additionalProperties": false,
       "properties": {
@@ -267,6 +335,53 @@
         "version"
       ],
       "title": "Classifier",
+      "type": "object"
+    },
+    "ClassifyView": {
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "$ref": "#/$defs/Classifier"
+        },
+        "deadline_unix_ms": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "title": "Deadline Unix Ms",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "operation": {
+          "const": "classify_view",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema": {
+          "const": "cc-transcript.snapshot/1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/View"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "deadline_unix_ms",
+        "limits",
+        "operation",
+        "view",
+        "classifier"
+      ],
+      "title": "ClassifyView",
       "type": "object"
     },
     "CurrentTurn": {
@@ -503,6 +618,39 @@
       "title": "EventRef",
       "type": "object"
     },
+    "ExcerptSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "around": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Around",
+          "type": "integer"
+        },
+        "count": {
+          "exclusiveMinimum": 0,
+          "maximum": 256,
+          "title": "Count",
+          "type": "integer"
+        },
+        "forms": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Forms",
+          "type": "array"
+        }
+      },
+      "required": [
+        "forms",
+        "around",
+        "count"
+      ],
+      "title": "ExcerptSelection",
+      "type": "object"
+    },
     "GraphHandle": {
       "additionalProperties": false,
       "properties": {
@@ -686,6 +834,56 @@
         "flags"
       ],
       "title": "InputRegex",
+      "type": "object"
+    },
+    "InteractionKeys": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "interaction_keys",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "title": "InteractionKeys",
+      "type": "object"
+    },
+    "InteractionSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "keys": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Keys",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "interaction_winners",
+            "interaction_records"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "keys"
+      ],
+      "title": "InteractionSelection",
       "type": "object"
     },
     "Limits": {
@@ -872,6 +1070,34 @@
       "title": "MessageCount",
       "type": "object"
     },
+    "MetaMessages": {
+      "additionalProperties": false,
+      "properties": {
+        "contains": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contains"
+        },
+        "kind": {
+          "const": "meta_messages",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "MetaMessages",
+      "type": "object"
+    },
     "Mine": {
       "additionalProperties": false,
       "properties": {
@@ -988,6 +1214,7 @@
         "kind": {
           "enum": [
             "turns",
+            "instruction_turns",
             "events",
             "files_touched",
             "edited_files",
@@ -1655,7 +1882,12 @@
               "has_skill": "#/$defs/ListPredicate",
               "has_skill_suffix": "#/$defs/ListPredicate",
               "has_tool": "#/$defs/ToolPredicate",
+              "instruction_turns": "#/$defs/Page",
+              "interaction_keys": "#/$defs/InteractionKeys",
+              "interaction_records": "#/$defs/InteractionSelection",
+              "interaction_winners": "#/$defs/InteractionSelection",
               "message_count": "#/$defs/MessageCount",
+              "meta_messages": "#/$defs/MetaMessages",
               "pending_named_task": "#/$defs/PendingNamedTask",
               "predicate_inputs": "#/$defs/Page",
               "prompts": "#/$defs/Prompts",
@@ -1708,6 +1940,15 @@
             },
             {
               "$ref": "#/$defs/ToolCalls"
+            },
+            {
+              "$ref": "#/$defs/MetaMessages"
+            },
+            {
+              "$ref": "#/$defs/InteractionKeys"
+            },
+            {
+              "$ref": "#/$defs/InteractionSelection"
             },
             {
               "$ref": "#/$defs/DirectSidechains"
@@ -2668,8 +2909,10 @@
   "discriminator": {
     "mapping": {
       "acquire": "#/$defs/Acquire",
+      "acquire_views": "#/$defs/AcquireViews",
       "activity_probe": "#/$defs/ActivityProbe",
       "capture": "#/$defs/Capture",
+      "classify_view": "#/$defs/ClassifyView",
       "describe": "#/$defs/Describe",
       "discover": "#/$defs/Discover",
       "hydrate": "#/$defs/Hydrate",
@@ -2696,6 +2939,12 @@
     },
     {
       "$ref": "#/$defs/Acquire"
+    },
+    {
+      "$ref": "#/$defs/AcquireViews"
+    },
+    {
+      "$ref": "#/$defs/ClassifyView"
     },
     {
       "$ref": "#/$defs/Resolve"

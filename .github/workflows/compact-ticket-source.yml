@@ -1,0 +1,39 @@
+name: Compact Ticket Source Contract
+on:
+  push:
+    branches: [diag/compact-ticket-source]
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: "2"
+      GOMAXPROCS: "2"
+      GOFLAGS: "-p=2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: yasyf/cc-transcript
+          ref: e0fd2e913a5bbbf46ae27cdb1e1c7ce3ecfa10a0
+          path: sdk-source
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk-source/rust -> target
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+      - run: git rev-parse HEAD && git -C sdk-source rev-parse HEAD && rustc -Vv
+      - run: uv sync --locked --extra dev
+      - run: uv pip install --python .venv/bin/python --reinstall --no-deps ./sdk-source
+      - run: uv run --no-sync python -m captain_hook.snapshots.schema captain_hook/snapshots/schemas --core-directory sdk-source/cc_transcript/snapshot_schema --check
+      - run: uv run --no-sync python -m captain_hook.snapshots.schema internal/snapshots/schema --core-directory sdk-source/cc_transcript/snapshot_schema --check
+      - run: uv run --no-sync pytest tests/test_ticket_native_evidence.py tests/test_tickets.py tests/test_ticket_touch_projection.py -n 0 -q -s --tb=short
+      - run: go test ./internal/snapshots -run TestInteractionRequestMetadataPreservesTheStrictHostBoundary -count=1 -v

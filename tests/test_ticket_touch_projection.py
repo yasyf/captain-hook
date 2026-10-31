@@ -62,6 +62,11 @@ def test_touches_match_full_turn_oracle_without_projecting_assistant_text(tmp_pa
 
     monkeypatch.setattr(fixture.client, "_exchange", measured)
     try:
+        assert native.tool_calls.failed().with_errors.items == native.tool_calls.failed().items
+        assert native.tool_calls.with_errors.failed().items == native.tool_calls.failed().items
+        assert local.tool_calls.failed().with_errors.items == local.tool_calls.failed().items
+        requests.clear()
+        output_bytes.clear()
         provider = TranscriptSources(event(tmp_path, native), (), window)
         old = [touch_of(use) for use in ordered_uses(turn for turn, _ in provider.turns(window)) if use.call.name != QUESTION_TOOL]
         assert old == expected
