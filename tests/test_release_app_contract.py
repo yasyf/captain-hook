@@ -110,7 +110,7 @@ def test_release_stages_and_smokes_every_app_asset_before_github_publication() -
     assert "contents: write" not in smoke
 
     for required in (
-        "needs: [build, python-assets]",
+        "needs: [build, python-assets, stage-release, smoke-draft]",
         "name: verified-python-assets",
         "Resolve the exact PyPI publication state",
         "existing PyPI assets differ",
@@ -154,7 +154,8 @@ def test_release_stages_and_smokes_every_app_asset_before_github_publication() -
     assert "softprops/action-gh-release" not in workflow
 
 
-def test_python_publication_remains_ready_while_the_mac_app_is_blocked() -> None:
+@pytest.mark.parametrize("blocked", ["helper", "smoke-draft"])
+def test_python_publication_waits_for_the_matching_app_smoke(blocked: str) -> None:
     workflow = WORKFLOW.read_text()
     jobs = re.findall(r"(?m)^  ([a-z][a-z-]+):$", workflow)
     dependencies = {}
@@ -162,7 +163,6 @@ def test_python_publication_remains_ready_while_the_mac_app_is_blocked() -> None
         needs = re.search(r"(?m)^    needs: ([^\n]+)$", workflow_job(workflow, name))
         dependencies[name] = set(needs[1].strip("[]").split(", ")) if needs else set()
     assert set.union(*dependencies.values()) <= set(jobs)
-    assert dependencies["publish-pypi"] == {"build", "python-assets"}
     assert dependencies["python-assets"] == {"build"}
     assert dependencies["build"] == {"release-tests"}
     assert "smoke-draft" in dependencies["publish-github"]
@@ -171,12 +171,14 @@ def test_python_publication_remains_ready_while_the_mac_app_is_blocked() -> None
     graph.prepare()
     completed = set()
     while ready := graph.get_ready():
-        finished = set(ready) - {"helper", "smoke-draft"}
+        finished = set(ready) - {blocked}
         graph.done(*finished)
         completed |= finished
 
-    assert {"release-tests", "build", "python-assets", "publish-pypi"} <= completed
-    assert not {"helper", "stage-release", "smoke-draft", "publish-github", "sync-plugin-version", "helper-formula"} & completed
+    assert {"release-tests", "build", "python-assets"} <= completed
+    assert not {"publish-pypi", "publish-github", "sync-plugin-version", "helper-formula"} & completed
+    assert dependencies["publish-pypi"] == {"build", "python-assets", "stage-release", "smoke-draft"}
+    assert ("stage-release" in completed) == (blocked == "smoke-draft")
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="The release asset scripts run on Ubuntu")

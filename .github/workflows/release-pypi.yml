@@ -333,7 +333,7 @@ jobs:
           APP_PATH="$app" CAPT_HOOK_VERSION="${RELEASE_TAG#v}" bash helper/scripts/assert-signed-bridge.sh
 
   publish-pypi:
-    needs: [build, python-assets]
+    needs: [build, python-assets, stage-release, smoke-draft]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
