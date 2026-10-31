@@ -135,8 +135,8 @@ def run_spec(
     from spawnllm import ClaudeConfig, CodexConfig, RunSpec, run_sync
 
     configs: dict[str, ClaudeConfig | CodexConfig] = {} if tools is None else {"claude": ClaudeConfig(tools=tools)}
-    if env is not None and backend.provider == "codex":
-        configs["codex"] = CodexConfig(bypass_approvals_and_sandbox=True)
+    if backend.provider == "codex":
+        configs["codex"] = CodexConfig(service_tier=None, bypass_approvals_and_sandbox=env is not None)
     spec = RunSpec(
         prompt=prompt,
         model=backend.resolve_model(model),
@@ -640,7 +640,13 @@ class HookContext:
                 "llm",
                 "call_sync",
                 call_sync,
-                prompt, backend=serving, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
+                prompt,
+                backend=serving,
+                specialty=specialty,
+                model=model,
+                agent=agent,
+                cwd=cwd,
+                timeout=timeout,
             )
         except BackendCallError as exc:
             if is_unsupported_model(exc):
