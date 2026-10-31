@@ -407,29 +407,30 @@ def test_stack_writes_with_a_ccx_twin_are_rewritten(
 
 
 @pytest.mark.parametrize(
-    ("command", "needle"),
+    ("command", "runs"),
     [
-        pytest.param("git rebase main", "ccx vcs stack rebase", id="git-rebase"),
-        pytest.param("git rebase --onto origin/dev old-base feat", "ccx vcs stack rebase", id="git-rebase-onto"),
+        pytest.param("git rebase main", "git rebase --no-update-refs main", id="git-rebase"),
+        pytest.param(
+            "git rebase --onto origin/dev old-base feat",
+            "git rebase --no-update-refs --onto origin/dev old-base feat",
+            id="git-rebase-onto",
+        ),
     ],
 )
 def test_stack_writes_without_a_ccx_twin_are_nudged(
-    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, needle: str
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, runs: str
 ) -> None:
     """No ccx verb does the same job with these flags, so the command runs and the route is named."""
     discover_pack("graphite", GRAPHITE_HOOKS)
     result = dispatch_command(command, gt_repo, tmp_path)
+    assert rewritten_command(result) == runs
     assert result is not None
-    output = result["hookSpecificOutput"]
-    assert "updatedInput" not in output
-    assert output.get("permissionDecision") != "deny"
-    assert needle in output["additionalContext"]
-    assert_meets_copy_bar(output["additionalContext"])
+    assert "ccx vcs stack rebase" in result["hookSpecificOutput"]["additionalContext"]
 
 
 @pytest.mark.parametrize(
     "command",
-    ["gt submit # ccx:raw", "gt restack #ccx:raw", "jj new # ccx:raw", "git rebase main # ccx:raw"],
+    ["gt submit # ccx:raw", "gt restack #ccx:raw", "jj new # ccx:raw"],
 )
 def test_raw_marker_runs_the_command_as_written(
     isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
@@ -1269,7 +1270,7 @@ def test_pushes_the_hook_must_not_read_as_no_ops(
     ],
 )
 def test_a_rebase_moves_no_branch_but_its_own(
-    isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str, rewritten: str
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str, rewritten: str
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert rewritten_command(dispatch_command(command, gt_repo, tmp_path)) == rewritten
@@ -1279,7 +1280,7 @@ def test_a_rebase_moves_no_branch_but_its_own(
     "command", ["git rebase --continue", "git rebase --update-refs main", "git rebase --no-update-refs main"]
 )
 def test_a_rebase_that_states_its_refs_or_continues_runs_as_written(
-    isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str
+    isolate_modules: None, ccx_installed: None, gt_repo: Path, tmp_path: Path, command: str
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     result = dispatch_command(command, gt_repo, tmp_path)

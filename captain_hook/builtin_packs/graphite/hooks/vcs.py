@@ -340,7 +340,7 @@ def git_rebase_through_ccx(evt: BaseHookEvent) -> HookResult | None:
 
 @on(
     Event.PreToolUse,
-    only_if=[Tool("Bash"), GraphiteCall(starts_a_rebase)],
+    only_if=[Tool("Bash"), CcxInstalled(), GraphiteCall(starts_a_rebase)],
     tests={Input(command="git rebase main", cwd="/"): Allow()},
 )
 def rebase_moves_only_its_own_branch(evt: BaseHookEvent) -> HookResult | None:
