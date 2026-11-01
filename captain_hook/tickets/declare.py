@@ -74,20 +74,21 @@ class Tickets:
 
     def context(self, evt: BaseHookEvent, action: Proposal | None = None) -> Context:
         """The context :meth:`decide` reads for *evt*: *action*, or the declaration's ``action`` of the event."""
-        if action is None:
-            if self.action is None:
-                raise TypeError(f"{self.kind} declares no action, so the context needs the action to cover")
-            action = self.action(evt)
-        coordinator = coordinator_tree(evt)
-        return Context.of(
-            evt,
-            self.kind,
-            self.canonical(action),
-            tree=evt.session_id if self.own_session else None,
-            trees=() if coordinator is None else (coordinator,),
-            window=self.window,
-            machine=self.machine,
-        )
+        with decision_stage(self.kind, "context") if self.kind == "slack.write" else nullcontext():
+            if action is None:
+                if self.action is None:
+                    raise TypeError(f"{self.kind} declares no action, so the context needs the action to cover")
+                action = self.action(evt)
+            coordinator = coordinator_tree(evt)
+            return Context.of(
+                evt,
+                self.kind,
+                self.canonical(action),
+                tree=evt.session_id if self.own_session else None,
+                trees=() if coordinator is None else (coordinator,),
+                window=self.window,
+                machine=self.machine,
+            )
 
     def mint(self, ctx: Context, rule: str, evidence: Sequence[Evidence]) -> Ticket:
         """Mint the ticket *rule* earned for *ctx*'s action."""
@@ -114,31 +115,34 @@ class Tickets:
         It records *cause* as its evidence and covers this one action for :data:`UNCHECKED_TTL`, so the
         store says why nothing checked the action and a later action at the place still gets checked.
         """
-        created = store.now()
-        ticket = store.mint(
-            Ticket(
-                id=store.new_id(),
-                kind=self.kind,
-                tree=ctx.tree,
-                place=ctx.place,
-                reach=Reach.ONCE,
-                rule=UNCHECKED,
-                evidence=[
-                    Evidence(
-                        id=f"{UNCHECKED}:{ctx.call}",
-                        source="hook",
-                        quote=cause,
-                        said_at=created,
-                        detail="the check did not finish, so the action went ahead unchecked",
-                    )
-                ],
-                fingerprint=ctx.action.fingerprint,
-                author=f"hook:{self.hook}@{ctx.session}/{ctx.agent}",
-                created=created,
-                expires=created + UNCHECKED_TTL,
+        with decision_stage(self.kind, "mint-unchecked") if self.kind == "slack.write" else nullcontext():
+            created = store.now()
+            ticket = store.mint(
+                Ticket(
+                    id=store.new_id(),
+                    kind=self.kind,
+                    tree=ctx.tree,
+                    place=ctx.place,
+                    reach=Reach.ONCE,
+                    rule=UNCHECKED,
+                    evidence=[
+                        Evidence(
+                            id=f"{UNCHECKED}:{ctx.call}",
+                            source="hook",
+                            quote=cause,
+                            said_at=created,
+                            detail="the check did not finish, so the action went ahead unchecked",
+                        )
+                    ],
+                    fingerprint=ctx.action.fingerprint,
+                    author=f"hook:{self.hook}@{ctx.session}/{ctx.agent}",
+                    created=created,
+                    expires=created + UNCHECKED_TTL,
+                )
             )
+        decision_log().bind(hook=self.hook, kind=self.kind, ticket=ticket.id, cause=cause).warning(
+            "unchecked ticket minted"
         )
-        decision_log().bind(hook=self.hook, kind=self.kind, ticket=ticket.id, cause=cause).warning("unchecked ticket minted")
         return ticket
 
     def decide(self, ctx: Context) -> Allow | Deny:
@@ -170,8 +174,7 @@ class Tickets:
         """:meth:`decide` over :meth:`context`, failing closed: a store, source, or judge error denies, naming it."""
         try:
             with decision_stage(self.kind, "check") if self.kind == "slack.write" else nullcontext():
-                with decision_stage(self.kind, "context") if self.kind == "slack.write" else nullcontext():
-                    ctx = self.context(evt, action)
+                ctx = self.context(evt, action)
                 return self.decide(ctx)
         except Exception as exc:
             decision_log().bind(hook=self.hook, kind=self.kind).opt(exception=True).warning("ticket check failed")
