@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import shlex
 import subprocess
 import sys
@@ -52,6 +53,32 @@ CHATTY_PASSING_PYTHON = f'#!/bin/sh\necho "launcher: resolved an interpreter"\ne
 NOTING_PYTHON = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(skip_envelope('PreToolUse', 'host-unavailable'))}\nexit 0\n"
 STOCK_MACOS_PATH = "/usr/bin:/bin"
 STOCK_MACOS_PYTHON = Path("/usr/bin/python3")
+BINRUN_APP_CASES = [
+    pytest.param(
+        "12.30.9",
+        "PreToolUse",
+        DESTRUCTIVE_PAYLOAD,
+        0,
+        ENVELOPES["PreToolUse"],
+        BELOW_MINIMUM,
+        id="below-minimum-skips-with-a-note",
+    ),
+    pytest.param(
+        "12.30.9",
+        "PermissionRequest",
+        DESTRUCTIVE_PAYLOAD,
+        0,
+        ENVELOPES["PermissionRequest"],
+        BELOW_MINIMUM,
+        id="below-minimum-skips-with-a-note-permission-request",
+    ),
+    pytest.param("12.30.9", "PreToolUse", BENIGN_PAYLOAD, 1, "", BELOW_MINIMUM, id="below-minimum-fails-open-benign"),
+    pytest.param("12.31.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="minimum-app-reads-stdin"),
+    pytest.param(
+        "12.60.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="host-behind-the-plugin-reads-stdin"
+    ),
+    pytest.param("13.0.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="newer-app-reads-stdin"),
+]
 
 
 def _render_formula() -> str:
@@ -215,37 +242,33 @@ def test_linux_hook_dispatch_execs_the_installed_host_and_notes_the_skip_without
         assert str(host) in result.stderr
 
 
+@pytest.fixture(scope="session")
+def pinned_binrun(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    pinned = re.search(r'^RUNNER_TAG="(.+)"$', (ROOT / "captain_hook/scripts/install-binary.sh").read_text(), re.M)
+    assert pinned is not None
+    runner = Path.home() / ".daemonkit" / "binrun" / pinned[1] / "binrun"
+    if runner.is_file():
+        return runner
+    home = tmp_path_factory.mktemp("binrun-home")
+    result = subprocess.run(
+        [ROOT / "captain_hook/scripts/install-binary.sh"],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(home), "DAEMONKIT_HOME": str(home)},
+        input="",
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    runner = home / ".daemonkit" / "binrun" / pinned[1] / "binrun"
+    assert runner.is_file(), result.stderr
+    assert result.returncode == 1 and NOT_INSTALLED in result.stderr, result.stderr
+    return runner
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="the signed-app hook shim")
 @pytest.mark.parametrize(
     ("installed", "event", "payload", "code", "stdout", "hint"),
-    [
-        pytest.param(
-            "12.30.9",
-            "PreToolUse",
-            DESTRUCTIVE_PAYLOAD,
-            0,
-            ENVELOPES["PreToolUse"],
-            BELOW_MINIMUM,
-            id="below-minimum-skips-with-a-note",
-        ),
-        pytest.param(
-            "12.30.9",
-            "PermissionRequest",
-            DESTRUCTIVE_PAYLOAD,
-            0,
-            ENVELOPES["PermissionRequest"],
-            BELOW_MINIMUM,
-            id="below-minimum-skips-with-a-note-permission-request",
-        ),
-        pytest.param(
-            "12.30.9", "PreToolUse", BENIGN_PAYLOAD, 1, "", BELOW_MINIMUM, id="below-minimum-fails-open-benign"
-        ),
-        pytest.param("12.31.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="minimum-app-reads-stdin"),
-        pytest.param(
-            "12.60.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="host-behind-the-plugin-reads-stdin"
-        ),
-        pytest.param("13.0.0", "PreToolUse", DESTRUCTIVE_PAYLOAD, 0, HOST_ECHO, None, id="newer-app-reads-stdin"),
-    ],
+    BINRUN_APP_CASES,
 )
 def test_hook_dispatch_notes_a_guarded_call_binrun_refuses(
     installed: str | None, event: str, payload: bytes, code: int, stdout: str, hint: str | None, tmp_path: Path
@@ -275,6 +298,48 @@ def test_hook_dispatch_notes_a_guarded_call_binrun_refuses(
         "HOME": str(tmp_path),
         "DAEMONKIT_HOME": str(tmp_path),
         "BINRUN_BIN": str(runner),
+    }
+    result = subprocess.run(
+        [ROOT / "captain_hook/bin/hook", "run", event],
+        env=env,
+        input=payload.decode(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert (result.returncode, result.stdout) == (code, stdout), result.stderr
+    if hint is not None:
+        assert hint in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the signed-app hook shim")
+@pytest.mark.parametrize(
+    ("installed", "event", "payload", "code", "stdout", "hint"),
+    BINRUN_APP_CASES,
+)
+def test_hook_dispatch_with_pinned_binrun(
+    installed: str | None,
+    event: str,
+    payload: bytes,
+    code: int,
+    stdout: str,
+    hint: str | None,
+    tmp_path: Path,
+    pinned_binrun: Path,
+) -> None:
+    if installed is not None:
+        contents = tmp_path / "Applications" / "Captain Hook.app" / "Contents"
+        (contents / "Helpers").mkdir(parents=True)
+        (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": installed}))
+        host = contents / "Helpers" / "capt-hookd"
+        host.write_text(FAKE_HOST)
+        host.chmod(0o755)
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "DAEMONKIT_HOME": str(tmp_path),
+        "BINRUN_BIN": str(pinned_binrun),
     }
     result = subprocess.run(
         [ROOT / "captain_hook/bin/hook", "run", event],
