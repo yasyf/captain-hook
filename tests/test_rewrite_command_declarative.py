@@ -64,6 +64,12 @@ class TestRegexFormStillWorks:
         assert result.updated_input == {"command": "ccx read bar.py --full"}
         assert result.note == "Rewrote cat to ccx read"
 
+    def test_escaped_dollar_stays_a_regex(self, tmp_path: Path) -> None:
+        rewrite_command(r"\bfind\s+\$HOME\b", "ccx repo find ~", note="Scoped find")
+        result = next(r for r in fire(tmp_path, "find $HOME -name x") if r)
+        assert result.action == Action.rewrite
+        assert result.updated_input == {"command": "ccx repo find ~ -name x"}
+
 
 class TestModeValidation:
     @pytest.mark.parametrize(

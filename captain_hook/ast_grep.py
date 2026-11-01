@@ -139,8 +139,8 @@ def lang_for_path(path: Path) -> str | None:
 
 
 def has_metavar(text: str) -> bool:
-    """Whether ``text`` carries an ast-grep metavariable (``$NAME`` or ``$$$NAME``)."""
-    return TEMPLATE_VAR.search(text) is not None
+    """Whether ``text`` carries an ast-grep metavariable (``$NAME`` or ``$$$NAME``) not escaped as ``\\$``."""
+    return any(m.start() == 0 or text[m.start() - 1] != "\\" for m in TEMPLATE_VAR.finditer(text))
 
 
 def parse(source: str, lang: str) -> SyntaxNode:
