@@ -19,8 +19,6 @@ from itertools import accumulate, islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from loguru import logger
-
 from capt_hook_client.client import HOST
 
 if TYPE_CHECKING:
@@ -495,6 +493,8 @@ class SnapshotClient:
                 and operation != "release"
                 and int(time.time() * 1000) >= self.foreground_deadline_unix_ms
             ):
+                from loguru import logger
+
                 logger.bind(
                     **request_metadata({"operation": operation, "id": request_id} | arguments),
                     status="deadline",
@@ -553,6 +553,8 @@ class SnapshotClient:
             while True:
                 status = result.get("status")
                 if status not in {"ok", "incomplete"}:
+                    from loguru import logger
+
                     logger.bind(
                         **request_metadata({"operation": operation, "id": result.get("id")} | arguments),
                         status=status,
@@ -815,6 +817,8 @@ class Lease:
             "release", owner_epoch=self.handle["owner_epoch"], kind="lease", token=self.handle["lease_id"]
         )
         if result.get("status") == "retained_limit":
+            from loguru import logger
+
             logger.bind(status="retained_limit", reason=result.get("reason")).warning("snapshot lease cleanup deferred")
             self.cleanup_pending = True
             return
@@ -1165,6 +1169,8 @@ class PreparedGraphEvidence:
                 "release", kind="graph", token=self.outcome.graph_id, owner_epoch=self.outcome.owner_epoch
             )
             if result.get("status") == "retained_limit":
+                from loguru import logger
+
                 logger.bind(status="retained_limit", reason=result.get("reason")).warning(
                     "prepared graph cleanup deferred"
                 )
@@ -1614,6 +1620,8 @@ class RemoteSession:
 
 
 def skip_oversized(path: Path, exc: EvidenceIncomplete) -> None:
+    from loguru import logger
+
     from captain_hook.util import reqenv
 
     logger.bind(path=str(path), reason=exc.reason).warning("transcript event over the record bound skipped")
