@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from cc_transcript.command import parse_command_line
 
 from captain_hook.cmd import Cmd
@@ -68,3 +69,35 @@ def test_blocked_messages_keeps_shell_rule_order(tmp_path: Path) -> None:
         return ()
 
     assert blocked_messages(cmd, "Bash", {}, tmp_path, pack_roots=pack_roots) == (SEARCH_MESSAGE, FIND_MESSAGE)
+
+
+@pytest.mark.parametrize(
+    ("command", "blocked"),
+    (
+        ("rg -l 'perf-46725-proof|46772' {corpus}", True),
+        ("rg needle ~/.cc-inbox/blobs", True),
+        ('rg needle "$HOME/.cc-inbox/blobs"', True),
+        ("cd ~/.cc-inbox/blobs && rg needle .", True),
+        ("rg needle {home}/.cc-inbox", True),
+        ("rg needle {alias}", True),
+        ("rg needle {corpus}/known-digest", False),
+        ("rg needle ~/.cc-inbox/blobs/known-digest", False),
+        ("rg --glob known-digest needle {corpus}", False),
+        ("rg -g 'known-*' needle {corpus}", False),
+    ),
+    ids=("reported", "home", "variable", "cwd", "parent", "symlink", "file", "home-file", "filename", "prefix"),
+)
+def test_blob_corpus_search_requires_file_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str, blocked: bool
+) -> None:
+    home = tmp_path / "home"
+    corpus = home / ".cc-inbox" / "blobs"
+    corpus.mkdir(parents=True)
+    (corpus / "known-digest").write_text("needle")
+    alias = tmp_path / "corpus-alias"
+    alias.symlink_to(corpus, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+    raw = command.format(home=home, corpus=corpus, alias=alias)
+    cmd = Cmd(parse_command_line(raw), raw=raw, cwd=tmp_path)
+
+    assert blocked_messages(cmd, "Bash", {}, tmp_path, pack_roots=lambda: ()) == ((SEARCH_MESSAGE,) if blocked else ())
