@@ -11,9 +11,9 @@ from cc_transcript.query import Session
 from captain_hook.app import State, current_state, get_hook_candidates, use_state
 from captain_hook.conditions import matches_conditions
 from captain_hook.context import HookContext
-from captain_hook.dispatch import Envelope, combine, envelope_text, run_declarative
 from captain_hook.events import PreToolUseEvent
 from captain_hook.loader import import_pack_module, stamp_identity
+from captain_hook.results import Envelope, combine, envelope_text, run_declarative
 from captain_hook.session import SessionStore
 from captain_hook.types import Event, HookResult
 
