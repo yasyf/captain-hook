@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import threading
 from collections.abc import Iterator
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -181,6 +182,39 @@ class TestPendingAnnouncements:
         assert len(await pending_announcements(store, REPO)) == 1
         rows = await store.candidates(REPO)
         assert rows[0]["announced_status"] == CandidateStatus.PR_OPEN
+
+
+class TestReviewerFailureAnnouncement:
+    async def record_failures(self, store: ReviewStore, minutes: range) -> None:
+        for minute in minutes:
+            await store.record_spawn_run(
+                f"/t-{minute}.jsonl",
+                started_at=datetime.fromisoformat(f"2026-11-01T17:{minute:02d}:00+00:00"),
+                ok=False,
+                error="EvidenceIncomplete: transcript evidence source_limit: source exceeds owner bound",
+            )
+
+    async def test_streak_announced_once_at_threshold(self, store: ReviewStore) -> None:
+        await self.record_failures(store, range(2))
+        assert await pending_announcements(store, REPO) == []
+        await self.record_failures(store, range(2, 3))
+        assert await pending_announcements(store, REPO) == [
+            f"{ANNOUNCE_PREFIX} the reviewer has failed 3 runs in a row since 2026-11-01T17:00:00+00:00, "
+            "so no hook PRs are being opened: EvidenceIncomplete: transcript evidence source_limit: "
+            "source exceeds owner bound (capt-hook status)"
+        ]
+        await self.record_failures(store, range(3, 4))
+        assert await pending_announcements(store, REPO) == []
+
+    async def test_new_streak_after_success_announced_again(self, store: ReviewStore) -> None:
+        await self.record_failures(store, range(3))
+        assert len(await pending_announcements(store, REPO)) == 1
+        await store.record_spawn_run(
+            "/t-ok.jsonl", started_at=datetime.fromisoformat("2026-11-01T17:10:00+00:00"), ok=True, report_json="{}"
+        )
+        await self.record_failures(store, range(11, 14))
+        [line] = await pending_announcements(store, REPO)
+        assert "since 2026-11-01T17:11:00+00:00" in line
 
 
 class TestCollectAnnouncements:

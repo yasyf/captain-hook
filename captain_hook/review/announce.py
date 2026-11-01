@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from captain_hook.review.notify import FAILURE_STREAK_THRESHOLD
 from captain_hook.review.store import CandidateStatus
 
 if TYPE_CHECKING:
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from captain_hook.review.store import ReviewStore
 
 ANNOUNCE_PREFIX = "captain-hook review:"
+ANNOUNCED_FAILING_KEY = "announced_failing_since"
 
 ANNOUNCE_STATUSES = frozenset(
     {CandidateStatus.PR_OPEN, CandidateStatus.ACCEPTED, CandidateStatus.REJECTED, CandidateStatus.STALE}
@@ -49,6 +51,9 @@ def announcement_line(row: Mapping[str, object], status: CandidateStatus) -> str
 async def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
     """Returns one line per candidate whose PR outcome changed since it was last announced, marking each.
 
+    A failing reviewer streak of :data:`~captain_hook.review.notify.FAILURE_STREAK_THRESHOLD` runs or more
+    leads the lines once per streak, keyed by its ``failing_since`` in ``review_meta``.
+
     Reads the repo's candidates (matched by PR-target or misfire-origin repo), keeps
     those in a PR-bearing state (:data:`ANNOUNCE_STATUSES`) whose ``announced_status``
     lags the current ``status`` and that carry a ``pr_url`` — so a judged-and-dropped
@@ -67,6 +72,17 @@ async def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
     """
     lines: list[str] = []
     async with store.db.transaction():
+        health = await store.spawn_health()
+        if (
+            health.consecutive_failures >= FAILURE_STREAK_THRESHOLD
+            and await store.meta(ANNOUNCED_FAILING_KEY) != health.failing_since
+        ):
+            error = health.last["error"] if health.last else None
+            lines.append(
+                f"{ANNOUNCE_PREFIX} the reviewer has failed {health.consecutive_failures} runs in a row since "
+                f"{health.failing_since}, so no hook PRs are being opened: {error} (capt-hook status)"
+            )
+            await store.set_meta(ANNOUNCED_FAILING_KEY, health.failing_since)
         for row in await store.candidates(repo):
             status = CandidateStatus(str(row["status"]))
             if status not in ANNOUNCE_STATUSES or row["announced_status"] == status or not row["pr_url"]:
