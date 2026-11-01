@@ -63,6 +63,8 @@ BROAD_ROOTS = PathMatches(
         *SYSTEM_ROOTS.patterns,
         *POOL_ROOTS.patterns,
         *POOL_MEMBERS.patterns,
+        "**/.cc-inbox",
+        "**/.cc-inbox/blobs",
         "**/.claude/scratch",
         "**/.claude/scratch/*",
         *(pattern for root in TEMP_ROOTS for pattern in (str(root), f"{root}/*")),
