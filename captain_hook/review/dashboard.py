@@ -225,6 +225,17 @@ def health_line(health: SpawnHealth, judge: JudgeHealth) -> RenderableType:
                     return Text.assemble((f"{line}  ·  ", "dim"), (segment, style))
 
 
+def not_wired_line() -> RenderableType:
+    return Text.assemble(
+        ("NOT WIRED", "bold red"),
+        (
+            "   no settings file for this repo enables the captain-hook plugin or runs capt-hook as a hook, "
+            "so Claude Code never calls it — run `capt-hook init`",
+            "red",
+        ),
+    )
+
+
 def unwatched_line(repos: Sequence[str]) -> RenderableType:
     return Text(
         f"reviewer ran for unwatched repos: {', '.join(repos)} — run `capt-hook review enable` in each repo",
@@ -296,8 +307,9 @@ def render(
     load_errors: Sequence[LoadError] = (),
     unwatched: Sequence[str] = (),
     syncing: bool = False,
+    wired: bool = True,
 ) -> RenderableType:
-    """The whole dashboard frame: reviewer health, degraded loads, header, then a section per lifecycle stage."""
+    """The whole dashboard frame: wiring, reviewer health, degraded loads, header, then a section per stage."""
     sections = [
         block
         for stage, title, desc, style in SECTIONS
@@ -307,6 +319,7 @@ def render(
     empty = [] if views else [Text("No corrections tracked yet — they appear here as you correct Claude.", style="dim")]
     spinner = [Spinner("dots", text=Text("syncing open PRs with GitHub…", style="dim"))] if syncing else []
     return Group(
+        *([] if wired else [not_wired_line()]),
         health_line(health, judge),
         *([unwatched_line(unwatched)] if unwatched else []),
         *pack_errors_lines(load_errors),
@@ -318,7 +331,7 @@ def render(
     )
 
 
-async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadError] = ()) -> None:
+async def run_status(repo: RepoKey, *, sync: bool, wired: bool, load_errors: Sequence[LoadError] = ()) -> None:
     """Renders the dashboard for ``repo``, refreshing open-PR state in the background when ``sync``."""
     from rich.live import Live
 
@@ -347,6 +360,7 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
                     open_prs=open_prs,
                     load_errors=load_errors,
                     unwatched=unwatched,
+                    wired=wired,
                 )
             )
             return
@@ -362,6 +376,7 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
                 load_errors=load_errors,
                 unwatched=unwatched,
                 syncing=True,
+                wired=wired,
             ),
             console=console,
         ) as live:
@@ -379,10 +394,11 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
                     open_prs=open_prs,
                     load_errors=load_errors,
                     unwatched=unwatched,
+                    wired=wired,
                 )
             )
 
 
-def status_command(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadError] = ()) -> None:
+def status_command(repo: RepoKey, *, sync: bool, wired: bool, load_errors: Sequence[LoadError] = ()) -> None:
     """The synchronous CLI boundary for ``review status`` / ``capt-hook status``."""
-    asyncio.run(run_status(repo, sync=sync, load_errors=load_errors))
+    asyncio.run(run_status(repo, sync=sync, wired=wired, load_errors=load_errors))

@@ -117,6 +117,38 @@ def test_plugin_not_enabled_is_skipped(tmp_path: Path, settings: dict[str, objec
     assert plugins.resolve_plugin_packs(root) == []
 
 
+def command_hook(event: str, command: str) -> dict[str, object]:
+    return {"hooks": {event: [{"hooks": [{"type": "command", "command": command}]}]}}
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        pytest.param({"enabledPlugins": {plugins.PLUGIN_ID: True}}, True, id="plugin-enabled"),
+        pytest.param(
+            command_hook("SessionStart", '"$CLAUDE_PROJECT_DIR"/.venv/bin/hook run SessionStart'),
+            True,
+            id="direct-hook",
+        ),
+        pytest.param(command_hook("PreToolUse", "capt-hookd run --event PreToolUse"), True, id="direct-hookd"),
+        pytest.param(
+            {"enabledPlugins": {plugins.PLUGIN_ID: False}} | command_hook("Stop", "notify.sh"),
+            False,
+            id="disabled-with-other-hooks",
+        ),
+        pytest.param({}, False, id="nothing"),
+    ],
+)
+def test_wired_reads_plugin_enablement_and_direct_hooks(
+    tmp_path: Path, settings: dict[str, object], expected: bool
+) -> None:
+    (root := tmp_path / "proj").mkdir()
+    (path := root / ".claude" / "settings.json").parent.mkdir()
+    path.write_text(json.dumps(settings))
+
+    assert plugins.wired(root) is expected
+
+
 @pytest.mark.parametrize(
     ("layers", "enabled"),
     [

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`capt-hook status` says when Claude Code is not calling capt-hook.** The daemon can be
+  healthy and every hook discoverable while no settings file for the repo enables the
+  `captain-hook@captain-hook` plugin or registers a capt-hook command as a hook, so no hook ever
+  fires. The status frame now leads with a `NOT WIRED` line and the `capt-hook init` fix in that case.
 - **One oversized transcript no longer stops the reviewer.** The scan refused a transcript whose
   evidence exceeded the output bound but raised on the snapshot owner's source and entry bounds, so a
   single large transcript in a project failed every review pass (`EvidenceIncomplete: transcript

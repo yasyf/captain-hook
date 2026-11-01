@@ -194,10 +194,16 @@ def triage(limit: int | None) -> None:
 def status(state: CliState, repo_: str | None, sync: bool) -> None:
     """Show the tracked corrections, their progress toward a PR, and open PR status."""
     from captain_hook.app import _state
+    from captain_hook.packs.plugins import wired
     from captain_hook.review.dashboard import status_command
 
     state.discover()
-    status_command(resolve_repo(repo_, state.root), sync=sync, load_errors=list(_state.load_errors))
+    status_command(
+        resolve_repo(repo_, state.root),
+        sync=sync,
+        wired=wired(state.root),
+        load_errors=list(_state.load_errors),
+    )
 
 
 @review.command(name="list")

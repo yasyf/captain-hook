@@ -330,6 +330,23 @@ class TestRenderFrame:
         assert "No corrections tracked yet" in out
         assert "capt-hook review enable" in out
 
+    @pytest.mark.parametrize(("wired", "shown"), [(False, True), (True, False)])
+    def test_not_wired_leads_the_frame(self, wired: bool, shown: bool) -> None:
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=NO_OPEN_PRS,
+                wired=wired,
+            )
+        )
+        assert out.startswith("NOT WIRED") is shown
+        assert ("capt-hook init" in out) is shown
+
 
 def rendered_stages(views: list[CandidateView]) -> str:
     frame = render(
