@@ -87,11 +87,11 @@ def test_ticket_stage_records_duration_and_preserves_errors(fails, logcap, monke
     ctx = Context.fake("test.write", {"channel": "private-channel"}, payload={"text": "private-body"})
     error = RuntimeError("private-error")
     if fails:
-        with pytest.raises(RuntimeError) as caught, deciding.decision_stage(ctx, "jev"):
+        with pytest.raises(RuntimeError) as caught, deciding.decision_stage(ctx.kind, "jev"):
             raise error
         assert caught.value is error
     else:
-        with deciding.decision_stage(ctx, "jev"):
+        with deciding.decision_stage(ctx.kind, "jev"):
             pass
     [record] = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
     assert "kind='test.write'" in record.message
@@ -179,7 +179,7 @@ def test_decision_stages_and_mint_share_the_snapshot_request_prefix(logcap, monk
     ctx = Context.fake("trace.write", {"channel": "private-channel"}, said=["private-yes"])
     tickets = Tickets("trace.write", ("channel",), Reach.PLACE, rules=(Rule("match", UserSaid("private-yes")),), deny="Ask.")
     try:
-        with pytest.raises(EvidenceIncomplete), deciding.decision_stage(ctx, "jev"):
+        with pytest.raises(EvidenceIncomplete), deciding.decision_stage(ctx.kind, "jev"):
             list(client.pages("query", query={"kind": "turns"}))
         verdict = tickets.decide(ctx)
         assert isinstance(verdict, Allow)
@@ -207,8 +207,129 @@ def test_stage_duration_excludes_cold_log_metadata_lookup(logcap, monkeypatch):
 
     monkeypatch.setattr(deciding, "decision_build", cold_build)
     ctx = Context.fake("test.lookup", {})
-    with deciding.decision_stage(ctx, "jev"):
+    with deciding.decision_stage(ctx.kind, "jev"):
         clock[0] += 0.01
     [record] = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
     assert "elapsed_ms=10.0" in record.message
     assert clock[0] == pytest.approx(12.01)
+
+
+@pytest.mark.parametrize("kind", ["slack.write", "test.write"], ids=["slack", "other"])
+@pytest.mark.parametrize("covering", [False, True], ids=["mint", "covering"])
+def test_slack_outer_ticket_timings(kind, covering, logcap, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    from captain_hook.snapshots.client import CURRENT_CLIENT
+    from captain_hook.tickets import declare as declaring
+
+    clock = [10.0]
+    calls = []
+    ctx = Context.fake(kind, {}, said=["private-evidence"])
+    ticket = SimpleNamespace(id="private-ticket", rule="match")
+    tickets = Tickets(kind, (), Reach.PLACE, rules=(Rule("match", UserSaid()),), deny="Ask.")
+
+    def context(self, evt, action=None):
+        calls.append("context")
+        clock[0] += 0.002
+        return ctx
+
+    def lookup(*args):
+        calls.append("covering")
+        clock[0] += 0.003
+        return ticket if covering else None
+
+    def found(*args):
+        calls.append("rule")
+        clock[0] += 0.004
+        return [object()]
+
+    def mint(self, *args):
+        calls.append("mint")
+        clock[0] += 0.005
+        return ticket
+
+    monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(deciding, "decision_build", lambda: "12.108.99")
+    monkeypatch.setattr(Tickets, "context", context)
+    monkeypatch.setattr(Tickets, "mint", mint)
+    monkeypatch.setattr(declaring.store, "covering", lookup)
+    monkeypatch.setattr(declaring, "found", found)
+    client = SnapshotClient(lambda _: pytest.fail("no native request expected"))
+    token = CURRENT_CLIENT.set(client)
+    try:
+        verdict = tickets.check(object())
+    finally:
+        CURRENT_CLIENT.reset(token)
+        client.close()
+    assert isinstance(verdict, Allow) and verdict.ticket is ticket and verdict.minted is not covering
+    assert calls == (["context", "covering"] if covering else ["context", "covering", "rule", "mint"])
+    stages = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
+    expected = {} if covering else {"rule:match": 4.0}
+    if kind == "slack.write":
+        expected |= {"check": 5.0 if covering else 14.0, "context": 2.0, "covering": 3.0}
+        if not covering:
+            expected["mint"] = 5.0
+    if kind == "slack.write":
+        assert any("stage='check'" in record.message for record in stages), "SLACK_OUTER_STAGE_MISSING: check"
+    assert len(stages) == len(expected)
+    for stage, duration in expected.items():
+        matching = [record for record in stages if f"stage={stage!r}" in record.message]
+        assert len(matching) == 1, f"SLACK_OUTER_STAGE_MISSING: {stage}"
+        assert f"elapsed_ms={duration!r}" in matching[0].message
+    for record in stages:
+        assert f"kind={kind!r}" in record.message
+        assert f"request_prefix={client.request_prefix!r}" in record.message
+        assert "capt_build='12.108.99'" in record.message
+        assert f"worker_pid={os.getpid()}" in record.message
+        assert "private-evidence" not in record.message
+        assert "private-ticket" not in record.message
+
+
+@pytest.mark.parametrize("kind", ["slack.write", "test.write"], ids=["slack", "other"])
+@pytest.mark.parametrize("boundary", ["context", "covering", "mint"])
+@pytest.mark.parametrize("incomplete", [False, True], ids=["ordinary", "incomplete"])
+def test_slack_outer_ticket_exception_timings(kind, boundary, incomplete, logcap, monkeypatch):
+    from types import SimpleNamespace
+
+    from captain_hook.tickets import Deny
+    from captain_hook.tickets import declare as declaring
+
+    clock = [10.0]
+    calls = []
+    ctx = Context.fake(kind, {})
+    ticket = SimpleNamespace(id="private-ticket")
+    error = EvidenceIncomplete("incomplete", "private-error") if incomplete else RuntimeError("private-error")
+    tickets = Tickets(kind, (), Reach.PLACE, rules=(Rule("match", UserSaid()),), deny="Ask.")
+
+    def step(name, value):
+        calls.append(name)
+        clock[0] += 0.001
+        if name == boundary:
+            raise error
+        return value
+
+    monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(Tickets, "context", lambda *args: step("context", ctx))
+    monkeypatch.setattr(declaring.store, "covering", lambda *args: step("covering", None))
+    monkeypatch.setattr(declaring, "found", lambda *args: step("rule", [object()]))
+    monkeypatch.setattr(Tickets, "mint", lambda *args: step("mint", ticket))
+    verdict = tickets.check(object())
+    assert isinstance(verdict, Deny) and verdict.message == "Ask."
+    assert "private-error" in verdict.detail
+    expected_calls = ["context"] if boundary == "context" else ["context", "covering"] if boundary == "covering" else ["context", "covering", "rule", "mint"]
+    assert calls == expected_calls
+    stages = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
+    expected = ["rule:match"] if boundary == "mint" else []
+    if kind == "slack.write":
+        expected += [name for name in expected_calls if name != "rule"] + ["check"]
+    assert len(stages) == len(expected)
+    for stage in expected:
+        assert sum(f"stage={stage!r}" in record.message for record in stages) == 1
+    assert all("private-error" not in record.message and "private-ticket" not in record.message for record in stages)
+    if boundary != "context":
+        calls.clear()
+        with pytest.raises(type(error)) as caught:
+            tickets.decide(ctx)
+        assert caught.value is error
+        assert calls == expected_calls[1:]
