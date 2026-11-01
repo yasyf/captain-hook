@@ -77,30 +77,6 @@ assert not {
 """,
         """
 import sys
-from pathlib import Path
-from captain_hook.util import caller
-
-assert not {"captain_hook.state", "pydantic", "spacy"}.intersection(sys.modules)
-assert Path(caller.FRAMEWORK_DIR) == Path(caller.__file__).resolve().parents[1]
-assert caller.framework_frame(caller.__file__)
-assert not caller.framework_frame(str(Path(caller.BUILTIN_PACKS_DIR) / "performance/hooks/search.py"))
-
-import captain_hook.state as state
-for name in (
-    "BUILTIN_PACKS_DIR", "FRAMEWORK_DIR", "PACK_PACKAGE_PREFIX",
-    "caller_file", "caller_frame", "caller_stem", "framework_frame",
-    "framework_path", "hook_name", "package_aware_stem",
-):
-    assert getattr(state, name) is getattr(caller, name)
-""",
-        """
-import sys
-import captain_hook.app
-
-assert "captain_hook.state" not in sys.modules
-""",
-        """
-import sys
 import captain_hook.dispatch as dispatch
 import captain_hook.results as results
 
@@ -131,8 +107,82 @@ except ImportError as exc:
 else:
     raise AssertionError("ticket initialization was deferred past dispatch import")
 """,
+        """
+import json
+import socket
+import subprocess
+import sys
+from io import StringIO
+from pathlib import Path
+
+def unexpected(*args: object, **kwargs: object) -> None:
+    raise AssertionError("standalone search guard invoked external work")
+
+subprocess.Popen = unexpected
+socket.socket.connect = unexpected
+import captain_hook.search_guard as guard
+root = Path(sys.argv[1])
+raw = {
+    "hook_event_name": "PreToolUse",
+    "cwd": str(root),
+    "tool_name": "Bash",
+    "tool_input": {"command": "printf safe"},
+}
+from contextlib import redirect_stdout
+for command, denied in (("printf safe", False), ("rg needle .", True)):
+    sys.stdin = StringIO(json.dumps(raw | {"tool_input": {"command": command}}))
+    output = StringIO()
+    with redirect_stdout(output):
+        guard.main()
+    if denied:
+        result = json.loads(output.getvalue())
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    else:
+        assert output.getvalue() == ""
+    for prefix in (
+        "captain_hook.app", "captain_hook.cli", "captain_hook.context",
+        "captain_hook.conditions", "captain_hook.dispatch", "captain_hook.events",
+        "captain_hook.loader", "captain_hook.results", "captain_hook.session",
+        "captain_hook.snapshots", "captain_hook.state", "captain_hook.testing",
+        "captain_hook.tickets", "captain_hook.types", "cc_transcript.query",
+        "pydantic", "loguru",
+    ):
+        assert not any(name == prefix or name.startswith(prefix + ".") for name in sys.modules), prefix
+""",
+        """
+import sys
+from pathlib import Path
+from captain_hook.util import caller
+
+assert not {"captain_hook.state", "pydantic", "spacy"}.intersection(sys.modules)
+assert Path(caller.FRAMEWORK_DIR) == Path(caller.__file__).resolve().parents[1]
+assert caller.framework_frame(caller.__file__)
+assert not caller.framework_frame(str(Path(caller.BUILTIN_PACKS_DIR) / "performance/hooks/search.py"))
+
+import captain_hook.state as state
+for name in (
+    "BUILTIN_PACKS_DIR", "FRAMEWORK_DIR", "PACK_PACKAGE_PREFIX",
+    "caller_file", "caller_frame", "caller_stem", "framework_frame",
+    "framework_path", "hook_name", "package_aware_stem",
+):
+    assert getattr(state, name) is getattr(caller, name)
+""",
+        """
+import sys
+import captain_hook.app
+
+assert "captain_hook.state" not in sys.modules
+""",
     ],
-    ids=["results-only", "search-only", "caller-only", "app-without-state", "eager-tickets", "ticket-import-error"],
+    ids=[
+        "results-only",
+        "search-only",
+        "eager-tickets",
+        "ticket-import-error",
+        "standalone-pure",
+        "caller-only",
+        "app-without-state",
+    ],
 )
 def test_search_guard_import_boundaries(script: str, tmp_path: Path) -> None:
     root = tmp_path / "repo"

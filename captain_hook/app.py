@@ -187,6 +187,16 @@ def current_state() -> State:
         return _GLOBAL_STATE
 
 
+def registered_pack_roots() -> tuple[Path, ...]:
+    return tuple(
+        Path(registered.state_root)
+        for registered in current_state().hooks
+        if registered.pack_name is not None
+        and registered.state_root is not None
+        and Path(registered.state_root).is_absolute()
+    )
+
+
 @contextmanager
 def use_state(state: State) -> Iterator[State]:
     token = _STATE_VAR.set(state)
