@@ -62,6 +62,7 @@ dev = [
 
 [project.scripts]
 capt-hook = "captain_hook.cli:main"
+capt-search-guard = "captain_hook.search_guard:main"
 hook = "capt_hook_client.client:main"
 hookd = "capt_hook_client.client:ops_main"
 
