@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import plistlib
-import re
 import shlex
 import subprocess
 import sys
@@ -257,19 +256,26 @@ def test_hook_dispatch_notes_a_guarded_call_binrun_refuses(
     notes the skip on a session-ending call; a benign call keeps the non-blocking exit 1. An app at or past
     the minimum execs the host from the subshell with stdin untouched.
     """
+    contents = tmp_path / "Applications" / "Captain Hook.app" / "Contents"
+    host = contents / "Helpers" / "capt-hookd"
     if installed is not None:
-        contents = tmp_path / "Applications" / "Captain Hook.app" / "Contents"
         (contents / "Helpers").mkdir(parents=True)
         (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": installed}))
-        host = contents / "Helpers" / "capt-hookd"
         host.write_text(FAKE_HOST)
         host.chmod(0o755)
-    pinned = re.search(r'^RUNNER_TAG="(.+)"$', (ROOT / "captain_hook/scripts/install-binary.sh").read_text(), re.M)
-    assert pinned is not None
-    runner = Path.home() / ".daemonkit" / "binrun" / pinned[1] / "binrun"
-    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "DAEMONKIT_HOME": str(tmp_path)}
-    if runner.is_file():
-        env["BINRUN_BIN"] = str(runner)
+    runner = tmp_path / "binrun"
+    runner.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(hint)} >&2\nexit 1\n"
+        if hint is not None
+        else f'#!/bin/sh\nshift\nexec {shlex.quote(str(host))} "$@"\n'
+    )
+    runner.chmod(0o755)
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "DAEMONKIT_HOME": str(tmp_path),
+        "BINRUN_BIN": str(runner),
+    }
     result = subprocess.run(
         [ROOT / "captain_hook/bin/hook", "run", event],
         env=env,
