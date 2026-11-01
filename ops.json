@@ -1,1 +1,1 @@
-{"v":1,"lamport":6,"ops":[{"kind":"add_criterion","id":"037d1f69ab56ba1b485093814fad9113","text":"Record normal source merge and test-only delivery through the sole Capt coordinator; no app release or local install is required for this test-only fix.","script":""}]}
+{"v":1,"lamport":7,"ops":[{"kind":"remove_criterion","id":"3bdf190ae62cf5f54df1fee30c109e52"}]}
