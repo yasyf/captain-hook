@@ -44,7 +44,9 @@ def test_output_refusals_log_only_classified_metadata(reason, expected, logcap):
     assert full_reason not in logcap.text
 
 
-@pytest.mark.parametrize("kind", ["turns", "events", "interaction_keys", "interaction_winners", "interaction_records", "meta_messages"])
+@pytest.mark.parametrize(
+    "kind", ["turns", "events", "interaction_keys", "interaction_winners", "interaction_records", "meta_messages"]
+)
 def test_query_kind_logs_the_plain_whitelist_literal(kind, logcap):
     class PrivateKind(str):
         def __repr__(self) -> str:
@@ -141,7 +143,10 @@ def test_output_refusals_report_native_size_operands_without_the_reason(reason, 
     private = "private-sk-fixture-secret"
 
     def exchange(wrapper):
-        return {"schema": HOST_SCHEMA, "response": failure(wrapper["request"]["id"], "output_limit", f"{reason}: {private}")}
+        return {
+            "schema": HOST_SCHEMA,
+            "response": failure(wrapper["request"]["id"], "output_limit", f"{reason}: {private}"),
+        }
 
     client = SnapshotClient(exchange)
     with pytest.raises(EvidenceIncomplete) as caught:
@@ -177,7 +182,9 @@ def test_decision_stages_and_mint_share_the_snapshot_request_prefix(logcap, monk
     client = SnapshotClient(exchange)
     token = CURRENT_CLIENT.set(client)
     ctx = Context.fake("trace.write", {"channel": "private-channel"}, said=["private-yes"])
-    tickets = Tickets("trace.write", ("channel",), Reach.PLACE, rules=(Rule("match", UserSaid("private-yes")),), deny="Ask.")
+    tickets = Tickets(
+        "trace.write", ("channel",), Reach.PLACE, rules=(Rule("match", UserSaid("private-yes")),), deny="Ask."
+    )
     try:
         with pytest.raises(EvidenceIncomplete), deciding.decision_stage(ctx.kind, "jev"):
             list(client.pages("query", query={"kind": "turns"}))
@@ -186,7 +193,9 @@ def test_decision_stages_and_mint_share_the_snapshot_request_prefix(logcap, monk
     finally:
         CURRENT_CLIENT.reset(token)
         client.close()
-    records = [record for record in logcap.records if record.message.startswith(("ticket decision stage", "ticket minted"))]
+    records = [
+        record for record in logcap.records if record.message.startswith(("ticket decision stage", "ticket minted"))
+    ]
     assert len(records) == 3
     assert requests[0]["id"].startswith(client.request_prefix + "-")
     for record in records:
@@ -229,7 +238,7 @@ def test_slack_outer_ticket_timings(kind, covering, logcap, monkeypatch):
     ticket = SimpleNamespace(id="private-ticket", rule="match")
     tickets = Tickets(kind, (), Reach.PLACE, rules=(Rule("match", UserSaid()),), deny="Ask.")
 
-    def context(self, evt, action=None):
+    def context(cls, evt, kind, action, **kwargs):
         calls.append("context")
         clock[0] += 0.002
         return ctx
@@ -251,14 +260,15 @@ def test_slack_outer_ticket_timings(kind, covering, logcap, monkeypatch):
 
     monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
     monkeypatch.setattr(deciding, "decision_build", lambda: "12.108.99")
-    monkeypatch.setattr(Tickets, "context", context)
+    monkeypatch.setattr(declaring, "coordinator_tree", lambda _: None)
+    monkeypatch.setattr(Context, "of", classmethod(context))
     monkeypatch.setattr(Tickets, "mint", mint)
     monkeypatch.setattr(declaring.store, "covering", lookup)
     monkeypatch.setattr(declaring, "found", found)
     client = SnapshotClient(lambda _: pytest.fail("no native request expected"))
     token = CURRENT_CLIENT.set(client)
     try:
-        verdict = tickets.check(object())
+        verdict = tickets.check(object(), ctx.action)
     finally:
         CURRENT_CLIENT.reset(token)
         client.close()
@@ -310,14 +320,21 @@ def test_slack_outer_ticket_exception_timings(kind, boundary, incomplete, logcap
         return value
 
     monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
-    monkeypatch.setattr(Tickets, "context", lambda *args: step("context", ctx))
+    monkeypatch.setattr(declaring, "coordinator_tree", lambda _: None)
+    monkeypatch.setattr(Context, "of", classmethod(lambda *args, **kwargs: step("context", ctx)))
     monkeypatch.setattr(declaring.store, "covering", lambda *args: step("covering", None))
     monkeypatch.setattr(declaring, "found", lambda *args: step("rule", [object()]))
     monkeypatch.setattr(Tickets, "mint", lambda *args: step("mint", ticket))
-    verdict = tickets.check(object())
+    verdict = tickets.check(object(), ctx.action)
     assert isinstance(verdict, Deny) and verdict.message == "Ask."
     assert "private-error" in verdict.detail
-    expected_calls = ["context"] if boundary == "context" else ["context", "covering"] if boundary == "covering" else ["context", "covering", "rule", "mint"]
+    expected_calls = (
+        ["context"]
+        if boundary == "context"
+        else ["context", "covering"]
+        if boundary == "covering"
+        else ["context", "covering", "rule", "mint"]
+    )
     assert calls == expected_calls
     stages = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
     expected = ["rule:match"] if boundary == "mint" else []
@@ -333,3 +350,123 @@ def test_slack_outer_ticket_exception_timings(kind, boundary, incomplete, logcap
             tickets.decide(ctx)
         assert caught.value is error
         assert calls == expected_calls[1:]
+
+
+@pytest.mark.parametrize("kind", ["slack.write", "test.write"], ids=["slack", "other"])
+def test_manual_ticket_context_timings_preserve_freshness(kind, logcap, monkeypatch):
+    from types import SimpleNamespace
+
+    from captain_hook.tickets import Proposal
+    from captain_hook.tickets import declare as declaring
+    from captain_hook.tickets.context import TranscriptSources
+
+    clock = [10.0]
+    calls = []
+    coordinators = iter(("private-coordinator-a", "private-coordinator-b"))
+    evt = SimpleNamespace(
+        session_id="private-session",
+        agent_id="private-agent",
+        tool_use_id="private-call",
+        ctx=SimpleNamespace(root_path=None, event_count=0),
+    )
+    action = Proposal({"channel": "private-channel"}, {"text": "private-body"}, "private-summary")
+    tickets = Tickets(kind, ("channel",), Reach.ONCE, rules=(), deny="Ask.", window=240, machine=("private-marker",))
+
+    def coordinator(event):
+        assert event is evt
+        calls.append("coordinator")
+        clock[0] += 0.003
+        return next(coordinators)
+
+    monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(declaring, "coordinator_tree", coordinator)
+    monkeypatch.setattr(TranscriptSources, "sessions", lambda _: pytest.fail("context must not resolve evidence"))
+    first = tickets.context(evt, action)
+    first.facts[str] = "private-cached-fact"
+    second = tickets.context(evt, action)
+    assert calls == ["coordinator", "coordinator"]
+    assert first is not second and first.sources is not second.sources
+    assert str not in second.facts
+    assert Context.current(evt) is second
+    assert first.trees == ("private-session", "private-coordinator-a")
+    assert second.trees == ("private-session", "private-coordinator-b")
+    assert first.action == second.action == action
+    assert second.sources.window == 240 and second.sources.machine == ("private-marker",)
+    assert (second.session, second.agent, second.call) == ("private-session", "private-agent", "private-call")
+    stages = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
+    assert len(stages) == (2 if kind == "slack.write" else 0), "MANUAL_CONTEXT_STAGE_MISSING"
+    for record in stages:
+        assert "stage='context'" in record.message and "elapsed_ms=3.0" in record.message
+        assert "private-" not in record.message
+
+
+@pytest.mark.parametrize("incomplete", [False, True], ids=["ordinary", "incomplete"])
+def test_manual_slack_context_timing_preserves_exception(incomplete, logcap, monkeypatch):
+    from captain_hook.tickets import Proposal
+    from captain_hook.tickets import declare as declaring
+
+    clock = [10.0]
+    error = EvidenceIncomplete("incomplete", "private-error") if incomplete else RuntimeError("private-error")
+    tickets = Tickets("slack.write", (), Reach.ONCE, rules=(), deny="Ask.")
+
+    def coordinator(_):
+        clock[0] += 0.004
+        raise error
+
+    monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(declaring, "coordinator_tree", coordinator)
+    with pytest.raises(type(error)) as caught:
+        tickets.context(object(), Proposal({}))
+    assert caught.value is error
+    [record] = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
+    assert "stage='context'" in record.message and "elapsed_ms=4.0" in record.message
+    assert "private-error" not in record.message
+
+
+@pytest.mark.parametrize("kind", ["slack.write", "test.write"], ids=["slack", "other"])
+@pytest.mark.parametrize("failure", [None, "ordinary", "incomplete"], ids=["success", "ordinary", "incomplete"])
+def test_unchecked_ticket_mint_timings_preserve_storage_and_errors(kind, failure, logcap, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from captain_hook.tickets import declare as declaring
+
+    clock = [10.0]
+    created = datetime(2026, 11, 1, tzinfo=UTC)
+    saved = []
+    ctx = Context.fake(kind, {"channel": "private-channel"}, payload={"text": "private-body"})
+    error = (
+        EvidenceIncomplete("incomplete", "private-error") if failure == "incomplete" else RuntimeError("private-error")
+    )
+    tickets = Tickets(kind, ("channel",), Reach.PLACE, rules=(), deny="Ask.", hook="private-hook")
+
+    def mint(ticket):
+        saved.append(ticket)
+        clock[0] += 0.007
+        if failure is not None:
+            raise error
+        return ticket
+
+    monkeypatch.setattr(deciding, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(declaring.store, "now", lambda: created)
+    monkeypatch.setattr(declaring.store, "new_id", lambda: "private-ticket")
+    monkeypatch.setattr(declaring.store, "mint", mint)
+    if failure is None:
+        assert tickets.unchecked(ctx, "private-cause") is saved[0]
+    else:
+        with pytest.raises(type(error)) as caught:
+            tickets.unchecked(ctx, "private-cause")
+        assert caught.value is error
+    [ticket] = saved
+    assert ticket.id == "private-ticket" and ticket.kind == kind and ticket.tree == ctx.tree
+    assert ticket.place == ctx.place and ticket.reach is Reach.ONCE and ticket.rule == "unchecked"
+    assert ticket.fingerprint == ctx.action.fingerprint
+    assert ticket.author == f"hook:private-hook@{ctx.session}/{ctx.agent}"
+    assert ticket.created == created and ticket.expires == created + timedelta(minutes=10)
+    [evidence] = ticket.evidence
+    assert evidence.id == f"unchecked:{ctx.call}" and evidence.source == "hook"
+    assert evidence.quote == "private-cause" and evidence.said_at == created
+    stages = [record for record in logcap.records if record.message.startswith("ticket decision stage")]
+    assert len(stages) == (1 if kind == "slack.write" else 0), "UNCHECKED_MINT_STAGE_MISSING"
+    for record in stages:
+        assert "stage='mint-unchecked'" in record.message and "elapsed_ms=7.0" in record.message
+        assert "private-" not in record.message
