@@ -184,7 +184,10 @@ def test_render_groups_sessions_and_releases_before_return():
     token = CURRENT_CLIENT.set(SnapshotClient(wire))
     try:
         result = render_review_windows(
-            [window("a"), window("b"), window("a")], source_paths=[None, None, None], roots=["/fixtures"], render=render_budget()
+            [window("a"), window("b"), window("a")],
+            source_paths=[None, None, None],
+            roots=["/fixtures"],
+            render=render_budget(),
         )
     finally:
         CURRENT_CLIENT.reset(token)
@@ -200,7 +203,10 @@ def test_failed_session_is_not_downgraded_to_summary_or_poison_healthy_session()
     token = CURRENT_CLIENT.set(SnapshotClient(wire))
     try:
         result = render_review_windows(
-            [window("bad"), window("good"), window("gone")], source_paths=[None, None, None], roots=["/fixtures"], render=render_budget()
+            [window("bad"), window("good"), window("gone")],
+            source_paths=[None, None, None],
+            roots=["/fixtures"],
+            render=render_budget(),
         )
     finally:
         CURRENT_CLIENT.reset(token)
@@ -372,6 +378,33 @@ async def test_incomplete_source_cannot_advance_scan_checkpoint(store, settings,
     assert await store.file_mtimes() == {}
     assert await store.meta(f"snapshot_discovery:{dedup_key('/fixture')}") is None
     assert await store.meta(f"snapshot_revision:{dedup_key('/fixture/session.jsonl')}") is None
+
+
+@pytest.mark.parametrize("status", ["output_limit", "source_limit", "entry_limit"])
+async def test_oversized_source_is_refused_and_the_scan_completes(store, settings, monkeypatch, status):
+    from captain_hook.review import scan as scan_module
+
+    class Client:
+        def pages(self, operation, **kwargs):
+            assert operation == "discover"
+            yield {
+                "entries": [{"path": "/fixture/session.jsonl", "state": "present", "revision": "r1", "mtime_ns": "1"}],
+                "checkpoint": "next",
+            }
+
+    token = CURRENT_CLIENT.set(Client())
+    monkeypatch.setattr(
+        scan_module,
+        "prepare_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(EvidenceIncomplete(status, "source exceeds owner bound")),
+    )
+    try:
+        report = await scan(store, settings=settings, transcripts=[Path("/fixture")])
+    finally:
+        CURRENT_CLIENT.reset(token)
+    assert report == ScanReport(0, 0, 1)
+    assert await store.meta(f"snapshot_refused:{dedup_key('/fixture/session.jsonl')}") == "r1"
+    assert await store.meta(f"snapshot_discovery:{dedup_key('/fixture')}") == "next"
 
 
 async def test_ingest_records_empty_source_atomically(store):
@@ -981,7 +1014,9 @@ async def test_judge_known_source_avoids_unrelated_corpus_metadata(
     monkeypatch.setattr(native_review_owner.client, "_exchange", counted)
     report = await judge_pass(store, settings=settings)
     examined = sum(item["discovery_entries_examined"] for item in usage)
-    print(f"known_source unrelated={unrelated} discovery_entries={examined} file_rosters={len(file_roster_reads)} root_normalizations={len(root_normalizations)} operations={operations}")
+    print(
+        f"known_source unrelated={unrelated} discovery_entries={examined} file_rosters={len(file_roster_reads)} root_normalizations={len(root_normalizations)} operations={operations}"
+    )
     assert examined == 0
     assert file_roster_reads == []
     assert root_normalizations == []

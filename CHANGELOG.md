@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One oversized transcript no longer stops the reviewer.** The scan refused a transcript whose
+  evidence exceeded the output bound but raised on the snapshot owner's source and entry bounds, so a
+  single large transcript in a project failed every review pass (`EvidenceIncomplete: transcript
+  evidence source_limit: source exceeds owner bound`). Each of those bounds now refuses that
+  transcript revision and the pass continues.
+- **A failing reviewer says so at session start.** Once the reviewer fails three runs in a row, the
+  SessionStart announcement carries one line naming the streak's start and its last error, once per
+  streak. Before, only `capt-hook status` and a desktop banner showed it.
 - **An escaped `\$` in a `rewrite_command` regex stays a regex.** A pattern such as
   `\bfind\s+\$HOME\b` read as an ast-grep template because `$HOME` looks like a metavariable, and
   the hook failed at registration with `Multiple AST nodes are detected`. A dollar escaped with a

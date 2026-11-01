@@ -611,7 +611,7 @@ async def scan(
                             prepare_source, client, Path(path), settings, repo_key, recorded=ledger.recorded_from_thread
                         )
                     except EvidenceIncomplete as exc:
-                        if exc.status != "output_limit":
+                        if exc.status not in {"output_limit", "source_limit", "entry_limit"}:
                             raise
                         logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
                         await store.set_meta(refused_key, entry["revision"])
