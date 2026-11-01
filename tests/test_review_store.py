@@ -30,7 +30,7 @@ from captain_hook.review.store import (
     ReviewStore,
     prompt_version,
 )
-from tests.review_helpers import Verdict, install_resolved_model
+from tests.review_helpers import Verdict, install_fake_embedder, install_resolved_model
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -40,6 +40,11 @@ if TYPE_CHECKING:
 
 REPO = RepoKey("github.com/yasyf/captain-hook")
 ORIGIN_REPO = RepoKey("github.com/yasyf/scratch")
+
+
+@pytest.fixture(autouse=True)
+def fake_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_fake_embedder(monkeypatch)
 
 
 def digest_rule(seed: str) -> str:
