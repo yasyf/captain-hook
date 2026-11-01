@@ -390,3 +390,223 @@ def test_native_instruction_evidence_keeps_words_without_successful_tool_payload
         acting.release()
         CURRENT_CLIENT.reset(token)
         fixture.close()
+
+
+@pytest.fixture(params=["claude", "codex"])
+def hook_provider(tmp_path, request):
+    import os
+
+    from captain_hook.util import reqenv
+
+    overrides = reqenv.RequestOverrides(
+        env={key: os.environ[key] for key in ("CAPTAIN_HOOK_STATE_DIR", "CAPT_HOOK_DECISIONS_DB")}
+        | {"CAPT_HOOK_PROVIDER": request.param},
+        cwd=str(tmp_path),
+        client_ppid=0,
+        session_id="fixture",
+    )
+    with reqenv.use_request(overrides):
+        yield overrides
+
+
+def test_ordinary_provider_dispatch_projects_remote_words_and_answers_without_partial_turns(
+    tmp_path, monkeypatch, hook_provider
+):
+    from captain_hook import Event, on
+    from captain_hook.cli import dispatch_event
+    from captain_hook.dispatch import surfacing_handler_errors
+    from captain_hook.snapshots.client import HOOK_TAIL_BYTES, RemoteSession
+    from captain_hook.tickets import context as source_module
+    from captain_hook.transcripts import LazyTranscript
+    from tests.test_snapshot_client import response
+
+    monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
+    monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda *args: None)
+    monkeypatch.setattr("captain_hook.orca.coordinator_transcript", lambda: None)
+    noise = T.tool("Bash", id="irrelevant", command="echo noise")
+    payload = {
+        "type": "slack.action",
+        "action_ts": "owner-card",
+        "label": "No",
+        "waits": True,
+        "question": "Post to C1?",
+        "options": ["Yes", "No"],
+    }
+    tap = f'<channel source="{source_module.CARD_SERVER}" type="slack.action">\n{json.dumps(payload)}\n</channel>'
+    messages = [
+        T.user("C1 permission", timestamp="2026-01-01T00:00:00Z"),
+        T.assistant(noise),
+        T.user(T.result("x" * (2 * 1024 * 1024), of=noise)),
+        *question("duplicate", "Yes", 1),
+        *question("duplicate", "No", 2),
+        T.user(tap, isMeta=True),
+        T.user(tap.replace("owner-card", "tool-card"), isMeta=True, sourceToolUseID="not-owner"),
+    ]
+    reference = TranscriptSources(event(tmp_path, fixture_session(messages)), ("C1",))
+    expected = reference.said(), reference.answers()
+    assert expected[0]
+    assert [answer.id for answer in expected[1]] == ["ask:duplicate#0", "card:owner-card"]
+    path = tmp_path / "ordinary.jsonl"
+    path.write_text(lines(messages))
+    fixture = FixtureOwner()
+    fixture.client.bind_tool_registry({})
+    token = CURRENT_CLIENT.set(fixture.client)
+    requests = []
+    exchange = fixture.client._exchange
+
+    def bounded(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if request["operation"] == "query" and request["query"]["kind"] in {"turns", "events"}:
+            result = response(request, None)
+            result["response"].update(status="output_limit", complete=False, reason="whole-turn projection refused")
+            return result
+        return exchange(wrapper)
+
+    monkeypatch.setattr(fixture.client, "_exchange", bounded)
+    observed = []
+    provider = hook_provider.env["CAPT_HOOK_PROVIDER"]
+
+    @on(Event.PreToolUse)
+    def projected(evt):
+        assert type(evt.ctx.transcript) is LazyTranscript
+        assert (evt.ctx.transcript.pins.spec is None) == (provider == "codex")
+        sources = TranscriptSources(evt, ("C1",))
+        observed.append((sources.said(), sources.answers()))
+        assert isinstance(evt.ctx.t, RemoteSession)
+        assert evt.ctx.t.tail_bytes == (None if provider == "codex" else HOOK_TAIL_BYTES)
+
+    try:
+        baseline = fixture.load(path)
+        try:
+            with pytest.raises(EvidenceIncomplete) as refusal:
+                tuple(baseline.query({"kind": "turns", "order": "forward"}))
+            assert refusal.value.status == "output_limit"
+        finally:
+            baseline.release()
+        requests.clear()
+        (tmp_path / "dispatch-state").mkdir()
+        with surfacing_handler_errors():
+            envelope, _ = dispatch_event(
+                tmp_path,
+                Event.PreToolUse,
+                {
+                    "session_id": "fixture",
+                    "transcript_path": str(path),
+                    "cwd": str(tmp_path),
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "slack_reply",
+                    "tool_use_id": "current",
+                    "tool_input": {},
+                },
+                session_dir=tmp_path / "dispatch-state",
+            )
+        assert envelope is None
+        assert observed == [expected]
+        queries = [request["query"]["kind"] for request in requests if request["operation"] == "query"]
+        assert {
+            "instruction_turns",
+            "interaction_keys",
+            "interaction_winners",
+            "interaction_records",
+            "meta_messages",
+        } <= set(queries)
+        assert not set(queries) & {"turns", "events"}
+        assert hook_provider.evidence_gaps == []
+        assert fixture.client.call("stats")["data"]["gauges"]["active_leases"] == 0
+    finally:
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["local-session", "remote-session"])
+def test_custom_loader_keeps_its_session_semantics_and_remote_projection_capability(
+    tmp_path, monkeypatch, hook_provider, remote
+):
+    from captain_hook.tickets import context as source_module
+    from captain_hook.tickets import transcript_evidence as projections
+
+    monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
+    messages = [T.user("C1 permission"), *question("custom", "Yes", 1)]
+    reference = TranscriptSources(event(tmp_path, fixture_session(messages)), ("C1",))
+    expected = reference.said(), reference.answers()
+    path = tmp_path / "custom.jsonl"
+    path.write_text(lines(messages))
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    requests = []
+    loaded = []
+    exchange = fixture.client._exchange
+
+    def recorded(wrapper):
+        requests.append(wrapper["request"])
+        return exchange(wrapper)
+
+    def loader(source):
+        loaded.append(source)
+        return load_transcript(source) if remote else fixture_session(messages)
+
+    monkeypatch.setattr(fixture.client, "_exchange", recorded)
+    acting = lazy_transcript(path, loader=loader)
+    try:
+        assert acting.pins.spec is None
+        sources = TranscriptSources(event(tmp_path, acting), ("C1",))
+        with projections.sessions(sources) as selected:
+            assert [source.indexed for source in selected] == [remote]
+        assert (sources.said(), sources.answers()) == expected
+        assert loaded == [path]
+        queries = [request["query"]["kind"] for request in requests if request["operation"] == "query"]
+        assert not set(queries) & {"turns", "events"}
+        if remote:
+            assert {"instruction_turns", "interaction_records"} <= set(queries)
+        else:
+            assert queries == []
+        acting.release()
+        assert fixture.client.call("stats")["data"]["gauges"]["active_leases"] == 0
+    finally:
+        acting.release()
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
+def test_unavailable_remote_instruction_evidence_propagates_before_judging(tmp_path, monkeypatch, hook_provider):
+    from captain_hook.tickets import Decide
+    from captain_hook.worker.runtime import ProductRuntime
+
+    monkeypatch.setattr(HookContext, "decide", lambda *args, **kwargs: pytest.fail("unavailable evidence reached JeV"))
+    monkeypatch.setattr(
+        HookContext, "call_llm", lambda *args, **kwargs: pytest.fail("unavailable evidence reached LLM")
+    )
+    path = tmp_path / "unavailable.jsonl"
+    path.write_text(lines([T.user("C1 permission")]))
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    runtime = ProductRuntime(install_writer=False)
+    acting = lazy_transcript(path, loader=runtime._transcript_loader)
+    error = EvidenceIncomplete("output_limit", "permission evidence unavailable")
+    exchange = fixture.client._exchange
+    queries = []
+
+    def unavailable(wrapper):
+        request = wrapper["request"]
+        if request["operation"] == "query":
+            queries.append(request["query"]["kind"])
+            if request["query"]["kind"] == "instruction_turns":
+                raise error
+        return exchange(wrapper)
+
+    monkeypatch.setattr(fixture.client, "_exchange", unavailable)
+    try:
+        ctx = Context.of(event(tmp_path, acting), "slack.write", Proposal({"channel": "C1"}, {"text": "reply"}))
+        with pytest.raises(EvidenceIncomplete) as caught:
+            Decide("Only the user's permission allows the action.").evidence(ctx)
+        assert caught.value is error
+        assert queries == ["instruction_turns"]
+        assert "said" not in vars(ctx)
+        assert hook_provider.evidence_gaps == []
+        acting.release()
+        assert fixture.client.call("stats")["data"]["gauges"]["active_leases"] == 0
+    finally:
+        acting.release()
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
