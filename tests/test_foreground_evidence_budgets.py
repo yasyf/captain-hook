@@ -274,8 +274,24 @@ def test_async_hooks_read_the_transcript_after_the_foreground_deadline(
     def late(evt: BaseHookEvent) -> None:
         read.append(evt.ctx.t.has_command("git", "push", subagents=False))
 
-    foreground = SnapshotClient(owner.exchange, foreground_seconds=TOOL_SECONDS)
-    background = SnapshotClient(owner.exchange)
+    exchanges: list[dict[str, Any]] = []
+
+    def observed_exchange(wrapper: dict[str, object]) -> dict[str, Any]:
+        started = time.monotonic()
+        response = owner.exchange(wrapper)
+        request = wrapper["request"]
+        assert isinstance(request, dict)
+        exchanges.append(
+            {
+                "operation": request["operation"],
+                "status": response["response"]["status"],
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+        )
+        return response
+
+    foreground = SnapshotClient(observed_exchange, foreground_seconds=TOOL_SECONDS)
+    background = SnapshotClient(observed_exchange)
     payload = {
         "session_id": SESSION,
         "transcript_path": str(transcript.path),
@@ -287,19 +303,49 @@ def test_async_hooks_read_the_transcript_after_the_foreground_deadline(
     token = CURRENT_CLIENT.set(foreground)
     try:
         with reqenv.use_request(request):
+            dispatch_started = time.monotonic()
+            dispatch_started_unix_ms = int(time.time() * 1000)
             _, after = dispatch_event(
                 tmp_path, Event.PostToolUse, payload, session_dir=ensure_session(SessionId(SESSION))
             )
+            dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000
+            foreground_gaps = list(request.evidence_gaps)
+            foreground_exchange_count = len(exchanges)
             assert foreground.foreground_deadline_unix_ms is not None
             while time.time() * 1000 <= foreground.foreground_deadline_unix_ms + 1:
                 time.sleep(0.01)
             CURRENT_CLIENT.set(background)
+            background_started = time.monotonic()
+            background_started_unix_ms = int(time.time() * 1000)
             after()
+            background_elapsed_ms = (time.monotonic() - background_started) * 1000
     finally:
         CURRENT_CLIENT.reset(token)
         foreground.close()
         background.close()
 
+    print(
+        "CAPT_ASYNC_FOREGROUND_WITNESS",
+        json.dumps(
+            {
+                "sidechain": transcript.sidechain,
+                "budget_seconds": TOOL_SECONDS,
+                "dispatch_started_unix_ms": dispatch_started_unix_ms,
+                "dispatch_elapsed_ms": round(dispatch_elapsed_ms, 3),
+                "foreground_deadline_unix_ms": foreground.foreground_deadline_unix_ms,
+                "foreground_gaps": foreground_gaps,
+                "foreground_exchange_count": foreground_exchange_count,
+                "background_started_unix_ms": background_started_unix_ms,
+                "background_elapsed_ms": round(background_elapsed_ms, 3),
+                "denied": denied,
+                "read": read,
+                "gaps": request.evidence_gaps,
+                "exchange_count": len(exchanges),
+                "exchange_tail": exchanges[-32:],
+            },
+            sort_keys=True,
+        ),
+    )
     assert denied == ["has_command"]
     assert read == [True]
     assert request.evidence_gaps == []
