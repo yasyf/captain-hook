@@ -507,7 +507,7 @@ class BaseHookEvent:
             ...     return evt.warn("Drop the print before finishing.")
         """
         from captain_hook.primitives.llm import BoolAnswer, IntAnswer, llm_evaluate
-        from captain_hook.state import hook_name
+        from captain_hook.util.caller import hook_name
 
         result = llm_evaluate(
             self,

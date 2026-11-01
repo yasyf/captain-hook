@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, get_type_hints, overload
 from loguru import logger
 
 from captain_hook.app import on
-from captain_hook.state import hook_name
 from captain_hook.types import (
     Action,
     Event,
@@ -20,6 +19,7 @@ from captain_hook.types import (
     TestFile,
     Tool,
 )
+from captain_hook.util.caller import hook_name
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent

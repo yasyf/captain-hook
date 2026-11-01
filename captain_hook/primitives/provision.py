@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook.app import on
-from captain_hook.state import caller_file, hook_name
 from captain_hook.types import Event, InlineTests, TCondition
+from captain_hook.util.caller import caller_file, hook_name
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
