@@ -241,6 +241,16 @@ jobs:
           shard-index: ${{ matrix.shard }}
           workers: ${{ matrix.os == 'macos-15' && '1' || '0' }}
 
+      - name: Test review store with an empty offline model cache
+        if: matrix.shard == 0
+        env:
+          HF_HOME: ${{ runner.temp }}/review-store-hf
+          HF_HUB_CACHE: ${{ runner.temp }}/review-store-hf/hub
+          HF_HUB_OFFLINE: "1"
+        run: |
+          mkdir "$HF_HOME"
+          uv run --no-sync pytest -n 0 tests/test_review_store.py -q
+
       - name: Record async foreground evidence timing
         if: always() && matrix.os == 'macos-15' && matrix.shard == 1
         run: |
