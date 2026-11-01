@@ -173,3 +173,38 @@ def test_cli_uses_the_search_only_entrypoint(search_repo: Path) -> None:
     result = CliRunner().invoke(cli, ["search-guard"], input=json.dumps(payload("rg --files ~", search_repo)))
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_standalone_matches_all_registered_search_fixtures(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from captain_hook.conditions import matches_conditions
+    from captain_hook.envelopes import block_permission_envelope, join_block_messages
+    from captain_hook.loader import import_pack_module, stamp_identity
+    from captain_hook.search_guard import PERFORMANCE_ROOT
+    from captain_hook.testing.helpers import mock_tool_event
+
+    with use_state(State()) as state:
+        import_pack_module("captain_hook._search_guard_parity", PERFORMANCE_ROOT / "search.py")
+        stamp_identity(0, root=PERFORMANCE_ROOT, pack="performance")
+        assert len(state.hooks) == 4
+        for entry in state.hooks:
+            assert entry.spec.tests
+            for inp in entry.spec.tests:
+                event = mock_tool_event(
+                    tool=inp.tool or "Bash", command=inp.command, tool_input=inp.tool_input, cwd=inp.cwd
+                )
+                messages = tuple(
+                    candidate.spec.message
+                    for candidate in state.hooks
+                    if candidate.spec.message and matches_conditions(candidate.spec, event)
+                )
+                expected = (
+                    block_permission_envelope("PreToolUse", join_block_messages(messages, ())) if messages else None
+                )
+                assert check(event._raw) == expected
+                monkeypatch.setattr("sys.stdin", StringIO(json.dumps(event._raw)))
+                main()
+                output = capsys.readouterr()
+                assert output.err == ""
+                assert (json.loads(output.out) if output.out else None) == expected

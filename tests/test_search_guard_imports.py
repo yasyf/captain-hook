@@ -107,8 +107,50 @@ except ImportError as exc:
 else:
     raise AssertionError("ticket initialization was deferred past dispatch import")
 """,
+        """
+import json
+import socket
+import subprocess
+import sys
+from io import StringIO
+from pathlib import Path
+
+def unexpected(*args: object, **kwargs: object) -> None:
+    raise AssertionError("standalone search guard invoked external work")
+
+subprocess.Popen = unexpected
+socket.socket.connect = unexpected
+import captain_hook.search_guard as guard
+root = Path(sys.argv[1])
+raw = {
+    "hook_event_name": "PreToolUse",
+    "cwd": str(root),
+    "tool_name": "Bash",
+    "tool_input": {"command": "printf safe"},
+}
+from contextlib import redirect_stdout
+for command, denied in (("printf safe", False), ("rg needle .", True)):
+    sys.stdin = StringIO(json.dumps(raw | {"tool_input": {"command": command}}))
+    output = StringIO()
+    with redirect_stdout(output):
+        guard.main()
+    if denied:
+        result = json.loads(output.getvalue())
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    else:
+        assert output.getvalue() == ""
+    for prefix in (
+        "captain_hook.app", "captain_hook.cli", "captain_hook.context",
+        "captain_hook.conditions", "captain_hook.dispatch", "captain_hook.events",
+        "captain_hook.loader", "captain_hook.results", "captain_hook.session",
+        "captain_hook.snapshots", "captain_hook.state", "captain_hook.testing",
+        "captain_hook.tickets", "captain_hook.types", "cc_transcript.query",
+        "pydantic", "loguru",
+    ):
+        assert not any(name == prefix or name.startswith(prefix + ".") for name in sys.modules), prefix
+""",
     ],
-    ids=["results-only", "search-only", "eager-tickets", "ticket-import-error"],
+    ids=["results-only", "search-only", "eager-tickets", "ticket-import-error", "standalone-pure"],
 )
 def test_search_guard_import_boundaries(script: str, tmp_path: Path) -> None:
     root = tmp_path / "repo"

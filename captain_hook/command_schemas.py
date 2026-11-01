@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from captain_hook.cmd import COMMAND_VALUE_FLAGS
-from captain_hook.command_schema import CommandSchema, Operand, Option
+from captain_hook.command_schema_core import CommandSchema, Operand, Option
 
 SIGNAL_NAMES = (
     "HUP",
