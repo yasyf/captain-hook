@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `git config` listing never prints a credential.** `git config -l`, `--list`, `--get-regexp`
+  and `git config list` print every value, including an `http.<url>.extraheader` Authorization
+  header. The general pack now pipes such a listing through a redactor that replaces the value of
+  any extraheader, token, password or secret key with `<redacted>`. A read of one key by name runs
+  as written.
 - **A `git rebase` in a Graphite repo moves only its own branch.** With `rebase.updateRefs` on, a
   hand-run or `# ccx:raw` rebase also moved every other local branch pointing into the commits it
   replayed, including branches other agents were working on. The graphite pack now adds

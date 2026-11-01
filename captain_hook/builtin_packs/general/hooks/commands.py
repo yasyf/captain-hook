@@ -520,3 +520,34 @@ hook(
         Input(command="echo find / -delete"): Allow(),
     },
 )
+
+
+GIT_CONFIG_LISTS = frozenset({"-l", "--list", "--get-regexp", "--regexp", "list"})
+REDACT_SECRET_VALUES = r"perl -pe 's/^(.*?(?:extraheader|token|password|secret)[^=\s]*[= ]).*/$1<redacted>/i'"
+
+
+def redacted_git_config_listing(evt: PreToolUseEvent, occ: Occurrence, ctx: WalkContext) -> Rewritten | None:
+    command = occ.command.unwrapped
+    if command.executable != "git" or "config" not in command.args or not ctx.spliceable or command.redirects:
+        return None
+    if not GIT_CONFIG_LISTS.intersection(command.args[command.args.index("config") + 1 :]):
+        return None
+    return Rewritten(
+        f"{command.raw} | {REDACT_SECRET_VALUES}",
+        "A `git config` listing prints credential headers, so its secret values were redacted. "
+        "Read one key by name, such as `git config user.email`, to see a value.",
+    )
+
+
+rewrite_command_occurrences(
+    visit=redacted_git_config_listing,
+    tests={
+        Input(command="git config -l"): Rewrite(pattern="git config -l | perl -pe"),
+        Input(command="git -C repo config --global --list --show-origin"): Rewrite(pattern="--show-origin | perl -pe"),
+        Input(command="git config --get-regexp 'http.*'"): Rewrite(pattern="'http.*' | perl -pe"),
+        Input(command="git config list | grep github"): Rewrite(pattern="<redacted>/i' | grep github"),
+        Input(command="git config user.email"): Allow(),
+        Input(command="git config --get remote.origin.url"): Allow(),
+        Input(command="git log -l"): Allow(),
+    },
+)
