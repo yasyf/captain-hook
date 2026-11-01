@@ -69,10 +69,14 @@ func awaitResolvable(ctx context.Context, uv, dist, version, python string) erro
 		if ctx.Err() != nil {
 			break
 		}
-		if exit := (*exec.ExitError)(nil); !errors.As(err, &exit) {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
 			return err
 		}
 		reason = strings.TrimSpace(stderr.String())
+		if exit.ExitCode() != 1 {
+			return fmt.Errorf("uv cannot resolve %s==%s: %s: %w", dist, version, reason, err)
+		}
 		select {
 		case <-ctx.Done():
 		case <-poll.C:
