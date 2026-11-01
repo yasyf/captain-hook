@@ -29,6 +29,9 @@ repos:
         args: [--maxkb=1024]
       - id: detect-private-key
 
+# Python: mechanical linting (ruff format + import/lint --fix) and a
+# whole-project ty type check on every commit. Continues the `repos:` list
+# precommit-base opens.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.16
     hooks:
@@ -36,10 +39,13 @@ repos:
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/astral-sh/ty-pre-commit
+    # The rev pins the ty version (the hook entry carries --ty-version).
+    # Warning-only: [tool.ty.rules] sets all = "warn", so ty exits 0 and never
+    # blocks a commit.
     rev: v0.0.48
     hooks:
       - id: ty
-        entry: sh -c 'uv sync --locked --inexact --no-install-project --no-build && uv check --quiet --preview-features=check-command --ty-version=0.0.48 --no-sync --no-build'
+        # A passing hook hides its output by default; verbose surfaces the warnings.
         verbose: true
 
 # Generated bundles must remain byte-identical to the locked esbuild output.
