@@ -1,12 +1,24 @@
 from __future__ import annotations
 
-import json
 from concurrent.futures import Future, wait
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from captain_hook.envelopes import (
+    ADVISORY_SEPARATOR as ADVISORY_SEPARATOR,
+)
+from captain_hook.envelopes import (
+    Envelope as Envelope,
+)
+from captain_hook.envelopes import (
+    block_permission_envelope,
+    join_block_messages,
+)
+from captain_hook.envelopes import (
+    envelope_text as envelope_text,
+)
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 
@@ -14,10 +26,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from captain_hook.events import BaseHookEvent
-
-ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):"
-
-type Envelope = dict[str, Any] | str
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
@@ -102,13 +110,7 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
     approval = {} if codex else {"permissionDecision": "allow"}
     match result.action:
         case Action.block:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": event.name,
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": result.message,
-                }
-            }
+            return block_permission_envelope(event.name, result.message)
         case Action.warn:
             return {
                 "hookSpecificOutput": {
@@ -214,11 +216,9 @@ def combine(
 
     envelope: Envelope | None = None
     if blocked:
-        parts = list(blocks)
-        if deny_advisories:
-            parts.append(ADVISORY_SEPARATOR)
-            parts.extend(deny_advisories)
-        envelope = format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
+        envelope = format_output(
+            event, HookResult(action=Action.block, message=join_block_messages(blocks, deny_advisories))
+        )
     elif (winner := rewrite or approval) is not None:
         if warns:
             winner = (
@@ -234,7 +234,3 @@ def combine(
     if not notices or event is Event.PreCompact:
         return envelope
     return (envelope or {}) | {"systemMessage": "\n\n".join(notices)}
-
-
-def envelope_text(envelope: Envelope) -> str:
-    return envelope if isinstance(envelope, str) else json.dumps(envelope)
