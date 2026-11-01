@@ -9,6 +9,7 @@ state dir, so the throttle stamp never leaks across tests.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -530,3 +531,10 @@ def test_run_update_deploys_the_cellar_after_every_brew_lane(
         PACKAGE_INSTALL,
     ]
     assert [n["kind"] for n in notes] == ["update_failed"]
+
+
+def test_exit_reason_keeps_the_tail_where_brew_reports_the_error() -> None:
+    banner = "==> Auto-updating Homebrew...\n" + "hint " * 60
+    completed = subprocess.CompletedProcess(["brew"], 1, stdout="", stderr=f"{banner}\nError: SHA256 mismatch\n")
+
+    assert updater.exit_reason("brew upgrade", completed).endswith("Error: SHA256 mismatch")

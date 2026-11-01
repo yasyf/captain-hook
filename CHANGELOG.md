@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`capt-hook helper install` installs the latest release.** It landed whatever version the
+  Homebrew Cellar held and reported success once the host reached that version. A Cellar behind a
+  hand-installed host was package-installed over it, and a Cellar behind the latest release ended
+  in `installed` with the host still behind. It now converges on the latest GitHub release the way
+  `capt-hook update run` does: a host already at that release is left alone, and a Cellar short of
+  it fails with the host, Cellar and release versions.
+- **The update log keeps Homebrew's error.** A failed brew step logged the first 200 characters of
+  its stderr, which is always the `Auto-updating Homebrew...` banner. It now keeps the last 200,
+  where Homebrew prints the error.
 - **`capt-hook status` says when Claude Code is not calling capt-hook.** The daemon can be
   healthy and every hook discoverable while no settings file for the repo enables the
   `captain-hook@captain-hook` plugin or registers a capt-hook command as a hook, so no hook ever

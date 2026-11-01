@@ -1,9 +1,9 @@
 """The ``capt-hook helper`` command group — install, ping, and test the desktop helper.
 
 These are the user-facing surface for ``Captain Hook.app``: ``install`` converges the formula-owned
-signed deployment, ``status`` pings the running helper, and ``notify`` fires a test banner through
-:mod:`captain_hook.desktop.client`. Every side effect (brew or the signed bridge) runs only
-when the command is invoked, never at import.
+signed deployment onto the latest release, ``status`` pings the running helper, and ``notify`` fires a
+test banner through :mod:`captain_hook.desktop.client`. Every side effect (brew or the signed bridge)
+runs only when the command is invoked, never at import.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import subprocess
 import click
 
 from captain_hook.desktop import FORMULA, client
-from captain_hook.update.updater import brew, deploy, installed_version, update_log_path
+from captain_hook.update.updater import brew, converge, installed_version, latest_release_tag, update_log_path
 
 
 @click.group()
@@ -29,21 +29,21 @@ def cellar_version() -> str:
 
 @helper.command()
 def install() -> None:
-    """Install or repair the exact signed helper deployment via Homebrew."""
+    """Install or upgrade the signed helper deployment to the latest release via Homebrew."""
+    target = latest_release_tag()
     click.echo(f"Installing {FORMULA} with Homebrew...", err=True)
     if not brew(["install", "--formula", FORMULA], stream=True):
         click.echo(f"Reinstalling {FORMULA} with Homebrew...", err=True)
         brew(["reinstall", "--formula", FORMULA], stream=True)
-    cellar = cellar_version()
     click.echo(
-        f"Landing Captain Hook {cellar}: up to 10 minutes while the package index catches up, "
+        f"Landing Captain Hook {target}: up to 10 minutes while the package index catches up, "
         "up to 15 minutes while uv installs the tool env, then up to 3 minutes to restart the host...",
         err=True,
     )
-    if (host := deploy(cellar, stream=True)) is None:
+    if (host := converge(target, stream=True)) is None:
         raise click.ClickException(
-            f"Homebrew holds {cellar} but the running helper reports "
-            f"{installed_version() or 'no version (unreachable)'} — the deployment did not converge. "
+            f"the running helper reports {installed_version() or 'no version (unreachable)'} and Homebrew holds "
+            f"{cellar_version()}, short of the latest release {target} — the deployment did not converge. "
             "The Cellar copy is not the deployment; nothing is installed until the host answers. "
             f"The failing step's output is printed above; {update_log_path()} records each step's exit."
         )
