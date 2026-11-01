@@ -241,6 +241,35 @@ jobs:
           shard-index: ${{ matrix.shard }}
           workers: ${{ matrix.os == 'macos-15' && '1' || '0' }}
 
+      - name: Verify graph deadlines do not replay as evidence
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
+        shell: bash
+        run: |
+          baseline="$RUNNER_TEMP/graph-deadline-progress-before"
+          git fetch --no-tags --depth=1 origin 130a8f0a8457e20fd06f73a28bbc7c3aee9752e1
+          git worktree add --detach "$baseline" 130a8f0a8457e20fd06f73a28bbc7c3aee9752e1
+          test "$(git -C "$baseline" rev-parse HEAD)" = 130a8f0a8457e20fd06f73a28bbc7c3aee9752e1
+          cp tests/testdata/snapshot-graph-deadline-before.py.txt "$baseline/tests/test_snapshot_graph_deadline_progress.py"
+          (cd "$baseline" && uv sync --locked --extra dev)
+          if (cd "$baseline" && PYTHONPATH="$baseline:$baseline/tests" "$baseline/.venv/bin/python" -m pytest tests/test_snapshot_graph_deadline_progress.py::test_prepare_graph_deadline_is_not_evidence_for_a_later_request -n 0 -s) > "$RUNNER_TEMP/graph-deadline-progress-negative.log" 2>&1; then
+            cat "$RUNNER_TEMP/graph-deadline-progress-negative.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/graph-deadline-progress-negative.log"
+          grep -F 'GRAPH_DEADLINE_REPLAY_PREVENTED_PROGRESS' "$RUNNER_TEMP/graph-deadline-progress-negative.log"
+          grep -F 'FAILED tests/test_snapshot_graph_deadline_progress.py::test_prepare_graph_deadline_is_not_evidence_for_a_later_request' "$RUNNER_TEMP/graph-deadline-progress-negative.log"
+          grep -F '1 failed' "$RUNNER_TEMP/graph-deadline-progress-negative.log"
+          uv run --no-sync pytest tests/test_snapshot_graph_deadline_progress.py -n 0 -s > "$RUNNER_TEMP/graph-deadline-progress-positive.log" 2>&1
+          cat "$RUNNER_TEMP/graph-deadline-progress-positive.log"
+          grep -F '5 passed' "$RUNNER_TEMP/graph-deadline-progress-positive.log"
+
+      - name: Retain graph deadline replay controls
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.shard == 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: graph-deadline-progress-controls
+          path: ${{ runner.temp }}/graph-deadline-progress-*.log
+
       - name: Verify the immutable Slack outer timing regression
         if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
         run: |
