@@ -1,0 +1,12 @@
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.48
+    hooks:
+      - id: ty
+        entry: sh -c 'uv sync --locked --inexact --no-install-project --no-build && uv check --quiet --preview-features=check-command --ty-version=0.0.48 --no-sync --no-build'
+        verbose: true

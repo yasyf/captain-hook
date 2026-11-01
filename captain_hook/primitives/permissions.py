@@ -10,8 +10,8 @@ from pydantic import BaseModel
 from captain_hook.app import on
 from captain_hook.primitives.llm import staged_verdict
 from captain_hook.prompt import Prompt, dedent_text
-from captain_hook.state import hook_name
 from captain_hook.types import Event, HookResult, InlineTests, TCondition
+from captain_hook.util.caller import hook_name
 
 if TYPE_CHECKING:
     from spawnllm import TModel

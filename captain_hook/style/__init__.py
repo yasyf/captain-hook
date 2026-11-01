@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from captain_hook.app import on
-from captain_hook.state import hook_name
 from captain_hook.style import matchers
 from captain_hook.style.ast_grep import (
     AstGrepStyleDiffRule,
@@ -17,6 +16,7 @@ from captain_hook.style.ast_grep import (
 from captain_hook.style.scope import changed_lines, read_source, reconstruct_pre
 from captain_hook.style.types import Change, StyleDiffRule, StyleRule, Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
+from captain_hook.util.caller import hook_name
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent

@@ -16,8 +16,8 @@ from loguru import logger
 
 from captain_hook import faults
 from captain_hook.app import LoadError, _state, on
-from captain_hook.state import PACK_PACKAGE_PREFIX
 from captain_hook.types import Event
+from captain_hook.util.caller import PACK_PACKAGE_PREFIX
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
