@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"claim","assignee":"Yasyf Mohamedali \u003cyasyf@poetic.com\u003e"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"set_assignee","assignee":"/root/cci_canonical_union_peer \u003ccci-canonical-union-peer@codex.local\u003e"},{"kind":"add_label","label":"owner:cci_canonical_union_peer"},{"kind":"remove_label","label":"owner:ccx911_driver_peer"},{"kind":"set_branch","branch":"fix/review-store-hermetic"}]}
