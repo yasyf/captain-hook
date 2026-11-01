@@ -182,7 +182,7 @@ def test_standalone_matches_all_registered_search_fixtures(
     from captain_hook.envelopes import block_permission_envelope, join_block_messages
     from captain_hook.loader import import_pack_module, stamp_identity
     from captain_hook.search_guard import PERFORMANCE_ROOT
-    from captain_hook.testing.helpers import input_to_event
+    from captain_hook.testing.helpers import mock_tool_event
 
     with use_state(State()) as state:
         import_pack_module("captain_hook._search_guard_parity", PERFORMANCE_ROOT / "search.py")
@@ -191,7 +191,9 @@ def test_standalone_matches_all_registered_search_fixtures(
         for entry in state.hooks:
             assert entry.spec.tests
             for inp in entry.spec.tests:
-                event = input_to_event(Event.PreToolUse, inp)
+                event = mock_tool_event(
+                    tool=inp.tool or "Bash", command=inp.command, tool_input=inp.tool_input, cwd=inp.cwd
+                )
                 messages = tuple(
                     candidate.spec.message
                     for candidate in state.hooks
