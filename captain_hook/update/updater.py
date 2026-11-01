@@ -14,7 +14,7 @@ Every outcome is read back from the host, never from brew's exit status. ``brew 
 exits 0 against a Cellar that is already current, so exit 0 covers both a real upgrade and a
 no-op that left the deployment untouched — the state this converges, where one machine carried
 Cellar 12.21.6 for six days while its host stayed 12.21.4 and every check logged success. Brew
-only fills the Cellar; :func:`deploy` is what supersedes the deployed app, and the escalation
+only fills the Cellar; :func:`land` is what supersedes the deployed app, and the escalation
 repairs a Cellar that brew left short. It is bounded per release tag by :data:`MAX_ESCALATIONS`:
 a reinstall is heavy, and one that cannot converge must not run on every window forever.
 
@@ -88,7 +88,7 @@ def installed_version() -> str | None:
 def exit_reason(step: str, completed: subprocess.CompletedProcess[str]) -> str:
     if completed.stderr is None:
         return f"{step} exit {completed.returncode}"
-    return f"{step} exit {completed.returncode}: {completed.stderr.strip()[:200]}"
+    return f"{step} exit {completed.returncode}: {completed.stderr.strip()[-200:]}"
 
 
 def brew(args: list[str], *, stream: bool = False) -> bool:
@@ -107,7 +107,7 @@ def brew(args: list[str], *, stream: bool = False) -> bool:
 def host_at_least(target: str) -> str | None:
     """The running host's version once it has reached ``target``; ``None`` while it has not.
 
-    :func:`deploy` supersedes the deployed app and returns only once the new host answers a ping,
+    :func:`land` supersedes the deployed app and returns only once the new host answers a ping,
     so the host's own reply is the proof that a brew lane landed rather than no-opped.
     """
     if (installed := installed_version()) is None:
@@ -116,23 +116,6 @@ def host_at_least(target: str) -> str | None:
         return installed if version_tuple(installed) >= version_tuple(target) else None
     except ValueError:
         return None
-
-
-def deploy(target: str, *, stream: bool = False) -> str | None:
-    """Land the Cellar's application over the deployment, and the host's version once it reaches ``target``.
-
-    ``package-install`` was the formula's ``post_install`` step until Homebrew's post-install sandbox
-    denied the ``~/Library/LaunchAgents`` write it makes, failing every ``brew`` lane on every host.
-    Outside that sandbox the same command installs, activates, and pings, so the deployment converges
-    here rather than inside brew — which is why ``brew`` alone never proves anything.
-
-    ``stream`` is for a person at a terminal: ``package-install`` writes its output there live, the
-    host ping is announced before it runs, and every failure that lands in the update log is printed
-    to stderr as well.
-    """
-    if (candidate := cellar_host(stream=stream)) is None:
-        return None
-    return land(candidate, target, stream=stream)
 
 
 def cellar_host(*, stream: bool = False) -> Path | None:
@@ -199,24 +182,24 @@ def physical(candidate: Path) -> Path | None:
         return None
 
 
-def converge(target: str) -> str | None:
+def converge(target: str, *, stream: bool = False) -> str | None:
     if (host := host_at_least(target)) is not None:
         return host
     if (
-        (alias := cellar_host()) is None
+        (alias := cellar_host(stream=stream)) is None
         or (candidate := physical(alias)) is None
         or (build := candidate_build(candidate)) is None
     ):
-        breadcrumb(f"package-install skip: no readable Cellar candidate for {target}")
+        breadcrumb(f"package-install skip: no readable Cellar candidate for {target}", echo=stream)
         return None
     try:
         reaches = version_tuple(build) >= version_tuple(target)
     except ValueError:
         reaches = False
     if not reaches:
-        breadcrumb(f"package-install skip: Cellar candidate {build} not proven to reach {target}")
+        breadcrumb(f"package-install skip: Cellar candidate {build} not proven to reach {target}", echo=stream)
         return None
-    return land(candidate, target)
+    return land(candidate, target, stream=stream)
 
 
 def pending() -> str | None:
