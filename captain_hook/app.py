@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
 from captain_hook.conditions import matches_conditions
-from captain_hook.state import caller_file, framework_frame, hook_name
 from captain_hook.types import (
     TOOL_EVENTS,
     CustomCondition,
@@ -21,6 +20,7 @@ from captain_hook.types import (
     TCondition,
     condition_events,
 )
+from captain_hook.util.caller import caller_file, framework_frame, hook_name
 
 if TYPE_CHECKING:
     from cc_transcript.activity import UserClassifier

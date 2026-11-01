@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-import os
-import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -12,25 +9,50 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property, lru_cache
 from hashlib import sha256
-from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from captain_hook.util import reqenv
+from captain_hook.util.caller import (
+    BUILTIN_PACKS_DIR as BUILTIN_PACKS_DIR,
+)
+from captain_hook.util.caller import (
+    FRAMEWORK_DIR as FRAMEWORK_DIR,
+)
+from captain_hook.util.caller import (
+    PACK_PACKAGE_PREFIX as PACK_PACKAGE_PREFIX,
+)
+from captain_hook.util.caller import (
+    caller_file as caller_file,
+)
+from captain_hook.util.caller import (
+    caller_frame as caller_frame,
+)
+from captain_hook.util.caller import (
+    caller_stem as caller_stem,
+)
+from captain_hook.util.caller import (
+    framework_frame as framework_frame,
+)
+from captain_hook.util.caller import (
+    framework_path as framework_path,
+)
+from captain_hook.util.caller import (
+    hook_name as hook_name,
+)
+from captain_hook.util.caller import (
+    package_aware_stem as package_aware_stem,
+)
 
 if TYPE_CHECKING:
-    from types import FrameType, ModuleType
+    from types import ModuleType
 
     import spacy
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals import SignalMatches
     from captain_hook.types import Signals
-
-FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
-BUILTIN_PACKS_DIR = str(Path(FRAMEWORK_DIR) / "builtin_packs")
-PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
 def load_spacy() -> spacy.language.Language:
@@ -261,56 +283,6 @@ def normalize_ws(text: str) -> str:
 
 def text_hash(text: str) -> str:
     return sha256(text.encode()).hexdigest()[:16]
-
-
-def package_aware_stem(p: Path) -> str:
-    # A builtin pack file is builtin_packs/<pack>/hooks/<stem>.py, so its pack name is the grandparent.
-    if str(p).startswith(BUILTIN_PACKS_DIR):
-        return f"{p.parent.parent.name}.{p.stem}"
-    if (
-        p.name != "__init__.py"
-        and not str(p).startswith(FRAMEWORK_DIR)
-        and (init := p.parent / "__init__.py").exists()
-        and init.stat().st_size > 0
-    ):
-        return f"{p.parent.name}.{p.stem}"
-    return p.stem
-
-
-@lru_cache(maxsize=4096)
-def framework_path(absolute: str) -> bool:
-    resolved = Path(absolute).resolve()
-    return resolved.is_relative_to(FRAMEWORK_DIR) and not resolved.is_relative_to(BUILTIN_PACKS_DIR)
-
-
-def framework_frame(filename: str) -> bool:
-    return framework_path(os.path.join(os.getcwd(), filename))
-
-
-def caller_frame() -> FrameType | None:
-    frame: FrameType | None = inspect.currentframe()
-    if frame:
-        frame = frame.f_back
-    while frame and framework_frame(frame.f_code.co_filename):
-        frame = frame.f_back
-    return frame
-
-
-def caller_stem() -> str:
-    if (frame := caller_frame()) is None:
-        return "unknown"
-    if (name := frame.f_globals.get("__name__", "")).startswith(f"{PACK_PACKAGE_PREFIX}."):
-        return name.removeprefix(f"{PACK_PACKAGE_PREFIX}.")
-    return package_aware_stem(Path(frame.f_code.co_filename))
-
-
-def caller_file() -> str:
-    return frame.f_code.co_filename if (frame := caller_frame()) else ""
-
-
-def hook_name(prefix: str, label: str | None, message: str) -> str:
-    suffix = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") if label else sha256(message.encode()).hexdigest()[:8]
-    return f"{caller_stem()}:{prefix}_{suffix}"
 
 
 def record_fire(evt: BaseHookEvent) -> None:

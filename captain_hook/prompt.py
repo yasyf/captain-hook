@@ -6,8 +6,8 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
-from captain_hook.state import FRAMEWORK_DIR, framework_frame
 from captain_hook.util import reqenv
+from captain_hook.util.caller import FRAMEWORK_DIR, framework_frame
 
 
 def dedent_text(text: str) -> str:

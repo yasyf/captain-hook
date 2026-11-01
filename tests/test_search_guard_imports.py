@@ -149,8 +149,40 @@ for command, denied in (("printf safe", False), ("rg needle .", True)):
     ):
         assert not any(name == prefix or name.startswith(prefix + ".") for name in sys.modules), prefix
 """,
+        """
+import sys
+from pathlib import Path
+from captain_hook.util import caller
+
+assert not {"captain_hook.state", "pydantic", "spacy"}.intersection(sys.modules)
+assert Path(caller.FRAMEWORK_DIR) == Path(caller.__file__).resolve().parents[1]
+assert caller.framework_frame(caller.__file__)
+assert not caller.framework_frame(str(Path(caller.BUILTIN_PACKS_DIR) / "performance/hooks/search.py"))
+
+import captain_hook.state as state
+for name in (
+    "BUILTIN_PACKS_DIR", "FRAMEWORK_DIR", "PACK_PACKAGE_PREFIX",
+    "caller_file", "caller_frame", "caller_stem", "framework_frame",
+    "framework_path", "hook_name", "package_aware_stem",
+):
+    assert getattr(state, name) is getattr(caller, name)
+""",
+        """
+import sys
+import captain_hook.app
+
+assert "captain_hook.state" not in sys.modules
+""",
     ],
-    ids=["results-only", "search-only", "eager-tickets", "ticket-import-error", "standalone-pure"],
+    ids=[
+        "results-only",
+        "search-only",
+        "eager-tickets",
+        "ticket-import-error",
+        "standalone-pure",
+        "caller-only",
+        "app-without-state",
+    ],
 )
 def test_search_guard_import_boundaries(script: str, tmp_path: Path) -> None:
     root = tmp_path / "repo"
