@@ -467,13 +467,14 @@ def init_project(root: Path, *, review: bool = True) -> None:
 
 
 def show_logs(session: str | None = None, tail: int | None = None) -> None:
-    """Print a captain-hook session log.
+    """Print a regular, decodable captain-hook session log.
 
     Args:
         session: A session id, or a transcript path (whose stem is the session
             id) to locate its log file. When ``None``, the most recently
             modified log is shown.
-        tail: When set, print only the last ``tail`` lines.
+        tail: Positive values print the last ``tail`` lines. Zero and ``None``
+            print the whole log; negative values omit the first ``abs(tail)`` lines.
     """
     from captain_hook.util.paths import resolve_log_dir
 
@@ -496,7 +497,11 @@ def show_logs(session: str | None = None, tail: int | None = None) -> None:
         print(f"No log file at {log_file}", file=sys.stderr)
         return
 
-    lines = log_file.read_text().splitlines()
+    if tail is not None and tail > 0:
+        text = subprocess.check_output(["tail", "-n", f"{min(tail, sys.maxsize):d}", "--", str(log_file)], text=True)
+    else:
+        text = log_file.read_text()
+    lines = text.splitlines()
     print("\n".join(lines[-tail:] if tail else lines))
 
 

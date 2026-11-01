@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
+import sys
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import httpx
@@ -697,6 +700,22 @@ class TestFlags:
 
 
 class TestLogsSubcommand:
+    @pytest.fixture
+    def logs_module(self) -> Iterator[ModuleType]:
+        if before := os.environ.get("CAPT_LOG_TAIL_BASELINE"):
+            spec = importlib.util.spec_from_file_location("cli_logs_before", before)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        else:
+            from captain_hook import cli as module
+        try:
+            yield module
+        finally:
+            if before:
+                sys.modules.pop(module.__name__)
+
     @staticmethod
     def seed_logs(log_dir: Path) -> None:
         (log_dir / "old.log").write_text("OLD-A\nOLD-B")
@@ -709,6 +728,11 @@ class TestLogsSubcommand:
         [
             pytest.param({}, "NEW-1\nNEW-2\nNEW-3\n", id="no_arg_prints_newest"),
             pytest.param({"tail": 2}, "NEW-2\nNEW-3\n", id="tail_limits_to_last_n_lines"),
+            pytest.param({"tail": True}, "NEW-3\n", id="true_selects_last_line"),
+            pytest.param({"tail": 0}, "NEW-1\nNEW-2\nNEW-3\n", id="zero_prints_whole_log"),
+            pytest.param({"tail": -1}, "NEW-2\nNEW-3\n", id="negative_omits_first_lines"),
+            pytest.param({"tail": -3}, "\n", id="negative_can_omit_all_lines"),
+            pytest.param({"tail": -(1 << 100)}, "\n", id="negative_unbounded_integer"),
             pytest.param({"session": "old"}, "OLD-A\nOLD-B\n", id="session_id_selects_that_file"),
         ],
     )
@@ -736,6 +760,83 @@ class TestLogsSubcommand:
         (tmp_path / "t.log").write_text("BY-STEM")
         show_logs(session="/tmp/t.jsonl")
         assert capsys.readouterr().out == "BY-STEM\n"
+
+    @pytest.mark.parametrize(
+        ("content", "tail", "expected"),
+        [
+            pytest.param("", 1, "\n", id="empty"),
+            pytest.param("only", 20, "only\n", id="oversized_tail_unterminated"),
+            pytest.param("first\r\nlast\r\n", 1, "last\n", id="CRLF"),
+            pytest.param("first\n\n", 1, "\n", id="trailing_empty_line"),
+            pytest.param("α\rβ\vγ\fδ\x1cε\x1dζ\x1eη\x85θ\u2028ι\u2029κ", 3, "θ\nι\nκ\n", id="logical_separators"),
+            pytest.param(
+                "head\none\u2028two\nthree\u2029four\n", 3, "two\nthree\nfour\n", id="mixed_physical_and_logical"
+            ),
+            pytest.param("head\n雪\n🦀", 2, "雪\n🦀\n", id="multibyte_unterminated"),
+            pytest.param("α\u2028β\nγ", 1 << 100, "α\nβ\nγ\n", id="unbounded_integer_with_Unicode"),
+        ],
+    )
+    def test_positive_tail_preserves_logical_lines(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        content: str,
+        tail: int,
+        expected: str,
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        (tmp_path / "private.log").write_text(content)
+        show_logs(session="private", tail=tail)
+        assert capsys.readouterr().out == expected
+
+    def test_positive_tail_passes_filename_as_one_argument(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.chdir(tmp_path)
+        log_dir = Path("-logs with spaces")
+        log_dir.mkdir()
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(log_dir))
+        session = "-n $(touch touched)"
+        (log_dir / f"{session}.log").write_text("first\nkept\n")
+        show_logs(session=session, tail=1)
+        assert capsys.readouterr().out == "kept\n"
+        assert not (tmp_path / "touched").exists()
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux process and waited-child IO counters")
+    def test_positive_tail_reads_only_log_suffix(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        logs_module: ModuleType,
+    ) -> None:
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        log_file = tmp_path / "private.log"
+        with log_file.open("w") as stream:
+            for _ in range(256):
+                stream.write("x" * 32767 + "\n")
+            stream.write("kept-one\nkept-two\n")
+
+        def read_characters() -> int:
+            return int(
+                next(
+                    line.split()[1]
+                    for line in Path("/proc/self/io").read_text().splitlines()
+                    if line.startswith("rchar:")
+                )
+            )
+
+        before = read_characters()
+        logs_module.show_logs(session="private", tail=2)
+        read_volume = read_characters() - before
+        assert capsys.readouterr().out == "kept-one\nkept-two\n"
+        print(json.dumps({"log_bytes": log_file.stat().st_size, "rchar_with_waited_children": read_volume, "tail": 2}))
+        assert read_volume < 1024 * 1024, "positive log tail read the full prefix"
 
     @pytest.mark.parametrize(
         ("log_dir_name", "kwargs", "needle_is_dir"),

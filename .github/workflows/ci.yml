@@ -302,6 +302,23 @@ jobs:
           grep -F 'duplicate plugin filesystem probes were repeated' "$RUNNER_TEMP/plugin-resolution-negative.log"
           env -u CAPT_PLUGIN_RESOLUTION_BASELINE uv run --no-sync pytest tests/test_plugin_resolution_probes.py -n 0 -q -s
 
+      - name: Verify bounded CLI log reads against the immutable baseline
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
+        env:
+          CAPT_LOG_TAIL_BASELINE: ${{ runner.temp }}/cli-log-tail-before.py
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin 5a11cb44b376c25d66b0eb3dbd324923ee8addc7
+          git show 5a11cb44b376c25d66b0eb3dbd324923ee8addc7:captain_hook/cli.py > "$CAPT_LOG_TAIL_BASELINE"
+          if uv run --no-sync pytest tests/test_cli.py::TestLogsSubcommand::test_positive_tail_reads_only_log_suffix -n 0 -s > "$RUNNER_TEMP/cli-log-tail-negative.log" 2>&1; then
+            cat "$RUNNER_TEMP/cli-log-tail-negative.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/cli-log-tail-negative.log"
+          grep -F 'positive log tail read the full prefix' "$RUNNER_TEMP/cli-log-tail-negative.log"
+          grep -F '1 failed' "$RUNNER_TEMP/cli-log-tail-negative.log"
+          env -u CAPT_LOG_TAIL_BASELINE uv run --no-sync pytest tests/test_cli.py::TestLogsSubcommand -n 0 -q -s
+
       - name: Build + smoke-test wheel in a fresh venv
         if: matrix.shard == 0
         run: |
