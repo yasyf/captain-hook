@@ -1,0 +1,357 @@
+from __future__ import annotations
+
+import glob
+import os
+from collections import deque
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
+from pathlib import Path, PurePath
+from typing import TYPE_CHECKING, Literal
+
+from captain_hook.cmd import Target, Targets
+
+if TYPE_CHECKING:
+    from cc_transcript.command import Word
+
+    from captain_hook.cmd import Call, Cmd
+
+type Scalar = str | int | bool
+
+
+@dataclass(frozen=True, slots=True)
+class Option:
+    """Bind option aliases to a named, typed value or a flag.
+
+    ``prefix`` keeps positional binding open for leading options in a schema whose
+    options start a trailing expression. ``until`` consumes an opaque argument list
+    through its terminator, such as a nested command passed to another program.
+    ``first`` binds the option only as the first word after the program, the way
+    ``kill`` reads a signal spec: it never joins a flag cluster, and a later spelling
+    is an unknown option that ends binding incomplete, so ``kill -9 -15`` cannot read
+    its negative process group as a second signal.
+    """
+
+    name: str
+    flags: tuple[str, ...]
+    type: type[str] | type[int] | type[bool] = str
+    prefix: bool = False
+    until: tuple[tuple[str, ...], ...] = ()
+    first: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Operand:
+    """Bind positional words to a role, optionally collecting a variable-length group.
+
+    A variadic operand reserves words for the fixed operands after it. Defaults are
+    literal words used only when no explicit word binds the role.
+    """
+
+    name: str
+    count: int | Literal["*"] = 1
+    default: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Arguments:
+    """Named bindings from one invocation, retaining source words and unknown values.
+
+    ``complete`` is false when an unknown option, missing value, invalid typed value,
+    or command substitution prevents a complete binding. Known path operands remain
+    available so a policy can still reject an explicitly broad root. ``unread`` holds
+    the words from the first unknown option on, or the option left without its value,
+    so a policy can name exactly what stopped the binding. ``dashdash`` counts the positional
+    words read before an end-of-options ``--``, or is None when none was written, so a program
+    that gives the separator its own meaning, such as ``git grep`` reading revisions before it
+    and pathspecs after, can split its operands. ``order`` names the role of every option
+    word read, once per occurrence and in the order written, so a policy can apply a program's
+    last-wins precedence across roles, such as ripgrep honoring whichever of ``--files``,
+    ``--type-list``, and ``--generate`` comes last.
+    """
+
+    words: dict[str, tuple[Word, ...]]
+    values: dict[str, tuple[Scalar | None, ...]]
+    cwd: Path | None
+    complete: bool
+    operands_complete: bool
+    call: Call
+    unread: tuple[Word, ...] = ()
+    dashdash: int | None = None
+    order: tuple[str, ...] = ()
+
+    def paths(self, name: str) -> Targets:
+        """Return the named role as path targets with the invocation's working directory.
+
+        A word with a same-line expansion the call can resolve contributes one target per
+        candidate value; one it cannot stays unverified.
+        """
+        return Targets(
+            tuple(
+                target
+                for word, value in zip(self.words.get(name, ()), self.values.get(name, ()), strict=True)
+                for target in (
+                    self.call.word_targets(word)
+                    if word.value is None
+                    else (Target(value if isinstance(value, str) else None, word.raw, self.cwd),)
+                )
+            ),
+            complete=self.operands_complete,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CommandSchema:
+    """Bind parsed shell words using declarative option and positional definitions.
+
+    Schemas operate on an existing ``Call`` and never parse shell text. With
+    ``options_end_operands``, the first non-prefix option starts a trailing expression;
+    expression arguments never become positional operands. With ``operands_end_options``,
+    the first operand ends option reading the way POSIX utilities such as ``kill`` do, so
+    a later option word is unknown and ``kill 123 -l`` never reads as a listing. Unknown
+    options end binding and mark the result incomplete instead of guessing their arity. A
+    value attached to a short option (``-oVAL``) binds only when every single-dash alias
+    is one letter, since a schema with find-style single-dash words cannot split such a
+    token unambiguously. A ``subcommand`` schema describes one verb of a program with global
+    options, such as ``git grep``: it binds only the words after the call's leading global
+    options and the verb, so a global ``-c key=value`` and the verb's own ``-c`` never share
+    an alias table. A short-option cluster binds only when every letter is a flag, since a
+    schema that does not list every short option cannot tell where a value starts; with
+    ``clustered_values``, a schema that does reads the cluster the way getopt and Git's
+    parse-options do, flags letter by letter until one that takes a value, which takes the
+    rest of the word or else the next word, so ``-nC3`` binds ``-n`` and ``-C 3``.
+    """
+
+    program: str
+    operands: tuple[Operand, ...] = ()
+    options: tuple[Option, ...] = ()
+    options_end_operands: bool = False
+    operands_end_options: bool = False
+    separators: tuple[str, ...] = ()
+    subcommand: tuple[str, ...] = ()
+    clustered_values: bool = False
+
+    def invokes(self, call: Call) -> bool:
+        """Whether ``call`` runs this schema's subcommand, read past the program's global options."""
+        return call.verb_argv[1 : 1 + len(self.subcommand)] == self.subcommand
+
+    def bind(self, call: Call) -> Arguments:
+        """Bind an invocation while preserving the parser's word provenance."""
+        from cc_transcript.command import Word
+
+        aliases = {flag: option for option in self.options for flag in option.flags}
+        short_values = all(len(flag) == 2 or flag.startswith("--") for flag in aliases)
+        words: dict[str, list[Word]] = {}
+        values: dict[str, list[Scalar | None]] = {}
+        positional: list[Word] = []
+        unread: tuple[Word, ...] = ()
+        dashdash: int | None = None
+        order: list[str] = []
+        accept_operands = True
+        accept_options = True
+        complete = not call.substituted
+        operands_complete = not call.substituted
+        skipped = len(call.leading_options) + len(self.subcommand) if self.subcommand else 0
+        stream = iter(call.command.words[1 + skipped :])
+        for index, word in enumerate(stream):
+            token = word.value
+            flag, joined, attached = (token or "").partition("=")
+            inline = attached if joined else None
+            if self.operands_end_options and positional:
+                accept_options = False
+            if (
+                short_values
+                and token is not None
+                and len(token) > 2
+                and (short := aliases.get(token[:2])) is not None
+                and short.type is not bool
+            ):
+                flag, inline = token[:2], token[2:]
+            if token == "--" and accept_options:
+                accept_options = False
+                dashdash = len(positional)
+                continue
+            if token in self.separators and accept_options:
+                accept_operands = False
+                continue
+            if (
+                accept_options
+                and token is not None
+                and token.startswith("-")
+                and not token.startswith("--")
+                and flag not in aliases
+                and len(token) > 2
+                and (cluster := short_cluster(token[1:], aliases, take_values=self.clustered_values and short_values))
+                is not None
+            ):
+                flags, valued = cluster
+                for option in flags:
+                    values.setdefault(option.name, []).append(True)
+                    order.append(option.name)
+                    if self.options_end_operands and not option.prefix:
+                        accept_operands = False
+                if valued is None:
+                    continue
+                flag, inline = valued
+            if accept_options and (option := aliases.get(flag)) is not None and not (option.first and index):
+                order.append(option.name)
+                if self.options_end_operands and not option.prefix:
+                    accept_operands = False
+                if option.until:
+                    values.setdefault(option.name, []).append(True)
+                    suffix: deque[str | None] = deque(maxlen=max(map(len, option.until)))
+                    for argument in stream:
+                        suffix.append(argument.value)
+                        if any(tuple(suffix)[-len(end) :] == end for end in option.until):
+                            break
+                    else:
+                        complete = False
+                    continue
+                if option.type is bool:
+                    values.setdefault(option.name, []).append(True)
+                    continue
+                argument = word if inline is not None else next(stream, None)
+                if argument is None:
+                    complete = False
+                    unread = (word,)
+                    break
+                words.setdefault(option.name, []).append(argument)
+                value: Scalar | None = argument.value if inline is None else inline
+                if option.type is int and value is not None:
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        value = None
+                values.setdefault(option.name, []).append(value)
+                complete &= value is not None
+            elif (
+                (accept_options or (self.operands_end_options and positional))
+                and token is not None
+                and token.startswith("-")
+                and token != "-"
+            ):
+                complete = False
+                operands_complete &= not accept_operands or (
+                    self.options_end_operands and bool(positional or any(o.name in words for o in self.operands))
+                )
+                unread = (word, *stream)
+                break
+            elif accept_operands:
+                positional.append(word)
+            elif token is None:
+                complete = False
+        for index, operand in enumerate(self.operands):
+            reserved = sum(o.count for o in self.operands[index + 1 :] if isinstance(o.count, int))
+            count = max(0, len(positional) - reserved) if operand.count == "*" else operand.count
+            bound, positional = positional[:count], positional[count:]
+            if not bound and operand.name not in words:
+                bound = [Word(value, value, None, value.startswith("~")) for value in operand.default]
+            words.setdefault(operand.name, []).extend(bound)
+            values.setdefault(operand.name, []).extend(word.value for word in bound)
+            complete &= operand.count == "*" or len(bound) == operand.count
+        return Arguments(
+            {name: tuple(bound) for name, bound in words.items()},
+            {name: tuple(bound) for name, bound in values.items()},
+            call.cwd,
+            complete and not positional,
+            operands_complete,
+            call,
+            unread,
+            dashdash,
+            tuple(order),
+        )
+
+
+def short_cluster(
+    letters: str, aliases: dict[str, Option], *, take_values: bool
+) -> tuple[list[Option], tuple[str, str | None] | None] | None:
+    options = [aliases.get(f"-{letter}") for letter in letters]
+    count = next(
+        (index for index, option in enumerate(options) if option is None or option.type is not bool or option.first),
+        len(options),
+    )
+    flags = [aliases[f"-{letter}"] for letter in letters[:count]]
+    if count == len(letters):
+        return flags, None
+    if not take_values or not flags or (valued := options[count]) is None or valued.first:
+        return None
+    return flags, (f"-{letters[count]}", letters[count + 1 :] or None)
+
+
+def glob_prefix(path: Path) -> Path:
+    """The literal directory a glob path walks from: its parts up to the first one with glob magic."""
+    literal = list(path.parts)
+    for index, part in enumerate(path.parts):
+        if glob.has_magic(part):
+            literal = path.parts[:index]
+            break
+    return Path(*literal) if literal else Path(".")
+
+
+@dataclass(frozen=True, slots=True)
+class PathMatches:
+    """Match complete path globs against lexical and resolved targets.
+
+    ``*`` matches one path segment; ``**`` can cross directories. Patterns may use
+    ``~`` for the current home. Unknown shell expansions match only when explicitly
+    requested through ``unresolved``; no shell variables are evaluated or replaced.
+    """
+
+    patterns: tuple[str, ...]
+    unresolved: bool = False
+
+    def __call__(self, target: Target) -> bool:
+        if target.value is None:
+            return self.unresolved
+        value = os.path.expanduser(target.value) if target.raw.startswith("~") else target.value
+        path = Path(value)
+        if not path.is_absolute():
+            if target.cwd is None:
+                return self.unresolved
+            path = target.cwd / path
+        return any(self.matches(candidate) for candidate in (path, glob_prefix(path)))
+
+    def matches(self, path: Path) -> bool:
+        lexical = PurePath(os.path.normpath(path))
+        return any(
+            candidate.full_match(os.path.expanduser(pattern))
+            for candidate in (lexical, path.resolve())
+            for pattern in self.patterns
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PathsMatch:
+    """Match when any path in a named argument role satisfies a path predicate."""
+
+    name: str
+    predicate: PathMatches
+
+    def __call__(self, arguments: Arguments) -> bool:
+        targets = arguments.paths(self.name)
+        return (not targets.complete and self.predicate.unresolved) or any(self.predicate(target) for target in targets)
+
+
+@dataclass(frozen=True, slots=True)
+class OptionIs:
+    """Match a completely parsed invocation's last value for a named option."""
+
+    name: str
+    values: Collection[Scalar]
+
+    def __call__(self, arguments: Arguments) -> bool:
+        return arguments.complete and bool(values := arguments.values.get(self.name)) and values[-1] in self.values
+
+
+def matches_command(
+    cmd: Cmd,
+    schema: CommandSchema,
+    *,
+    only_if: tuple[Callable[[Arguments], bool], ...] = (),
+    skip_if: tuple[Callable[[Arguments], bool], ...] = (),
+) -> bool:
+    return any(
+        all(predicate(arguments) for predicate in only_if) and not any(predicate(arguments) for predicate in skip_if)
+        for call in cmd.calls(schema.program)
+        if schema.invokes(call)
+        for arguments in (schema.bind(call),)
+    )
