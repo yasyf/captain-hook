@@ -1,0 +1,84 @@
+name: Snapshot caller phase profile
+
+on:
+  push:
+    branches: [diag/warm923-sdk35-phase-profile]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot-phase-profile:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: f72ddf2b7e3c6b40ee350f496929d695fbddf688
+          path: .snapshot-current
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: .snapshot-current/uv.lock
+      - name: Verify immutable source and sync locked environment
+        working-directory: .snapshot-current
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/snapshot-phase-venv
+        run: |
+          test "$(git rev-parse HEAD)" = f72ddf2b7e3c6b40ee350f496929d695fbddf688
+          python3 -I -B - <<'PY'
+          import hashlib
+          from pathlib import Path
+          assert hashlib.sha256(Path('tests/test_snapshot_client.py').read_bytes()).hexdigest() == '61cfa7d824c03117ffa6bf8fc9281c0bedc9626e5cf9f4fca3601e6505ef8830'
+          PY
+          mkdir "$RUNNER_TEMP/snapshot-phase-profile"
+          uv sync --locked --extra dev
+      - name: Profile one unchanged strict fixture
+        id: strict
+        continue-on-error: true
+        working-directory: .snapshot-current
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/snapshot-phase-venv
+          PYTHONPATH: ${{ github.workspace }}/.ci
+          SNAPSHOT_DIAGNOSTIC_SOURCE: f72ddf2b7e3c6b40ee350f496929d695fbddf688
+          SNAPSHOT_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/snapshot-phase-profile/profile.json
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -p snapshot_latency_phase_diag -n 0 -s "tests/test_snapshot_client.py::test_foreground_graph_latency_stays_bounded_while_registry_warms" 2>&1 | tee "$RUNNER_TEMP/snapshot-phase-profile/strict.log"
+      - name: Preserve numeric profile and raw strict result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: snapshot-phase-profile-sdk35
+          path: ${{ runner.temp }}/snapshot-phase-profile/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Require profile nonvacuity and retain strict outcome
+        if: always()
+        env:
+          STRICT: ${{ steps.strict.outcome }}
+        run: |
+          python3 -I -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'snapshot-phase-profile'
+          report = json.loads((root / 'profile.json').read_text())
+          assert report['source'] == 'f72ddf2b7e3c6b40ee350f496929d695fbddf688'
+          assert report['node'] == 'tests/test_snapshot_client.py::test_foreground_graph_latency_stays_bounded_while_registry_warms'
+          assert report['cc_transcript_version'] == '14.45.35'
+          assert report['native_files_sha256']['cc_transcript/_native.abi3.so'] == '8b326e0d8e3b79a4d079a65b5e61f984c83a78dd2384c563aff174b20d68c669'
+          assert report['dropped_records'] == 0 and len(report['logical_rounds']) >= 30
+          clients = [row for row in report['records'] if row['layer'] == 'client']
+          assert any(row['operation'] == 'prepare_graph' for row in clients)
+          assert any(row['operation'] == 'warm_registered' for row in clients)
+          phases = {key for row in clients for key, value in row['phases'].items() if value['calls'] > 0}
+          assert {'host-request.numeric_canonical_copy', 'host-request.python_schema_validate', 'host-request.numeric_native_copy', 'sdk.input_wire_and_json', 'native.request.call_and_gil_return', 'sdk.response_json_decode', 'owner.resource_metadata_and_hash', 'logging.info_total', 'host-response.python_schema_validate'} <= phases
+          print(json.dumps({'strict_outcome': os.environ['STRICT'], 'records': len(report['records']), 'logical_rounds': len(report['logical_rounds']), 'phases': sorted(phases)}))
+          assert os.environ['STRICT'] == 'success'
+          PY
