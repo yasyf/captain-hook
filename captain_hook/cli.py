@@ -631,6 +631,14 @@ def run(state: CliState, event: str) -> None:
     run_event(state, event)
 
 
+@cli.command("search-guard")
+def search_guard() -> None:
+    """Check only the existing search guards from a JSON hook event."""
+    from captain_hook.search_guard import main
+
+    main()
+
+
 @cli.command()
 @click.option("--json", "json_output", is_flag=True, default=False, help="Emit one JSON record per test (CI mode)")
 @click.pass_obj
