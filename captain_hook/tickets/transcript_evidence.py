@@ -31,7 +31,10 @@ if TYPE_CHECKING:
 class EvidenceSession:
     session: Session | RemoteSession
     prompts_are_user: bool
-    indexed: bool = False
+
+    @property
+    def indexed(self) -> bool:
+        return isinstance(self.session, RemoteSession)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,12 +191,12 @@ def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
                 acquired = [fixed_session(client, view["description"], stack) for view in views]
                 if [view["label"] for view in views] != expected:
                     raise SnapshotProtocolError("ticket source selection returned different views")
-                output.extend(EvidenceSession(classified(session, stack), True, True) for session in acquired)
+                output.extend(EvidenceSession(classified(session, stack), True) for session in acquired)
             if root.tail_events is None:
-                output.append(EvidenceSession(classified(base, stack), True, True))
+                output.append(EvidenceSession(classified(base, stack), True))
         base = acquired_source(client, acting, stack)
         output.append(
-            EvidenceSession(classified(base, stack), root is None, True)
+            EvidenceSession(classified(base, stack), root is None)
             if isinstance(base, RemoteSession)
             else EvidenceSession(base, root is None)
         )
