@@ -173,6 +173,39 @@ import captain_hook.app
 
 assert "captain_hook.state" not in sys.modules
 """,
+        """
+import sys
+from typing import get_type_hints
+import captain_hook.types as runtime
+import captain_hook.inline_tests as schema
+
+assert not any(name == "captain_hook.testing" or name.startswith("captain_hook.testing.") for name in sys.modules)
+assert "pydantic" in sys.modules
+assert runtime.InlineTests is schema.InlineTests
+import captain_hook
+for name in ("Allow", "Ask", "Block", "FileFixture", "InlineTests", "Input", "Rewrite", "TranscriptFixture", "Warn"):
+    assert getattr(captain_hook, name) is getattr(schema, name)
+assert "captain_hook.testing" not in sys.modules
+import captain_hook.testing as testing
+import captain_hook.testing.types as legacy
+for name in ("Allow", "Ask", "Block", "FileFixture", "InlineTests", "Input", "Rewrite", "TranscriptFixture", "Warn"):
+    assert getattr(testing, name) is getattr(legacy, name) is getattr(schema, name)
+assert legacy.FIELD_TYPES is schema.FIELD_TYPES
+assert legacy.BaseModel is schema.BaseModel
+hints = get_type_hints(schema.Input, localns={"Ticket": object})
+assert hints == get_type_hints(legacy.Input, globalns=vars(legacy), localns={"Ticket": object})
+assert hints["state"] == list[schema.BaseModel] | None
+class Seed(schema.BaseModel):
+    value: int = 7
+seed = Seed()
+assert schema.Input(state=[seed]).state == [seed]
+try:
+    schema.Input(state=[object()])
+except TypeError as exc:
+    assert str(exc) == "Input field 'state' must contain pydantic models, got object"
+else:
+    raise AssertionError("Input accepted non-model state")
+""",
     ],
     ids=[
         "results-only",
@@ -182,6 +215,7 @@ assert "captain_hook.state" not in sys.modules
         "standalone-pure",
         "caller-only",
         "app-without-state",
+        "production-inline-schema",
     ],
 )
 def test_search_guard_import_boundaries(script: str, tmp_path: Path) -> None:

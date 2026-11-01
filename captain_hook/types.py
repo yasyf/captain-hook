@@ -1027,7 +1027,7 @@ type HookResponse = HookResult | None
 """Return type of a hook handler: a :class:`HookResult`, or None to take no action."""
 
 
-from captain_hook.testing.types import InlineTests as InlineTests  # noqa: E402
+from captain_hook.inline_tests import InlineTests as InlineTests  # noqa: E402
 
 
 @dataclass(frozen=True, kw_only=True)
