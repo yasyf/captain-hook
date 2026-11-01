@@ -52,6 +52,29 @@ jobs:
       - name: Test capt-hookd
         run: go test -race -count=1 ./...
 
+      - name: Verify fatal release preflight against its unchanged baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=3e1468c6296937b11cdcc4e3c73cc034794e9212
+          baseline_dir="$RUNNER_TEMP/fatal-preflight-baseline"
+          baseline_log="$RUNNER_TEMP/fatal-preflight-baseline.log"
+          filter='^TestAwaitResolvableReturnsNonResolutionExitWithItsDiagnostic$'
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git worktree add --detach "$baseline_dir" "$baseline"
+          cp internal/hookd/toolrelease_test.go "$baseline_dir/internal/hookd/toolrelease_test.go"
+          set +e
+          (cd "$baseline_dir" && go test -race -count=1 ./internal/hookd -run "$filter") > "$baseline_log" 2>&1
+          baseline_status=$?
+          set -e
+          cat "$baseline_log"
+          test "$baseline_status" -ne 0
+          grep -Fq 'want wrapped uv exit 2' "$baseline_log"
+          grep -Fq 'want wrapped uv exit 7' "$baseline_log"
+          grep -Fq -- '--- FAIL: TestAwaitResolvableReturnsNonResolutionExitWithItsDiagnostic/exit2' "$baseline_log"
+          grep -Fq -- '--- FAIL: TestAwaitResolvableReturnsNonResolutionExitWithItsDiagnostic/exit7' "$baseline_log"
+          go test -race -count=1 ./internal/hookd -run "$filter"
+
   linux-host:
     runs-on: ubuntu-latest
     steps:

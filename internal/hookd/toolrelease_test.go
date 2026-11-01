@@ -2,8 +2,10 @@ package hookd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,6 +108,58 @@ func TestAwaitResolvableGivesUpAtItsDeadlineNamingTheVersion(t *testing.T) {
 	err := awaitResolvable(ctx, uv, productDist, "12.88.0", floor)
 	if err == nil || !strings.Contains(err.Error(), "uv cannot resolve capt-hook==12.88.0: No solution found") {
 		t.Fatalf("awaitResolvable = %v, want the unresolved version named", err)
+	}
+}
+
+func TestAwaitResolvableReturnsNonResolutionExitWithItsDiagnostic(t *testing.T) {
+	t.Parallel()
+	for _, code := range []int{2, 7} {
+		t.Run(fmt.Sprintf("exit%d", code), func(t *testing.T) {
+			t.Parallel()
+			floor := productFloor(t)
+			dir := t.TempDir()
+			uv := filepath.Join(dir, "uv")
+			requests := filepath.Join(dir, "requests")
+			const diagnostic = "publication probe cannot continue"
+			script := fmt.Sprintf("#!/bin/sh\ncat >> %q\necho \"$@\" >> %q\necho %q >&2\nexit %d\n",
+				requests, requests, diagnostic, code)
+			if err := os.WriteFile(uv, []byte(script), 0o700); err != nil { //nolint:gosec // a fake uv must be executable
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			err := awaitResolvable(ctx, uv, productDist, "12.88.0", floor)
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != code {
+				t.Fatalf("awaitResolvable = %v, want wrapped uv exit %d", err, code)
+			}
+			if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				t.Fatalf("awaitResolvable = %v, context = %v, want the uv failure before its deadline", err, ctx.Err())
+			}
+			if !strings.Contains(err.Error(), "capt-hook==12.88.0: "+diagnostic) {
+				t.Fatalf("awaitResolvable = %v, want the version and uv diagnostic", err)
+			}
+			got, err := os.ReadFile(requests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := probe("12.88.0", floor); string(got) != want {
+				t.Fatalf("uv saw %q, want one exact resolution probe %q", got, want)
+			}
+		})
+	}
+}
+
+func TestAwaitResolvableHonorsCancellationBeforeStartingUV(t *testing.T) {
+	t.Parallel()
+	uv, requests := fakeUV(t, 0, productFloor(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := awaitResolvable(ctx, uv, productDist, "12.88.0", productFloor(t)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("awaitResolvable = %v, want context cancellation", err)
+	}
+	if _, err := os.Stat(requests); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uv requests = %v, want no invocation after cancellation", err)
 	}
 }
 
