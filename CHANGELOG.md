@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An escaped `\$` in a `rewrite_command` regex stays a regex.** A pattern such as
+  `\bfind\s+\$HOME\b` read as an ast-grep template because `$HOME` looks like a metavariable, and
+  the hook failed at registration with `Multiple AST nodes are detected`. A dollar escaped with a
+  backslash is now a literal, so the pattern dispatches as a regex.
 - **A `git config` listing never prints a credential.** `git config -l`, `--list`, `--get-regexp`
   and `git config list` print every value, including an `http.<url>.extraheader` Authorization
   header. The general pack now pipes such a listing through a redactor that replaces the value of

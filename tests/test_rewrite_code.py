@@ -68,6 +68,8 @@ class TestRewriteCore:
         assert ast_grep.has_metavar("cat $$$ARGS")
         assert ast_grep.has_metavar("os.system($CMD)")
         assert not ast_grep.has_metavar(r"^cat\s+(\S+)$")
+        assert not ast_grep.has_metavar(r"\bfind\s+\$HOME\b")
+        assert ast_grep.has_metavar(r"echo \$HOME $CMD")
 
 
 class TestCapture:
