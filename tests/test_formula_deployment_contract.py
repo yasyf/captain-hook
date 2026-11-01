@@ -250,10 +250,16 @@ def pinned_binrun(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if runner.is_file():
         return runner
     home = tmp_path_factory.mktemp("binrun-home")
+    contents = home / "Applications" / "Captain Hook.app" / "Contents"
+    (contents / "Helpers").mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "12.31.0"}))
+    host = contents / "Helpers" / "capt-hookd"
+    host.write_text(FAKE_HOST)
+    host.chmod(0o755)
     result = subprocess.run(
-        [ROOT / "captain_hook/scripts/install-binary.sh"],
+        [ROOT / "captain_hook/scripts/install-binary.sh", "bootstrap-check"],
         env={"PATH": "/usr/bin:/bin", "HOME": str(home), "DAEMONKIT_HOME": str(home)},
-        input="",
+        input="binrun fixture stdin\n",
         capture_output=True,
         text=True,
         check=False,
@@ -261,7 +267,7 @@ def pinned_binrun(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
     runner = home / ".daemonkit" / "binrun" / pinned[1] / "binrun"
     assert runner.is_file(), result.stderr
-    assert result.returncode == 1 and NOT_INSTALLED in result.stderr, result.stderr
+    assert (result.returncode, result.stdout) == (0, "host bootstrap-check\nbinrun fixture stdin\n"), result.stderr
     return runner
 
 
