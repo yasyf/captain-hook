@@ -241,6 +241,12 @@ jobs:
           shard-index: ${{ matrix.shard }}
           workers: ${{ matrix.os == 'macos-15' && '1' || '0' }}
 
+      - name: Record async foreground evidence timing
+        if: always() && matrix.os == 'macos-15' && matrix.shard == 1
+        run: |
+          uv run --no-sync pytest -n 0 -s \
+            tests/test_foreground_evidence_budgets.py::test_async_hooks_read_the_transcript_after_the_foreground_deadline
+
       - name: Verify graph deadlines do not replay as evidence
         if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
         shell: bash
