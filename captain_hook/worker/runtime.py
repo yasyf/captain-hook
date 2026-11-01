@@ -18,7 +18,7 @@ from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
 from captain_hook.dispatch import attributed, denies, envelope_text, format_output, mandatory_completions
-from captain_hook.dispatch_metrics import collect_submit, measured_call, note_session
+from captain_hook.dispatch_metrics import collect_dispatch, measured_call, note_session
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
 from captain_hook.transcripts import load_transcript
@@ -83,7 +83,7 @@ class ProductRuntime:
         started = time.perf_counter()
         abandoned: list[str] = []
         warmups: list[str] = []
-        with collect_submit(request.event, request.id) as metrics:
+        with collect_dispatch(request.event, request.id) as metrics:
             try:
                 response, background = self._respond(request, abandoned, warmups)
                 return replace(response, warmup=bool(warmups)), background

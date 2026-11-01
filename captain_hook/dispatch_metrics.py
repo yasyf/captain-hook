@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 from collections import defaultdict
 from contextlib import contextmanager
@@ -12,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-USER_SUBMIT_SLOW_MS = 250.0
+SLOW_DISPATCH_MS = 250.0
 TOP_NAMES = 3
 MAX_NAME = 96
 
@@ -31,7 +32,7 @@ type Phase = Literal[
 ]
 type WriteComparison = Literal["same", "different", "uncompared"]
 
-ACTIVE: ContextVar[SubmitMetrics | None] = ContextVar("captain_hook_submit_metrics", default=None)
+ACTIVE: ContextVar[DispatchMetrics | None] = ContextVar("captain_hook_dispatch_metrics", default=None)
 
 
 @dataclass
@@ -43,13 +44,12 @@ class PhaseMetrics:
 
 
 @dataclass
-class SubmitMetrics:
+class DispatchMetrics:
     request_id: int
+    event: str
     session_sha256: str | None = None
     phases: defaultdict[Phase, PhaseMetrics] = field(default_factory=lambda: defaultdict(PhaseMetrics))
-    writes: dict[WriteComparison, int] = field(
-        default_factory=lambda: {"same": 0, "different": 0, "uncompared": 0}
-    )
+    writes: dict[WriteComparison, int] = field(default_factory=lambda: {"same": 0, "different": 0, "uncompared": 0})
     closed: bool = False
     guard: threading.Lock = field(default_factory=threading.Lock)
 
@@ -72,12 +72,18 @@ class SubmitMetrics:
     def summary(self, worker_ms: float) -> dict[str, object]:
         with self.guard:
             self.closed = True
-            correlation = {"request_id": self.request_id, "session_sha256": self.session_sha256}
-            if worker_ms < USER_SUBMIT_SLOW_MS:
+            submit = self.event == "UserPromptSubmit"
+            correlation: dict[str, object] = {"request_id": self.request_id}
+            if submit:
+                correlation["session_sha256"] = self.session_sha256
+            else:
+                correlation["worker_pid"] = os.getpid()
+            if worker_ms < SLOW_DISPATCH_MS:
                 return correlation
-            return correlation | {
-                "submit_worker_ms": round(worker_ms, 1),
-                "submit_phases": {
+            prefix = "submit" if submit else "dispatch"
+            fields: dict[str, object] = {
+                f"{prefix}_worker_ms": round(worker_ms, 1),
+                f"{prefix}_phases": {
                     phase: {
                         "count": stats.count,
                         "sum_ms": round(stats.sum_ms, 1),
@@ -86,14 +92,16 @@ class SubmitMetrics:
                     }
                     for phase, stats in sorted(self.phases.items())
                 },
-                "submit_state_writes": dict(self.writes),
-                "submit_phases_overlap": True,
             }
+            if submit:
+                fields["submit_state_writes"] = dict(self.writes)
+            fields[f"{prefix}_phases_overlap"] = True
+            return correlation | fields
 
 
 @contextmanager
-def collect_submit(event: str, request_id: int) -> Iterator[SubmitMetrics | None]:
-    metrics = SubmitMetrics(request_id) if event == "UserPromptSubmit" else None
+def collect_dispatch(event: str, request_id: int) -> Iterator[DispatchMetrics | None]:
+    metrics = DispatchMetrics(request_id, event) if event in ("UserPromptSubmit", "PreToolUse", "Stop") else None
     token = ACTIVE.set(metrics)
     try:
         yield metrics
@@ -101,23 +109,21 @@ def collect_submit(event: str, request_id: int) -> Iterator[SubmitMetrics | None
         ACTIVE.reset(token)
 
 
-def active() -> bool:
-    return (metrics := ACTIVE.get()) is not None and not metrics.closed
+def compare_state_writes() -> bool:
+    return (metrics := ACTIVE.get()) is not None and metrics.event == "UserPromptSubmit" and not metrics.closed
 
 
 def note_session(session_id: str | None) -> None:
-    if (metrics := ACTIVE.get()) is not None and session_id is not None:
+    if (metrics := ACTIVE.get()) is not None and metrics.event == "UserPromptSubmit" and session_id is not None:
         metrics.session_sha256 = hashlib.sha256(session_id.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def note_write(comparison: WriteComparison) -> None:
-    if (metrics := ACTIVE.get()) is not None:
+    if (metrics := ACTIVE.get()) is not None and metrics.event == "UserPromptSubmit":
         metrics.write(comparison)
 
 
-def measured_call[T, **P](
-    phase: Phase, name: str, function: Callable[P, T], *args: P.args, **kwargs: P.kwargs
-) -> T:
+def measured_call[T, **P](phase: Phase, name: str, function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
     if (metrics := ACTIVE.get()) is None or metrics.closed:
         return function(*args, **kwargs)
     started = perf_counter()
