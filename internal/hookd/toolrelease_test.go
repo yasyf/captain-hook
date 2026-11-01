@@ -8,11 +8,22 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	captainhook "github.com/yasyf/captain-hook"
 )
+
+func writeFakeUV(t *testing.T, uv, script string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(uv, []byte(script), 0o700) //nolint:gosec // a fake uv must be executable
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func fakeUV(t *testing.T, failures int, supported string) (uv, requests string) {
 	t.Helper()
@@ -36,9 +47,7 @@ if [ "$(grep -c '^pip compile' %[1]q)" -le %[2]d ]; then
   exit 1
 fi
 `, requests, failures, supported)
-	if err := os.WriteFile(uv, []byte(script), 0o700); err != nil { //nolint:gosec // a fake uv must be executable
-		t.Fatal(err)
-	}
+	writeFakeUV(t, uv, script)
 	return uv, requests
 }
 
@@ -123,9 +132,7 @@ func TestAwaitResolvableReturnsNonResolutionExitWithItsDiagnostic(t *testing.T) 
 			const diagnostic = "publication probe cannot continue"
 			script := fmt.Sprintf("#!/bin/sh\ncat >> %q\necho \"$@\" >> %q\necho %q >&2\nexit %d\n",
 				requests, requests, diagnostic, code)
-			if err := os.WriteFile(uv, []byte(script), 0o700); err != nil { //nolint:gosec // a fake uv must be executable
-				t.Fatal(err)
-			}
+			writeFakeUV(t, uv, script)
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			err := awaitResolvable(ctx, uv, productDist, "12.88.0", floor)
