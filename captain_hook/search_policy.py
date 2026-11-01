@@ -1063,10 +1063,27 @@ def mcp_searches_broadly(
     ) or any(map(spans_checkouts, roots))
 
 
-MCP_GREP_MESSAGE = "`ccx_code_grep` over a home, repository root, pool, or ancestor of a known checkout or loaded pack is broad; the output `budget` does not bound files searched. Name files or a focused directory in `paths`, or add a filename bound such as `globs: ['*.py']`."
-SEARCH_MESSAGE = "A recursive `grep` over a directory reads every file under it; bound `grep` by filename and scope other searches below broad roots. Name files, use `--include='*.py'`, `-g '*.py'`, or `-- '*.py'`, or run `ccx code grep` with scoped paths."
-FILES_MESSAGE = "`rg --files` over `~`, a worktree pool, or any directory above them is blocked even with `-g` or `-t` filename filters. List one checkout or a deeper subtree instead: `rg --files <checkout>` or `rg --files <checkout>/<dir>`."
-FIND_MESSAGE = "A `find` rooted at a filesystem, home, or checkout pool is a broad filesystem search that walks every dependency tree. Run `ccx repo locate <name>` instead, name a focused directory, or bound the listing with `-maxdepth 2`."
+MCP_GREP_MESSAGE = (
+    "`ccx_code_grep` over a home, repository root, pool, or ancestor of a known check"
+    "out or loaded pack is broad; the output `budget` does not bound files searched. "
+    "Name files or a focused directory in `paths`, or add a filename bound such as `g"
+    "lobs: ['*.py']`."
+)
+SEARCH_MESSAGE = (
+    "A recursive `grep` over a directory reads every file under it; bound `grep` by f"
+    "ilename and scope other searches below broad roots. Name files, use `--include='"
+    "*.py'`, `-g '*.py'`, or `-- '*.py'`, or run `ccx code grep` with scoped paths."
+)
+FILES_MESSAGE = (
+    "`rg --files` over `~`, a worktree pool, or any directory above them is blocked e"
+    "ven with `-g` or `-t` filename filters. List one checkout or a deeper subtree in"
+    "stead: `rg --files <checkout>` or `rg --files <checkout>/<dir>`."
+)
+FIND_MESSAGE = (
+    "A `find` rooted at a filesystem, home, or checkout pool is a broad filesystem se"
+    "arch that walks every dependency tree. Run `ccx repo locate <name>` instead, nam"
+    "e a focused directory, or bound the listing with `-maxdepth 2`."
+)
 
 
 @dataclass(frozen=True, slots=True)

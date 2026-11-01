@@ -79,7 +79,10 @@ def test_block_permission_envelope(message: str | None) -> None:
         (
             ("blocked",),
             ("second advice", "first advice", "second advice"),
-            "blocked\n\nAdditional advisories (not the reason for the deny):\n\nsecond advice\n\nfirst advice\n\nsecond advice",
+            (
+                "blocked\n\nAdditional advisories (not the reason for the deny):\n\nsecond "
+                "advice\n\nfirst advice\n\nsecond advice"
+            ),
         ),
     ],
     ids=["empty", "empty-message", "ordered-duplicates", "advisory-only", "ordered-advisories"],
