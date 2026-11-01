@@ -40,6 +40,7 @@ from captain_hook.loader import (
 )
 from captain_hook.log import setup_logging
 from captain_hook.packs import manager, plugins
+from captain_hook.packs.plugins import PLUGIN_ID
 from captain_hook.pause import pause, resume
 from captain_hook.review.cli import review
 from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
@@ -62,7 +63,6 @@ if TYPE_CHECKING:
 
 # capt-hook plugin/marketplace identity, rehomed from the deleted packs.contract module.
 DEFAULT_PREFIX = "uvx --isolated capt-hook"
-PLUGIN_ID = "captain-hook@captain-hook"
 # A captain-hook dependency version floor is a lower bound: `>=X.Y.Z` (a bare pin or `<=`/`==`
 # would not let a newer captain-hook resolve). `pack test` requires it in a pack plugin's plugin.json.
 VERSION_FLOOR_RE = re.compile(r">=\s*\d+\.\d+\.\d+")
@@ -755,7 +755,12 @@ def status(state: CliState, repo_: str | None, sync: bool) -> None:
     from captain_hook.review.dashboard import status_command
 
     state.discover()
-    status_command(resolve_repo(repo_, state.root), sync=sync, load_errors=list(_state.load_errors))
+    status_command(
+        resolve_repo(repo_, state.root),
+        sync=sync,
+        wired=plugins.wired(state.root),
+        load_errors=list(_state.load_errors),
+    )
 
 
 @cli.command()

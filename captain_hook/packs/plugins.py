@@ -16,6 +16,7 @@ paths at the same scope of one project is a corrupt roster that raises :class:`P
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
@@ -27,6 +28,8 @@ from captain_hook.packs import manager
 from captain_hook.util.fs import read_json
 from captain_hook.util.paths import resolve_claude_config_dir
 
+PLUGIN_ID = "captain-hook@captain-hook"
+HOOK_COMMAND = re.compile(r'\b(?:capt-hookd?|hook)"? run\b')
 SCOPE_PRECEDENCE = ("local", "project", "user")
 MANAGED_SETTINGS_DIRS = (
     Path("/Library/Application Support/ClaudeCode"),
@@ -99,6 +102,23 @@ def enablement(root: Path) -> dict[str, bool]:
     return merged
 
 
+def wired(root: Path) -> bool:
+    """Whether Claude Code calls capt-hook for ``root``: the plugin is enabled, or a settings file runs it as a hook."""
+    if enablement(root).get(PLUGIN_ID, False):
+        return True
+    return any(
+        isinstance(command := hook.get("command"), str) and HOOK_COMMAND.search(command) is not None
+        for path in settings_stack(root)
+        if isinstance(data := read_json(path), dict) and isinstance(events := data.get("hooks"), dict)
+        for groups in events.values()
+        if isinstance(groups, list)
+        for group in groups
+        if isinstance(group, dict) and isinstance(hooks := group.get("hooks"), list)
+        for hook in hooks
+        if isinstance(hook, dict)
+    )
+
+
 def parse_install(
     pid: str, entry: object, *, is_directory: Callable[[Path], bool] = Path.is_dir
 ) -> EnabledPlugin | None:
@@ -121,9 +141,7 @@ def scope_rank(scope: str | None) -> int:
     return SCOPE_PRECEDENCE.index(scope) if scope in SCOPE_PRECEDENCE else len(SCOPE_PRECEDENCE)
 
 
-def governs(
-    plugin: EnabledPlugin, root: Path, *, canonicalize: Callable[[Path], Path] = Path.resolve
-) -> bool:
+def governs(plugin: EnabledPlugin, root: Path, *, canonicalize: Callable[[Path], Path] = Path.resolve) -> bool:
     return plugin.project_path is None or canonicalize(Path(plugin.project_path)) == root
 
 
