@@ -698,7 +698,8 @@ class SnapshotClient:
         events: list[TranscriptEvent] = []
         positions: list[int] = []
         fresh_start: int | None = None
-        for _ in range(max_pages):
+        pages = 0
+        while pages < max_pages:
             [data] = self.pages(
                 "review_events",
                 domain=True,
@@ -724,6 +725,7 @@ class SnapshotClient:
             )
             fresh_start = data["fresh_start"] if fresh_start is None else fresh_start
             watermark = data["watermark"]
+            pages += bool(positions) and positions[-1] >= fresh_start
             if data["caught_up"]:
                 break
         return ReviewEvents(tuple(events), tuple(positions), fresh_start, watermark, data["caught_up"])
