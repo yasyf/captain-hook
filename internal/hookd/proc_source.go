@@ -25,10 +25,12 @@ func (r procRow) identity() procIdentity {
 }
 
 type procUsage struct {
-	CPUSeconds float64
-	DiskBytes  uint64
-	CPUKnown   bool
-	DiskKnown  bool
+	CPUSeconds  float64
+	DiskBytes   uint64
+	MemoryBytes uint64
+	CPUKnown    bool
+	DiskKnown   bool
+	MemoryKnown bool
 }
 
 type procSource interface {

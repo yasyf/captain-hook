@@ -28,7 +28,7 @@ func TestDarwinProcSourceDescribesThisProcess(t *testing.T) {
 		t.Fatalf("argv(%d) = %q, %t; want this test binary", pid, argv, ok)
 	}
 	usage, ok := source.usage(pid)
-	if !ok || !usage.CPUKnown || !usage.DiskKnown || usage.CPUSeconds <= 0 {
+	if !ok || !usage.CPUKnown || !usage.DiskKnown || !usage.MemoryKnown || usage.CPUSeconds <= 0 || usage.MemoryBytes == 0 {
 		t.Fatalf("usage(%d) = %+v, %t", pid, usage, ok)
 	}
 	cwd, ok := source.cwd(pid)

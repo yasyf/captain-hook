@@ -40,6 +40,16 @@ func TestParseLinuxIOSumsReadAndWriteBytes(t *testing.T) {
 	}
 }
 
+func TestParseLinuxStatmResidentReadsTheSecondField(t *testing.T) {
+	pages, ok := parseLinuxStatmResident([]byte("51234 20480 3072 512 0 40960 0\n"))
+	if !ok || pages != 20480 {
+		t.Fatalf("parseLinuxStatmResident = %d, %t", pages, ok)
+	}
+	if _, ok := parseLinuxStatmResident([]byte("51234\n")); ok {
+		t.Fatal("parseLinuxStatmResident reported a reading without the resident field")
+	}
+}
+
 func TestParseLinuxCmdlineSplitsOnNUL(t *testing.T) {
 	t.Parallel()
 	argv, ok := parseLinuxCmdline([]byte("node\x00/opt/claude/cli.js\x00--resume\x00"))

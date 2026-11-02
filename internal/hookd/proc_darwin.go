@@ -132,7 +132,7 @@ func (s *darwinProcSource) usage(pid int) (procUsage, bool) {
 	nanoseconds := ticks * float64(s.timebase.Numer) / float64(s.timebase.Denom)
 	return procUsage{
 		CPUSeconds: nanoseconds / 1e9, DiskBytes: record.DiskIOBytesRead + record.DiskIOBytesWrite,
-		CPUKnown: true, DiskKnown: true,
+		MemoryBytes: record.PhysFootprint, CPUKnown: true, DiskKnown: true, MemoryKnown: true,
 	}, true
 }
 
