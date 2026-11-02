@@ -391,7 +391,9 @@ func TestWorkerManagerCloseReportsJoinedProductGraph(t *testing.T) {
 
 func mustWorkerManager(t *testing.T) *workerManager {
 	t.Helper()
-	return newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager.memory = func(*workerClient) (uint64, bool) { return 0, false }
+	return manager
 }
 
 func TestDispatchRunsOneAgentsEventsConcurrently(t *testing.T) {
