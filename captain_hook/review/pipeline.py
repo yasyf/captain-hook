@@ -189,7 +189,7 @@ def parse_payload(raw: bytes) -> dict[str, object] | None:
     return payload if is_payload(payload) else None
 
 
-def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None, str | None] | None:
+def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None] | None:
     if (payload := parse_payload(raw)) is None:
         breadcrumb(f"{label} skip: unparseable stdin")
         return None
@@ -205,8 +205,7 @@ def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None, str 
         breadcrumb(f"{label} skip: missing transcript file")
         return None
     cwd = payload.get("cwd")
-    event = payload.get("hook_event_name")
-    return transcript, cwd if isinstance(cwd, str) else None, event if isinstance(event, str) else None
+    return transcript, cwd if isinstance(cwd, str) else None
 
 
 def detach(argv: list[str], *, spawned: str, pass_fds: tuple[int, ...] = ()) -> bool:
@@ -286,7 +285,7 @@ def _claim_stamp(stamp: Path, window: timedelta) -> bool:
     return False
 
 
-def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
+def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False, session_start: bool = False) -> None:
     """Parses the SessionStart/SessionEnd hook payload and detaches the reviewer child.
 
     Every path returns normally so the wired hook always exits 0: a set
@@ -308,7 +307,7 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     for that directory spawns nothing; while a pass runs, the next event queues
     exactly one follow-up child behind it.
 
-    A ``SessionStart`` also shares the ``Stop`` sweep's per-directory stamp: it spawns
+    A ``session_start`` pass also shares the ``Stop`` sweep's per-directory stamp: it spawns
     only when no ``SessionStart`` pass or sweep started on that transcript directory
     within ``sweep_interval_minutes``, and stamps the directory once its child is up.
     A ``SessionEnd`` always spawns.
@@ -316,6 +315,8 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     Args:
         raw: The hook's stdin bytes, holding the SessionStart/SessionEnd JSON payload.
         gate_enrollment: Skip the spawn for a non-watched repo (native dispatch only).
+        session_start: Whether native dispatch is answering a ``SessionStart``, which shares the
+            per-directory sweep interval.
     """
     from captain_hook.review.settings import ReviewAdmission
 
@@ -328,8 +329,7 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
         return
     if (parsed := payload_transcript(raw, label="review-run")) is None:
         return
-    transcript, cwd, event = parsed
-    session_start = event == "SessionStart"
+    transcript, cwd = parsed
     admission = ReviewAdmission()
     interval = timedelta(minutes=admission.sweep_interval_minutes)
     with ExitStack() as claim:
@@ -398,7 +398,7 @@ def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
         return
     if (parsed := payload_transcript(raw, label="sweep")) is None:
         return
-    transcript, cwd, _ = parsed
+    transcript, cwd = parsed
     interval = timedelta(minutes=ReviewAdmission().sweep_interval_minutes)
     try:
         trigger, stamp = directory_stamps(transcript)
@@ -434,7 +434,7 @@ def dispatch_review(event_name: str, payload: dict[str, object]) -> None:
     if event_name == "Stop":
         guard_and_sweep(raw, gate_enrollment=True)
     else:
-        guard_and_spawn(raw, gate_enrollment=True)
+        guard_and_spawn(raw, gate_enrollment=True, session_start=event_name == "SessionStart")
 
 
 def brain_prompt(transcript: Path) -> str:
