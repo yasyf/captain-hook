@@ -16,17 +16,19 @@ def resolve_review_db_path() -> Path:
     return resolve_state_dir() / "review" / "review-v1.db"
 
 
-class ReviewPaths(BaseSettings):
-    """The reviewer's database location alone, read from ``HOOKS_REVIEW_DB_PATH``.
+class ReviewAdmission(BaseSettings):
+    """What the hook guards read before they admit a reviewer child, from ``HOOKS_REVIEW_*``.
 
-    The hook guard resolves its admission locks from this without validating the full
-    :class:`ReviewSettings`, so a malformed reviewer knob still reaches the detached child,
-    which records the failure.
+    ``db_path`` locates the pending-pass locks. ``sweep_interval_minutes`` spaces the passes a
+    ``Stop`` or ``SessionStart`` queues over one transcript directory. The guards read these without
+    validating the full :class:`ReviewSettings`, so a malformed reviewer knob still reaches the
+    detached child, which records the failure.
     """
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")
 
     db_path: Path = Field(default_factory=resolve_review_db_path)
+    sweep_interval_minutes: int = 30
 
 
 class ReviewSettings(HooksSettings):
@@ -41,7 +43,6 @@ class ReviewSettings(HooksSettings):
     bounds one detached child's whole run so a hang records a failed spawn instead
     of stalling; five minutes past it the resident host terminates the child's
     whole session, which is the bound a blocking call cannot outlast.
-    ``sweep_interval_minutes`` throttles the Stop-triggered repo-wide sweep.
     """
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")
@@ -66,5 +67,4 @@ class ReviewSettings(HooksSettings):
     brain_max_budget_usd: float = 5.0
     brain_deadline_seconds: int = 3600
     spawn_deadline_seconds: int = 7200
-    sweep_interval_minutes: int = 30
     db_path: Path = Field(default_factory=resolve_review_db_path)

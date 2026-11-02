@@ -31,7 +31,7 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -145,8 +145,18 @@ def sweep_dir() -> Path:
     return resolve_state_dir() / "review" / "sweeps"
 
 
-def sweep_key(cwd: str) -> str:
-    return hashlib.sha256(cwd.encode()).hexdigest()[:12]
+def sweep_key(directory: str) -> str:
+    return hashlib.sha256(directory.encode()).hexdigest()[:12]
+
+
+def directory_stamps(transcript: str) -> tuple[Path, Path]:
+    (stamps := sweep_dir()).mkdir(parents=True, exist_ok=True)
+    key = sweep_key(str(Path(transcript).parent))
+    return stamps / f"{key}.trigger", stamps / f"{key}.sweep"
+
+
+def fresh(stamp: Path, interval: timedelta) -> bool:
+    return stamp.exists() and datetime.now(UTC) - datetime.fromtimestamp(stamp.stat().st_mtime, tz=UTC) < interval
 
 
 def spawn_argv(transcript: str, cwd: str | None, *, sweep: bool = False, pending_fd: int | None = None) -> list[str]:
@@ -179,7 +189,7 @@ def parse_payload(raw: bytes) -> dict[str, object] | None:
     return payload if is_payload(payload) else None
 
 
-def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None] | None:
+def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None, str | None] | None:
     if (payload := parse_payload(raw)) is None:
         breadcrumb(f"{label} skip: unparseable stdin")
         return None
@@ -195,10 +205,11 @@ def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None] | No
         breadcrumb(f"{label} skip: missing transcript file")
         return None
     cwd = payload.get("cwd")
-    return transcript, cwd if isinstance(cwd, str) else None
+    event = payload.get("hook_event_name")
+    return transcript, cwd if isinstance(cwd, str) else None, event if isinstance(event, str) else None
 
 
-def detach(argv: list[str], *, spawned: str, pass_fds: tuple[int, ...] = ()) -> None:
+def detach(argv: list[str], *, spawned: str, pass_fds: tuple[int, ...] = ()) -> bool:
     try:
         (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
@@ -214,12 +225,13 @@ def detach(argv: list[str], *, spawned: str, pass_fds: tuple[int, ...] = ()) -> 
             )
     except OSError:
         breadcrumb(f"detach failed: {spawned}")
-        return
+        return False
     breadcrumb(spawned)
     if _ADOPTER is not None:
         from captain_hook.review.settings import ReviewSettings
 
         _ADOPTER(child.pid, (ReviewSettings().spawn_deadline_seconds + LIFETIME_GRACE_SECONDS) * 1000)
+    return True
 
 
 def enrolled(cwd: str | None) -> bool:
@@ -296,11 +308,16 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     for that directory spawns nothing; while a pass runs, the next event queues
     exactly one follow-up child behind it.
 
+    A ``SessionStart`` also shares the ``Stop`` sweep's per-directory stamp: it spawns
+    only when no ``SessionStart`` pass or sweep started on that transcript directory
+    within ``sweep_interval_minutes``, and stamps the directory once its child is up.
+    A ``SessionEnd`` always spawns.
+
     Args:
         raw: The hook's stdin bytes, holding the SessionStart/SessionEnd JSON payload.
         gate_enrollment: Skip the spawn for a non-watched repo (native dispatch only).
     """
-    from captain_hook.review.settings import ReviewPaths
+    from captain_hook.review.settings import ReviewAdmission
 
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("review-run skip: CAPT_HOOK_SPAWNED set")
@@ -311,24 +328,39 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
         return
     if (parsed := payload_transcript(raw, label="review-run")) is None:
         return
-    transcript, cwd = parsed
+    transcript, cwd, event = parsed
+    session_start = event == "SessionStart"
+    admission = ReviewAdmission()
+    interval = timedelta(minutes=admission.sweep_interval_minutes)
     with ExitStack() as claim:
         try:
-            pending_fd = claim.enter_context(pending_claim(ReviewPaths().db_path, Path(transcript)))
+            pending_fd = claim.enter_context(pending_claim(admission.db_path, Path(transcript)))
         except OSError:
             breadcrumb("review-run skip: pending lock OSError")
             return
         if pending_fd is None:
             breadcrumb("review-run skip: a queued pass already covers this transcript directory")
             return
+        try:
+            stamp = directory_stamps(transcript)[1]
+            throttled = session_start and fresh(stamp, interval)
+        except OSError:
+            breadcrumb("review-run skip: stamp OSError")
+            return
+        if throttled:
+            breadcrumb("review-run skip: throttled")
+            return
         if gate_enrollment and not enrolled(cwd):
             breadcrumb("review-run skip: not watching")
             return
-        detach(
+        spawned = detach(
             spawn_argv(transcript, cwd, pending_fd=pending_fd),
             spawned=f"spawned {transcript}",
             pass_fds=(pending_fd,),
         )
+        if spawned and session_start:
+            with suppress(OSError):
+                stamp.touch()
 
 
 def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
@@ -336,12 +368,13 @@ def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
 
     Mirrors :func:`guard_and_spawn`'s skips (each breadcrumbed) and detach, plus a
     file-based, database-free throttle: every invocation that passes the skips
-    touches ``<key>.trigger`` under :func:`sweep_dir`, keyed by the payload cwd's
-    sha256, and a sweep spawns only when the matching ``<key>.sweep`` stamp is
-    older than ``sweep_interval_minutes`` (or absent). The stamp is claimed
-    atomically (:func:`_claim_stamp`) just before the detach, so a burst of Stop
-    events yields at most one sweep per interval, and native ``run Stop`` dispatch
-    collapses with a stale plugin's raw ``review sweep`` entry. The child runs
+    touches ``<key>.trigger`` under :func:`sweep_dir`, keyed by the sha256 of the
+    transcript's directory (the directory the sweep scans), and a sweep spawns only
+    when the matching ``<key>.sweep`` stamp is older than ``sweep_interval_minutes``
+    (or absent). The stamp is claimed atomically (:func:`_claim_stamp`) just before
+    the detach, so a burst of Stop events across every cwd sharing that directory
+    yields at most one sweep per interval, and native ``run Stop`` dispatch collapses
+    with a stale plugin's raw ``review sweep`` entry. The child runs
     ``review spawn --sweep``: scan, triage, and judge, but never PR sync or the
     working-copy-editing brain.
 
@@ -355,7 +388,7 @@ def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
         raw: The hook's stdin bytes, holding the Stop JSON payload.
         gate_enrollment: Skip the spawn for a non-watched repo (native dispatch only).
     """
-    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.settings import ReviewAdmission
 
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("sweep skip: CAPT_HOOK_SPAWNED set")
@@ -365,14 +398,12 @@ def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
         return
     if (parsed := payload_transcript(raw, label="sweep")) is None:
         return
-    transcript, cwd = parsed
-    interval = timedelta(minutes=ReviewSettings().sweep_interval_minutes)
-    key = sweep_key(cwd or "")
+    transcript, cwd, _ = parsed
+    interval = timedelta(minutes=ReviewAdmission().sweep_interval_minutes)
     try:
-        (stamps := sweep_dir()).mkdir(parents=True, exist_ok=True)
-        (stamps / f"{key}.trigger").touch()
-        stamp = stamps / f"{key}.sweep"
-        if stamp.exists() and datetime.now(UTC) - datetime.fromtimestamp(stamp.stat().st_mtime, tz=UTC) < interval:
+        trigger, stamp = directory_stamps(transcript)
+        trigger.touch()
+        if fresh(stamp, interval):
             breadcrumb("sweep skip: throttled")
             return
     except OSError:
