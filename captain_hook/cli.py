@@ -319,7 +319,11 @@ def dispatch_event(
     if root_session and event is Event.SessionStart and raw.get("source") == "startup":
         record_unborn(session_dir, parent)
     unborn = threading.Event()
-    if root_session and event is Event.UserPromptSubmit and claim_unborn(session_dir, parent):
+    # Claude Code also fires SubagentStop for forks that record no transcript (the compaction
+    # summarizer), naming an agent_transcript_path that is never written.
+    if (event is Event.SubagentStop and raw.get("agent_transcript_path")) or (
+        root_session and event is Event.UserPromptSubmit and claim_unborn(session_dir, parent)
+    ):
         unborn.set()
 
     def evidence() -> LazyTranscript:

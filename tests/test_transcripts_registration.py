@@ -1496,6 +1496,29 @@ def test_unborn_allowance_binds_the_root_prompt_of_its_session(tmp_path, probe, 
     assert probe == [0]
 
 
+@pytest.mark.parametrize(
+    ("messages", "seen"),
+    [
+        pytest.param((), [0], id="transcriptless-fork"),
+        pytest.param((T.user("review the diff"), T.assistant("looks good")), [2], id="written-lane"),
+    ],
+)
+def test_subagent_stop_reads_a_never_written_agent_transcript_as_empty(tmp_path, snapshot_owner, messages, seen):
+    lengths: list[int] = []
+
+    @on(Event.SubagentStop)
+    def stop_probe(evt):
+        lengths.append(len(evt.ctx.t))
+
+    lane = tmp_path / "projects" / FIRST_SESSION / "subagents" / "agent-fork.jsonl"
+    write_transcript(first_root(tmp_path), T.user("earlier"))
+    if messages:
+        write_transcript(lane, *messages)
+
+    assert sync_event(tmp_path, Event.SubagentStop, agent_id="fork", agent_transcript_path=str(lane)) == []
+    assert lengths == seen
+
+
 def test_unborn_allowance_is_spent_by_the_first_prompt_alone(tmp_path, probe, snapshot_owner):
     start_session(tmp_path, "startup")
 
