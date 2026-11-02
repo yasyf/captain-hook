@@ -35,9 +35,9 @@ if TYPE_CHECKING:
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 ROOT_TAIL_EVENTS = 256
 ROOT_EXCERPT_BYTES = 16 * 1024 * 1024
-REGISTERED_SOURCES: StampedCache[tuple[Path, Path, int | None], tuple[int, int, int, int, int], GraphSources | None] = (
-    StampedCache(1)
-)
+REGISTERED_SOURCES: StampedCache[
+    tuple[Path, Path, int | None, str | None], tuple[int, int, int, int, int], GraphSources | None
+] = StampedCache(1)
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -435,6 +435,7 @@ def register_transcript(
     thread_id: str | None = None,
     path: str | None = None,
     label: str | None = None,
+    agent_id: str | None = None,
 ) -> RegisteredTranscript:
     """Register an external transcript against ``session_id`` so it folds into the deep view.
 
@@ -444,7 +445,9 @@ def register_transcript(
     Registration is idempotent by ``(provider, thread_id, path)``: re-registering the same transcript keeps
     one entry and refreshes its ``registered_at``. A compacted session's deep view folds only the
     transcripts registered since its current window started, so register a transcript once its run has
-    written its edits, and again after later activity. This is the one write codepath; the CLI and the
+    written its edits, and again after later activity. A transcript registered with ``agent_id`` folds
+    only into the deep view of the subagent or teammate that dispatched it, never into the root's or a
+    sibling's; without one it folds into the root's. This is the one write codepath; the CLI and the
     ``capt-hook mcp`` server both delegate here.
 
     Args:
@@ -453,6 +456,7 @@ def register_transcript(
         thread_id: The provider thread/session id to resolve at dispatch.
         path: A path to the transcript file, stored absolute (a relative path anchors to the caller's cwd).
         label: An optional human label for the registration.
+        agent_id: The dispatching agent's id (a hook payload's ``agent_id``), or ``None`` for the root.
 
     Returns:
         The :class:`~captain_hook.state.RegisteredTranscript` recorded for the request.
@@ -464,6 +468,7 @@ def register_transcript(
         thread_id=thread_id,
         path=str(Path(path).absolute()) if path else path,
         label=label,
+        agent_id=agent_id,
     )
     key = (entry.provider, entry.thread_id, entry.path)
     with SessionSlot(ensure_session(SessionId(session_id)), RegisteredTranscripts).mutate() as blob:
@@ -483,7 +488,9 @@ def registered_sources_stamp(path: Path) -> tuple[int, int, int, int, int] | Non
     return stamp.st_dev, stamp.st_ino, stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns
 
 
-def registered_sources(session_dir: Path | None, since_unix_ms: int | None = None) -> GraphSources:
+def registered_sources(
+    session_dir: Path | None, since_unix_ms: int | None = None, agent_id: str | None = None
+) -> GraphSources:
     from cc_transcript.codex import sessions_root
 
     from captain_hook.snapshots.client import GraphSources
@@ -498,7 +505,7 @@ def registered_sources(session_dir: Path | None, since_unix_ms: int | None = Non
         entries = [
             entry
             for entry in registered.entries
-            if since_unix_ms is None or entry.registered_at * 1000 >= since_unix_ms
+            if entry.agent_id == agent_id and (since_unix_ms is None or entry.registered_at * 1000 >= since_unix_ms)
         ]
         return GraphSources(
             thread_ids=tuple(dict.fromkeys(entry.thread_id for entry in entries if entry.thread_id)),
@@ -510,7 +517,7 @@ def registered_sources(session_dir: Path | None, since_unix_ms: int | None = Non
         return read() or GraphSources()
     return (
         REGISTERED_SOURCES.get(
-            (path, root, since_unix_ms),
+            (path, root, since_unix_ms, agent_id),
             stamp,
             math.inf,
             read,
