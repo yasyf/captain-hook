@@ -668,7 +668,14 @@ class TestMcpServerLiveness:
         (tool,) = session.request("tools/list")["tools"]
         assert tool["name"] == "register_transcript"
         assert tool["inputSchema"]["required"] == ["session_id"]
-        assert set(tool["inputSchema"]["properties"]) == {"session_id", "provider", "thread_id", "path", "label"}
+        assert set(tool["inputSchema"]["properties"]) == {
+            "session_id",
+            "provider",
+            "thread_id",
+            "path",
+            "label",
+            "agent_id",
+        }
 
     def test_tools_call_registers_through_the_protocol(
         self, initialized_mcp_session: tuple[McpStdioSession, dict[str, Any]]
