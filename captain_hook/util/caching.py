@@ -49,6 +49,29 @@ class WeightedLRUDict[K, V](LRUDict[K, V]):
         return len(self) > 1 and sum(map(self.weigh, self.values())) > self.maxsize
 
 
+def weighted_lru_cache[K, V](
+    maxweight: int, weigh: Callable[[V], int]
+) -> Callable[[Callable[[K], V]], Callable[[K], V]]:
+    def decorate(fn: Callable[[K], V]) -> Callable[[K], V]:
+        store: WeightedLRUDict[K, V] = WeightedLRUDict(maxweight, weigh)
+        guard = threading.Lock()
+
+        @wraps(fn)
+        def wrapper(key: K) -> V:
+            with guard:
+                if key in store:
+                    return store[key]
+            value = fn(key)
+            with guard:
+                store[key] = value
+            return value
+
+        wrapper.cache_clear = store.cache_clear
+        return wrapper
+
+    return decorate
+
+
 def ttl_cache[**P, R](ttl: float) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Memoize a callable's result for ``ttl`` seconds, keyed by its arguments.
 
@@ -87,8 +110,14 @@ class StampedCache[K, S, V]:
         self._refill_lock = threading.Lock()
 
     def get(
-        self, key: K, stamp: S, ttl: float, compute: Callable[[], V], *,
-        fresh: bool = False, cache_if: Callable[[V], bool] | None = None,
+        self,
+        key: K,
+        stamp: S,
+        ttl: float,
+        compute: Callable[[], V],
+        *,
+        fresh: bool = False,
+        cache_if: Callable[[V], bool] | None = None,
     ) -> V:
         if not fresh and (hit := self._valid(key, stamp, ttl)) is not None:
             return hit.value

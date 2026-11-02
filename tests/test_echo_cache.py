@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from captain_hook.signals.nlp import parse
+from captain_hook.signals.nlp import PARSE_CACHE_TOKENS, parse
 from captain_hook.state import RESOURCES, PrimitiveState, cached_content_lemmas
 
 
@@ -39,7 +39,7 @@ def test_lemma_cache_evicts_old_text(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_seed_echo_reuses_signal_parse(monkeypatch: pytest.MonkeyPatch) -> None:
     message = "Leave the codebase better than you found it."
-    pipeline = Mock(return_value=SimpleNamespace(sents=[SimpleNamespace(text=message)]))
+    pipeline = Mock(return_value=MagicMock(sents=[SimpleNamespace(text=message)]))
     monkeypatch.setitem(RESOURCES.__dict__, "spacy", pipeline)
     parse(message)
     first, second = PrimitiveState(), PrimitiveState()
@@ -47,3 +47,16 @@ def test_seed_echo_reuses_signal_parse(monkeypatch: pytest.MonkeyPatch) -> None:
     second.seed_echo_verbatim(message)
     assert first.echo_verbatim == second.echo_verbatim == [message]
     pipeline.assert_called_once_with(message)
+
+
+def test_parse_cache_holds_docs_up_to_its_token_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    def doc(text: str) -> MagicMock:
+        parsed = MagicMock()
+        parsed.__len__.return_value = PARSE_CACHE_TOKENS // 2
+        return parsed
+
+    pipeline = Mock(side_effect=doc)
+    monkeypatch.setitem(RESOURCES.__dict__, "spacy", pipeline)
+    for text in ("first", "second", "third", "second", "first"):
+        parse(text)
+    assert [call.args[0] for call in pipeline.call_args_list] == ["first", "second", "third", "first"]

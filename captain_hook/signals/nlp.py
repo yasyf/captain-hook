@@ -6,8 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, get_args
 
+from captain_hook.util.caching import weighted_lru_cache
+
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span, Token
+
+PARSE_CACHE_TOKENS = 16_384
 
 SubjectKind = Literal["unnamed", "passive", "actor"]
 
@@ -147,7 +151,7 @@ class NlpSignal:
     weight: int = 1
 
 
-@functools.lru_cache
+@weighted_lru_cache(PARSE_CACHE_TOKENS, len)
 def parse(text: str) -> Doc:
     from captain_hook.state import RESOURCES
 
