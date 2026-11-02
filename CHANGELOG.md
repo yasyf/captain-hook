@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The performance pack no longer encodes one machine's directory layout.** The lane-install guard
+  (`installs.py`) is gone. It blocked `yarn`, `npm`, `pnpm` and `bun` installs under
+  `~/repos/claude/worktrees`, `~/.orca/workspaces` and `~/repos/orca/workspaces`. The search guards
+  no longer treat `~/repos`, `~/.vcache`, `~/.daemonkit`, `~/.orca`, or those worktree and cleanup-queue
+  paths as broad roots or worktree pools. `~`, `~/.claude` and its plugin cache, transcripts and
+  worktree pool, `~/.cache`, `~/Library` and the temp roots stay protected, and a `-g` or `-name` filter
+  still does not bound a search under them.
+
 ### Fixed
 
 - **The host updates while the Homebrew formula trails the newest release.** `capt-hook update run` and

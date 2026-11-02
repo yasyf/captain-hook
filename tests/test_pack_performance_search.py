@@ -15,9 +15,6 @@ from captain_hook.types import Event
 from tests.helpers import make_pre_tool_event, run_cli
 from tests.test_cmd import evt_for
 
-ORCA_UUID = "7f3c2a10-5d4e-4b8a-9c61-2e0f8a9b4d17"
-LINKED_UUID = "0b9e4d22-8a71-4c3f-b5e6-91d0c7a3f258"
-
 
 @pytest.fixture
 def performance(isolate_modules: None) -> None:
@@ -46,16 +43,6 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (local := root / "project" / ".claude" / "worktrees" / "lane" / "src").mkdir(parents=True)
     (local.parent / ".git").write_text("gitdir: ../../../.git/worktrees/lane")
     (local.parents[1] / "stale").mkdir()
-    (adopted := root / "repos" / "orca" / "workspaces" / ORCA_UUID / "captain-hook" / "lane" / "src").mkdir(
-        parents=True
-    )
-    (adopted.parent / ".git").mkdir()
-    (cleanup := root / ".daemonkit" / "a" / "ccx-cleanup").mkdir(parents=True)
-    (cleanup / "switch.json").write_text('{"paused":true}')
-    (job := cleanup / "jobs" / "queued-job").mkdir(parents=True)
-    (job / "job.json").write_text("{}")
-    (payload := job / "payload" / "src").mkdir(parents=True)
-    (payload.parent / ".git").write_text("gitdir: /retired")
     monkeypatch.setenv("HOME", str(root))
     return root
 
@@ -85,18 +72,6 @@ def relocated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (claude / "worktrees").symlink_to(lane.parents[1])
     monkeypatch.setenv("HOME", str(claude.parent))
     return claude.parent
-
-
-@pytest.fixture
-def linked_aggregates(home: Path, tmp_path: Path) -> Path:
-    (aggregate := tmp_path.resolve() / "outside" / "aggregate" / "captain-hook" / "lane").mkdir(parents=True)
-    (checkout := tmp_path.resolve() / "outside" / "checkout" / "src").mkdir(parents=True)
-    (checkout.parent / ".git").mkdir()
-    pool = home / "repos" / "orca" / "workspaces"
-    (pool / LINKED_UUID).symlink_to(aggregate.parents[1])
-    (pool / ORCA_UUID / "linked-repo").symlink_to(aggregate.parent)
-    (pool / ORCA_UUID / "linked-checkout").symlink_to(checkout.parent)
-    return pool
 
 
 @pytest.fixture
@@ -298,7 +273,7 @@ def search_provenance(performance: None, home: Path) -> dict[str, Path]:
     worktree_git = git / "worktrees" / "amberjack"
     worktree_git.mkdir(parents=True)
     (worktree_git / "commondir").write_text("../..\n")
-    checkout = home / ".orca" / "workspaces" / "monorepo" / "monorepo" / "amberjack"
+    checkout = home / "worktrees" / "monorepo" / "amberjack"
     checkout.mkdir(parents=True)
     (checkout / ".git").write_text(f"gitdir: {worktree_git}\n")
     for directory in [checkout / ".claude", checkout / ".agents", primary / "src" / "focused"]:
@@ -629,7 +604,6 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
         pytest.param("rg --files -g AGENTS.md ~/.claude/worktrees", id="whole-pool-filename-glob"),
         pytest.param("rg --files --glob=CLAUDE.md ~/.claude/worktrees", id="whole-pool-joined-long-glob"),
         pytest.param("rg --files -gAGENTS.md ~/.claude/worktrees", id="whole-pool-joined-short-glob"),
-        pytest.param("rg --files -g AGENTS.md ~/.orca/workspaces/captain-hook", id="orca-workspace-pool"),
         pytest.param("rg --files ~", id="home"),
         pytest.param("rg --files -g '*.py' ~", id="home-filename-glob"),
         pytest.param("rg --files -tpy ~", id="home-type-filter"),
@@ -650,7 +624,6 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
         pytest.param("rg --files ~/..", id="tilde-parent"),
         pytest.param("rg --files ~/.claude", id="claude-dir"),
         pytest.param("rg --files -g AGENTS.md ~/.claude", id="claude-dir-filename-glob"),
-        pytest.param("rg --files ~/.orca", id="orca-dir"),
         pytest.param("cd ~/.claude && rg --files", id="implicit-cwd-claude-dir"),
         pytest.param("rg --files ~/.claude/worktrees/README ~/.claude/worktrees", id="explicit-file-beside-pool"),
         pytest.param(
@@ -661,37 +634,10 @@ def test_allows_search_below_home_roots(performance: None, home: Path, tmp_path:
         pytest.param("rg --files -g AGENTS.md ~/project/.claude/worktrees", id="project-local-pool-filename-glob"),
         pytest.param("rg --files ~/project/.claude/worktrees/stale", id="project-local-unmarked-child"),
         pytest.param("cd ~/project/.claude/worktrees && rg --files", id="implicit-cwd-project-local-pool"),
-        pytest.param("rg --files ~/repos/orca/workspaces", id="adopted-pool"),
-        pytest.param("rg --files -g AGENTS.md ~/repos/orca/workspaces", id="adopted-pool-filename-glob"),
-        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}", id="adopted-uuid-aggregate"),
-        pytest.param("rg --files -tmd ~/repos/orca/workspaces/{uuid}", id="adopted-uuid-type-filter"),
-        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}/captain-hook", id="adopted-repo-aggregate"),
-        pytest.param(
-            "rg --files -g AGENTS.md -g CLAUDE.md ~/repos/orca/workspaces/{uuid}/captain-hook",
-            id="adopted-repo-aggregate-filename-glob",
-        ),
-        pytest.param("cd ~/repos/orca/workspaces/{uuid} && rg --files", id="implicit-cwd-adopted-uuid"),
-        pytest.param(
-            "rg --files ~/repos/orca/workspaces/{uuid}/captain-hook/lane ~/repos/orca/workspaces/{uuid}/captain-hook",
-            id="adopted-checkout-beside-repo-aggregate",
-        ),
-        pytest.param("rg --files ~/repos/orca", id="adopted-pool-parent"),
-        pytest.param("rg --files ~/repos", id="adopted-pool-grandparent"),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs", id="cleanup-queue"),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job", id="cleanup-job-root"),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup", id="cleanup-queue-parent"),
-        pytest.param(
-            "rg --files {home}/.daemonkit/a/ccx-cleanup -g '*.json' -g '*.toml'",
-            id="observed-cleanup-queue-parent-with-filename-filters",
-        ),
-        pytest.param("rg --files ~/.daemonkit/a", id="cleanup-queue-grandparent"),
-        pytest.param("rg --files ~/.daemonkit", id="cleanup-queue-ancestor"),
-        pytest.param("cd ~/.daemonkit/a/ccx-cleanup && rg --files", id="implicit-cleanup-queue-parent"),
-        pytest.param("rg --files --maxdepth 1 ~/.daemonkit/a/ccx-cleanup", id="cleanup-retains-listing-depth-policy"),
     ],
 )
 def test_blocks_listing_at_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
-    assert decision(command.format(home=home, uuid=ORCA_UUID), tmp_path.resolve(), tmp_path) == "deny"
+    assert decision(command, tmp_path.resolve(), tmp_path) == "deny"
 
 
 @pytest.mark.parametrize(
@@ -721,52 +667,10 @@ def test_blocks_listing_at_home_roots(performance: None, home: Path, tmp_path: P
         ),
         pytest.param("rg --files ~/project/.claude/worktrees/lane/src", id="project-local-checkout-subtree"),
         pytest.param("cd ~/project/.claude/worktrees/lane && rg --files", id="implicit-cwd-project-local-checkout"),
-        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}/captain-hook/lane", id="adopted-checkout"),
-        pytest.param(
-            "rg --files -g AGENTS.md ~/repos/orca/workspaces/{uuid}/captain-hook/lane/src",
-            id="adopted-checkout-subtree",
-        ),
-        pytest.param(
-            "cd ~/repos/orca/workspaces/{uuid}/captain-hook/lane && rg --files", id="implicit-cwd-adopted-checkout"
-        ),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-switch-file"),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/job.json", id="cleanup-job-file"),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload", id="cleanup-one-checkout"),
-        pytest.param(
-            "rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload/src", id="cleanup-checkout-subtree"
-        ),
-        pytest.param("rg paused ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-direct-state-search"),
-        pytest.param("cat ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-direct-state-read"),
-        pytest.param("find ~/.daemonkit/a/ccx-cleanup -maxdepth 1 -name '*.json'", id="cleanup-shallow-find"),
     ],
 )
 def test_allows_listing_below_home_roots(performance: None, home: Path, tmp_path: Path, command: str) -> None:
-    assert decision(command.format(uuid=ORCA_UUID), tmp_path.resolve(), tmp_path) is None
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        pytest.param("rg --files ~/repos/orca/workspaces/{linked}", id="linked-uuid-aggregate"),
-        pytest.param(
-            "rg --files --follow -g AGENTS.md ~/repos/orca/workspaces/{linked}", id="followed-linked-uuid-aggregate"
-        ),
-        pytest.param("rg --files ~/repos/orca/workspaces/{uuid}/linked-repo", id="linked-repo-aggregate"),
-    ],
-)
-def test_blocks_listing_at_a_linked_adopted_aggregate(
-    performance: None, linked_aggregates: Path, tmp_path: Path, command: str
-) -> None:
-    assert decision(command.format(linked=LINKED_UUID, uuid=ORCA_UUID), tmp_path.resolve(), tmp_path) == "deny"
-
-
-def test_allows_a_linked_checkout_in_the_adopted_pool(
-    performance: None, linked_aggregates: Path, tmp_path: Path
-) -> None:
-    assert (
-        decision(f"rg --files ~/repos/orca/workspaces/{ORCA_UUID}/linked-checkout", tmp_path.resolve(), tmp_path)
-        is None
-    )
+    assert decision(command, tmp_path.resolve(), tmp_path) is None
 
 
 def test_listing_follows_the_working_directory(performance: None, home: Path, tmp_path: Path) -> None:
@@ -813,8 +717,6 @@ def test_allows_search_below_a_symlinked_home(
         pytest.param("rg --files ~/..", id="tilde-parent"),
         pytest.param("rg --files {real.parent}", id="canonical-parent"),
         pytest.param("rg --files ~/.claude", id="tilde-claude-dir"),
-        pytest.param("rg --files {real}/repos/orca/workspaces", id="canonical-adopted-pool"),
-        pytest.param("rg --files {real}/repos", id="canonical-adopted-pool-ancestor"),
     ],
 )
 def test_blocks_listing_at_a_symlinked_home(performance: None, linked_home: Path, tmp_path: Path, command: str) -> None:
@@ -910,11 +812,6 @@ def test_classifies_roots_without_walking(
     assert decision("git grep needle internal/focused", repo, tmp_path) is None
     assert decision("rg --files -g AGENTS.md . internal/focused", repo, tmp_path) is None
     assert decision("rg --files ~", repo, tmp_path / "home") == "deny"
-    assert (
-        decision(f"rg --files {home}/.daemonkit/a/ccx-cleanup -g '*.json' -g '*.toml'", repo, tmp_path / "cleanup")
-        == "deny"
-    )
-    assert decision("rg --files ~/.daemonkit/a/ccx-cleanup/switch.json", repo, tmp_path / "switch") is None
 
 
 def test_git_grep_follows_its_own_directory(performance: None, repo: Path, tmp_path: Path) -> None:
@@ -1104,7 +1001,7 @@ def test_recursive_grep_uses_the_current_command_without_history(
     assert (output or {}).get("hookSpecificOutput", {}).get("permissionDecision") == expected
 
 
-@pytest.mark.parametrize("root", ["~/Code", "~/repos"])
+@pytest.mark.parametrize("root", ["~/Code", "~/.claude/worktrees"])
 def test_blocks_unbounded_find_at_checkout_collections(
     performance: None, home: Path, tmp_path: Path, root: str
 ) -> None:
@@ -1120,37 +1017,20 @@ def test_blocks_unbounded_find_at_checkout_collections(
         pytest.param("find ~/.claude/worktrees/captain-hook -name needle", "deny", id="claude-project-pool"),
         pytest.param("find ~/.claude/worktrees/captain-hook/* -name needle", "deny", id="claude-project-pool-star"),
         pytest.param("find ~/.claude/worktrees/captain-hook/lane/* -name needle", None, id="focused-claude-lane-star"),
-        pytest.param(
-            f"find ~/repos/orca/workspaces/{ORCA_UUID}/captain-hook -name needle",
-            "deny",
-            id="orca-project-pool",
-        ),
-        pytest.param(
-            f"find ~/repos/orca/workspaces/{ORCA_UUID}/captain-hook/* -name needle",
-            "deny",
-            id="orca-project-pool-star",
-        ),
-        pytest.param(
-            f"find ~/repos/orca/workspaces/{ORCA_UUID}/captain-hook/lane/* -name needle",
-            None,
-            id="focused-orca-lane-star",
-        ),
-        pytest.param("find ~/repos -type f -name '*.py'", "deny", id="filename-filter"),
-        pytest.param("find ~/repos/claude/worktrees -name needle", "deny", id="claude-pool"),
-        pytest.param("find ~/repos/orca/workspaces -name needle", "deny", id="orca-pool"),
-        pytest.param(f"find ~/repos/orca/workspaces/{ORCA_UUID} -name needle", "deny", id="orca-aggregate"),
+        pytest.param("find ~/Code -type f -name '*.py'", "deny", id="filename-filter"),
         pytest.param("env X=1 timeout 2 /usr/bin/find ~/Code -name needle", "deny", id="wrapper"),
-        pytest.param("sh -c 'find ~/repos -name needle'", "deny", id="shell"),
+        pytest.param("sh -c 'find ~/Code -name needle'", "deny", id="shell"),
         pytest.param("cd ~/Code && find . -name needle", "deny", id="command-cwd"),
-        pytest.param("for root in ~/Code ~/repos; do find $root -name needle; done", "deny", id="loop-roots"),
+        pytest.param(
+            "for root in ~/Code ~/.claude/worktrees; do find $root -name needle; done", "deny", id="loop-roots"
+        ),
         pytest.param("find ~/Code -maxdepth 1 $EXPR", "deny", id="unknown-expression"),
         pytest.param("find ~/Code -maxdepth 1 -maxdepth 99", "deny", id="last-depth-unbounded"),
         pytest.param("find ~/Code -maxdepth 0", None, id="depth-zero"),
         pytest.param("find ~/Code -maxdepth 1 -type d", None, id="depth-one"),
-        pytest.param("find ~/repos -maxdepth 2 -name needle", None, id="depth-two"),
+        pytest.param("find ~/Code -maxdepth 2 -name needle", None, id="depth-two"),
         pytest.param("find ~/Code -maxdepth 99 -maxdepth 1", None, id="last-depth-bounded"),
         pytest.param("find ~/Code/captain-hook -name needle", None, id="focused-code-checkout"),
-        pytest.param("find ~/repos/captain-hook/src -name needle", None, id="focused-repos-subpath"),
         pytest.param("find ~/.claude/worktrees/captain-hook/lane -name needle", None, id="focused-worktree"),
         pytest.param("find ~/Code/notes.log -name needle", None, id="explicit-file"),
         pytest.param("find src -name needle", None, id="relative-focused-path"),
@@ -1162,7 +1042,6 @@ def test_find_scope_and_depth_contract(
 ) -> None:
     (home / "Code" / "captain-hook" / "src").mkdir(parents=True)
     (home / "Code" / "notes.log").write_text("needle\n")
-    (home / "repos" / "captain-hook" / "src").mkdir(parents=True)
     assert decision(command, repo, tmp_path) == expected
 
 
@@ -1170,7 +1049,7 @@ def test_find_repeated_broad_commands_always_block(performance: None, home: Path
     assert decision("find / -name first", home, tmp_path) == "deny"
     assert decision("find / -name second", home, tmp_path) == "deny"
     assert decision("find ~/Code -name third", home, tmp_path) == "deny"
-    assert decision("find ~/repos -name fourth", home, tmp_path) == "deny"
+    assert decision("find ~/.claude/worktrees -name fourth", home, tmp_path) == "deny"
     assert decision("find ~/Code -maxdepth 2", home, tmp_path) is None
 
 
@@ -1212,8 +1091,7 @@ def test_find_classifies_without_walks_subprocesses_or_history(
     for index, (command, expected) in enumerate(
         [
             ("find ~/Code -name needle", "deny"),
-            ("find ~/repos -name needle", "deny"),
-            ("find ~/repos/orca/workspaces -name needle", "deny"),
+            ("find ~/.claude/worktrees -name needle", "deny"),
             ("find internal/focused -name needle", None),
             ("find ~/Code -maxdepth 2", None),
         ]

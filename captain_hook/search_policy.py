@@ -33,15 +33,10 @@ if TYPE_CHECKING:
 
     from captain_hook.cmd import Call, Cmd
 
-POOLS = (
-    ".claude/worktrees",
-    ".orca/workspaces",
-    "repos/claude/worktrees",
-    ".daemonkit/a/ccx-cleanup/jobs",
-)
+POOLS = (".claude/worktrees",)
 
 
-HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2}
+HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1)
 
 
 POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in HOME_POOL_LEVELS), unresolved=True)
@@ -90,20 +85,6 @@ PROTECTED_ROOTS = PathMatches(
                 "/.claude/projects/**",
                 "/.claude/worktrees",
                 "/.claude/worktrees/*",
-                "/.orca",
-                "/.orca/workspaces",
-                "/.orca/workspaces/*",
-                "/repos",
-                "/repos/claude",
-                "/repos/claude/worktrees",
-                "/repos/claude/worktrees/*",
-                "/repos/orca",
-                "/repos/orca/workspaces",
-                "/repos/orca/workspaces/*",
-                "/.vcache",
-                "/.vcache/**",
-                "/.daemonkit",
-                "/.daemonkit/**",
                 "/.cache",
                 "/.cache/**",
                 "/Library",
@@ -127,10 +108,6 @@ SCOPED_UNITS = PathMatches(
             "/.claude/plugins/marketplaces/*/**",
             "/.claude/projects/*/memory",
             "/.claude/projects/*/memory/**",
-            "/.vcache/scratch/*",
-            "/.vcache/scratch/*/**",
-            "/.daemonkit/a/ccx-cleanup/jobs/*/payload",
-            "/.daemonkit/a/ccx-cleanup/jobs/*/payload/**",
         )
     )
 )
@@ -826,10 +803,7 @@ def find_searches_broadly(arguments: Arguments) -> bool:
     return not roots.complete or any(
         SYSTEM_ROOTS(target)
         or spans_checkouts(target)
-        or (
-            (root := canonical(target)) is not None
-            and encloses_roots(root, (Path.home() / "Code", Path.home() / "repos"))
-        )
+        or ((root := canonical(target)) is not None and encloses_roots(root, (Path.home() / "Code",)))
         for target in roots
     )
 
@@ -1219,10 +1193,9 @@ FIND_MESSAGE = (
     "e a focused directory, or bound the listing with `-maxdepth 2`."
 )
 PROTECTED_ROOT_MESSAGE = (
-    "A recursive search under `~`, `~/.claude`, `~/repos`, `~/.vcache`, `~/.daemonkit"
-    "`, `~/.cache`, `~/Library` or a temp root walks gigabytes, even with `-g` or `-n"
-    "ame`. Name one checkout or version dir, list the known depth (`ls <dir>/*/job.js"
-    "on`), or ask the owning tool (`ccx vcs cleanup status`)."
+    "A recursive search under `~`, `~/.claude`, `~/.cache`, `~/Library` or a temp roo"
+    "t walks gigabytes, even with `-g` or `-name`. Name one checkout or plugin versio"
+    "n dir, or list the known depth (`ls <dir>/*/<file>`)."
 )
 EMPTY_ROOT_MESSAGE = (
     "A search whose only path is an unquoted expansion such as `$dir` or `$(...)` wal"
