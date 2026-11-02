@@ -23,17 +23,10 @@ class FixtureSnapshot:
         self.description = {
             "canonical_path": str(path),
             "mtime_ns": str(path.stat().st_mtime_ns),
-            "source_revision": f"fixture:{path.stat().st_ino}:{path.stat().st_mtime_ns}:{len(self.raw)}",
             "handle": handle,
             "lease_expires_unix_ms": 9_000_000_000_000_000,
         }
         self.activities = {}
-
-    @property
-    def hook_marker_indices(self):
-        from captain_hook.review.fix import turn_marker
-
-        return tuple(index for index, event in enumerate(self.events) if turn_marker(event))
 
     def source_facts(self, *, first_user_contains):
         from cc_transcript.models import UserEvent
@@ -114,9 +107,7 @@ class FixtureOwner:
         except (ValueError, KeyError) as exc:
             raise EvidenceIncomplete("parse_error", str(exc)) from exc
         lease = SimpleNamespace(require=lambda: handle, release=lambda: self.released.append(token))
-        return SimpleNamespace(
-            view=lambda: {"handle": handle, "classifier": dict(classifier)}, lease=lease, release=lease.release
-        )
+        return SimpleNamespace(view=lambda: {"handle": handle, "classifier": dict(classifier)}, lease=lease, release=lease.release)
 
     def pages(self, operation, **arguments):
         self.calls.append((operation, arguments))
@@ -138,10 +129,7 @@ class FixtureOwner:
                     )
             yield {"kind": "discovered", "entries": entries, "checkpoint": "fixture-checkpoint"}
         elif operation in {"prepare_review", "prepare_corrections"}:
-            path = Path(arguments["path"])
-            snapshot = FixtureSnapshot(path, None)
-            if operation == "prepare_corrections":
-                assert arguments["source_revision"] == snapshot.description["source_revision"]
+            snapshot = self.snapshots[arguments["view"]["handle"]["lease_id"]]
             handler = self.policy.prepare_review if operation == "prepare_review" else self.policy.prepare_corrections
             yield asyncio.run(handler(snapshot, arguments | {"limits": DEFAULT_LIMITS}))
         elif operation == "resolve":
