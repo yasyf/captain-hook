@@ -326,7 +326,7 @@ def dispatch_event(
         return lazy_transcript(
             resolved_path,
             loader=transcript_loader,
-            attach=lambda since: registered_sources(session_dir, since),
+            attach=lambda since: registered_sources(session_dir, since, raw.get("agent_id")),
             unborn=unborn,
         )
 
@@ -926,8 +926,14 @@ def transcripts() -> None:
 @click.option("--thread-id", "thread_id", default=None, help="Provider thread id, resolved to a rollout at dispatch")
 @click.option("--path", "path", default=None, help="Direct path to the transcript file")
 @click.option("--label", default=None, help="Optional human label for the registration")
+@click.option(
+    "--agent",
+    "agent_id",
+    default=None,
+    help="The dispatching subagent's or teammate's agent id; the transcript folds only into its deep view",
+)
 def transcripts_register(
-    session_id: str, provider: str, thread_id: str | None, path: str | None, label: str | None
+    session_id: str, provider: str, thread_id: str | None, path: str | None, label: str | None, agent_id: str | None
 ) -> None:
     """Register one external transcript against a session — exactly one of --thread-id or --path."""
     from captain_hook.transcripts import register_transcript
@@ -935,7 +941,9 @@ def transcripts_register(
     if bool(thread_id) == bool(path):
         raise click.UsageError("pass exactly one of --thread-id or --path")
     try:
-        entry = register_transcript(session_id, provider=provider, thread_id=thread_id, path=path, label=label)
+        entry = register_transcript(
+            session_id, provider=provider, thread_id=thread_id, path=path, label=label, agent_id=agent_id
+        )
     except ValueError as e:
         raise click.UsageError(str(e)) from e
     click.echo(f"  registered {provider} transcript for session {session_id}: {entry.thread_id or entry.path}")

@@ -113,6 +113,24 @@ def test_a_window_keeps_only_registrations_recorded_since_it_started(tmp_path):
     assert transcripts.registered_sources(tmp_path).thread_ids == ("stale", "fresh")
 
 
+def test_an_agent_and_the_root_each_see_only_their_own_registrations(tmp_path):
+    SessionSlot(tmp_path, RegisteredTranscripts).set(
+        RegisteredTranscripts(
+            entries=[
+                RegisteredTranscript(provider="codex", thread_id="root"),
+                RegisteredTranscript(provider="codex", thread_id="lane", agent_id="alane"),
+                RegisteredTranscript(provider="codex", thread_id="sibling", agent_id="asibling"),
+            ]
+        )
+    )
+    assert transcripts.registered_sources(tmp_path).thread_ids == ("root",)
+    lane = transcripts.registered_sources(tmp_path, None, "alane")
+    assert lane.thread_ids == ("lane",)
+    assert transcripts.registered_sources(tmp_path, None, "alane") is lane
+    assert transcripts.registered_sources(tmp_path, None, "asibling").thread_ids == ("sibling",)
+    assert transcripts.registered_sources(tmp_path, None, "aunknown") == GraphSources()
+
+
 def test_new_registration_is_visible_on_the_next_call(reads):
     session_id = SessionId("cache-new-registration")
     session_dir = ensure_session(session_id)

@@ -26,14 +26,16 @@ def build_mcp_server() -> MCPServer:
         thread_id: str | None = None,
         path: str | None = None,
         label: str | None = None,
+        agent_id: str | None = None,
     ) -> dict[str, Any]:
         """Register an external transcript against a Claude Code session so its edits fold into the deep view.
 
         Exactly one of ``thread_id`` (a codex thread id, resolved to its rollout at dispatch) or
-        ``path`` (a direct transcript file path) locates the transcript. Registration is idempotent.
+        ``path`` (a direct transcript file path) locates the transcript. Registration is idempotent. Pass
+        ``agent_id`` (the dispatching subagent's or teammate's id) to fold it only into that agent's view.
         """
         return register_transcript(
-            session_id, provider=provider, thread_id=thread_id, path=path, label=label
+            session_id, provider=provider, thread_id=thread_id, path=path, label=label, agent_id=agent_id
         ).model_dump()
 
     return server

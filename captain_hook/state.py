@@ -408,6 +408,8 @@ class RegisteredTranscript(BaseModel):
         thread_id: The provider thread/session id, resolved to a rollout path at dispatch.
         path: An absolute path to the transcript file.
         label: An optional human label for the registration.
+        agent_id: The Claude Code agent (subagent or teammate) that dispatched the transcript's run, or
+            ``None`` for the session's root. An entry folds only into that agent's own deep view.
         registered_at: The Unix timestamp the registration was last recorded.
     """
 
@@ -417,6 +419,7 @@ class RegisteredTranscript(BaseModel):
     thread_id: str | None = None
     path: str | None = None
     label: str | None = None
+    agent_id: str | None = None
     registered_at: float = Field(default_factory=time.time)
 
     @model_validator(mode="after")

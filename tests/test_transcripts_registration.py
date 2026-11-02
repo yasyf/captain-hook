@@ -108,6 +108,14 @@ class TestRegisterCommand:
         assert entry["path"] == str(rollout)
         assert entry["thread_id"] is None
 
+    def test_register_with_agent_records_the_dispatching_lane(self) -> None:
+        result = CliRunner().invoke(
+            cli, ["transcripts", "register", "--session", "s-agent", "--thread-id", "thread-1", "--agent", "alane-1"]
+        )
+        assert result.exit_code == 0, result.output
+        (entry,) = read_entries("s-agent")
+        assert (entry["thread_id"], entry["agent_id"]) == ("thread-1", "alane-1")
+
     def test_register_is_idempotent(self) -> None:
         runner = CliRunner()
         args = ["transcripts", "register", "--session", "s-idem", "--thread-id", "thread-x"]
@@ -558,6 +566,19 @@ class TestMcpTool:
         (entry,) = read_entries("s-mcp")
         assert entry["provider"] == "codex"
         assert entry["thread_id"] == "thread-mcp"
+        assert entry["agent_id"] is None
+
+    def test_mcp_tool_records_the_dispatching_agent(self) -> None:
+        from captain_hook.mcp_server import build_mcp_server
+
+        server = build_mcp_server()
+        asyncio.run(
+            server.call_tool(
+                "register_transcript", {"session_id": "s-mcp-agent", "thread_id": "thread-mcp", "agent_id": "alane"}
+            )
+        )
+        (entry,) = read_entries("s-mcp-agent")
+        assert entry["agent_id"] == "alane"
 
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -965,9 +986,9 @@ def test_dispatch_reads_registered_sources_once_per_phase(tmp_path, monkeypatch)
     client = RecordingClient()
     source = description()
 
-    def sources(session_dir, since):
+    def sources(session_dir, since, agent_id):
         reads.append(session_dir)
-        return registered_sources(session_dir, since)
+        return registered_sources(session_dir, since, agent_id)
 
     def loader(_):
         loads.append(True)
@@ -1047,6 +1068,56 @@ def test_dispatch_folds_only_registrations_since_the_window_started(tmp_path, mo
     )
 
     assert seen == [(("after",), 1_500_000)]
+
+
+@pytest.mark.parametrize(
+    ("event", "agent_id", "folded"),
+    [
+        (Event.Stop, None, ("root-lane",)),
+        (Event.PreToolUse, "alane-1", ("first-lane",)),
+        (Event.PreToolUse, "alane-2", ()),
+    ],
+    ids=["root", "dispatching-lane", "sibling-lane"],
+)
+def test_dispatch_folds_a_registration_only_into_the_agent_that_dispatched_it(
+    tmp_path, monkeypatch, event, agent_id, folded
+):
+    from captain_hook.snapshots.client import Lease, RemoteSession
+    from captain_hook.transcripts import release_transcript
+    from tests.test_prepared_graph_evidence import RecordingClient, description
+
+    session_dir = ensure_session(SessionId("s-lanes"))
+    SessionSlot(session_dir, RegisteredTranscripts).set(
+        RegisteredTranscripts(
+            entries=[
+                RegisteredTranscript(provider="codex", thread_id="root-lane"),
+                RegisteredTranscript(provider="codex", thread_id="first-lane", agent_id="alane-1"),
+            ]
+        )
+    )
+    seen = []
+    client = RecordingClient()
+    source = description()
+
+    def observe(_event, evt, session_dir, advisory=True):
+        seen.append(evt.ctx.t.graph.sources.thread_ids)
+        release_transcript(evt.ctx.transcript)
+        return None
+
+    monkeypatch.setattr("captain_hook.cli.dispatch", observe)
+    monkeypatch.setattr("captain_hook.cli.after_reply", lambda *args: None)
+    payload = {"session_id": "s-lanes", "transcript_path": str(tmp_path / "main.jsonl")}
+    dispatch_event(
+        tmp_path,
+        event,
+        payload | ({"agent_id": agent_id, "tool_name": "Bash", "tool_input": {}} if agent_id else {}),
+        session_dir=session_dir,
+        transcript_loader=lambda _: RemoteSession(
+            client, Lease(client, source), Path(source["canonical_path"]), source["classifier"]
+        ),
+    )
+
+    assert seen == [folded]
 
 
 def test_each_hook_reads_only_the_tail_it_declares(tmp_path, monkeypatch):
