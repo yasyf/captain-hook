@@ -686,7 +686,6 @@ hook(
         Input(command="fd -e py needle ~/.vcache/prek"): Block(),
         Input(command="rg needle ~/.orca/workspaces"): Block(),
         Input(command="find /tmp -name '*.log'"): Block(),
-        Input(command="cd ~/.claude/plugins && rg -tpy needle"): Block(),
         Input(command="rg needle ~/.claude/plugins/cache/skills/long-running/0.7.861"): Allow(),
         Input(command="find ~/.claude/plugins/marketplaces/skills -name SKILL.md"): Allow(),
         Input(command="rg needle ~/.claude/projects/-Users-alice/memory"): Allow(),

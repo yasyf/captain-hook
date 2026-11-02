@@ -1122,6 +1122,12 @@ def searches_protected(arguments: Arguments) -> bool:
     return any_protected(named_roots(arguments), arguments.cwd)
 
 
+def rg_searches_protected(arguments: Arguments) -> bool:
+    return any_protected(
+        arguments.paths("operands") if lists_files(arguments) else named_roots(arguments), arguments.cwd
+    )
+
+
 def finds_protected(arguments: Arguments) -> bool:
     return any_protected(arguments.paths("roots"), arguments.cwd)
 
@@ -1264,7 +1270,7 @@ def shell_search_rules(*, pack_roots: Callable[[], tuple[Path, ...]]) -> tuple[S
             (
                 CommandPattern(GREP, only_if=(recursive, searches_protected), skip_if=(informational,)),
                 CommandPattern(UGREP, only_if=(recursive, searches_protected), skip_if=(informational,)),
-                CommandPattern(RG, only_if=(searches_protected,), skip_if=(informational, reads_stdin)),
+                CommandPattern(RG, only_if=(rg_searches_protected,), skip_if=(informational, reads_stdin)),
                 CommandPattern(FIND, only_if=(finds_protected,), skip_if=(OptionIs("max_depth", range(3)),)),
                 CommandPattern(
                     FD, only_if=(fd_searches_protected,), skip_if=(informational, OptionIs("max_depth", range(3)))
