@@ -6,37 +6,14 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import BaseModel, Field
-
 from captain_hook.command_schema_core import PathMatches
 from captain_hook.util import reqenv
 
-ENV_PREFIX = "HOOKS_LAYOUT_"
-
-
-class LayoutSettings(BaseModel):
-    """This machine's own directory layout, read per request from ``HOOKS_LAYOUT_*`` variables holding JSON.
-
-    Every field defaults to empty, so the performance pack's search and install guards cover only the
-    generic roots until a machine names its own. ``~`` expands to the hook run's home directory.
-
-    Attributes:
-        protected_roots: Directories a recursive search may not walk, whatever its filename filter.
-            ``HOOKS_LAYOUT_PROTECTED_ROOTS='["~/src", "~/.local/share/jobs"]'``.
-        searchable_units: Path globs under a protected root that stay searchable, with everything below
-            them. ``HOOKS_LAYOUT_SEARCHABLE_UNITS='["~/.local/share/jobs/*/payload"]'``.
-        checkout_collections: Directories whose children are checkouts. A ``find`` at one is blocked, a
-            checkout inside one stays searchable. ``HOOKS_LAYOUT_CHECKOUT_COLLECTIONS='["~/src"]'``.
-        worktree_pools: Worktree pool directories mapped to their aggregate depth: ``1`` when lanes sit
-            at ``<pool>/<repo>/<lane>``. The search guards treat a pool and its aggregates as broad, and
-            the install guard blocks dependency installs in a lane whose checkout carries
-            ``tools/hooks/warm-lane.sh``. ``HOOKS_LAYOUT_WORKTREE_POOLS='{"~/src/worktrees": 1}'``.
-    """
-
-    protected_roots: list[str] = Field(default_factory=list)
-    searchable_units: list[str] = Field(default_factory=list)
-    checkout_collections: list[str] = Field(default_factory=list)
-    worktree_pools: dict[str, int] = Field(default_factory=dict)
+PROTECTED_ROOTS = "HOOKS_LAYOUT_PROTECTED_ROOTS"
+SEARCHABLE_UNITS = "HOOKS_LAYOUT_SEARCHABLE_UNITS"
+CHECKOUT_COLLECTIONS = "HOOKS_LAYOUT_CHECKOUT_COLLECTIONS"
+WORKTREE_POOLS = "HOOKS_LAYOUT_WORKTREE_POOLS"
+KEYS = (PROTECTED_ROOTS, SEARCHABLE_UNITS, CHECKOUT_COLLECTIONS, WORKTREE_POOLS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,19 +35,28 @@ def unit_globs(unit: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(pattern for root in (unit, resolved) for pattern in (root, f"{root}/**")))
 
 
+def paths(key: str) -> tuple[str, ...]:
+    match json.loads(reqenv.getenv(key) or "[]"):
+        case list() as values if all(isinstance(value, str) for value in values):
+            return tuple(values)
+        case value:
+            raise ValueError(f"`{key}` must hold a JSON list of paths, not {value!r}")
+
+
+def depths(key: str) -> tuple[tuple[str, int], ...]:
+    match json.loads(reqenv.getenv(key) or "{}"):
+        case dict() as pools if all(isinstance(levels, int) and levels >= 0 for levels in pools.values()):
+            return tuple(pools.items())
+        case value:
+            raise ValueError(f"`{key}` must hold a JSON object mapping each pool to its lane depth, not {value!r}")
+
+
 def load() -> Layout:
-    settings = LayoutSettings.model_validate(
-        {
-            name: json.loads(value)
-            for name in LayoutSettings.model_fields
-            if (value := reqenv.getenv(f"{ENV_PREFIX}{name.upper()}"))
-        }
-    )
     return Layout(
-        protected_roots=tuple(map(expand, settings.protected_roots)),
-        searchable=PathMatches(tuple(pattern for unit in settings.searchable_units for pattern in unit_globs(unit))),
-        collections=tuple(map(expand, settings.checkout_collections)),
-        pools=tuple((expand(pool), levels) for pool, levels in settings.worktree_pools.items()),
+        protected_roots=tuple(map(expand, paths(PROTECTED_ROOTS))),
+        searchable=PathMatches(tuple(pattern for unit in paths(SEARCHABLE_UNITS) for pattern in unit_globs(unit))),
+        collections=tuple(map(expand, paths(CHECKOUT_COLLECTIONS))),
+        pools=tuple((expand(pool), levels) for pool, levels in depths(WORKTREE_POOLS)),
     )
 
 

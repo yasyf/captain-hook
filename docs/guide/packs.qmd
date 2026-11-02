@@ -537,6 +537,59 @@ The host runs the escalation stage once per child.
 - **A calm child keeps its warning.** A child that drops below the thresholds is not warned a second time
   for the same run.
 
+### Describe your machine's directory layout {#describe-your-machines-directory-layout}
+
+The `performance` pack's search guards block recursive searches (`rg`, `grep -r`, `ugrep -r`, `find`, `fd`,
+and `du`) rooted at directories that hold gigabytes. A `-g`, `--glob`, `--iglob`, or `-name` filter does not
+count as a bound, because the tool still walks every directory. Out of the box, the pack protects only generic
+roots: `~` itself, `~/.claude` with its plugin cache, transcripts (`~/.claude/projects`), and worktree pool
+(`~/.claude/worktrees`), `~/.cache`, `~/Library`, and the temp roots.
+
+Four environment variables, each holding JSON, add a machine's own layout. All four default to empty, which
+leaves only the generic roots. A `~` in a value expands to the home directory of the hook run. The worker
+reads them from each hook run's environment, so set them where Claude Code's environment comes from, such as
+the `env` block of `~/.claude/settings.json`. Values there are JSON strings, so the inner JSON is escaped. A
+value that does not match the expected JSON shape, such as a bare string instead of a list, raises a
+`ValueError` that names the variable. It is never ignored.
+
+- `HOOKS_LAYOUT_PROTECTED_ROOTS`: JSON list of directories. A recursive search at or under one is blocked,
+  filter or not, except inside a checkout or a lane as defined by the next two keys and except under a
+  searchable unit.
+- `HOOKS_LAYOUT_SEARCHABLE_UNITS`: JSON list of path globs (`*` matches one path segment) under a protected
+  root that stay searchable, along with everything below them.
+- `HOOKS_LAYOUT_CHECKOUT_COLLECTIONS`: JSON list of directories whose children are checkouts. A `find` at a
+  collection, or at a directory above one, is blocked. Each child checkout stays searchable even when the
+  collection sits under a protected root.
+- `HOOKS_LAYOUT_WORKTREE_POOLS`: JSON object mapping each worktree pool directory to the depth of its repo
+  aggregates: `1` when lanes sit at `<pool>/<repo>/<lane>`, `2` for `<pool>/<id>/<repo>/<lane>`. A search of
+  the pool itself or of an aggregate is blocked. A lane, one level deeper than the aggregates, stays
+  searchable.
+
+A root or pool reached through a symlink matches both as written and as resolved.
+
+The same pools switch on the JavaScript install guard, which is off while `HOOKS_LAYOUT_WORKTREE_POOLS` is
+empty. It blocks `yarn install`, a bare `yarn`, `yarn add`, `yarn remove`, `yarn up`, `yarn dedupe`,
+`npm install`, `npm ci`, `pnpm install`, `pnpm add`, `bun install`, and `bun add` only inside a lane of a
+configured pool whose checkout carries `tools/hooks/warm-lane.sh`, the script that links `node_modules` from a
+shared store. It reads the target directory from a `cd`, the working directory, or the package manager's
+`--cwd`, `--prefix`, `--dir`, or `-C` flag. Installs with `--mode=update-lockfile`, `--package-lock-only`, or
+`--lockfile-only`, and global installs, still run.
+
+```json
+{
+  "env": {
+    "HOOKS_LAYOUT_PROTECTED_ROOTS": "[\"~/src\", \"~/.local/share/jobs\"]",
+    "HOOKS_LAYOUT_SEARCHABLE_UNITS": "[\"~/.local/share/jobs/*/payload\"]",
+    "HOOKS_LAYOUT_CHECKOUT_COLLECTIONS": "[\"~/src\"]",
+    "HOOKS_LAYOUT_WORKTREE_POOLS": "{\"~/src/worktrees\": 1}"
+  }
+}
+```
+
+With this configuration, `find ~/src -name AGENTS.md`, `rg needle ~/src/worktrees/app`, and
+`rg needle ~/.local/share/jobs` are blocked, while `rg needle ~/src/app/internal`,
+`rg needle ~/src/worktrees/app/lane-1/src`, and `rg needle ~/.local/share/jobs/42/payload` run.
+
 ### Warn on local builds on a saturated host {#defer-local-builds-on-a-saturated-host}
 
 The host counts as saturated when its 1-minute load average is at or above `HOOKS_ADMISSION_LOAD_PER_CORE`

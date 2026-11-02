@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.layout import LayoutSettings
+from captain_hook.layout import KEYS
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 from tests.test_pack_performance_search import decision
@@ -37,8 +37,8 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (hooks := root / "lanes" / "monorepo" / "lane" / "tools" / "hooks").mkdir(parents=True)
     (hooks / "warm-lane.sh").write_text("#!/bin/sh\n")
     monkeypatch.setenv("HOME", str(root))
-    for name in LayoutSettings.model_fields:
-        monkeypatch.delenv(f"HOOKS_LAYOUT_{name.upper()}", raising=False)
+    for key in KEYS:
+        monkeypatch.delenv(key, raising=False)
     return root
 
 
