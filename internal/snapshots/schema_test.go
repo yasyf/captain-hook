@@ -139,7 +139,7 @@ func TestHostConfigurationGrowsRetentionByItsFactCacheBudget(t *testing.T) {
 	backgroundHeadroom := func(config map[string]int64) int64 {
 		return config["max_retained_bytes"] - config["reserved_hook_accounted_bytes"] - config["max_prepared_fact_memory_bytes"]
 	}
-	if host["max_prepared_fact_memory_bytes"] != 512<<20 || host["max_retained_bytes"] != 1408<<20 {
+	if host["max_prepared_fact_memory_bytes"] != 512<<20 || host["max_retained_bytes"] != 4480<<20 {
 		t.Fatalf("host fact memory=%d retained=%d", host["max_prepared_fact_memory_bytes"], host["max_retained_bytes"])
 	}
 	if backgroundHeadroom(host) != backgroundHeadroom(library) || backgroundHeadroom(host) != 384<<20 {
@@ -186,7 +186,7 @@ func TestHostConfigurationNamesTheFactProducer(t *testing.T) {
 			if err := json.Unmarshal(data, &config); err != nil {
 				t.Fatal(err)
 			}
-			for key, want := range map[string]string{"prepared_fact_producer": test.want, "max_prepared_fact_memory_bytes": "536870912", "max_retained_bytes": "1476395008"} {
+			for key, want := range map[string]string{"prepared_fact_producer": test.want, "max_prepared_fact_memory_bytes": "536870912", "max_retained_bytes": "4697620480"} {
 				if got := string(config[key]); got != want {
 					t.Fatalf("%s=%s want %s", key, got, want)
 				}
