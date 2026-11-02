@@ -44,6 +44,16 @@ if TYPE_CHECKING:
 WRAPPER_COMMANDS: frozenset[str] = frozenset(LITERALS["command.WRAPPER_COMMANDS"])
 COMMAND_VALUE_FLAGS: dict[str, tuple[str, ...]] = {
     "git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"),
+    "yarn": ("--cwd", "--mode"),
+    "npm": ("-C", "--prefix", "-w", "--workspace"),
+    "pnpm": ("-C", "--dir", "-F", "--filter"),
+    "bun": ("--cwd", "--filter"),
+}
+PACKAGE_DIRECTORY_FLAGS: dict[str, frozenset[str]] = {
+    "yarn": frozenset({"--cwd"}),
+    "npm": frozenset({"-C", "--prefix"}),
+    "pnpm": frozenset({"-C", "--dir"}),
+    "bun": frozenset({"--cwd"}),
 }
 INFO_OPTIONS = frozenset({"-h", "--help", "--version"})
 
@@ -494,6 +504,21 @@ def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Pat
         return cwd, None
     path = Path(os.path.expanduser(git_dir))
     return cwd, path if path.is_absolute() else (cwd / path if cwd else None)
+
+
+def package_directory(call: Call) -> tuple[Target, ...]:
+    flags = PACKAGE_DIRECTORY_FLAGS.get(call.name, frozenset())
+    options, _ = call.command.split_options(COMMAND_VALUE_FLAGS.get(call.name, ()))
+    directory = (Target(None, "", None) if call.cwd is None else Target(str(call.cwd), str(call.cwd), None),)
+    for flag, value in zip(options, (*options[1:], None), strict=False):
+        name, attached, rest = (flag.value or "").partition("=")
+        if name not in flags:
+            continue
+        if attached:
+            directory = (Target(rest, flag.raw.partition("=")[2], call.cwd),)
+        elif value is not None:
+            directory = call.word_targets(value)
+    return directory
 
 
 def cd_operand(call: Call) -> tuple[str, ...]:
