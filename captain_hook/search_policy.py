@@ -665,7 +665,9 @@ def names_files(target: Target) -> bool:
     match target.value:
         case str(value) if target.has_glob:
             path = Path(value)
-            return "**" not in path.parts and narrows("".join(path.parts[len(glob_prefix(path).parts) :]))
+            return narrows("".join(path.parts[len(glob_prefix(path).parts) :])) and (
+                "**" not in path.parts or not spans_checkouts(target)
+            )
         case _:
             return False
 
@@ -1089,6 +1091,7 @@ MCP_GREP_MESSAGE = (
     "lobs: ['*.py']`."
 )
 SEARCH_MESSAGE = (
+    "A recursive `grep` over a directory without filename bounds reads every file under it. "
     "Recursive searches over home, worktree, or plugin pools are blocked even with filename filters. "
     "Name one checkout or a focused directory; within that scope, use `--include='*.py'`, `-g '*.py'`, "
     "or `-- '*.py'`, or run `ccx code grep` with scoped paths."

@@ -355,13 +355,13 @@ hook(
         Input(command="grep -rn needle -", cwd="/repo"): Allow(),
         Input(command="rg needle config.toml tests/test_specific.py", cwd="/repo"): Allow(),
         Input(command="ugrep -rn needle ~/.claude/scratch/release-v3/specific-lane"): Allow(),
-        Input(command="grep -rn --include='*.py' needle ~"): Allow(),
+        Input(command="grep -rn --include='*.py' needle ~"): Block(pattern="filename filters"),
         Input(command="grep -rIn --include='*.py' needle infra/", cwd="/repo"): Allow(),
-        Input(command="grep -rn --include='*.py' --include='*.json' needle ~"): Allow(),
-        Input(command="rg -g'*.json' needle ~"): Allow(),
-        Input(command="rg -tpy needle ~"): Allow(),
-        Input(command="ugrep -r -tpy,json needle ~"): Allow(),
-        Input(command="ugrep -g 'src/*.py' needle ~"): Allow(),
+        Input(command="grep -rn --include='*.py' --include='*.json' needle ~"): Block(pattern="filename filters"),
+        Input(command="rg -g'*.json' needle ~"): Block(pattern="filename filters"),
+        Input(command="rg -tpy needle ~"): Block(pattern="filename filters"),
+        Input(command="ugrep -r -tpy,json needle ~"): Block(pattern="filename filters"),
+        Input(command="ugrep -g 'src/*.py' needle ~"): Block(pattern="filename filters"),
         Input(command="grep -rn needle *.py", cwd="/"): Block(),
         Input(command="grep -rn --include='*.py' needle internal/f*", cwd="/repo"): Allow(),
         Input(command="cat explicit.log | rg needle"): Allow(),
@@ -573,7 +573,7 @@ hook(
         ): Allow(),
         Input(
             command="for v in 0.2.9 0.2.11; do find $v -maxdepth 3; done",
-            cwd="/Users/yasyf/.claude/plugins/cache/forge",
+            cwd="/Users/yasyf/.claude/plugins/cache/forge/example",
         ): Allow(),
         Input(
             command=(

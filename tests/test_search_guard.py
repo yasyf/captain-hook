@@ -99,7 +99,7 @@ def test_native_bash_payload_preserves_focused_searches(search_repo: Path, comma
 @pytest.mark.parametrize(
     "command",
     [
-        "rg -l --max-count 1 -e addVolume -g '*.sh' -g '*.py' -g '*.go' -g '*.md "
+        "rg -l --max-count 1 -e addVolume -g '*.sh' -g '*.py' -g '*.go' -g '*.md' "
         "{home}/.claude/plugins/cache {home}/.claude/plugins/marketplaces",
         "rg -g '*.py' needle {home}",
         "rg -tpy needle {home}/.claude/worktrees",
