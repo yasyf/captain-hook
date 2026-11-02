@@ -127,7 +127,7 @@ def test_handler_fanout_shares_one_request_collector(event: str) -> None:
 
 
 @pytest.mark.parametrize("event", ["PreToolUse", "Stop", "UserPromptSubmit", "PostToolUse"])
-def test_unchanged_state_observation_adds_no_reads_or_writes(
+def test_an_unchanged_state_observation_reads_once_and_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event: str
 ) -> None:
     slot = session.SessionSlot(tmp_path, Value)
@@ -150,10 +150,10 @@ def test_unchanged_state_observation_adds_no_reads_or_writes(
         with slot.mutate() as value:
             assert value.count == 1
         assert reads == [tmp_path / "value.json"]
-        assert writes == [tmp_path / "value.json"]
+        assert writes == []
         assert (tmp_path / "value.json").read_bytes() == b'{"count":1}'
         if collected is not None:
-            assert collected.phases["state_write"].count == 1
+            assert collected.phases["state_write"].count == 0
             summary = collected.summary(300.0)
             if event == "UserPromptSubmit":
                 assert summary["submit_state_writes"] == {"same": 1, "different": 0, "uncompared": 0}

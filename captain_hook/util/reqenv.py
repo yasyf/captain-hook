@@ -300,6 +300,11 @@ def abandonable(flag: Cutoff) -> Generator[None]:
         _ABANDONED.reset(token)
 
 
+def stopped() -> bool:
+    """True once nobody waits on the running work: its fan-out or host request gave up, or its deadline passed."""
+    return ((flag := _ABANDONED.get()) is not None and flag.is_set()) or abandon_signal().is_set() or deadline_within(0)
+
+
 def checkpoint() -> None:
     """Unwind the running hook once its fan-out or host request stops waiting."""
     if (flag := _ABANDONED.get()) is not None and flag.is_set():

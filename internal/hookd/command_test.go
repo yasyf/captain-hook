@@ -167,6 +167,47 @@ func TestRunRetriesATimedOutGuardOnceThenSkips(t *testing.T) {
 	}
 }
 
+type stalledClient struct {
+	budget time.Duration
+}
+
+func (c *stalledClient) Event(ctx context.Context, _ wireproto.EventRequest) (wireproto.EventResponse, error) {
+	deadline, _ := ctx.Deadline()
+	c.budget = time.Until(deadline)
+	<-ctx.Done()
+	return wireproto.EventResponse{}, ctx.Err()
+}
+
+func (c *stalledClient) Close() error { return nil }
+
+func TestRunGivesUpOnAStalledPromptWellInsideClaudeCodesHookTimeout(t *testing.T) {
+	const claudeHookTimeout = 30 * time.Second
+	t.Setenv("CLAUDE_PROJECT_DIR", "/project")
+	t.Setenv("CAPTAIN_HOOK_STATE_DIR", t.TempDir())
+	t.Setenv("CAPT_HOOK_CLIENT_TIMEOUT", "")
+	for event, want := range map[string]time.Duration{"UserPromptSubmit": promptRequestTimeout, "Stop": defaultRequestTimeout} {
+		t.Run(event, func(t *testing.T) {
+			client := &stalledClient{}
+			previous := openEventClient
+			openEventClient = func() (eventClient, error) { return client, nil }
+			t.Cleanup(func() { openEventClient = previous })
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				var stdout, stderr bytes.Buffer
+				code := Main([]string{"run", event}, strings.NewReader(`{"cwd":"/r","prompt":"hi"}`), &stdout, &stderr)
+				if elapsed := time.Since(started); code != 1 || stdout.Len() != 0 || elapsed != want || client.budget != want ||
+					!strings.Contains(stderr.String(), context.DeadlineExceeded.Error()) {
+					t.Fatalf("exit=%d stdout=%q stderr=%q after %s with a %s budget, want exit 1 at %s",
+						code, stdout.String(), stderr.String(), elapsed, client.budget, want)
+				}
+			})
+		})
+	}
+	if worst := promptRequestTimeout + closeTimeout; worst > claudeHookTimeout*2/3 {
+		t.Fatalf("a stalled prompt holds Claude Code for up to %s of its %s hook timeout", worst, claudeHookTimeout)
+	}
+}
+
 func TestRunAnswersAMandatoryEventLocallyWhenTheHostTransportFails(t *testing.T) {
 	refused := errors.Join(fmt.Errorf("captain: %w", daemonkit.ErrDraining), context.DeadlineExceeded)
 	deny := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",` +

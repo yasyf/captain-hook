@@ -38,10 +38,11 @@ if TYPE_CHECKING:
     from captain_hook.dispatch import Envelope
 
     class RegistryLike(Protocol):
-        def get(self) -> Any: ...
+        def get(self, *, stale_after: float | None = None) -> Any: ...
 
 
 GUARD_PACKS = frozenset({"general"})
+PROMPT_REBUILD_WAIT_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +177,8 @@ class ProductRuntime:
         buffers: RequestBuffers,
     ) -> tuple[Background, GuardCompletion]:
         session_dir = ensure_session(_session(session_id)) if session_id else None
-        snapshot = measured_call("registry", "", lambda: self._registry(request.root).get())
+        stale_after = PROMPT_REBUILD_WAIT_SECONDS if event is Event.UserPromptSubmit else None
+        snapshot = measured_call("registry", "", lambda: self._registry(request.root).get(stale_after=stale_after))
         if (foreground := CURRENT_CLIENT.get()) is not None:
             foreground.bind_tool_registry(snapshot.tools)
         if (background_client := BACKGROUND_SNAPSHOT_CLIENT.get()) is not None:

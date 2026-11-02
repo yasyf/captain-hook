@@ -34,9 +34,12 @@ func openClient(d daemonkit.Daemon) (*Client, error) {
 	return &Client{daemon: daemon, business: daemon.Business()}, nil
 }
 
-// Close settles the product session.
+// Close settles the product session, the lane and the link sharing one
+// closeTimeout so a slow host cannot hold the caller for twice that.
 func (c *Client) Close() error {
-	return errors.Join(closeLane(c.business), closeDaemonClient(c.daemon))
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+	return errors.Join(c.business.Close(ctx), c.daemon.Close(ctx))
 }
 
 func closeLane(lane *daemonkit.Business) error {

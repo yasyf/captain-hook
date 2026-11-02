@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A slow prompt hook no longer times the whole prompt out.** Claude Code kills a
+  `UserPromptSubmit` hook at 30 s and discards its output. The client gave the host the same 30 s
+  from a later start, so one stall lost every prompt-time hook. The client now gives a prompt
+  15 s, and the session close after it shares one 5 s budget instead of two. The stalls it hit:
+  - Sessions rooted at the home directory waited on one cross-process language-marker lock that
+    every dispatch took, because the home directory's own timestamp changes constantly. Home,
+    its ancestors, and `/` now skip language detection: no lock, no walk, no languages.
+    A walk of `/` had taken 73 s.
+  - An expired language generation is now renewed in the background. A lookup waits up to a second
+    for it and otherwise keeps the previous generation, instead of queueing on the lock behind a
+    project walk.
+  - A prompt that finds the registry rebuilding after a plugin or hook change waits up to 2 s, then
+    runs the previous registry while the rebuild finishes.
+  - Session state that comes back unchanged is no longer rewritten. Of the prompt-time state
+    writes in a day, 94% were unchanged, and each one could take up to 19 s while the disk was busy.
+  - A hook waiting on a session-state lock stops waiting once its request gives up on it, instead of
+    holding a fan-out thread until the lock frees.
 - **`capt-hook helper install` installs the latest release.** It landed whatever version the
   Homebrew Cellar held and reported success once the host reached that version. A Cellar behind a
   hand-installed host was package-installed over it, and a Cellar behind the latest release ended

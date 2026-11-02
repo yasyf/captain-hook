@@ -258,6 +258,61 @@ def test_home_root_skips_language_marker_walk(tmp_path: Path, monkeypatch: pytes
     assert manager.active_builtins(tmp_path) == ("fixes", "general", "graphite", "performance", "steering")
 
 
+@pytest.mark.parametrize("root", ["home", "parent", "filesystem-root"])
+def test_home_and_its_ancestors_never_touch_the_shared_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root: str
+) -> None:
+    (home := tmp_path / "home").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(manager.os, "walk", lambda *args, **kwargs: pytest.fail("a home-containing root was walked"))
+    monkeypatch.setattr(registry, "marker_path", lambda path: pytest.fail("a home-containing root took the lock"))
+    target = {"home": home, "parent": tmp_path, "filesystem-root": Path(tmp_path.anchor)}[root]
+    assert registry._language_markers(target, since=registry.ANY_AGE) == ()
+    assert registry._language_markers(target, since=time.monotonic()) == ()
+
+
+def test_a_held_marker_lock_serves_the_previous_generation_while_it_renews(
+    project: CliState, clock: list[float], walks: list[Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(registry, "MARKER_WAIT_SECONDS", 0.05)
+    assert registry._language_markers(project.root, since=registry.ANY_AGE) == ()
+    (project.root / "go.mod").write_text("module x\n")
+    path = registry.marker_path(project.root)
+    with registry.marker_lock(path):
+        waited = time.monotonic()
+        assert registry._language_markers(project.root, since=registry.ANY_AGE) == ()
+        assert time.monotonic() - waited < 5
+        renewal = registry.RENEWALS[path]
+        assert walks == [project.root]
+    assert renewal.result(timeout=60) == ("go",)
+    assert walks == [project.root] * 2
+    assert registry._language_markers(project.root, since=registry.ANY_AGE) == ("go",)
+
+
+def test_a_prompt_is_served_the_previous_registry_while_a_slow_rebuild_runs(
+    project: CliState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reg = Registry(project)
+    previous = reg.get()
+    (Path(project.hooks) / "h.py").write_text(HOOK.replace("message='m'", "message='edited'"))
+    release = threading.Event()
+    discover = Registry._discover_once
+
+    def slow(self: Registry, fingerprint: Fingerprint, languages: tuple[str, ...]) -> registry.RegistrySnapshot:
+        assert release.wait(timeout=60)
+        return discover(self, fingerprint, languages)
+
+    monkeypatch.setattr(Registry, "_discover_once", slow)
+    waited = time.monotonic()
+    assert reg.get(stale_after=0.05) is previous
+    assert time.monotonic() - waited < 5
+    release.set()
+    rebuilt = reg.get()
+    assert rebuilt is not previous
+    assert rebuilt.fingerprint == fp(project)
+    assert reg.get(stale_after=0.05) is rebuilt
+
+
 def test_nested_language_marker_lands_within_the_ttl(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     (nested := project.root / "services" / "api").mkdir(parents=True)
     before = fp(project)
