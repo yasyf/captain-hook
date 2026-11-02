@@ -27,3 +27,7 @@ def test_resolve_cd_missing_returns_prior() -> None:
 
 def test_resolve_cd_existing(tmp_path: Path) -> None:
     assert resolve_cd((str(tmp_path),), Path("/some/prior")) == tmp_path.resolve()
+
+
+def test_resolve_cd_after_end_of_options(tmp_path: Path) -> None:
+    assert resolve_cd(("--", str(tmp_path)), Path("/some/prior")) == tmp_path.resolve()

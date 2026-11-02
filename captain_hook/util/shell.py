@@ -43,7 +43,7 @@ def emit_token(raw: str, *, plain_words: bool) -> str | None:
 
 def resolve_cd(args: tuple[str, ...], cwd: Path | None) -> Path | None:
     match args:
-        case (token,) if "$" not in token and token != "-":
+        case (token,) | ("--", token) if "$" not in token and token != "-":
             path = Path(os.path.expanduser(unescape_shell(token)))
             resolved = path.resolve() if path.is_absolute() else (cwd / path).resolve() if cwd is not None else None
             return resolved if resolved is not None and resolved.is_dir() else cwd
