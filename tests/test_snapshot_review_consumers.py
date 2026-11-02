@@ -984,9 +984,6 @@ async def test_judge_known_source_avoids_unrelated_corpus_metadata(
     monkeypatch.setattr(native_review_owner.client, "_exchange", counted)
     report = await judge_pass(store, settings=settings)
     examined = sum(item["discovery_entries_examined"] for item in usage)
-    print(
-        f"known_source unrelated={unrelated} discovery_entries={examined} file_rosters={len(file_roster_reads)} root_normalizations={len(root_normalizations)} operations={operations}"
-    )
     assert examined == 0
     assert file_roster_reads == []
     assert root_normalizations == []
