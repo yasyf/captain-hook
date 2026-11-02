@@ -46,6 +46,7 @@ from captain_hook.review.pipeline import (
     _claim_stamp,
     brain_argv,
     brain_lock,
+    brain_plugin_root,
     brain_prompt,
     dispatch_review,
     enrolled,
@@ -1279,6 +1280,8 @@ class TestBrain:
         assert argv == brain_argv(max_turns=7, max_budget_usd=2.5)
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"][SPAWNED_ENV] == "1"
+        assert kwargs["env"]["CLAUDE_CODE_PLUGIN_CACHE_DIR"] == str(brain_plugin_root())
+        assert brain_plugin_root().parts[-2:] == ("captain-hook", "headless-plugins")
         assert REVIEWER_MARKER in kwargs["input"].decode()
         assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
 
