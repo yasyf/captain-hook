@@ -24,15 +24,16 @@ func domainSnapshotRequest(t *testing.T, operation, id string) json.RawMessage {
 	request := map[string]any{
 		"schema": "captain.transcript/1", "id": id, "operation": operation, "deadline_unix_ms": int64(9_000_000_000_000),
 		"limits": map[string]int{"max_read_bytes": 1024, "max_source_read_bytes": 1024, "max_events": 10, "max_items": 10, "max_output_bytes": 1024, "max_discovery_entries": 10, "max_sources": 10},
-		"view":   map[string]any{"handle": map[string]string{"owner_epoch": "e", "snapshot_id": "s", "generation": "g", "lease_id": "l"}, "classifier": map[string]string{"id": "captain", "version": "1"}, "selectors": []any{}, "attachments": []string{}},
 	}
 	policy := map[string]string{"id": "captain-review", "version": "1"}
 	switch operation {
 	case "prepare_review":
-		request["policy"], request["min_confidence"], request["min_confidence_fix"] = policy, 0.5, 0.25
+		request["path"], request["policy"], request["min_confidence"], request["min_confidence_fix"] = "/fixture/transcript.jsonl", policy, 0.5, 0.25
 	case "prepare_corrections":
-		request["policy"], request["anchors"], request["feedback"], request["repo"] = policy, []any{}, []string{}, nil
+		request["path"], request["source_revision"], request["policy"] = "/fixture/transcript.jsonl", "review:fixture", policy
+		request["anchors"], request["feedback"], request["repo"] = []any{}, []string{}, nil
 	case "prepare_hook_view":
+		request["view"] = map[string]any{"handle": map[string]string{"owner_epoch": "e", "snapshot_id": "s", "generation": "g", "lease_id": "l"}, "classifier": map[string]string{"id": "captain", "version": "1"}, "selectors": []any{}, "attachments": []string{}}
 		request["cwd"], request["droid"] = nil, false
 	default:
 		t.Fatalf("no domain request fixture for %s", operation)
