@@ -107,6 +107,50 @@ def failure(request_id: str, status: str, reason: str, usage: dict[str, int] | N
     }
 
 
+def completion_fields(
+    request: dict[str, Any], response: dict[str, Any], elapsed_ms: float, execution_path: ExecutionPath
+) -> dict[str, Any]:
+    usage = response["usage"]
+    return (
+        request_metadata(request)
+        | {
+            "pid": os.getpid(),
+            "status": response["status"],
+            "elapsed_ms": round(elapsed_ms, 1),
+            "query_kind": request.get("query", {}).get("kind"),
+            "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
+            "selector_count": len(request.get("selectors", [])),
+            "tail_bytes": request.get("tail_bytes"),
+        }
+        | {
+            key: usage[key]
+            for key in (
+                "source_opens",
+                "source_bytes_read",
+                "bytes_decoded",
+                "events_parsed",
+                "cold_parses",
+                "append_parses",
+                "discovery_entries_examined",
+                "prepared_cache_reads",
+                "prepared_cache_bytes_read",
+                "activity_lifts",
+                "cache_hits",
+                "inflight_joins",
+                "generations_published",
+                "generations_invalidated",
+                "nonincremental_lowering_calls",
+                "nonincremental_lowering_source_bytes",
+            )
+        }
+        | {
+            "execution_path": execution_path,
+            "cursor_in_sha256": cursor_digest(request.get("cursor")),
+            "cursor_out_sha256": cursor_digest(response["cursor"]),
+        }
+    )
+
+
 class Owner:
     def __init__(self, config: dict[str, Any]) -> None:
         from cc_transcript.snapshots import CancellationToken, SnapshotIncomplete, TranscriptStore
@@ -209,52 +253,17 @@ class Owner:
     ) -> dict[str, Any]:
         usage = response["usage"]
         elapsed_ms = (time.monotonic() - started) * 1000
-        if (
-            usage["source_bytes_read"]
-            or usage["prepared_cache_bytes_read"]
-            or request.get("cursor") is not None
-            or response["cursor"] is not None
-            or elapsed_ms >= SLOW_REQUEST_MS
-        ):
-            fields = (
-                request_metadata(request)
-                | {
-                    "pid": os.getpid(),
-                    "status": response["status"],
-                    "elapsed_ms": round(elapsed_ms, 1),
-                    "query_kind": request.get("query", {}).get("kind"),
-                    "observer_kinds": tuple(observer["kind"] for observer in request.get("observers", [])),
-                    "selector_count": len(request.get("selectors", [])),
-                    "tail_bytes": request.get("tail_bytes"),
-                }
-                | {
-                    key: usage[key]
-                    for key in (
-                        "source_opens",
-                        "source_bytes_read",
-                        "bytes_decoded",
-                        "events_parsed",
-                        "cold_parses",
-                        "append_parses",
-                        "discovery_entries_examined",
-                        "prepared_cache_reads",
-                        "prepared_cache_bytes_read",
-                        "activity_lifts",
-                        "cache_hits",
-                        "inflight_joins",
-                        "generations_published",
-                        "generations_invalidated",
-                        "nonincremental_lowering_calls",
-                        "nonincremental_lowering_source_bytes",
-                    )
-                }
-                | {
-                    "execution_path": execution_path,
-                    "cursor_in_sha256": cursor_digest(request.get("cursor")),
-                    "cursor_out_sha256": cursor_digest(response["cursor"]),
-                }
+        paged = request.get("cursor") is not None or response["cursor"] is not None
+        slow = elapsed_ms >= SLOW_REQUEST_MS
+        if usage["source_bytes_read"] or usage["prepared_cache_bytes_read"] or paged or slow:
+            logger.opt(lazy=True).log(
+                "DEBUG" if paged and not slow else "INFO",
+                "snapshot request completed: {}",
+                lambda: " ".join(
+                    f"{key}={value!r}"
+                    for key, value in completion_fields(request, response, elapsed_ms, execution_path).items()
+                ),
             )
-            logger.info("snapshot request completed: {}", " ".join(f"{key}={value!r}" for key, value in fields.items()))
         return response
 
     def call(
@@ -563,6 +572,8 @@ def handshake(input_stream: BinaryIO, output_stream: BinaryIO, *, build: str) ->
 def main() -> None:
     output = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
     try:
         config = handshake(sys.stdin.buffer, output, build=importlib.metadata.version("capt-hook"))
         if config is not None:
