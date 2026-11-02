@@ -225,9 +225,9 @@ async def count_rows(store: ReviewStore, table: str) -> int:
     return [int(row["n"]) for row in rows][0]
 
 
-def sweep_stamps(cwd: str) -> tuple[Path, Path]:
+def sweep_stamps(directory: str) -> tuple[Path, Path]:
     base = state_dir() / "review" / "sweeps"
-    return base / f"{sweep_key(cwd)}.trigger", base / f"{sweep_key(cwd)}.sweep"
+    return base / f"{sweep_key(directory)}.trigger", base / f"{sweep_key(directory)}.sweep"
 
 
 @pytest.fixture
@@ -505,10 +505,50 @@ class TestSweepGuard:
         guard_and_sweep(payload)
         assert popen_calls == []
 
+    def test_sweep_guard_throttles_every_cwd_sharing_the_transcript_directory(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        transcript, _ = self.payload(tmp_path)
+        for cwd in (tmp_path / "a", tmp_path / "b"):
+            guard_and_sweep(json.dumps({"transcript_path": str(transcript), "cwd": str(cwd)}).encode())
+        assert len(popen_calls) == 1
+
     def test_sweep_guard_missing_transcript(self, popen_calls: list[tuple[list[str], dict[str, Any]]]) -> None:
         guard_and_sweep(json.dumps({"transcript_path": "/nonexistent/t.jsonl", "cwd": "/x"}).encode())
         assert popen_calls == []
         assert "sweep skip: missing transcript file" in review_log_path().read_text()
+
+
+class TestSessionStartThrottle:
+    @pytest.fixture
+    def transcript(self, tmp_path: Path) -> Path:
+        return write_transcript(tmp_path / "s.jsonl", correction_entries())
+
+    def payload(self, transcript: Path, event: str) -> bytes:
+        return json.dumps(
+            {"transcript_path": str(transcript), "cwd": str(transcript.parent), "hook_event_name": event}
+        ).encode()
+
+    def test_session_start_shares_the_directory_interval_with_the_sweep(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], transcript: Path
+    ) -> None:
+        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        guard_and_sweep(self.payload(transcript, "Stop"))
+        assert len(popen_calls) == 1
+        assert "review-run skip: throttled" in review_log_path().read_text()
+        guard_and_spawn(self.payload(transcript, "SessionEnd"))
+        assert len(popen_calls) == 2
+
+    def test_session_start_spawns_once_the_interval_passes(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], transcript: Path
+    ) -> None:
+        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        _, sweep = sweep_stamps(str(transcript.parent))
+        aged = (datetime.now(UTC) - timedelta(minutes=31)).timestamp()
+        os.utime(sweep, (aged, aged))
+        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        assert len(popen_calls) == 2
 
 
 class TestEnrollmentGate:
