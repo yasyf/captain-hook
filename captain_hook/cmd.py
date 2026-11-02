@@ -18,6 +18,8 @@ from captain_hook.bindings import (
     Unknown,
     Unresolved,
     dequote,
+    droppable,
+    references,
     segments,
     skip_group,
     skip_quoted,
@@ -342,6 +344,24 @@ class Call:
         """
         scope, offset = self.cmd.scope_for(self, word)
         return Unresolved(None) if offset is None else scope.resolve(word.raw, offset)
+
+    def vanishes(self, word: Word) -> bool:
+        """Whether the shell can drop ``word`` as empty, leaving the program to run on its default operand.
+
+        The word must be :func:`~captain_hook.bindings.droppable`. A ``for`` variable never
+        vanishes, and a word the call can :meth:`resolve` vanishes only when a candidate is blank.
+        """
+        if word.value is not None or not droppable(word.raw):
+            return False
+        scope, offset = self.cmd.scope_for(self, word)
+        names = references(word.raw)
+        if offset is not None and names and all(scope.looped(name, offset) for name in names):
+            return False
+        match self.resolve(word):
+            case Resolved(candidates, _):
+                return any(not candidate.split() for candidate in candidates)
+            case _:
+                return True
 
     def resolved_targets(self, words: tuple[Word, ...]) -> Targets:
         """``words`` as targets, each same-line expansion the call can :meth:`resolve` expanded to its candidates."""

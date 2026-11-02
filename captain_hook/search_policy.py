@@ -22,7 +22,7 @@ from captain_hook.command_schema_core import (
     glob_prefix,
     matches_command,
 )
-from captain_hook.command_schemas import FIND
+from captain_hook.command_schemas import DU, FD, FIND
 from captain_hook.util.scratch import TEMP_ROOTS
 from captain_hook.util.vcs import common_git_dir, git_dir, is_repo_root
 
@@ -1030,6 +1030,32 @@ def lists_home_or_pool(arguments: Arguments) -> bool:
     return not roots.complete or any(map(spans_checkouts, roots or (Target(".", ".", arguments.cwd),)))
 
 
+def vanishing(words: Iterable[Word], arguments: Arguments, *, lifted: bool = True) -> bool:
+    written = tuple(word for word in words if word.span is not None)
+    return not arguments.unread and (
+        all(map(arguments.call.vanishes, written)) if written else lifted and arguments.call.substituted
+    )
+
+
+def pattern_roots_vanish(arguments: Arguments) -> bool:
+    operands = arguments.words.get("operands", ())
+    pattern_given = any(arguments.values.get(role) for role in PATTERN_ROLES)
+    return vanishing(operands[0 if pattern_given else 1 :], arguments, lifted=pattern_given or bool(operands))
+
+
+def find_roots_vanish(arguments: Arguments) -> bool:
+    return vanishing(arguments.words.get("roots", ()), arguments)
+
+
+def fd_roots_vanish(arguments: Arguments) -> bool:
+    operands = arguments.words.get("operands", ())
+    return vanishing((*operands[1:], *arguments.words.get("search_path", ())), arguments, lifted=bool(operands))
+
+
+def du_roots_vanish(arguments: Arguments) -> bool:
+    return "from" not in arguments.values and vanishing(arguments.words.get("operands", ()), arguments)
+
+
 def mcp_searches_broadly(
     fields: dict[str, Any], cwd: Path | None, *, pack_roots: Callable[[], tuple[Path, ...]]
 ) -> bool:
@@ -1086,6 +1112,11 @@ FIND_MESSAGE = (
     "arch that walks every dependency tree. Run `ccx repo locate <name>` instead, nam"
     "e a focused directory, or bound the listing with `-maxdepth 2`."
 )
+EMPTY_ROOT_MESSAGE = (
+    "A search whose only path is an unquoted expansion such as `$dir` or `$(...)` wal"
+    "ks the working directory when that expansion is empty. Write the path as `${dir:"
+    "?}` so an empty value stops the command, or pass a literal path."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1128,6 +1159,17 @@ def shell_search_rules(*, pack_roots: Callable[[], tuple[Path, ...]]) -> tuple[S
         ShellSearchRule(
             FIND_MESSAGE,
             (CommandPattern(FIND, only_if=(find_searches_broadly,), skip_if=(OptionIs("max_depth", range(3)),)),),
+        ),
+        ShellSearchRule(
+            EMPTY_ROOT_MESSAGE,
+            (
+                CommandPattern(GREP, only_if=(recursive, pattern_roots_vanish), skip_if=(informational,)),
+                CommandPattern(UGREP, only_if=(recursive, pattern_roots_vanish), skip_if=(informational,)),
+                CommandPattern(RG, only_if=(pattern_roots_vanish,), skip_if=(informational, lists_files, reads_stdin)),
+                CommandPattern(FIND, only_if=(find_roots_vanish,), skip_if=(OptionIs("max_depth", range(3)),)),
+                CommandPattern(FD, only_if=(fd_roots_vanish,), skip_if=(informational, OptionIs("max_depth", range(3)))),
+                CommandPattern(DU, only_if=(du_roots_vanish,), skip_if=(informational,)),
+            ),
         ),
     )
 
