@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The host updates while the Homebrew formula trails the newest release.** `capt-hook update run` and
+  `capt-hook helper install` landed a Cellar build only when it reached the newest GitHub tag. Tags land
+  faster than the formula follows, so a host stayed on an old build while every newer Cellar build was
+  skipped. A Cellar build newer than the running host now lands, and `helper install` still fails with
+  the host, Cellar and release versions until the host reaches the newest release.
 - **A slow prompt hook no longer times the whole prompt out.** Claude Code kills a
   `UserPromptSubmit` hook at 30 s and discards its output. The client gave the host the same 30 s
   from a later start, so one stall lost every prompt-time hook. The client now gives a prompt

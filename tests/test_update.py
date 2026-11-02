@@ -147,12 +147,11 @@ def test_run_update_settles_without_package_install_once_the_host_reaches_the_re
     ]
 
 
-@pytest.mark.parametrize("host", ["22.0.0", "21.0.0"], ids=["host-equals-candidate", "host-older-than-candidate"])
-def test_run_update_never_package_installs_a_candidate_short_of_the_release(
-    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]], host: str
+def test_run_update_never_package_installs_a_candidate_no_newer_than_the_host(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
 ) -> None:
     stub_release(monkeypatch, "v23.0.0")
-    stub_installed(monkeypatch, host)
+    stub_installed(monkeypatch, "22.0.0")
     calls = record_brew(monkeypatch, 0, candidate="22.0.0")
 
     updater.run_update()
@@ -160,6 +159,28 @@ def test_run_update_never_package_installs_a_candidate_short_of_the_release(
     assert calls == ESCALATED_WITHOUT_INSTALL
     assert [n["kind"] for n in notes] == ["update_failed"]
     assert updater.escalations("v23.0.0") == 1
+
+
+def test_run_update_lands_a_candidate_newer_than_the_host_while_the_formula_trails_the_release(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v23.0.0")
+    stub_installed(monkeypatch, "21.0.0")
+
+    def landing(argv: list[str]) -> int:
+        if argv == PACKAGE_INSTALL:
+            stub_installed(monkeypatch, "22.0.0")
+        return 0
+
+    calls = record_brew(monkeypatch, landing, candidate="22.0.0")
+
+    updater.run_update()
+
+    assert calls == [UPGRADE, PREFIX, VERSION, PACKAGE_INSTALL]
+    assert notes == [
+        {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 22.0.0."}
+    ]
+    assert updater.escalations("v23.0.0") == 0
 
 
 @pytest.mark.parametrize(

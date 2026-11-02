@@ -108,13 +108,23 @@ def test_install_keeps_a_host_already_at_the_latest_release(monkeypatch: pytest.
     assert PACKAGE_INSTALL not in calls
 
 
-def test_install_fails_while_the_cellar_is_short_of_the_latest_release(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PIN: a Cellar behind the latest release is a failure naming all three versions, never "installed"."""
-    calls = record_brew(monkeypatch, cellar="12.22.1")
-    stub_host(monkeypatch, "12.21.6")
+def test_install_lands_a_newer_cellar_and_fails_while_it_is_short_of_the_latest_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PIN: a Cellar newer than the host lands, and short of the latest release it is still a failure."""
+    calls = record_brew(monkeypatch, cellar="12.22.1", host=stub_host(monkeypatch, "12.21.6"))
     result = invoke("install")
     assert result.exit_code != 0
-    assert f"reports 12.21.6 and Homebrew holds 12.22.1, short of the latest release {RELEASE}" in result.output
+    assert f"reports 12.22.1 and Homebrew holds 12.22.1, short of the latest release {RELEASE}" in result.output
+    assert PACKAGE_INSTALL in calls
+
+
+def test_install_never_lands_a_cellar_no_newer_than_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = record_brew(monkeypatch, cellar="12.22.1")
+    stub_host(monkeypatch, "12.22.1")
+    result = invoke("install")
+    assert result.exit_code != 0
+    assert f"reports 12.22.1 and Homebrew holds 12.22.1, short of the latest release {RELEASE}" in result.output
     assert PACKAGE_INSTALL not in calls
 
 
