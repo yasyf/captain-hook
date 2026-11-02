@@ -42,6 +42,9 @@ const (
 
 	spareIdleTTL = 5 * time.Minute
 
+	workerMemoryCeiling = 512 << 20
+	bloatedIdleTTL      = time.Minute
+
 	workerSweepInterval = time.Minute
 )
 
@@ -172,6 +175,7 @@ type workerManager struct {
 	readiness    time.Duration
 	start        func(ctx context.Context, key workerKey) (*workerClient, error)
 	adoptProcess func(ctx context.Context, pid int) (detachedProcess, error)
+	memory       func(worker *workerClient) (uint64, bool)
 
 	// lifetime bounds every worker startup and the sweeper; end cancels it at
 	// Close, so no startup outlives the manager and none is ever bound to the
@@ -198,6 +202,11 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 		now: time.Now, readiness: workerReadinessTimeout, lifetime: lifetime, end: end, changed: make(chan struct{}),
 	}
 	m.start = m.startWorker
+	source := newProcSource()
+	m.memory = func(worker *workerClient) (uint64, bool) {
+		usage, known := source.usage(worker.child.PID())
+		return usage.MemoryBytes, known && usage.MemoryKnown
+	}
 	m.adoptProcess = func(ctx context.Context, pid int) (detachedProcess, error) {
 		tracked, err := owner.Adopt(ctx, pid)
 		if err != nil {
@@ -498,9 +507,10 @@ func (m *workerManager) evictIdleLocked() *workerEntry {
 
 // sweep retires every cached entry that no longer earns its interpreter: one
 // idle past workerIdleTTL, a pool member other than the pool's most recently
-// used idle past spareIdleTTL, and one keyed on a root that has since been
-// deleted — a reaped scratch directory or a removed worktree. Returns the
-// workers it removed so the caller stops them off the lock.
+// used idle past spareIdleTTL, one whose interpreter has grown past
+// workerMemoryCeiling idle past bloatedIdleTTL, and one keyed on a root that
+// has since been deleted — a reaped scratch directory or a removed worktree.
+// Returns the workers it removed so the caller stops them off the lock.
 func (m *workerManager) sweep(now time.Time) []*workerClient {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -522,7 +532,8 @@ func (m *workerManager) sweep(now time.Time) []*workerClient {
 		if newest[entry.key.id] != entry {
 			ttl = spareIdleTTL
 		}
-		if rootExists(entry.key.root) && now.Sub(entry.lastUsed) < ttl {
+		idle := now.Sub(entry.lastUsed)
+		if rootExists(entry.key.root) && idle < ttl && (idle < bloatedIdleTTL || !m.bloatedLocked(entry)) {
 			continue
 		}
 		delete(m.entries, id)
@@ -531,6 +542,19 @@ func (m *workerManager) sweep(now time.Time) []*workerClient {
 		}
 	}
 	return retired
+}
+
+func (m *workerManager) bloatedLocked(entry *workerEntry) bool {
+	if entry.worker == nil {
+		return false
+	}
+	bytes, known := m.memory(entry.worker)
+	if !known || bytes <= workerMemoryCeiling {
+		return false
+	}
+	fmt.Fprintf(m.logWriter, "captain: retire idle worker %s at %d MiB, over the %d MiB ceiling\n",
+		entry.key.member(), bytes>>20, workerMemoryCeiling>>20)
+	return true
 }
 
 // adopt takes ownership of a process a worker detached into its own session.

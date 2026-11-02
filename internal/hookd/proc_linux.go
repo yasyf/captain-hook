@@ -108,6 +108,11 @@ func (s *linuxProcSource) usage(pid int) (procUsage, bool) {
 			usage.DiskBytes, usage.DiskKnown = disk, true
 		}
 	}
+	if raw, err := os.ReadFile(procPath(pid, "statm")); err == nil {
+		if pages, ok := parseLinuxStatmResident(raw); ok {
+			usage.MemoryBytes, usage.MemoryKnown = pages*uint64(os.Getpagesize()), true
+		}
+	}
 	return usage, true
 }
 
@@ -182,6 +187,15 @@ func parseLinuxIO(raw []byte) (uint64, bool) {
 		found++
 	}
 	return total, found == 2
+}
+
+func parseLinuxStatmResident(raw []byte) (uint64, bool) {
+	fields := strings.Fields(string(raw))
+	if len(fields) < 2 {
+		return 0, false
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	return pages, err == nil
 }
 
 func parseLinuxCmdline(raw []byte) ([]string, bool) {

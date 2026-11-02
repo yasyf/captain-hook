@@ -298,6 +298,47 @@ func TestWorkerManagerSweepRetiresSparePoolMembersSooner(t *testing.T) {
 	}
 }
 
+func TestWorkerManagerSweepRetiresAnIdleWorkerOverTheMemoryCeiling(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1<<32, 0)
+	live := t.TempDir()
+	manager := mustWorkerManager(t)
+	resident := map[*workerClient]uint64{}
+	manager.memory = func(worker *workerClient) (uint64, bool) {
+		bytes, known := resident[worker]
+		return bytes, known
+	}
+	seed := func(id string, lastUsed time.Time, inflight int, bytes uint64, known bool) {
+		entry := &workerEntry{
+			ready: make(chan struct{}), key: workerKey{id: id, root: live}, worker: &workerClient{},
+			lastUsed: lastUsed, inflight: inflight,
+		}
+		close(entry.ready)
+		if known {
+			resident[entry.worker] = bytes
+		}
+		manager.entries[entry.key.member()] = entry
+	}
+	seed("bloated", now.Add(-bloatedIdleTTL), 0, workerMemoryCeiling+1, true)
+	seed("at-ceiling", now.Add(-bloatedIdleTTL), 0, workerMemoryCeiling, true)
+	seed("just-used", now.Add(-bloatedIdleTTL+time.Second), 0, 2*workerMemoryCeiling, true)
+	seed("dispatching", now.Add(-workerIdleTTL/2), 1, 2*workerMemoryCeiling, true)
+	seed("unread", now.Add(-workerIdleTTL/2), 0, 0, false)
+
+	retired := manager.sweep(now)
+
+	if len(retired) != 1 {
+		t.Fatalf("sweep retired %d workers, want only the bloated one", len(retired))
+	}
+	for member, kept := range map[string]bool{
+		"bloated/0": false, "at-ceiling/0": true, "just-used/0": true, "dispatching/0": true, "unread/0": true,
+	} {
+		if _, live := manager.entries[member]; live != kept {
+			t.Errorf("after the sweep %s cached = %t, want %t", member, live, kept)
+		}
+	}
+}
+
 // TestEphemeralRootIsScoped keeps the ephemeral test narrow: a scratch root
 // under the system temp directory, and nothing else. Misreading a real project
 // as ephemeral would stop it ever caching an interpreter.
@@ -350,7 +391,9 @@ func TestWorkerManagerCloseReportsJoinedProductGraph(t *testing.T) {
 
 func mustWorkerManager(t *testing.T) *workerManager {
 	t.Helper()
-	return newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager.memory = func(*workerClient) (uint64, bool) { return 0, false }
+	return manager
 }
 
 func TestDispatchRunsOneAgentsEventsConcurrently(t *testing.T) {
