@@ -16,6 +16,8 @@ ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=")
 MUTATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?=|\(\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|\+\+|--|[-+*/%]=)")
 REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 SPECIAL_PARAMETER = re.compile(r"[0-9@*#?$!_-]")
+GUARDED = re.compile(r"#|(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)(?::\?|:[-=][^}$`])")
+QUOTED_LIST = re.compile(r'"\$(?:@|\{[A-Za-z_][A-Za-z0-9_]*\[@\]\})"')
 WORD_BREAK = frozenset(" \t\n;&|()<>")
 OPERATORS = (
     "<<<",
@@ -319,6 +321,41 @@ def references(raw: str) -> frozenset[str]:
     return frozenset(match.group(1) for match in REFERENCE.finditer(raw))
 
 
+def filled(binding: Binding | None) -> bool:
+    """Whether every value ``binding`` can hold is non-blank."""
+    return isinstance(binding, Known) and all(candidate.strip() for candidate in binding.candidates)
+
+
+def droppable(raw: str) -> bool:
+    """Whether ``raw`` is built only from expansions the shell drops when they expand to nothing.
+
+    Unquoted parameters and command substitutions qualify, and so do a quoted ``"$@"`` or
+    ``"${name[@]}"``. A literal character, a quoted part, arithmetic, or a parameter guarded by
+    ``${name:?}``, ``${#name}``, or a ``${name:-default}`` whose default starts with a literal keeps the word.
+    """
+    index = 0
+    while index < len(raw):
+        if (listed := QUOTED_LIST.match(raw, index)) is not None:
+            index = listed.end()
+        elif raw.startswith("$((", index):
+            return False
+        elif raw.startswith("$(", index):
+            index = skip_group(raw, index + 1, "(", ")")
+        elif raw.startswith("`", index):
+            index = skip_quoted(raw, index, "`")
+        elif raw.startswith("${", index):
+            if GUARDED.match(raw, index + 2) is not None:
+                return False
+            index = skip_group(raw, index + 1, "{", "}")
+        elif raw.startswith("$", index) and (
+            parameter := NAME.match(raw, index + 1) or SPECIAL_PARAMETER.match(raw, index + 1)
+        ):
+            index = parameter.end()
+        else:
+            return False
+    return bool(raw)
+
+
 def unreadable_substitution(value: str) -> bool:
     return "$(" in value and any(marker in value for marker in UNREADABLE_IN_SUBSTITUTION)
 
@@ -385,6 +422,13 @@ class Scope:
         if binding is None and name in self.mentioned:
             return Unknown(None)
         return binding
+
+    def looped(self, name: str, offset: int) -> bool:
+        """Whether ``name`` is a ``for`` variable at ``offset``, which word splitting never leaves empty."""
+        return any(
+            event.name == name and event.until is not None and event.offset < offset < event.until
+            for event in self.events
+        )
 
     def in_function(self, offset: int) -> bool:
         return any(start <= offset < end for start, end in self.functions)
@@ -644,6 +688,7 @@ class Walk:
                 self.pending_loop = len(self.scope.events)
                 self.bind(Event(words[0].start, name, binding))
             case [name, *_] if NAME.fullmatch(name) is not None:
+                self.pending_loop = len(self.scope.events)
                 self.bind(Event(words[0].start, name, Unknown(None)))
             case _:
                 pass

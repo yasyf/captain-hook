@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.bindings import Resolved, Scope, Unresolved
+from captain_hook.bindings import Resolved, Scope, Unresolved, droppable
 from captain_hook.cmd import Target
 from tests.test_cmd import evt_for
 
@@ -224,3 +224,50 @@ class TestCallResolution:
     def test_nested_variable_cd_does_not_recurse(self) -> None:
         evt = evt_for("export X=/tmp; sh -c 'cd \"$X\"; rm -rf child'")
         assert evt.cmd.calls("rm")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("$site", True),
+        ("${site}", True),
+        ("$a$b", True),
+        ("$(git rev-parse --show-toplevel)", True),
+        ("`pwd`", True),
+        ('"$@"', True),
+        ('"${files[@]}"', True),
+        ("${site:+$site}", True),
+        ("${site:-}", True),
+        ("${site:-$fallback}", True),
+        ("${site:?}", False),
+        ("${site:?set site}", False),
+        ("${site:-src}", False),
+        ("${#site}", False),
+        ("$((n + 1))", False),
+        ('"$site"', False),
+        ('"${files[*]}"', False),
+        ("$site/src", False),
+        ("src", False),
+        ("", False),
+    ],
+)
+def test_droppable_names_words_the_shell_drops_when_empty(raw: str, expected: bool) -> None:
+    assert droppable(raw) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "word", "expected"),
+    [
+        ("grep -r --include='*.py' x $site", "$site", True),
+        ("site=; grep -r --include='*.py' x $site", "$site", True),
+        ("site=src; grep -r --include='*.py' x $site", "$site", False),
+        ("for d in $(git ls-files); do grep -r x $d; done", "$d", False),
+        ("for d; do grep -r x $d; done", "$d", False),
+        ("root=src; grep -r x $root$extra", "$root$extra", False),
+        ("grep -r --include='*.py' x ${site:?}", "${site:?}", False),
+    ],
+)
+def test_a_call_word_vanishes_only_when_it_can_expand_to_nothing(text: str, word: str, expected: bool) -> None:
+    [call] = evt_for(text, cwd="/").cmd.calls("grep")
+    [target] = [candidate for candidate in call.command.words if candidate.raw == word]
+    assert call.vanishes(target) is expected

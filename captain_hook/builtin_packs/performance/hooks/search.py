@@ -218,7 +218,7 @@ rg_searches_broadly = partial(search_policy.rg_searches_broadly, pack_roots=regi
 searches_broadly = partial(search_policy.searches_broadly, pack_roots=registered_pack_roots)
 ugrep_searches_broadly = partial(search_policy.ugrep_searches_broadly, pack_roots=registered_pack_roots)
 
-SEARCH_RULE, FILES_RULE, FIND_RULE = search_policy.shell_search_rules(pack_roots=registered_pack_roots)
+SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE = search_policy.shell_search_rules(pack_roots=registered_pack_roots)
 
 
 class BroadMCPGrep(CustomCondition):
@@ -596,5 +596,59 @@ hook(
         Input(command="echo 'find / -name daemonkit'"): Allow(),
         Input(command="cat <<'EOF'\nfind / -name daemonkit\nEOF"): Allow(),
         Input(command="ccx repo locate daemonkit"): Allow(),
+    },
+)
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[
+        Tool("Bash"),
+        Or(
+            *(
+                CommandMatches(pattern.schema, only_if=pattern.only_if, skip_if=pattern.skip_if)
+                for pattern in EMPTY_ROOT_RULE.patterns
+            )
+        ),
+    ],
+    message=(EMPTY_ROOT_RULE.message),
+    block=True,
+    max_fires=None,
+    tests={
+        Input(command="grep -rn --include='*.py' needle $site", cwd="/Users/alice"): Block(
+            pattern="walks the working directory"
+        ),
+        Input(command="site=; grep -rn --include='*.py' needle $site", cwd="/Users/alice"): Block(),
+        Input(command="grep -r --include='*.py' needle $(git rev-parse --show-toplevel)"): Block(),
+        Input(command="rg -tpy needle $root"): Block(),
+        Input(command='rg -g "*.py" needle "${files[@]}"'): Block(),
+        Input(command="ugrep -r -tpy needle ${root}"): Block(),
+        Input(command="find $root -maxdepth 4 -name '*.py'"): Block(),
+        Input(command="fd -e py needle $dir"): Block(),
+        Input(command="du -sh $dir"): Block(),
+        Input(command="du -sh $(dirname $0)"): Block(),
+        Input(command="du -sh ${dir:-$fallback}"): Block(),
+        Input(command="du -hd 3 $dir"): Block(),
+        Input(command="fd -HIe py needle $dir"): Block(),
+        Input(command="grep -rn --include='*.py' needle ~/Code/captain-hook/captain_hook"): Allow(),
+        Input(command="grep -rn --include='*.py' needle ${site:?}"): Allow(),
+        Input(command="grep -rn --include='*.py' needle ${site:-src}"): Allow(),
+        Input(command="site=src; grep -rn --include='*.py' needle $site"): Allow(),
+        Input(command="grep -rn --include='*.py' needle src $extra", cwd="/repo"): Allow(),
+        Input(command="grep -n needle $file"): Allow(),
+        Input(command='rg -tpy needle "$root"'): Allow(),
+        Input(command="rg -tpy needle $root/src"): Allow(),
+        Input(command="for d in $(git ls-files); do rg -tpy needle $d; done"): Allow(),
+        Input(command="cat notes.txt | rg needle $file"): Allow(),
+        Input(command="find $root -maxdepth 1 -name '*.py'"): Allow(),
+        Input(command="fd needle", cwd="/repo"): Allow(),
+        Input(command="fd -e py needle src", cwd="/repo"): Allow(),
+        Input(command="du -sh", cwd="/repo"): Allow(),
+        Input(command="du -sh node_modules", cwd="/repo"): Allow(),
+        Input(command="rg -tpy $(printf needle) src", cwd="/repo"): Allow(),
+        Input(command='du -sh "${dirs[*]}"'): Allow(),
+        Input(command="root=src; du -sh $root$extra"): Allow(),
+        Input(command="for dir; do du -sh $dir; done"): Allow(),
+        Input(command="echo 'du -sh $dir'"): Allow(),
     },
 )
