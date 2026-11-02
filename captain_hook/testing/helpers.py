@@ -198,6 +198,7 @@ def stubbed_commands(commands: dict[str, str | tuple[int, str]] | None) -> Itera
 def materialize_file(fixture: FileFixture) -> str:
     base = home_fixture_dir() if fixture.home else fixture_file_dir()
     path = base / (fixture.name or f"fixture-{next(FIXTURE_FILE_COUNTER)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(fixture.content.encode() if fixture.content is not None else b"x" * (fixture.size or 0))
     return str(path)
 
@@ -623,8 +624,11 @@ def input_to_event(
                 tool_input=inp.tool_input,
                 **ctx_kw,
             )
-    if isinstance(inp.file, FileFixture) and inp.file.home:
-        evt.__dict__["_home_dir"] = str(Path(file).parent)
+    match inp.file, file:
+        case FileFixture(home=True, name=str(name)), str(path):
+            evt.__dict__["_home_dir"] = str(Path(path).parents[len(Path(name).parts) - 1])
+        case _:
+            pass
     evt._raw |= (
         ({"transcript_path": str(transcript_path)} if transcript_path else {})
         | {"session_id": inp.session_id or "fixture"}

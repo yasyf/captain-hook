@@ -66,7 +66,8 @@ class FileFixture:
     ``home=True`` materializes the file under a per-test temporary "home" directory instead of
     the shared fixture directory, and ``run_inline_tests`` swaps ``$HOME`` to that directory for
     the duration of that one test's hook execution — restored afterward even on failure — so an
-    ``os.path.expanduser``-based hook resolves deterministically. Requires ``name``.
+    ``os.path.expanduser``-based hook resolves deterministically. Requires ``name``, which may
+    nest directories (``lanes/app/tools/run.sh``); the home is the directory above them.
     """
 
     size: int | None = None

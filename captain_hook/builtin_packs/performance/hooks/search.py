@@ -221,6 +221,12 @@ ugrep_searches_broadly = partial(search_policy.ugrep_searches_broadly, pack_root
 SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE, PROTECTED_ROOT_RULE = search_policy.shell_search_rules(
     pack_roots=registered_pack_roots
 )
+LAYOUT = {
+    "HOOKS_LAYOUT_PROTECTED_ROOTS": '["~/.local/share/jobs", "~/src"]',
+    "HOOKS_LAYOUT_SEARCHABLE_UNITS": '["~/.local/share/jobs/*/payload"]',
+    "HOOKS_LAYOUT_CHECKOUT_COLLECTIONS": '["~/src"]',
+    "HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/lanes": 1}',
+}
 
 
 class BroadMCPGrep(CustomCondition):
@@ -300,6 +306,9 @@ hook(
         Input(command="rg --type-add 'mine:*' -tmine needle ~"): Block(),
         Input(command="rg -e needle -e other ~"): Block(),
         Input(command="rg needle ~/.claude/worktrees/captain-hook"): Block(),
+        Input(command="rg needle ~/lanes/captain-hook", env=LAYOUT): Block(),
+        Input(command="rg needle ~/lanes/captain-hook"): Allow(),
+        Input(command="rg needle ~/lanes/captain-hook/lane", env=LAYOUT): Allow(),
         Input(command="rg needle src; rg needle /", cwd="/repo"): Block(),
         Input(command='rg needle "$ROOT"'): Block(),
         Input(command="rg needle"): Block(),
@@ -441,6 +450,8 @@ hook(
             command="rg --files -g AGENTS.md /Users/yasyf/.claude/worktrees/captain-hook/language-shared-cache"
         ): Allow(),
         Input(command="rg --files ~/.claude/worktrees/captain-hook/lane"): Allow(),
+        Input(command="rg --files -g AGENTS.md ~/lanes", env=LAYOUT): Block(),
+        Input(command="rg --files ~/lanes/captain-hook/lane", env=LAYOUT): Allow(),
         Input(command="rg --files ~/.claude/worktrees/captain-hook/lane/src"): Allow(),
         Input(command="rg --files ~/.claude/scratch"): Allow(),
         Input(command="rg --files ~/.config"): Allow(),
@@ -486,6 +497,8 @@ hook(
         Input(command="find /Users/alice -name daemonkit"): Block(),
         Input(command="find /home/alice -name daemonkit"): Block(),
         Input(command="find ~/.claude/worktrees -name daemonkit"): Block(),
+        Input(command="find ~/src -name daemonkit", env=LAYOUT): Block(),
+        Input(command="find ~/lanes/captain-hook -name daemonkit", env=LAYOUT): Block(),
         Input(command="find $HOME/.claude/worktrees -name daemonkit"): Block(),
         Input(command="find /System/Volumes/Data -name daemonkit"): Block(),
         Input(command="find -H / -name daemonkit"): Block(),
@@ -546,6 +559,9 @@ hook(
         Input(command="find . -type d -name daemonkit", cwd="/repo"): Allow(),
         Input(command="find ~/Code/captain-hook -type d -name daemonkit"): Allow(),
         Input(command="find ~/.claude/worktrees/captain-hook/dispatch-stall -name daemonkit"): Allow(),
+        Input(command="find ~/src -name daemonkit"): Allow(),
+        Input(command="find ~/src/captain-hook -name daemonkit", env=LAYOUT): Allow(),
+        Input(command="find ~/lanes/captain-hook/lane -name daemonkit", env=LAYOUT): Allow(),
         Input(
             command=(
                 "R=/Users/yasyf/.claude/worktrees/monorepo/parity-audit-dev; ls $R/go/ci; "
@@ -665,6 +681,13 @@ hook(
         Input(command="rg --iglob '*.log' needle ~/.cache/captain-hook"): Block(),
         Input(command="grep -rn --include='*.plist' needle ~/Library"): Block(),
         Input(command="fd -e json needle /private/var/folders/ab/xyz"): Block(),
+        Input(command="rg -l watcher-poll ~/.local/share/jobs/a/cleanup -g job.json", env=LAYOUT): Block(
+            pattern="known depth"
+        ),
+        Input(command="rg -n needle ~/src -g '*.go'", env=LAYOUT): Block(),
+        Input(command="rg -l watcher-poll ~/.local/share/jobs/a/cleanup -g job.json"): Allow(),
+        Input(command="rg -n needle ~/.local/share/jobs/7f3c/payload", env=LAYOUT): Allow(),
+        Input(command="rg -n needle ~/src/cc-context -g '*.go'", env=LAYOUT): Allow(),
         Input(command="rg -n foo internal/cli", cwd="/Users/alice/src/cc-context"): Allow(),
         Input(command="rg needle ~/.cache/tool/*/job.json"): Allow(),
         Input(command="find ~/.cache/tool -maxdepth 2 -name job.json"): Allow(),
