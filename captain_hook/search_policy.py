@@ -38,10 +38,15 @@ POOLS = (
     ".orca/workspaces",
     "repos/claude/worktrees",
     ".daemonkit/a/ccx-cleanup/jobs",
+    ".claude/plugins/cache",
+    ".claude/plugins/marketplaces",
 )
 
 
-HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2}
+HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2, ".claude/plugins/cache": 2}
+
+
+HOME_COLLECTIONS = ("Code", "repos", "Library", ".cache", ".codex", ".vcache", ".vcache/scratch")
 
 
 POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in HOME_POOL_LEVELS), unresolved=True)
@@ -660,7 +665,9 @@ def names_files(target: Target) -> bool:
     match target.value:
         case str(value) if target.has_glob:
             path = Path(value)
-            return narrows("".join(path.parts[len(glob_prefix(path).parts) :]))
+            return narrows("".join(path.parts[len(glob_prefix(path).parts) :])) and (
+                "**" not in path.parts or not spans_checkouts(target)
+            )
         case _:
             return False
 
@@ -692,7 +699,7 @@ def encloses_roots(root: Path, anchors: Iterable[Path]) -> bool:
 
 
 def encloses_home_or_pool(root: Path) -> bool:
-    return encloses_roots(root, (Path.home(), *pool_anchors()))
+    return encloses_roots(root, (Path.home(), *(Path.home() / name for name in HOME_COLLECTIONS), *pool_anchors()))
 
 
 def known_search_roots(cwd: Path | None, *, pack_roots: Callable[[], tuple[Path, ...]]) -> tuple[Path, ...]:
@@ -746,6 +753,7 @@ def broad(
         and (not (path is not None and path.is_file()))
         and (
             BROAD_ROOTS(target)
+            or spans_checkouts(target)
             or at_home(target)
             or (path is not None and is_repo_root(glob_prefix(path)))
             or (
@@ -981,26 +989,37 @@ def listed(values: Iterable[Scalar | None]) -> tuple[str | None, ...]:
     return tuple(piece for value in values for piece in (value.split(",") if isinstance(value, str) else (None,)))
 
 
+def bounded_roots(arguments: Arguments) -> bool:
+    roots = named_roots(arguments)
+    return roots.complete and not any(spans_checkouts(target) for target in roots or (Target(".", ".", arguments.cwd),))
+
+
 def grep_bounded(arguments: Arguments) -> bool:
-    return bounded((*arguments.values.get("include", ()), *arguments.values.get("include_dir", ())))
+    return bounded((*arguments.values.get("include", ()), *arguments.values.get("include_dir", ()))) and bounded_roots(
+        arguments
+    )
 
 
 def ugrep_bounded(arguments: Arguments) -> bool:
-    return not arguments.values.get("all") and bounded(
-        (
-            *positive(
-                listed(
-                    (
-                        *arguments.values.get("glob", ()),
-                        *arguments.values.get("extension", ()),
-                        *arguments.values.get("type", ()),
-                    )
+    return (
+        not arguments.values.get("all")
+        and bounded(
+            (
+                *positive(
+                    listed(
+                        (
+                            *arguments.values.get("glob", ()),
+                            *arguments.values.get("extension", ()),
+                            *arguments.values.get("type", ()),
+                        )
+                    ),
+                    ("!", "^"),
                 ),
-                ("!", "^"),
-            ),
-            *arguments.values.get("include_dir", ()),
-            *(None for _ in (*arguments.values.get("magic", ()), *arguments.values.get("include_from", ()))),
+                *arguments.values.get("include_dir", ()),
+                *(None for _ in (*arguments.values.get("magic", ()), *arguments.values.get("include_from", ()))),
+            )
         )
+        and bounded_roots(arguments)
     )
 
 
@@ -1011,7 +1030,7 @@ def rg_bounded(arguments: Arguments) -> bool:
             *positive(arguments.values.get("glob", ()), ("!",)),
             *(kind if typed and kind != "all" else None for kind in arguments.values.get("type", ())),
         )
-    )
+    ) and bounded_roots(arguments)
 
 
 def informational(arguments: Arguments) -> bool:
@@ -1106,9 +1125,10 @@ MCP_GREP_MESSAGE = (
     "lobs: ['*.py']`."
 )
 SEARCH_MESSAGE = (
-    "A recursive `grep` over a directory reads every file under it; bound `grep` by f"
-    "ilename and scope other searches below broad roots. Name files, use `--include='"
-    "*.py'`, `-g '*.py'`, or `-- '*.py'`, or run `ccx code grep` with scoped paths."
+    "A recursive `grep` over a directory without filename bounds reads every file under it. "
+    "Recursive searches over home, worktree, or plugin pools are blocked even with filename filters. "
+    "Name one checkout or a focused directory; within that scope, use `--include='*.py'`, `-g '*.py'`, "
+    "or `-- '*.py'`, or run `ccx code grep` with scoped paths."
 )
 FILES_MESSAGE = (
     "`rg --files` over `~`, a worktree pool, or any directory above them is blocked e"
