@@ -45,8 +45,8 @@ WRAPPER_COMMANDS: frozenset[str] = frozenset(LITERALS["command.WRAPPER_COMMANDS"
 COMMAND_VALUE_FLAGS: dict[str, tuple[str, ...]] = {
     "git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"),
     "yarn": ("--cwd", "--mode"),
-    "npm": ("-C", "--prefix", "-w", "--workspace"),
-    "pnpm": ("-C", "--dir", "-F", "--filter"),
+    "npm": ("-C", "--prefix", "-w", "--workspace", "--registry", "--userconfig", "--cache", "--loglevel"),
+    "pnpm": ("-C", "--dir", "-F", "--filter", "--registry", "--loglevel"),
     "bun": ("--cwd", "--filter"),
 }
 PACKAGE_DIRECTORY_FLAGS: dict[str, frozenset[str]] = {
@@ -511,11 +511,18 @@ def package_directory(call: Call) -> tuple[Target, ...]:
     options, _ = call.command.split_options(COMMAND_VALUE_FLAGS.get(call.name, ()))
     directory = (Target(None, "", None) if call.cwd is None else Target(str(call.cwd), str(call.cwd), None),)
     for flag, value in zip(options, (*options[1:], None), strict=False):
-        name, attached, rest = (flag.value or "").partition("=")
+        name, attached, _ = (flag.raw if flag.value is None else flag.value).partition("=")
         if name not in flags:
             continue
         if attached:
-            directory = (Target(rest, flag.raw.partition("=")[2], call.cwd),)
+            directory = tuple(
+                Target(
+                    None if target.value is None else target.value.partition("=")[2],
+                    target.raw.partition("=")[2],
+                    call.cwd,
+                )
+                for target in call.word_targets(flag)
+            )
         elif value is not None:
             directory = call.word_targets(value)
     return directory

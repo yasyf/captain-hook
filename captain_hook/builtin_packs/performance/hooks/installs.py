@@ -15,16 +15,48 @@ LANES = PathMatches(
 )
 INSTALL_VERBS = {
     "yarn": frozenset({"install", "add", "remove", "up", "dedupe"}),
-    "npm": frozenset({"install", "i", "add", "ci", "clean-install", "install-test", "it", "install-ci-test", "cit"}),
+    "npm": frozenset(
+        {
+            "install",
+            "i",
+            "in",
+            "ins",
+            "inst",
+            "insta",
+            "instal",
+            "isnt",
+            "isnta",
+            "isntal",
+            "isntall",
+            "add",
+            "ci",
+            "clean-install",
+            "ic",
+            "install-clean",
+            "isntall-clean",
+            "install-test",
+            "it",
+            "install-ci-test",
+            "cit",
+        }
+    ),
     "pnpm": frozenset({"install", "i", "add"}),
     "bun": frozenset({"install", "i", "add"}),
 }
-OUTSIDE_LANE = frozenset({"--mode=update-lockfile", "--package-lock-only", "--lockfile-only", "-g", "--global"})
+OUTSIDE_LANE = frozenset({"--package-lock-only", "--lockfile-only", "-g", "--global", "--dry-run"})
 INFO_FLAGS = INFO_OPTIONS | {"-v"}
 
 
+def options(call: Call) -> set[tuple[str, str]]:
+    return {(name, value) for name, _, value in (flag.partition("=") for flag in call.flags)} | set(
+        pairwise(call.flags)
+    )
+
+
 def leaves_lane(call: Call) -> bool:
-    return not OUTSIDE_LANE.isdisjoint(call.flags) or ("--mode", "update-lockfile") in pairwise(call.flags)
+    return ("--mode", "update-lockfile") in (pairs := options(call)) or any(
+        name in OUTSIDE_LANE and value in {"", "true"} for name, value in pairs
+    )
 
 
 def installs(call: Call) -> bool:
@@ -70,6 +102,14 @@ hook(  # capt-hook: no-escape node_modules in a lane comes only from warm-lane, 
         Input(command="bun i", cwd="/Users/alice/repos/claude/worktrees/app/lane"): Block(),
         Input(command="git pull && yarn install", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
         Input(command="sh -c 'yarn install'", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
+        Input(command="npm in", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
+        Input(command="npm ic", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
+        Input(
+            command="npm --registry https://registry.npmjs.org install", cwd="/Users/alice/.claude/worktrees/app/lane"
+        ): Block(),
+        Input(command="npm --prefix=$HOME/.claude/worktrees/app/lane install", cwd="/"): Block(),
+        Input(command="npm install --package-lock-only=false", cwd="/Users/alice/.claude/worktrees/app/lane"): Block(),
+        Input(command="npm install --global=false zx", cwd="/Users/alice/.claude/worktrees/app/lane"): Block(),
         Input(command="yarn biome check src", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
         Input(command="yarn tsc --noEmit -p .", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
         Input(command="yarn run lint", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
@@ -82,6 +122,10 @@ hook(  # capt-hook: no-escape node_modules in a lane comes only from warm-lane, 
             command="yarn add zod --mode update-lockfile", cwd="/Users/alice/.claude/worktrees/monorepo/lane"
         ): Allow(),
         Input(command="npm install -g pnpm", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
+        Input(command="npm install --global=true pnpm", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
+        Input(command="npm install --package-lock-only=true", cwd="/Users/alice/.claude/worktrees/app/lane"): Allow(),
+        Input(command="npm install --dry-run", cwd="/Users/alice/.claude/worktrees/app/lane"): Allow(),
+        Input(command="cd -- / && npm install", cwd="/Users/alice/.claude/worktrees/app/lane"): Allow(),
         Input(command="tools/hooks/warm-lane.sh", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
         Input(command="yarn install --immutable", cwd="/Users/alice/Code/monorepo"): Allow(),
         Input(command="cd / && yarn install", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
