@@ -800,12 +800,7 @@ def broad(
 
 def find_searches_broadly(arguments: Arguments) -> bool:
     roots = arguments.paths("roots")
-    return not roots.complete or any(
-        SYSTEM_ROOTS(target)
-        or spans_checkouts(target)
-        or ((root := canonical(target)) is not None and encloses_roots(root, (Path.home() / "Code",)))
-        for target in roots
-    )
+    return not roots.complete or any(SYSTEM_ROOTS(target) or spans_checkouts(target) for target in roots)
 
 
 def named_roots(arguments: Arguments) -> Targets:

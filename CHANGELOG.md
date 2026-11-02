@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The performance pack no longer encodes one machine's directory layout.** The guard that blocked
   JavaScript installs inside worktree lanes is gone. The search guards no longer treat one machine's
-  lane, cache-volume and cleanup-queue directories as protected roots or worktree pools. `~`,
+  checkout folder, lane, cache-volume and cleanup-queue directories as protected roots, checkout
+  collections or worktree pools. `~`,
   `~/.claude` with its plugin cache, transcripts and worktree pool, `~/.cache`, `~/Library` and the
   temp roots stay protected, and a `-g` or `-name` filter still does not bound a search under them.
 
