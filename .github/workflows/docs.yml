@@ -88,6 +88,7 @@ jobs:
           include-hidden-files: true
 
       - name: "Docs quality: link check"
+        if: github.event_name != 'pull_request'
         run: uv run --group docs great-docs check-links
         continue-on-error: true
         timeout-minutes: 3
@@ -95,11 +96,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: "Docs quality: SEO audit"
+        if: github.event_name != 'pull_request'
         run: uv run --group docs great-docs seo
         continue-on-error: true
         timeout-minutes: 2
 
   docs-quality-lint:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -123,6 +126,7 @@ jobs:
     needs: build-docs
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pages: write
       id-token: write
