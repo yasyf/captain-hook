@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     project walk.
   - A prompt that finds the registry rebuilding after a plugin or hook change waits up to 2 s, then
     runs the previous registry while the rebuild finishes.
-  - Session state that comes back unchanged is no longer rewritten. Of the prompt-time state
+  - Session state a hook's `mutate` leaves unchanged is no longer rewritten. Of the prompt-time state
     writes in a day, 94% were unchanged, and each one could take up to 19 s while the disk was busy.
 - **`capt-hook helper install` installs the latest release.** It landed whatever version the
   Homebrew Cellar held and reported success once the host reached that version. A Cellar behind a

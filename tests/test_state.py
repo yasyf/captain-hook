@@ -183,7 +183,7 @@ class TestStateStore:
                 model.value = 2
             assert persist.call_count == 1
             slot.set(DefaultModel(value=2))
-            assert persist.call_count == 1
+            assert persist.call_count == 2
         assert slot.get() == DefaultModel(value=2)
 
     @pytest.mark.parametrize("change", ["deleted", "rewritten"])

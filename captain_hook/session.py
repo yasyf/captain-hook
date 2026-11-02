@@ -98,13 +98,8 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         return self._load(default)[0]
 
     def set(self, obj: M) -> None:
-        if not self._path:
-            return
-        try:
-            stored = self._path.read_text()
-        except OSError:
-            stored = None
-        self._persist(self._path, obj.model_dump_json(), stored)
+        if self._path:
+            self._persist(self._path, obj.model_dump_json(), None)
 
     def delete(self) -> None:
         if self._path:
