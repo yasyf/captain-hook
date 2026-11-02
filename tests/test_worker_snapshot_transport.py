@@ -130,7 +130,7 @@ def test_reverse_foreground_and_explicit_background_use_separate_admission(trans
     assert service._snapshot_pending == {}
 
 
-def test_a_reverse_snapshot_rpc_validates_its_response_once(transport, monkeypatch):
+def test_a_reverse_snapshot_rpc_never_schema_validates_its_response(transport, monkeypatch):
     from captain_hook.snapshots import validation
 
     validated = []
@@ -145,7 +145,7 @@ def test_a_reverse_snapshot_rpc_validates_its_response_once(transport, monkeypat
     write_message(outgoing, event(41))
     write_message(outgoing, snapshot_reply(read_message(incoming)))
     assert read_message(incoming)["op"] == "result"
-    assert validated == ["host-response"]
+    assert validated == []
 
 
 def test_foreground_release_waits_until_after_hook_result(transport):

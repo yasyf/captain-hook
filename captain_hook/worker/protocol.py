@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from captain_hook.snapshots.validation import checked, native_numbers, parse_exact
+from captain_hook.snapshots.validation import native_numbers, parse_exact, wire_numbers
 
 if TYPE_CHECKING:
     from typing import BinaryIO
@@ -268,11 +268,9 @@ def decode_snapshot_reply(message: dict[str, Any]) -> SnapshotReply:
         raise ProtocolError("invalid snapshot reply")
     snapshot = message.get("snapshot")
     if snapshot is not None:
-        from jsonschema import ValidationError
-
         try:
-            snapshot = checked("host-response", snapshot)
-        except (ValueError, ValidationError) as exc:
+            snapshot = wire_numbers(snapshot)
+        except ValueError as exc:
             raise ProtocolError(f"invalid snapshot response: {exc}") from exc
         message = message | {"snapshot": snapshot}
     if len(json.dumps(message, separators=(",", ":")).encode()) > MAX_SNAPSHOT_FRAME:

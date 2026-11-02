@@ -77,3 +77,15 @@ def checked(name: str, value: object) -> Any:
     precise = canonical_numbers(value)
     validate(name, precise)
     return native_numbers(precise)
+
+
+def wire_numbers(value: Any) -> Any:
+    match value:
+        case dict():
+            return {key: wire_numbers(item) for key, item in value.items()}
+        case list():
+            return [wire_numbers(item) for item in value]
+        case Decimal() | float():
+            return float(precise) if isinstance(precise := canonical_numbers(value), Decimal) else precise
+        case _:
+            return value

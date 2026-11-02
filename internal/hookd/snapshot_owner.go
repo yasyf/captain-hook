@@ -111,10 +111,6 @@ func (o *snapshotOwner) call(ctx context.Context, request json.RawMessage, callC
 		settled()
 		return nil, err
 	}
-	if err := snapshots.Validate("context", encodedContext); err != nil {
-		settled()
-		return nil, err
-	}
 	o.mu.Lock()
 	if o.closed {
 		err := o.err
@@ -192,10 +188,6 @@ func (o *snapshotOwner) readLoop() {
 		case wireproto.OpSnapshotResult:
 			if frame.Error != "" {
 				o.fail(errors.New("captain: snapshot result contains error"), "result_contains_error")
-				return
-			}
-			if err := snapshots.Validate("host-response", frame.Snapshot); err != nil {
-				o.fail(err, "invalid_host_response")
 				return
 			}
 			result.body = frame.Snapshot

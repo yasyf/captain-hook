@@ -1770,13 +1770,13 @@ def observing(predicates: Iterable[tuple[str, str]]) -> Iterator[ObserverPlan | 
 
 @contextmanager
 def client_scope(*, defer_cleanup: bool = False, event: int = 0) -> Iterator[SnapshotClient]:
-    from captain_hook.snapshots.validation import checked
+    from captain_hook.snapshots.validation import wire_numbers
 
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
     bridge = Bridge(event=event)
-    client = SnapshotClient(lambda value: checked("host-response", bridge(value)), defer_cleanup=defer_cleanup)
+    client = SnapshotClient(lambda value: wire_numbers(bridge(value)), defer_cleanup=defer_cleanup)
     token = CURRENT_CLIENT.set(client)
     try:
         yield client

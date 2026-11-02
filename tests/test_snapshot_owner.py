@@ -9,7 +9,6 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from jsonschema import ValidationError
 
 from captain_hook.snapshots.client import (
     CORE_SCHEMA,
@@ -122,19 +121,19 @@ def test_warm_registered_uses_its_own_owner_lane_with_hook_cache_identity():
 
 
 @pytest.mark.parametrize(
-    "lexeme,accepted",
+    "lexeme,arrives_as",
     [
-        ("1", True),
-        ("1.0", True),
-        ("1e0", True),
-        ("1.00000000000000001", False),
-        ("9007199254740990.5", False),
-        ("9007199254740991", True),
-        ("1e100000000", False),
-        ("1e-100000000", False),
+        ("1", int),
+        ("1.0", int),
+        ("1e0", int),
+        ("1.00000000000000001", float),
+        ("9007199254740990.5", float),
+        ("9007199254740991", int),
+        ("1e100000000", None),
+        ("1e-100000000", None),
     ],
 )
-def test_actual_owner_ingress_preserves_numeric_lexemes(lexeme, accepted):
+def test_actual_owner_ingress_preserves_numeric_lexemes(lexeme, arrives_as):
     calls = []
     owner = SimpleNamespace(
         token_type=threading.Event,
@@ -163,14 +162,14 @@ def test_actual_owner_ingress_preserves_numeric_lexemes(lexeme, accepted):
     raw = json.dumps(body).replace('"deadline_unix_ms": 12345', f'"deadline_unix_ms": {lexeme}').encode()
     frame = read_frame(io.BytesIO(struct.pack(">I", len(raw)) + raw))
     try:
-        if accepted:
-            service.submit(frame)
-            wait_idle(service)
-            assert type(calls[0]["deadline_unix_ms"]) is int
-        else:
-            with pytest.raises((ValidationError, ValueError)):
+        if arrives_as is None:
+            with pytest.raises(ValueError):
                 service.submit(frame)
             assert calls == []
+        else:
+            service.submit(frame)
+            wait_idle(service)
+            assert type(calls[0]["deadline_unix_ms"]) is arrives_as
     finally:
         for executor in service.executors.values():
             executor.shutdown()
@@ -497,9 +496,9 @@ def test_rejected_response_discards_its_native_resources():
     try:
         service.result(1, response, context())
         assert discarded == [(response, context())]
-        with pytest.raises(ValidationError):
-            service.result(2, {"not": "valid"}, context())
-        assert discarded[-1] == ({"not": "valid"}, context())
+        with pytest.raises(ValueError):
+            service.result(2, {"not": float("inf")}, context())
+        assert discarded[-1] == ({"not": float("inf")}, context())
     finally:
         for executor in service.executors.values():
             executor.shutdown()

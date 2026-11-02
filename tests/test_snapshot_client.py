@@ -1558,7 +1558,7 @@ def stats_data():
     return {"kind": "stats", "counters": empty_usage(), "gauges": dict.fromkeys(gauges, 0)}
 
 
-def test_a_cli_scope_validates_each_bridge_response_once(monkeypatch):
+def test_a_cli_scope_never_schema_validates_a_bridge_response(monkeypatch):
     from captain_hook.snapshots import client as snapshots
     from captain_hook.snapshots import validation
 
@@ -1569,14 +1569,4 @@ def test_a_cli_scope_validates_each_bridge_response_once(monkeypatch):
     with snapshots.client_scope() as client:
         client.bind_tool_registry({})
         assert client.call("stats")["data"]["kind"] == "stats"
-        assert validated == ["host-response"]
-
-
-def test_a_cli_scope_rejects_a_bridge_response_outside_the_schema(monkeypatch):
-    from captain_hook.snapshots import client as snapshots
-
-    monkeypatch.setattr(snapshots, "Bridge", lambda event=0: StubBridge({"kind": "stats", "bogus": 1}))
-    with snapshots.client_scope() as client:
-        client.bind_tool_registry({})
-        with pytest.raises(snapshots.SnapshotProtocolError):
-            client.call("stats")
+        assert validated == []

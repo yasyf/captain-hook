@@ -27,7 +27,7 @@ from captain_hook.snapshots.client import (
     read_exact,
     request_metadata,
 )
-from captain_hook.snapshots.validation import checked, parse_exact, validator
+from captain_hook.snapshots.validation import checked, parse_exact, validator, wire_numbers
 from captain_hook.util.caching import LRUDict
 
 if TYPE_CHECKING:
@@ -422,7 +422,7 @@ class OwnerService:
 
     def result(self, frame_id: int, response: dict[str, Any], context: CallContext) -> None:
         try:
-            wrapped = checked("host-response", {"schema": HOST_SCHEMA, "response": response})
+            wrapped = wire_numbers({"schema": HOST_SCHEMA, "response": response})
             message = {"protocol": 1, "op": "snapshot_result", "id": frame_id, "snapshot": wrapped}
             try:
                 self.write(message)
@@ -497,9 +497,9 @@ class OwnerService:
             "snapshot_context",
         }:
             raise SnapshotProtocolError("invalid snapshot request frame fields")
-        wrapper = checked("host-request", frame["snapshot"])
+        wrapper = wire_numbers(frame["snapshot"])
         request = wrapper["request"]
-        context = checked("context", frame["snapshot_context"])
+        context = wire_numbers(frame["snapshot_context"])
         lane = (
             "release"
             if request["operation"] == "release"
