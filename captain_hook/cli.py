@@ -324,7 +324,10 @@ def dispatch_event(
 
     def evidence() -> LazyTranscript:
         return lazy_transcript(
-            resolved_path, loader=transcript_loader, attach=lambda: registered_sources(session_dir), unborn=unborn
+            resolved_path,
+            loader=transcript_loader,
+            attach=lambda since: registered_sources(session_dir, since),
+            unborn=unborn,
         )
 
     transcript = evidence()

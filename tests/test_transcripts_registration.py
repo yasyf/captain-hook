@@ -23,7 +23,7 @@ from captain_hook.app import on
 from captain_hook.cli import cli, dispatch_event
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.snapshots.client import EvidenceIncomplete, SnapshotProtocolError
-from captain_hook.state import ECHO_WINDOW, RegisteredTranscripts, UnbornTranscript
+from captain_hook.state import ECHO_WINDOW, RegisteredTranscript, RegisteredTranscripts, UnbornTranscript
 from captain_hook.testing.fixtures import T
 from captain_hook.transcripts import (
     TranscriptLoadError,
@@ -114,6 +114,22 @@ class TestRegisterCommand:
         assert runner.invoke(cli, args).exit_code == 0
         assert runner.invoke(cli, args).exit_code == 0
         assert len(read_entries("s-idem")) == 1
+
+    def test_reregistering_refreshes_the_entry_in_place(self) -> None:
+        SessionSlot(ensure_session(SessionId("s-refresh")), RegisteredTranscripts).set(
+            RegisteredTranscripts(
+                entries=[
+                    RegisteredTranscript(provider="codex", thread_id="first", registered_at=100),
+                    RegisteredTranscript(provider="codex", thread_id="second", registered_at=100),
+                ]
+            )
+        )
+        before = time.time()
+        register_transcript("s-refresh", thread_id="first", label="rerun")
+        first, second = read_entries("s-refresh")
+        assert (first["thread_id"], first["label"]) == ("first", "rerun")
+        assert first["registered_at"] >= before
+        assert (second["thread_id"], second["registered_at"]) == ("second", 100)
 
     def test_register_both_locators_is_usage_error(self) -> None:
         result = CliRunner().invoke(
@@ -949,9 +965,9 @@ def test_dispatch_reads_registered_sources_once_per_phase(tmp_path, monkeypatch)
     client = RecordingClient()
     source = description()
 
-    def sources(session_dir):
+    def sources(session_dir, since):
         reads.append(session_dir)
-        return registered_sources(session_dir)
+        return registered_sources(session_dir, since)
 
     def loader(_):
         loads.append(True)
@@ -993,6 +1009,44 @@ def test_dispatch_reads_registered_sources_once_per_phase(tmp_path, monkeypatch)
     ]
     assert len(reads) == 4
     assert len(loads) == 4
+
+
+def test_dispatch_folds_only_registrations_since_the_window_started(tmp_path, monkeypatch):
+    from captain_hook.snapshots.client import Lease, RemoteSession
+    from captain_hook.transcripts import release_transcript
+    from tests.test_prepared_graph_evidence import RecordingClient, description
+
+    session_dir = ensure_session(SessionId("s-window"))
+    SessionSlot(session_dir, RegisteredTranscripts).set(
+        RegisteredTranscripts(
+            entries=[
+                RegisteredTranscript(provider="codex", thread_id="before", registered_at=1_000),
+                RegisteredTranscript(provider="codex", thread_id="after", registered_at=2_000),
+            ]
+        )
+    )
+    seen = []
+    client = RecordingClient()
+    source = description() | {"window_start": 40, "window_started_unix_ms": 1_500_000}
+
+    def observe(_event, evt, session_dir, advisory=True):
+        seen.append((evt.ctx.t.graph.sources.thread_ids, evt.ctx.t.graph.sources.active_since_unix_ms))
+        release_transcript(evt.ctx.transcript)
+        return None
+
+    monkeypatch.setattr("captain_hook.cli.dispatch", observe)
+    monkeypatch.setattr("captain_hook.cli.after_reply", lambda *args: None)
+    dispatch_event(
+        tmp_path,
+        Event.Stop,
+        {"session_id": "s-window", "transcript_path": str(tmp_path / "main.jsonl")},
+        session_dir=session_dir,
+        transcript_loader=lambda _: RemoteSession(
+            client, Lease(client, source), Path(source["canonical_path"]), source["classifier"]
+        ),
+    )
+
+    assert seen == [(("after",), 1_500_000)]
 
 
 def test_each_hook_reads_only_the_tail_it_declares(tmp_path, monkeypatch):

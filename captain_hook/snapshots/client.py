@@ -1229,8 +1229,12 @@ class RemoteSession:
             "attachments": [],
         }
 
+    @property
+    def window_started_unix_ms(self) -> int | None:
+        return self.lease.description["window_started_unix_ms"]
+
     def with_registered_sources(self, sources: GraphSources) -> RemoteSession:
-        window = replace(sources, active_since_unix_ms=self.lease.description["window_started_unix_ms"])
+        window = replace(sources, active_since_unix_ms=self.window_started_unix_ms)
         return replace(self, graph=PreparedGraphEvidence(window))
 
     def selected(self, **selector: object) -> RemoteSession:
