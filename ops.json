@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"ops":[{"kind":"set_branch","branch":"perf/live-snapshot-io-20261102"}]}
+{"v":1,"lamport":4,"ops":[{"kind":"set_criterion_status","id":"b1af817c1a37665432eed7ab206e9ebd","status":"met","note":"Durable local hold note0dd3ce9b contains full25decisions, original hash, held workstreams and further retained requests; no prior task criteria changed"}]}
