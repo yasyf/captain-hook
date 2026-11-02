@@ -13,7 +13,14 @@ import subprocess
 import click
 
 from captain_hook.desktop import FORMULA, client
-from captain_hook.update.updater import brew, converge, installed_version, latest_release_tag, update_log_path
+from captain_hook.update.updater import (
+    brew,
+    converge,
+    host_at_least,
+    installed_version,
+    latest_release_tag,
+    update_log_path,
+)
 
 
 @click.group()
@@ -40,7 +47,7 @@ def install() -> None:
         "up to 15 minutes while uv installs the tool env, then up to 3 minutes to restart the host...",
         err=True,
     )
-    if (host := converge(target, stream=True)) is None:
+    if converge(target, stream=True) is None or (host := host_at_least(target)) is None:
         raise click.ClickException(
             f"the running helper reports {installed_version() or 'no version (unreachable)'} and Homebrew holds "
             f"{cellar_version()}, short of the latest release {target} — the deployment did not converge. "

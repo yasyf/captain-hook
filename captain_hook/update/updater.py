@@ -192,14 +192,19 @@ def converge(target: str, *, stream: bool = False) -> str | None:
     ):
         breadcrumb(f"package-install skip: no readable Cellar candidate for {target}", echo=stream)
         return None
+    installed = installed_version()
     try:
         reaches = version_tuple(build) >= version_tuple(target)
+        newer = installed is None or version_tuple(build) > version_tuple(installed)
     except ValueError:
-        reaches = False
-    if not reaches:
-        breadcrumb(f"package-install skip: Cellar candidate {build} not proven to reach {target}", echo=stream)
-        return None
-    return land(candidate, target, stream=stream)
+        reaches = newer = False
+    if reaches:
+        return land(candidate, target, stream=stream)
+    if newer:
+        breadcrumb(f"package-install: Cellar {build}, short of {target}, supersedes host {installed}", echo=stream)
+        return land(candidate, build, stream=stream)
+    breadcrumb(f"package-install skip: Cellar {build} short of {target} and of host {installed}", echo=stream)
+    return None
 
 
 def pending() -> str | None:
