@@ -26,7 +26,7 @@ class ReviewRequest(DomainModel):
     id: Token
     deadline_unix_ms: Annotated[int, Field(gt=0, le=2**53 - 1)]
     limits: dict[str, int]
-    view: dict[str, Any]
+    path: PathText
     policy: Policy
 
 
@@ -82,6 +82,7 @@ class ClassificationResult(DomainModel):
 
 class PrepareCorrections(ReviewRequest):
     operation: Literal["prepare_corrections"]
+    source_revision: Token
     anchors: Annotated[list[dict[str, str | None]], Field(max_length=256)]
     feedback: Annotated[list[Text], Field(max_length=256)]
     repo: PathText | None
@@ -106,6 +107,7 @@ class CorrectionsResult(DomainModel):
 
 class ReviewResult(DomainModel):
     kind: Literal["review"]
+    source_revision: Token
     canonical_path: PathText
     mtime_ns: Annotated[str, StringConstraints(pattern=r"^[0-9]+$")]
     repo_key: Text | None
