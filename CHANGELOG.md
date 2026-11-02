@@ -73,6 +73,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A lane cannot install JavaScript dependencies into its worktree.** The performance pack blocks
+  `yarn install`, a bare `yarn`, `yarn add`/`remove`/`up`/`dedupe`, `npm install`/`i`/`ci`,
+  `pnpm install`/`i`/`add`, and `bun install`/`i`/`add` run under `~/.claude/worktrees`,
+  `~/repos/claude/worktrees`, `~/.orca/workspaces`, or `~/repos/orca/workspaces`. It reads the directory
+  from a `cd`, the session's working directory, or the package manager's own `--cwd`, `--prefix`,
+  `--dir`, or `-C`. One monorepo install writes about 216,000 files; the block points at
+  `tools/hooks/warm-lane.sh`, which links `node_modules` to the shared store for the lockfile.
+  `--mode=update-lockfile`, `--package-lock-only`, `--lockfile-only`, and global installs still run, as
+  does every install outside a lane.
 - **An LLM nudge can judge every message the assistant sends.** The `AssistantMessage` prompt context
   carries the prose the assistant wrote right before a `PostToolUse` call, or the message that closes
   the turn on `Stop` and `SubagentStop`. Only the first call after the prose carries it, so each
