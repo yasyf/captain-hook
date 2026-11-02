@@ -102,6 +102,7 @@ class PreparedCorrection(DomainModel):
 
 class CorrectionsResult(DomainModel):
     kind: Literal["corrections"]
+    source_revision: Token
     corrections: Annotated[list[PreparedCorrection], Field(max_length=256)]
 
 

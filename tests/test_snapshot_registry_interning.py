@@ -13,7 +13,7 @@ SPECS = [{"name": "custom_edit", "behaves_like": "Edit", "span_edit": None}]
 
 def fake_owner(register, native):
     owner = object.__new__(Owner)
-    owner.store = SimpleNamespace(register_tool_registry=register, request=native)
+    owner.store = SimpleNamespace(register_tool_registry=register, request_agent=native)
     owner.incomplete_type = type("SnapshotIncomplete", (Exception,), {})
     owner.registry_generations = LRUDict(MAX_REGISTRY_GENERATIONS)
     owner.registry_guard = threading.Lock()

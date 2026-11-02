@@ -22,7 +22,7 @@ def owner_answering(statuses):
         return failure(body["id"], status, "fixture")
 
     owner = object.__new__(Owner)
-    owner.store = SimpleNamespace(register_tool_registry=lambda registry, *, context: "fixture", request=native)
+    owner.store = SimpleNamespace(register_tool_registry=lambda registry, *, context: "fixture", request_agent=native)
     owner.incomplete_type = type("SnapshotIncomplete", (Exception,), {})
     owner.registry_generations = {}
     owner.registry_guard = threading.Lock()

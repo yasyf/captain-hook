@@ -4797,10 +4797,17 @@
           "const": "corrections",
           "title": "Kind",
           "type": "string"
+        },
+        "source_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
         }
       },
       "required": [
         "kind",
+        "source_revision",
         "corrections"
       ],
       "title": "CorrectionsResult",
