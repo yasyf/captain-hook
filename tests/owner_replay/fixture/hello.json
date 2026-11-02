@@ -1,0 +1,224 @@
+{
+  "snapshot_config": {
+    "max_entry_bytes": 67108864,
+    "max_events_per_step": 4096,
+    "max_items_per_page": 256,
+    "max_lease_ms": 30000,
+    "max_leases": 256,
+    "max_pending_loads": 4,
+    "max_preparation_ms": 120000,
+    "max_prepared_disk_bytes": 2147483648,
+    "max_prepared_fact_memory_bytes": 536870912,
+    "max_projection_bytes": 16777216,
+    "max_read_bytes_per_step": 8388608,
+    "max_retained_bytes": 1476395008,
+    "max_scan_discovery_entries": 1048576,
+    "max_scan_events": 4294967296,
+    "max_scan_read_bytes": 1099511627776,
+    "max_scan_sources": 1048576,
+    "max_scan_validate_bytes": 1073741824,
+    "max_source_bytes": 536870912,
+    "prepared_fact_producer": "capt-hook",
+    "reserved_hook_accounted_bytes": 536870912,
+    "reserved_hook_leases": 32,
+    "reserved_hook_loads": 1
+  },
+  "snapshot_contexts": [
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:2",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:2",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:1",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "warm:6abba46825c248d4f6f094a96656f023",
+      "registry_generation": "12.110.0",
+      "work_class": "background"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:3",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:1",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:3",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:5",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:5",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "warm:830301c9a2dae76311fdd1bac5286e76",
+      "registry_generation": "12.110.0",
+      "work_class": "background"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:6",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:6",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "warm:a3357db2eb6de9e5f662baa25dd99859",
+      "registry_generation": "12.110.0",
+      "work_class": "background"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:4",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "worker:4",
+      "registry_generation": "12.110.0"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "warm:515820de485e736e2ec179e1b16cbe83",
+      "registry_generation": "12.110.0",
+      "work_class": "background"
+    },
+    {
+      "admission": "hook",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "warm:f2be7a22eaaf3cf3fc52d194dbb60d87",
+      "registry_generation": "12.110.0",
+      "work_class": "background"
+    },
+    {
+      "admission": "review",
+      "authority": {
+        "effective_uid": "501",
+        "kind": "user"
+      },
+      "claimant": "review:87",
+      "registry_generation": "12.110.0"
+    }
+  ],
+  "tool_registries": [
+    [
+      {
+        "behaves_like": "Bash",
+        "name": "BashFormat",
+        "span_edit": null
+      },
+      {
+        "behaves_like": "Edit",
+        "name": "ccx_code_edit",
+        "span_edit": {
+          "content": "content",
+          "delete": "delete",
+          "path": "path"
+        }
+      },
+      {
+        "behaves_like": "Write",
+        "name": "ccx_code_replace",
+        "span_edit": null
+      },
+      {
+        "behaves_like": "Bash",
+        "name": "ccx_exec",
+        "span_edit": null
+      }
+    ],
+    []
+  ]
+}

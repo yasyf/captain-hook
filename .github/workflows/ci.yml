@@ -195,6 +195,60 @@ jobs:
           cat "$RUNNER_TEMP/supervisor.out" || true
           cat ~/.cache/captain-hook/host-v1/capt-hookd.log || true
 
+  owner-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+
+      - name: Sync the owner environment
+        run: uv sync --locked
+
+      - name: Install libfaketime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libfaketime
+
+      - name: Replay the recorded stream against both snapshot owners
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/owner-replay"
+          mkdir "$out"
+          build="$(.venv/bin/python -c 'import importlib.metadata as m; print(m.version("capt-hook"))')"
+          preload="$(dpkg -L libfaketime | grep '/libfaketime\.so\.1$')"
+          frozen="$(date -u '+%Y-%m-%d %H:%M:%S')"
+          replay() {
+            env LD_PRELOAD="$preload" FAKETIME="$frozen" FAKETIME_DONT_FAKE_MONOTONIC=1 NO_FAKE_STAT=1 TZ=UTC \
+              .venv/bin/python tests/owner_replay/replay.py --out "$out/$1.jsonl" -- "${@:2}"
+          }
+          compare() {
+            cmp "$out/$1.jsonl" "$out/$2.jsonl" && return
+            diff "$out/$1.jsonl" "$out/$2.jsonl" | cut -c1-1500 | head -n 40 || true
+            return 1
+          }
+          replay python .venv/bin/python -P -m captain_hook.snapshots.worker
+          replay python-again .venv/bin/python -P -m captain_hook.snapshots.worker
+          compare python python-again
+          if [ ! -x .venv/bin/cc-transcript-owner ]; then
+            echo "::error::.venv/bin/cc-transcript-owner is missing; pin a cc-transcript release that ships the Rust snapshot owner"
+            exit 1
+          fi
+          replay rust .venv/bin/cc-transcript-owner --build "$build"
+          compare python rust
+
+      - name: Retain owner replay outputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: owner-replay
+          path: ${{ runner.temp }}/owner-replay/
+
   helper-test:
     if: github.event_name == 'schedule'
     runs-on: macos-15-intel
