@@ -59,6 +59,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "Arguments",
     "Artifact",
     "Ask",
+    "AssistantMessage",
     "BackgroundTask",
     "BaseHookEvent",
     "BashCall",

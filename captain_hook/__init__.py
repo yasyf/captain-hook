@@ -65,6 +65,7 @@ EXPORTS: dict[str, str] = {
     "UNCONFIRMED": "captain_hook.confirm",
     "HookContext": "captain_hook.context",
     "AfterEdit": "captain_hook.contexts",
+    "AssistantMessage": "captain_hook.contexts",
     "BeforeEdit": "captain_hook.contexts",
     "PendingToolCall": "captain_hook.contexts",
     "Excerpts": "captain_hook.contexts",

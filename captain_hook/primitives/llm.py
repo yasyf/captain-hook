@@ -677,6 +677,7 @@ def llm_nudge(
     contexts: Sequence[PromptContext] = (),
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
+    once_per_turn: bool | None = None,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -738,6 +739,10 @@ def llm_nudge(
             shifts whenever the prompt text changes).
         advisory_on_deny: Include this nudge after another hook's deny. Leave disabled
             when the message assumes the denied action ran.
+        once_per_turn: Whether the nudge stays quiet for the rest of the turn once any LLM hook
+            has fired in it. ``None`` keeps the default, on. Pass ``False`` for a nudge that must
+            judge every message the assistant sends, such as one reading
+            :class:`~captain_hook.contexts.AssistantMessage`.
         backend: Who judges. ``"jev"``, the default, asks TypeSafe Jev whenever the verdict
             model is categorical (see :func:`verdict_questions`); ``"llm"`` always asks the LLM.
             A Jev timeout or error skips the nudge exactly as a failed LLM call does.
@@ -770,6 +775,7 @@ def llm_nudge(
         contexts=contexts,
         only_if=only_if,
         skip_if=skip_if,
+        once_per_turn=once_per_turn,
         events=events,
         max_fires=max_fires,
         tests=tests,

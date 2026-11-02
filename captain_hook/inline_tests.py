@@ -18,6 +18,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "script": (str,),
     "agent_type": (str,),
     "agent_id": (str,),
+    "tool_use_id": (str,),
     "model": (str,),
     "output": (str,),
     "error": (str,),
@@ -164,6 +165,8 @@ class Input:
         agent_id: Subagent/teammate id, set in the payload on every event — a non-empty
             value makes ``evt.is_subagent`` true; each id also gets its own ``max_fires``
             budget.
+        tool_use_id: The tool call's id, surfaced as ``evt.tool_use_id``; name the ``id`` of a
+            :meth:`~captain_hook.testing.fixtures.T.tool` block to make the event concern that call.
         model: Model for an Agent/Task call's ``model`` input field.
         output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
         error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.
@@ -228,6 +231,7 @@ class Input:
     script: str | None = None
     agent_type: str | None = None
     agent_id: str | None = None
+    tool_use_id: str | None = None
     model: str | None = None
     output: str | None = None
     error: str | None = None

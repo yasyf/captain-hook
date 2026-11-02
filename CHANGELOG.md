@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An LLM nudge can judge every message the assistant sends.** The `AssistantMessage` prompt context
+  carries the prose the assistant wrote right before a `PostToolUse` call, or the message that closes
+  the turn on `Stop` and `SubagentStop`. Only the first call after the prose carries it, so each
+  mid-turn message is judged once, and an event with no new prose skips the judge. `llm_nudge` takes
+  `once_per_turn=False`, so one fire no longer silences the nudge for the rest of the turn. Inline
+  tests set the event's call with `Input(tool_use_id=...)`.
 - **A raw `git rebase` in a blob-filtered partial clone runs through `ccx vcs rebase`.** In a clone whose
   remote filters blobs, git fetches the blobs a rebase merges one commit at a time and writes a promisor
   pack for each. When ccx is on PATH, the graphite pack rewrites `git rebase`, including `--onto`,

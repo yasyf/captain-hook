@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
+from cc_transcript.models import AssistantEvent, TextBlock, ThinkingBlock, ToolUseBlock, UserEvent
 from cc_transcript.render import Budget, clip, render_tool_call
 
 from captain_hook.ast_grep import find_all, find_kinds, introduced, lang_for_path
@@ -350,8 +351,7 @@ class UserMessages:
             recent = tail[1:]
             return "\n\n".join(
                 [f"[first]\n{clip(first[0], self.per_message)}"]
-                + [f"[recent -{len(recent) - i}]\n{clip(prompt, self.per_message)}"
-                   for i, prompt in enumerate(recent)]
+                + [f"[recent -{len(recent) - i}]\n{clip(prompt, self.per_message)}" for i, prompt in enumerate(recent)]
             )
         if not (prompts := [turn.prompt for turn in transcript.turns if turn.prompt]):
             return None
@@ -360,6 +360,67 @@ class UserMessages:
             [f"[first]\n{clip(prompts[0], self.per_message)}"]
             + [f"[recent -{len(prompts) - i}]\n{clip(prompts[i], self.per_message)}" for i in recent if i]
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AssistantMessage:
+    """The prose the assistant just wrote, as an ``<assistant_message>`` block.
+
+    On ``PostToolUse`` it is the text the assistant wrote right before this call, so a judge on
+    ``PostToolUse`` reads each mid-turn message once: only the first call after the text carries it,
+    and the later calls of a parallel batch see none. On ``Stop`` and ``SubagentStop`` it is the
+    message that closes the turn. Thinking blocks are skipped; a tool call or a user line ends the
+    message. Every other event, and a call or stop with no prose before it, yields ``None``; being
+    ``required`` by default, that skips the LLM call. Pair it with ``once_per_turn=False`` and
+    ``events=Event.PostToolUse | Event.Stop | Event.SubagentStop`` to judge every message.
+
+    Attributes:
+        window: How many recent transcript messages to search for the message.
+        tag: The XML block tag; defaults to ``assistant_message``.
+        required: Whether empty content skips the LLM call; defaults to ``True``.
+
+    Example:
+        >>> llm_nudge("Does this message blame a tool without a fix?", message="...",
+        ...           contexts=[AssistantMessage()], once_per_turn=False,
+        ...           events=Event.PostToolUse | Event.Stop | Event.SubagentStop)
+    """
+
+    window: int = 40
+    tag: str = "assistant_message"
+    required: bool = True
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if evt.event & (Event.Stop | Event.SubagentStop):
+            return prose_before(evt.ctx.t.recent_messages(self.window).events, None)
+        if evt.event is Event.PostToolUse and evt.tool_use_id:
+            return prose_before(evt.ctx.t.recent_messages(self.window).events, evt.tool_use_id)
+        return None
+
+
+def prose_before(events: Sequence[object], tool_use_id: str | None) -> str | None:
+    stream = [
+        block
+        for event in events
+        if isinstance(event, AssistantEvent | UserEvent)
+        for block in (event.blocks if isinstance(event, AssistantEvent) else (event,))
+    ]
+    end = (
+        len(stream)
+        if tool_use_id is None
+        else next((i for i, b in enumerate(stream) if isinstance(b, ToolUseBlock) and b.id == tool_use_id), None)
+    )
+    if end is None:
+        return None
+    texts: list[str] = []
+    for block in reversed(stream[:end]):
+        match block:
+            case TextBlock(text=text):
+                texts.append(text)
+            case ThinkingBlock():
+                continue
+            case _:
+                break
+    return "\n\n".join(reversed(texts)).strip() or None
 
 
 def with_defaults(contexts: Sequence[PromptContext], budget: Budget | None = None) -> tuple[PromptContext, ...]:
