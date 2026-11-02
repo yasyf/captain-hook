@@ -262,6 +262,41 @@ func TestWorkerManagerSweepRetiresIdleAndDeadRoots(t *testing.T) {
 	}
 }
 
+func TestWorkerManagerSweepRetiresSparePoolMembersSooner(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1<<32, 0)
+	live := t.TempDir()
+	manager := mustWorkerManager(t)
+	seed := func(shard int, lastUsed time.Time) {
+		entry := &workerEntry{
+			ready: make(chan struct{}), key: workerKey{id: "pool", root: live, shard: shard}, lastUsed: lastUsed,
+		}
+		close(entry.ready)
+		manager.entries[entry.key.member()] = entry
+	}
+	seed(0, now.Add(-spareIdleTTL-2*time.Minute))
+	seed(1, now.Add(-spareIdleTTL-time.Minute))
+	seed(2, now.Add(-time.Minute))
+
+	manager.sweep(now)
+
+	if _, kept := manager.entries["pool/0"]; kept {
+		t.Error("sweep kept a spare member idle past spareIdleTTL")
+	}
+	if _, kept := manager.entries["pool/1"]; kept {
+		t.Error("sweep kept a spare member idle past spareIdleTTL")
+	}
+	if _, kept := manager.entries["pool/2"]; !kept {
+		t.Error("sweep retired a member used a minute ago")
+	}
+
+	manager.sweep(now.Add(spareIdleTTL))
+
+	if _, kept := manager.entries["pool/2"]; !kept {
+		t.Error("sweep retired the pool's last member before workerIdleTTL")
+	}
+}
+
 // TestEphemeralRootIsScoped keeps the ephemeral test narrow: a scratch root
 // under the system temp directory, and nothing else. Misreading a real project
 // as ephemeral would stop it ever caching an interpreter.
@@ -460,30 +495,58 @@ func TestAcquireDistributesDifferentTranscripts(t *testing.T) {
 	}
 }
 
-func TestAcquireStartsAnIdlePoolsMissingAffinityShard(t *testing.T) {
+func TestAcquireServesAMissingAffinityShardFromAnIdleMember(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
 	manager.poolSize = 2
-	readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 0)
+	idle := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 0)
 	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
+		t.Errorf("an idle pool started shard %d for a new transcript", key.shard)
 		worker, _ := silentWorker(t)
 		return worker, nil
 	}
-	affinity := affinityForShard(t, manager.poolSize, 1)
-	key := workerKey{id: "pool", root: "/live", affinity: affinity}
+	key := workerKey{id: "pool", root: "/live", affinity: affinityForShard(t, manager.poolSize, 1)}
+
+	entry, _, err := manager.acquire(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.wg.Wait()
+	if entry != idle {
+		t.Fatalf("a new transcript routed to shard %d, want the idle shard 0", entry.key.shard)
+	}
+}
+
+func TestAcquireGrowsABusyPoolsMissingAffinityShardInTheBackground(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	manager.poolSize = 2
+	shards := make(chan int, maxLiveWorkers)
+	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
+		shards <- key.shard
+		worker, _ := silentWorker(t)
+		return worker, nil
+	}
+	busy := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 1)
+	key := workerKey{id: "pool", root: "/live", affinity: affinityForShard(t, manager.poolSize, 1)}
 
 	first, _, err := manager.acquire(t.Context(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.settleLoad(first)
-	manager.release(first)
+	if first != busy {
+		t.Fatal("a busy pool made the caller wait on the member it started instead of taking the one that was up")
+	}
+	if shard := <-shards; shard != 1 {
+		t.Fatalf("growth started shard %d, want the transcript's shard 1", shard)
+	}
+	manager.wg.Wait()
 	second, _, err := manager.acquire(t.Context(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.key.shard != 1 || second != first {
-		t.Fatalf("affinity routed first to shard %d and then shard %d, want stable shard 1", first.key.shard, second.key.shard)
+	if second.key.shard != 1 {
+		t.Fatalf("the transcript routed to shard %d after its shard started, want 1", second.key.shard)
 	}
 }
 
