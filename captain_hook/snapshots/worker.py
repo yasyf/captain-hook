@@ -13,6 +13,7 @@ import traceback
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 
 from loguru import logger
@@ -21,6 +22,7 @@ from captain_hook.snapshots.client import (
     CORE_SCHEMA,
     HOST_SCHEMA,
     MAX_FRAME_BYTES,
+    NATIVE_CLASSIFIER,
     EvidenceIncomplete,
     SnapshotProtocolError,
     encode_frame,
@@ -159,7 +161,7 @@ class Owner:
         from captain_hook.classifiers.lane import classifier as lane
         from captain_hook.snapshots.review import ReviewPolicy
 
-        self.store = TranscriptStore(
+        self.store = TranscriptStore.new_agent(
             config,
             policies={
                 ("captain-lane", "1"): lane,
@@ -172,6 +174,25 @@ class Owner:
         self.runner: asyncio.Runner | None = None
         self.registry_generations: LRUDict[RegistryKey, str] = LRUDict(MAX_REGISTRY_GENERATIONS)
         self.registry_guard = threading.Lock()
+
+    @cached_property
+    def review_inputs(self) -> dict[str, Any]:
+        from cc_transcript.mining.engine import mining_spec_to_json
+
+        from captain_hook.review.fix import turn_marker
+        from captain_hook.review.scan import REVIEWER_MARKER, REVIEWER_MINING_SPEC
+        from captain_hook.snapshots.review import REVIEW_POLICY
+
+        return {
+            "policy": REVIEW_POLICY | {"classifier": NATIVE_CLASSIFIER},
+            "mining_spec_json": mining_spec_to_json(REVIEWER_MINING_SPEC),
+            "callable_formats": [
+                (fmt.name, fmt.pattern, fmt.extract, fmt.bounded)
+                for fmt in REVIEWER_MINING_SPEC.review.callable_formats
+            ],
+            "first_user_marker": REVIEWER_MARKER,
+            "prose_marker": turn_marker,
+        }
 
     def _run_policy(self, snapshot: Any, request: dict[str, Any]) -> dict[str, Any]:
         if self.runner is None:
@@ -282,7 +303,7 @@ class Owner:
                         )
                 return self._completed(
                     request,
-                    dict(self.store.request(request, context=context, cancellation=token)),
+                    dict(self.store.request_agent(request, context=context, cancellation=token)),
                     started,
                     execution_path="core_request",
                 )
@@ -347,31 +368,33 @@ class Owner:
                 )
             if request["policy"] != {"id": "captain-review", "version": "1"}:
                 raise EvidenceIncomplete("invalid_request", "unregistered Captain evidence policy")
-            with self.store.borrow_snapshot(
-                request["view"]["handle"],
-                context=context,
-                cancellation=token,
-                limits=request["limits"],
-                deadline_unix_ms=request["deadline_unix_ms"],
-            ) as snapshot:
-                try:
-                    result = self._run_policy(snapshot, request)
-                finally:
-                    usage = dict(snapshot.usage)
+
+            def project(snapshot: Any) -> dict[str, Any]:
+                result = self._run_policy(snapshot, request)
                 field = "candidates_json" if result["kind"] == "review" else "corrections"
                 records = result.pop(field)
                 if field == "corrections":
                     records = [json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records]
-                page = self.store.publish_projection(
+                return snapshot.publish_projection(
                     request,
-                    context=context,
-                    cancellation=token,
                     metadata=result,
                     field=field,
                     records_json=records,
-                    usage=usage,
+                    usage=dict(snapshot.usage),
                     work=dict(snapshot.work),
                 )
+
+            page = self.store.run_registered_review(
+                request["path"],
+                **self.review_inputs,
+                request=request,
+                context=context,
+                cancellation=token,
+                handler=project,
+            )
+            if page.get("kind") == "review_preparation":
+                usage = dict(page["usage"])
+                raise EvidenceIncomplete("deadline", "registered transcript preparation is not complete")
             return self._completed(request, self._page(page, request["id"]), started, execution_path="owned_projection")
         except self.incomplete_type as exc:
             status, reason, usage = exc.status, exc.reason, dict(exc.usage)
