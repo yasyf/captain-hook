@@ -3,6 +3,7 @@ name: Guides
 on:
   push: {branches: [main]}
   pull_request:
+    branches: [main]
   repository_dispatch: {types: [cc-guides-render]}
   schedule: [{cron: "17 9 * * *"}]
   workflow_dispatch:
