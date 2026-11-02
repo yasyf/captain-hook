@@ -73,45 +73,65 @@ BROAD_ROOTS = PathMatches(
 )
 
 
+HOMES = ("~", "/Users/*", "/home/*")
+
+
 PROTECTED_ROOTS = PathMatches(
     (
-        "~",
-        "~/.claude",
-        "~/.claude/plugins",
-        "~/.claude/plugins/**",
-        "~/.claude/projects",
-        "~/.claude/projects/**",
-        "~/.claude/worktrees",
-        "~/.claude/worktrees/*",
-        "~/.claude/scratch",
-        "~/.claude/scratch/*",
-        "~/.orca",
-        "~/.orca/workspaces",
-        "~/.orca/workspaces/*",
-        "~/repos",
-        "~/repos/claude",
-        "~/repos/claude/worktrees",
-        "~/repos/claude/worktrees/*",
-        "~/repos/orca",
-        "~/repos/orca/workspaces",
-        "~/repos/orca/workspaces/*",
-        "~/.vcache",
-        "~/.vcache/**",
-        *(pattern for root in TEMP_ROOTS for pattern in (str(root), f"{root}/*", f"{root}/*/*/T")),
+        *(
+            f"{home}{suffix}"
+            for home in HOMES
+            for suffix in (
+                "",
+                "/.claude",
+                "/.claude/plugins",
+                "/.claude/plugins/**",
+                "/.claude/projects",
+                "/.claude/projects/**",
+                "/.claude/worktrees",
+                "/.claude/worktrees/*",
+                "/.orca",
+                "/.orca/workspaces",
+                "/.orca/workspaces/*",
+                "/repos",
+                "/repos/claude",
+                "/repos/claude/worktrees",
+                "/repos/claude/worktrees/*",
+                "/repos/orca",
+                "/repos/orca/workspaces",
+                "/repos/orca/workspaces/*",
+                "/.vcache",
+                "/.vcache/**",
+                "/.daemonkit",
+                "/.daemonkit/**",
+                "/.cache",
+                "/.cache/**",
+                "/Library",
+                "/Library/**",
+            )
+        ),
+        *map(str, TEMP_ROOTS),
+        *(f"/private/var/folders{suffix}" for suffix in ("", "/*", "/*/*", "/*/*/*")),
     )
 )
 
 
 SCOPED_UNITS = PathMatches(
-    (
-        "~/.claude/plugins/cache/*/*/*",
-        "~/.claude/plugins/cache/*/*/*/**",
-        "~/.claude/plugins/marketplaces/*",
-        "~/.claude/plugins/marketplaces/*/**",
-        "~/.claude/projects/*/memory",
-        "~/.claude/projects/*/memory/**",
-        "~/.vcache/scratch/*",
-        "~/.vcache/scratch/*/**",
+    tuple(
+        f"{home}{suffix}"
+        for home in HOMES
+        for suffix in (
+            "/.claude/plugins/cache/*/*/*",
+            "/.claude/plugins/cache/*/*/*/**",
+            "/.claude/plugins/marketplaces/*",
+            "/.claude/plugins/marketplaces/*/**",
+            "/.claude/projects/*/memory",
+            "/.claude/projects/*/memory/**",
+            "/.vcache/scratch/*",
+            "/.vcache/scratch/*/**",
+            "/.daemonkit/a/ccx-cleanup/jobs/*/payload",
+            "/.daemonkit/a/ccx-cleanup/jobs/*/payload/**",
+        )
     )
 )
 
@@ -1199,10 +1219,10 @@ FIND_MESSAGE = (
     "e a focused directory, or bound the listing with `-maxdepth 2`."
 )
 PROTECTED_ROOT_MESSAGE = (
-    "A recursive search rooted at `~`, `~/.claude` or its `plugins`, `projects` and `"
-    "worktrees`, `~/repos`, `~/.vcache`, `~/.orca` or a temp root walks gigabytes. Na"
-    "me one checkout, scratch lane or plugin version dir (`claude plugin list` gives "
-    "the version), or read transcripts with `cc-transcript grep`."
+    "A recursive search under `~`, `~/.claude`, `~/repos`, `~/.vcache`, `~/.daemonkit"
+    "`, `~/.cache`, `~/Library` or a temp root walks gigabytes, even with `-g` or `-n"
+    "ame`. Name one checkout or version dir, list the known depth (`ls <dir>/*/job.js"
+    "on`), or ask the owning tool (`ccx vcs cleanup status`)."
 )
 EMPTY_ROOT_MESSAGE = (
     "A search whose only path is an unquoted expansion such as `$dir` or `$(...)` wal"
