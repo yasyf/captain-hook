@@ -532,8 +532,8 @@ class TestSessionStartThrottle:
     def test_session_start_shares_the_directory_interval_with_the_sweep(
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], transcript: Path
     ) -> None:
-        guard_and_spawn(self.payload(transcript, "SessionStart"))
-        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        guard_and_spawn(self.payload(transcript, "SessionStart"), session_start=True)
+        guard_and_spawn(self.payload(transcript, "SessionStart"), session_start=True)
         guard_and_sweep(self.payload(transcript, "Stop"))
         assert len(popen_calls) == 1
         assert "review-run skip: throttled" in review_log_path().read_text()
@@ -543,11 +543,11 @@ class TestSessionStartThrottle:
     def test_session_start_spawns_once_the_interval_passes(
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], transcript: Path
     ) -> None:
-        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        guard_and_spawn(self.payload(transcript, "SessionStart"), session_start=True)
         _, sweep = sweep_stamps(str(transcript.parent))
         aged = (datetime.now(UTC) - timedelta(minutes=31)).timestamp()
         os.utime(sweep, (aged, aged))
-        guard_and_spawn(self.payload(transcript, "SessionStart"))
+        guard_and_spawn(self.payload(transcript, "SessionStart"), session_start=True)
         assert len(popen_calls) == 2
 
 
@@ -788,13 +788,15 @@ class TestDispatchReview:
 
     @pytest.mark.parametrize("event", ["SessionStart", "SessionEnd"])
     def test_routes_session_events_to_reviewer(self, monkeypatch: pytest.MonkeyPatch, event: str) -> None:
-        calls: list[tuple[str, bool]] = []
+        calls: list[tuple[str, bool, bool]] = []
         monkeypatch.setattr(
             "captain_hook.review.pipeline.guard_and_spawn",
-            lambda raw, *, gate_enrollment=False: calls.append(("spawn", gate_enrollment)),
+            lambda raw, *, gate_enrollment=False, session_start=False: calls.append(
+                ("spawn", gate_enrollment, session_start)
+            ),
         )
         dispatch_review(event, {"transcript_path": "/t", "cwd": "/c"})
-        assert calls == [("spawn", True)]
+        assert calls == [("spawn", True, event == "SessionStart")]
 
 
 class TestNativeReviewWiring:
