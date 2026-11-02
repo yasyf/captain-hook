@@ -36,10 +36,12 @@ class Snapshot:
 class FakeRegistry:
     def __init__(self, state: app.State | None = None) -> None:
         self.calls = 0
+        self.stale_after: list[float | None] = []
         self.state = state or app.State()
 
-    def get(self) -> Snapshot:
+    def get(self, *, stale_after: float | None = None) -> Snapshot:
         self.calls += 1
+        self.stale_after.append(stale_after)
         return Snapshot(self.state)
 
 
@@ -358,10 +360,10 @@ def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) ->
 
 def test_dispatch_reports_a_one_time_load_as_warm_up() -> None:
     class ColdRegistry(FakeRegistry):
-        def get(self) -> Snapshot:
+        def get(self, *, stale_after: float | None = None) -> Snapshot:
             if self.calls == 0:
                 reqenv.warmed("registry")
-            return super().get()
+            return super().get(stale_after=stale_after)
 
     runtime = ProductRuntime(
         registry_factory=lambda _: ColdRegistry(),
@@ -373,6 +375,21 @@ def test_dispatch_reports_a_one_time_load_as_warm_up() -> None:
 
     assert first.warmup is True
     assert second.warmup is False
+
+
+def test_only_a_prompt_may_be_served_the_previous_registry_while_it_rebuilds() -> None:
+    from captain_hook.worker.runtime import PROMPT_REBUILD_WAIT_SECONDS
+
+    registry = FakeRegistry()
+    runtime = ProductRuntime(
+        registry_factory=lambda _: registry,
+        dispatcher=lambda *_, **__: (None, lambda: None),
+        install_writer=False,
+    )
+    for event in ("UserPromptSubmit", "PreToolUse", "Stop"):
+        runtime.dispatch(request(event=event, payload_raw='{"prompt": "hi"}'))
+
+    assert registry.stale_after == [PROMPT_REBUILD_WAIT_SECONDS, None, None]
 
 
 def test_nlp_resource_loads_mark_the_bound_request_warm_up(monkeypatch: pytest.MonkeyPatch) -> None:

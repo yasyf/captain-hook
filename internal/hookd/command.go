@@ -21,6 +21,13 @@ import (
 const (
 	defaultRequestTimeout = 30 * time.Second
 
+	// promptRequestTimeout caps a UserPromptSubmit well inside Claude Code's
+	// 30 s hook timeout, which discards the output of a hook it kills. The
+	// launcher's execs run before this clock starts and the session close
+	// after it ends, so the shared 30 s let one stalled hook lose every
+	// prompt-time hook's output.
+	promptRequestTimeout = 15 * time.Second
+
 	// packageLifecycleTimeout is one install or uninstall end to end: stopping
 	// the installed app generation, draining a serving host through the grace
 	// its own LaunchAgent promises it, and the sealed deployment verb after
@@ -122,7 +129,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	timeout := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", defaultRequestTimeout)
+	timeout := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", requestTimeout(args[0]))
 	if timeout <= 0 {
 		fmt.Fprintf(stderr, "capt-hookd: request timeout %s must be positive\n", timeout)
 		return 1
@@ -250,6 +257,13 @@ func skipMandatory(stdout, stderr io.Writer, event, kind string) int {
 	}
 	fmt.Fprintf(stderr, "capt-hookd: the session guard did not complete (%s); skipped\n", kind)
 	return 0
+}
+
+func requestTimeout(event string) time.Duration {
+	if event == "UserPromptSubmit" {
+		return promptRequestTimeout
+	}
+	return defaultRequestTimeout
 }
 
 func dispatch(client eventClient, request wireproto.EventRequest, timeout time.Duration) (wireproto.EventResponse, error) {

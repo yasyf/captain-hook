@@ -109,10 +109,6 @@ def collect_dispatch(event: str, request_id: int) -> Iterator[DispatchMetrics | 
         ACTIVE.reset(token)
 
 
-def compare_state_writes() -> bool:
-    return (metrics := ACTIVE.get()) is not None and metrics.event == "UserPromptSubmit" and not metrics.closed
-
-
 def note_session(session_id: str | None) -> None:
     if (metrics := ACTIVE.get()) is not None and metrics.event == "UserPromptSubmit" and session_id is not None:
         metrics.session_sha256 = hashlib.sha256(session_id.encode("utf-8", "surrogatepass")).hexdigest()

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import contextvars
 import ctypes
 import hashlib
 import math
 import sys
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from filelock import FileLock
+from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from captain_hook import app
@@ -24,12 +27,16 @@ from captain_hook.util.fs import DirectoryStamp, atomic_write
 from captain_hook.util.paths import resolve_state_dir
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from captain_hook.cli import CliState, ToolReg
 
 BUILD_RETRIES = 3
 MARKER_TTL = 30.0
 PLUGIN_TTL = 30.0
 MAX_WALK_ROOTS = 32
+MARKER_WAIT_SECONDS = 1.0
+RENEWAL_LOCK_SECONDS = 60.0
 ANY_AGE = -math.inf
 LINUX_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
@@ -42,6 +49,8 @@ RosterStamp = tuple[tuple[Path, RosterEntry], ...]
 
 PLUGIN_WALKS: StampedCache[Path, RosterStamp, tuple[PluginTree, ...] | str] = StampedCache(MAX_WALK_ROOTS)
 HOOK_TREES = DirectoryTreeCache(MAX_WALK_ROOTS)
+RENEWALS: dict[Path, Future[tuple[str, ...]]] = {}
+RENEWALS_GUARD = threading.Lock()
 
 
 def _stat_entry(path: Path) -> StatEntry | None:
@@ -123,12 +132,54 @@ def shared_generation(path: Path) -> LanguageGeneration | None:
 
 
 def _language_markers(root: Path, *, since: float) -> tuple[str, ...]:
+    if manager.contains_home(root):
+        return ()
     stamp = (_stat_entry(root), _stat_entry(root / ".gitignore"))
     if (hit := shared_generation(path := marker_path(root))) is not None and hit.current(
         stamp, since, time.monotonic()
     ):
         return hit.languages
-    with marker_lock(path).acquire(cancel_check=request_stopped):
+    if hit is None or since != ANY_AGE:
+        return _renew(root, path, stamp, since, cancel_check=request_stopped)
+    try:
+        return _renewal(root, path, stamp).result(timeout=MARKER_WAIT_SECONDS)
+    except TimeoutError:
+        return hit.languages
+
+
+def _renewal(root: Path, path: Path, stamp: MarkerStamp) -> Future[tuple[str, ...]]:
+    with RENEWALS_GUARD:
+        if (pending := RENEWALS.get(path)) is None:
+            RENEWALS[path] = pending = Future()
+            threading.Thread(
+                target=_settle_renewal, args=(pending, root, path, stamp), name="language-markers", daemon=True
+            ).start()
+    return pending
+
+
+def _settle_renewal(pending: Future[tuple[str, ...]], root: Path, path: Path, stamp: MarkerStamp) -> None:
+    try:
+        languages = _renew(root, path, stamp, ANY_AGE, timeout=RENEWAL_LOCK_SECONDS)
+    except BaseException as exc:
+        logger.bind(root=str(root)).opt(exception=exc).warning("language marker renewal failed")
+        pending.set_exception(exc)
+    else:
+        pending.set_result(languages)
+    finally:
+        with RENEWALS_GUARD:
+            del RENEWALS[path]
+
+
+def _renew(
+    root: Path,
+    path: Path,
+    stamp: MarkerStamp,
+    since: float,
+    *,
+    timeout: float = -1,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[str, ...]:
+    with marker_lock(path).acquire(timeout=timeout, cancel_check=cancel_check):
         if (hit := shared_generation(path)) is not None and hit.current(stamp, since, time.monotonic()):
             return hit.languages
         computed_at = time.monotonic()
@@ -215,25 +266,64 @@ class Registry:
         self._cli_state = cli_state
         self._cache: LRUDict[Fingerprint, RegistrySnapshot] = LRUDict(maxsize)
         self._build_lock = threading.Lock()
+        self._latest: RegistrySnapshot | None = None
+        self._pending: Future[RegistrySnapshot] | None = None
+        self._pending_guard = threading.Lock()
 
-    def get(self) -> RegistrySnapshot:
+    def get(self, *, stale_after: float | None = None) -> RegistrySnapshot:
         requested = time.monotonic()
         if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
+            self._latest = hit
             self._reconcile_tools(hit)
             return hit
+        if stale_after is None or (latest := self._latest) is None:
+            return self._rebuild(requested)
+        try:
+            return self._rebuilding(requested).result(timeout=stale_after)
+        except TimeoutError:
+            self._reconcile_tools(latest)
+            return latest
+
+    def drop_all(self) -> None:
+        self._cache.cache_clear()
+        self._latest = None
+
+    def _rebuild(self, requested: float) -> RegistrySnapshot:
         with self._build_lock:
             if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
                 reqenv.warmed("registry")
+                self._latest = hit
                 self._reconcile_tools(hit)
                 return hit
             snapshot = self._build(requested)
             if snapshot.cacheable:
-                self._cache[snapshot.fingerprint] = snapshot
+                self._cache[snapshot.fingerprint] = self._latest = snapshot
                 reqenv.warmed("registry")
             return snapshot
 
-    def drop_all(self) -> None:
-        self._cache.cache_clear()
+    def _rebuilding(self, requested: float) -> Future[RegistrySnapshot]:
+        with self._pending_guard:
+            if (pending := self._pending) is None:
+                self._pending = pending = Future()
+                threading.Thread(
+                    target=contextvars.copy_context().run,
+                    args=(self._settle, pending, requested),
+                    name="registry-rebuild",
+                    daemon=True,
+                ).start()
+            return pending
+
+    def _settle(self, pending: Future[RegistrySnapshot], requested: float) -> None:
+        try:
+            snapshot = self._rebuild(requested)
+        except BaseException as exc:
+            logger.bind(root=str(self._cli_state.root)).opt(exception=exc).warning("registry rebuild failed")
+            pending.set_exception(exc)
+        else:
+            pending.set_result(snapshot)
+        finally:
+            with self._pending_guard:
+                self._pending = None
 
     def _reconcile_tools(self, snapshot: RegistrySnapshot) -> None:
         # A cache hit skips discover(), so align cc-transcript's process-global tool registry to this

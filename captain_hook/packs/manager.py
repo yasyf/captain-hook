@@ -277,8 +277,12 @@ def detect_languages(root: Path) -> frozenset[str]:
     return frozenset(_language_witnesses(root))
 
 
+def contains_home(root: Path) -> bool:
+    return root == (home := Path.home()) or root in home.parents
+
+
 def _language_witnesses(root: Path) -> dict[str, str]:
-    if root == Path.home():
+    if contains_home(root):
         return {}
     pending = dict(LANGUAGE_MARKERS)
     found: dict[str, str] = {}
@@ -336,7 +340,7 @@ class LanguageEvidence:
         return tuple(language for language, _ in self.witnesses)
 
     def valid(self, root: Path) -> bool:
-        if root == Path.home() or set(self.languages) != LANGUAGE_MARKERS.keys():
+        if contains_home(root) or set(self.languages) != LANGUAGE_MARKERS.keys():
             return False
         required = _witness_directories(self.witnesses)
         stamps = dict(self.directories)

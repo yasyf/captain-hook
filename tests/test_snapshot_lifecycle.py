@@ -109,7 +109,7 @@ def test_runtime_freezes_both_clients_from_request_registry(monkeypatch):
     token = CURRENT_CLIENT.set(foreground)
     background_token = BACKGROUND_SNAPSHOT_CLIENT.set(background)
     runtime = ProductRuntime(
-        registry_factory=lambda _: SimpleNamespace(get=lambda: snapshot),
+        registry_factory=lambda _: SimpleNamespace(get=lambda *, stale_after: snapshot),
         dispatcher=dispatch,
         install_writer=False,
     )

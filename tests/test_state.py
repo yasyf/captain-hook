@@ -171,6 +171,34 @@ class TestStateStore:
             model.value = 3
         assert slot.get() is None
 
+    def test_mutate_rewrites_only_a_changed_model(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        slot = store[DefaultModel]
+        slot.set(DefaultModel(value=1))
+        with patch("captain_hook.util.fs.os.replace", wraps=os.replace) as persist:
+            with slot.mutate() as model:
+                assert model.value == 1
+            assert persist.call_count == 0
+            with slot.mutate() as model:
+                model.value = 2
+            assert persist.call_count == 1
+            slot.set(DefaultModel(value=2))
+            assert persist.call_count == 2
+        assert slot.get() == DefaultModel(value=2)
+
+    @pytest.mark.parametrize("change", ["deleted", "rewritten"])
+    def test_set_persists_over_whatever_another_slot_left_behind(self, tmp_path: Path, change: str) -> None:
+        store = SessionStore(tmp_path)
+        slot = store[DefaultModel]
+        slot.set(DefaultModel(value=1))
+        match change:
+            case "deleted":
+                store[DefaultModel].delete()
+            case "rewritten":
+                store[DefaultModel].set(DefaultModel(value=5))
+        slot.set(DefaultModel(value=1))
+        assert store[DefaultModel].get() == DefaultModel(value=1)
+
     def test_generic_type(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
         slot = store[MyModel]
