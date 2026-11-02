@@ -38,7 +38,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// stderr copiers are detached goroutines with no completion boundary a
 	// consumer can join, so closing the sink during shutdown turns a worker's
 	// last diagnostics into a write on a closed file. Process exit closes it.
-	logFile, err := os.OpenFile(s.paths.log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	logFile, err := openHostLog(s.paths.log, hostLogLimit)
 	if err != nil {
 		return fmt.Errorf("captain: open host log: %w", err)
 	}

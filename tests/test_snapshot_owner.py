@@ -738,7 +738,7 @@ def test_owner_zero_byte_cursor_origin_link_and_terminal_are_logged(logcap):
 
     assert results == responses
     assert all(result["usage"] is response["usage"] for result, response in zip(results, responses, strict=True))
-    assert len(logcap.records) == 3
+    assert [record.levelno for record in logcap.records] == [10, 10, 10]
     origin, link, terminal = [record.message for record in logcap.records]
     first, second = [hashlib.sha256(cursor.encode()).hexdigest() for cursor in cursors]
     assert "operation='query_graph'" in origin
@@ -821,6 +821,7 @@ def test_owner_slow_zero_byte_requests_log_wall_time_without_private_payload(
         assert logcap.records == []
         return
     [record] = logcap.records
+    assert record.levelno == 20
     sources = {"roots": body["roots"], "thread_ids": body["thread_ids"]}
     digest = hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest()[:16]
     assert "snapshot request completed: operation='locate' request_id='request-1'" in record.message
