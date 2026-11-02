@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -468,9 +469,21 @@ func TestInstalledPythonOnlyLooksUpTheToolEnv(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(toolDir, ".installed"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for _, stale := range []string{"capt-hook-cli/12.108.8", "capt-hook/0.0.1"} {
+		if err := os.MkdirAll(filepath.Join(home, ".daemonkit", "tools", stale), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 	python, err := installedPython()
 	if err != nil || python != filepath.Join(venvBin, "python") {
 		t.Fatalf("installedPython = %q, %v; want %q", python, err, filepath.Join(venvBin, "python"))
+	}
+	if strings.Contains(logged.String(), "no install marker") {
+		t.Fatalf("installedPython walked other tool envs and logged:\n%s", logged.String())
 	}
 }
 

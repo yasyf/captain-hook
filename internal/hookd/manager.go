@@ -46,6 +46,8 @@ const (
 	bloatedIdleTTL      = time.Minute
 
 	workerSweepInterval = time.Minute
+
+	toolInstalledMarker = ".installed"
 )
 
 var ErrWorkerCapacity = errors.New("captain: live worker capacity is exhausted")
@@ -1034,19 +1036,13 @@ func installedPython() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entries, err := store.ToolEntries()
+	dir := filepath.Join(store.ToolsDir(), "capt-hook", Build)
+	if _, err := os.Stat(filepath.Join(dir, toolInstalledMarker)); err != nil {
+		return "", fmt.Errorf("captain: the capt-hook %s tool env is not installed: %s", Build, wireproto.Remedy())
+	}
+	entrypoint, err := filepath.EvalSymlinks(filepath.Join(dir, "bin", "hook"))
 	if err != nil {
 		return "", err
 	}
-	for _, entry := range entries {
-		if entry.Dist != "capt-hook" || entry.Version != Build || entry.InstalledAt.IsZero() {
-			continue
-		}
-		entrypoint, err := filepath.EvalSymlinks(filepath.Join(entry.Dir, "bin", "hook"))
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(filepath.Dir(entrypoint), "python"), nil
-	}
-	return "", fmt.Errorf("captain: the capt-hook %s tool env is not installed: %s", Build, wireproto.Remedy())
+	return filepath.Join(filepath.Dir(entrypoint), "python"), nil
 }
