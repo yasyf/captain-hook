@@ -10,6 +10,11 @@ reinstall/install to repair a broken Cellar — then posts a success or failure 
 failure is a notification or a breadcrumb; nothing here raises into the dispatch or sets an
 exit code.
 
+Every brew lane forces brew's own auto-update, whatever ``HOMEBREW_NO_AUTO_UPDATE`` or the
+auto-update interval says. Brew skips refreshing the ``yasyf/tap`` clone when its own repository
+fetched within the interval, and always under ``HOMEBREW_NO_AUTO_UPDATE``, so a release tagged
+since the clone's last fetch would otherwise "upgrade" to the formula that stale clone still names.
+
 Every outcome is read back from the host, never from brew's exit status. ``brew upgrade``
 exits 0 against a Cellar that is already current, so exit 0 covers both a real upgrade and a
 no-op that left the deployment untouched — the state this converges, where one machine carried
@@ -27,6 +32,7 @@ interactive session picks that deferral up and converges.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -91,10 +97,16 @@ def exit_reason(step: str, completed: subprocess.CompletedProcess[str]) -> str:
     return f"{step} exit {completed.returncode}: {completed.stderr.strip()[-200:]}"
 
 
+def brew_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if key != "HOMEBREW_NO_AUTO_UPDATE"} | {
+        "HOMEBREW_AUTO_UPDATE_SECS": "0"
+    }
+
+
 def brew(args: list[str], *, stream: bool = False) -> bool:
     try:
         completed = subprocess.run(
-            ["brew", *args], capture_output=not stream, text=True, timeout=BREW_TIMEOUT, check=False
+            ["brew", *args], capture_output=not stream, text=True, timeout=BREW_TIMEOUT, check=False, env=brew_env()
         )
     except (OSError, subprocess.SubprocessError) as exc:
         breadcrumb(f"brew {' '.join(args)} errored: {exc}", echo=stream)

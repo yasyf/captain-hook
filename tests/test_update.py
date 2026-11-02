@@ -99,6 +99,26 @@ VERSION = [f"{CELLAR}/{updater.CELLAR_HOST}", "version"]
 ESCALATED_WITHOUT_INSTALL = [UPGRADE, PREFIX, VERSION, REINSTALL, PREFIX, VERSION, INSTALL, PREFIX, VERSION]
 
 
+def test_brew_lanes_refresh_the_tap_whatever_the_callers_auto_update_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOMEBREW_NO_AUTO_UPDATE", "1")
+    monkeypatch.setenv("HOMEBREW_AUTO_UPDATE_SECS", "86400")
+    envs: list[dict[str, str]] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        envs.append(kwargs["env"])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    assert updater.brew(["upgrade", "--formula", updater.FORMULA]) is True
+    [env] = envs
+    assert "HOMEBREW_NO_AUTO_UPDATE" not in env
+    assert env["HOMEBREW_AUTO_UPDATE_SECS"] == "0"
+    assert env["PATH"] == updater.os.environ["PATH"]
+
+
 def lanes(calls: list[list[str]]) -> list[list[str]]:
     """Only the brew install lanes; deploy's prefix lookup and package-install are its own."""
     return [call for call in calls if call[0] == "brew" and call[1] != "--prefix"]
