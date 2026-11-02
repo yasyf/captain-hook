@@ -41,7 +41,9 @@ const (
 	// the daemon restarts.
 	workerIdleTTL = 30 * time.Minute
 
-	workerSweepInterval = 5 * time.Minute
+	spareIdleTTL = 5 * time.Minute
+
+	workerSweepInterval = time.Minute
 )
 
 var ErrWorkerCapacity = errors.New("captain: live worker capacity is exhausted")
@@ -333,8 +335,9 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		target.shard = shard
 		if member := m.entries[target.member()]; member != nil {
 			entry = member
-		} else if view.starting == nil && view.size < m.poolSize && len(m.entries) < maxLiveWorkers {
-			entry, leave = m.startMemberLocked(key, shard, deadline)
+		} else if entry != nil && entry.load > 0 && view.starting == nil && view.size < m.poolSize &&
+			len(m.entries) < maxLiveWorkers {
+			m.startMemberLocked(key, shard, time.Time{})
 		}
 	}
 	switch {
@@ -507,21 +510,32 @@ func (m *workerManager) evictIdleLocked() *workerEntry {
 }
 
 // sweep retires every cached entry that no longer earns its interpreter: one
-// idle past workerIdleTTL, and one keyed on a root that has since been deleted
-// — a reaped scratch directory or a removed worktree. Returns the workers it
-// removed so the caller stops them off the lock.
+// idle past workerIdleTTL, a pool member other than the pool's most recently
+// used idle past spareIdleTTL, and one keyed on a root that has since been
+// deleted — a reaped scratch directory or a removed worktree. Returns the
+// workers it removed so the caller stops them off the lock.
 func (m *workerManager) sweep(now time.Time) []*workerClient {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.restarting || m.restartError != nil {
 		return nil
 	}
+	newest := make(map[string]*workerEntry)
+	for _, entry := range m.entries {
+		if kept := newest[entry.key.id]; kept == nil || entry.lastUsed.After(kept.lastUsed) {
+			newest[entry.key.id] = entry
+		}
+	}
 	var retired []*workerClient
 	for id, entry := range m.entries {
 		if !entry.idle() {
 			continue
 		}
-		if rootExists(entry.key.root) && now.Sub(entry.lastUsed) < workerIdleTTL {
+		ttl := workerIdleTTL
+		if newest[entry.key.id] != entry {
+			ttl = spareIdleTTL
+		}
+		if rootExists(entry.key.root) && now.Sub(entry.lastUsed) < ttl {
 			continue
 		}
 		delete(m.entries, id)
