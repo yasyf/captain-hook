@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import json
 import os
 from dataclasses import dataclass
@@ -50,6 +51,13 @@ def expand(path: str) -> Path:
     return Path(os.path.normpath(os.path.expanduser(path)))
 
 
+def unit_globs(unit: str) -> tuple[str, ...]:
+    parts = expand(unit).parts
+    fixed = next((index for index, part in enumerate(parts) if glob.has_magic(part)), len(parts))
+    resolved = str(Path(*parts[:fixed]).resolve().joinpath(*parts[fixed:]))
+    return tuple(dict.fromkeys(pattern for root in (unit, resolved) for pattern in (root, f"{root}/**")))
+
+
 def load() -> Layout:
     settings = LayoutSettings.model_validate(
         {
@@ -60,7 +68,7 @@ def load() -> Layout:
     )
     return Layout(
         protected_roots=tuple(map(expand, settings.protected_roots)),
-        searchable=PathMatches(tuple(glob for unit in settings.searchable_units for glob in (unit, f"{unit}/**"))),
+        searchable=PathMatches(tuple(pattern for unit in settings.searchable_units for pattern in unit_globs(unit))),
         collections=tuple(map(expand, settings.checkout_collections)),
         pools=tuple((expand(pool), levels) for pool, levels in settings.worktree_pools.items()),
     )
@@ -79,14 +87,14 @@ def within(path: Path, base: Path) -> bool:
 
 
 def depth_below(path: Path, base: Path) -> int | None:
-    return next(
+    return min(
         (
             len(form.relative_to(anchor).parts)
             for form in forms(path)
             for anchor in forms(base)
             if form == anchor or anchor in form.parents
         ),
-        None,
+        default=None,
     )
 
 

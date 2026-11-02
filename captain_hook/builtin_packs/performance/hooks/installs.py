@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from captain_hook import Allow, Block, CommandMatches, CommandSchema, Event, FileFixture, Input, Or, Tool, hook
 from captain_hook.cmd import INFO_OPTIONS, package_directory
 from captain_hook.layout import lane_checkout
+from captain_hook.search_policy import written
 
 if TYPE_CHECKING:
     from captain_hook import Arguments
@@ -69,7 +70,7 @@ def installs(call: Call) -> bool:
 
 def warm_lane(target: Target) -> bool:
     return (
-        (path := target.path) is not None
+        (path := written(target)) is not None
         and (checkout := lane_checkout(path)) is not None
         and (checkout / WARM_LANE).is_file()
     )
@@ -123,12 +124,12 @@ hook(  # capt-hook: no-escape node_modules in a lane comes only from warm-lane, 
         in_lane("npm --registry https://registry.npmjs.org install"): Block(),
         in_lane("npm install --package-lock-only=false"): Block(),
         in_lane("npm install --global=false zx"): Block(),
-        in_lane("yarn install", lane="lanes/monorepo/lane/web"): Block(),
+        in_lane("yarn --cwd ~/lanes/monorepo/lane/web install", lane="."): Block(),
         in_lane("yarn install", env={"HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/lanes/monorepo": 0}'}): Block(),
         in_lane("yarn install", env={}): Allow(),
         in_lane("yarn install", env={"HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/elsewhere": 1}'}): Allow(),
         in_lane("yarn install", lane="lanes/monorepo"): Allow(),
-        in_lane("yarn install", lane="lanes/app/lane"): Allow(),
+        in_lane("yarn --cwd ~/lanes/app/lane install", lane="."): Allow(),
         in_lane("yarn biome check src"): Allow(),
         in_lane("yarn tsc --noEmit -p ."): Allow(),
         in_lane("yarn run lint"): Allow(),
