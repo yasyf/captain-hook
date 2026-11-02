@@ -408,7 +408,7 @@ class RegisteredTranscript(BaseModel):
         thread_id: The provider thread/session id, resolved to a rollout path at dispatch.
         path: An absolute path to the transcript file.
         label: An optional human label for the registration.
-        registered_at: The Unix timestamp the registration was recorded.
+        registered_at: The Unix timestamp the registration was last recorded.
     """
 
     model_config = ConfigDict(frozen=True)

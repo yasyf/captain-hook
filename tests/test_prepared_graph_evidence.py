@@ -198,7 +198,7 @@ def test_unrelated_event_does_not_prepare_registered_transcripts(tmp_path, monke
         pytest.fail("unrelated Stop hook ran")
 
     monkeypatch.setattr(
-        "captain_hook.transcripts.registered_sources", lambda _: pytest.fail("registered sources were read")
+        "captain_hook.transcripts.registered_sources", lambda *_: pytest.fail("registered sources were read")
     )
     monkeypatch.setattr("captain_hook.cli.after_reply", lambda *args: None)
     _, background = dispatch_event(
@@ -257,7 +257,7 @@ def test_sync_and_background_each_prepare_under_their_own_client(tmp_path, monke
     background_client.phase = "background"
     monkeypatch.setattr(
         "captain_hook.transcripts.registered_sources",
-        lambda _: GraphSources(thread_ids=("thread-1",)),
+        lambda *_: GraphSources(thread_ids=("thread-1",)),
     )
 
     def loader(_):

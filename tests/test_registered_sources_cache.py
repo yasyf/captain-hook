@@ -28,9 +28,11 @@ def clear_registered_sources():
 
 def registration(session_dir: Path, *ids: str) -> Path:
     slot = SessionSlot(session_dir, RegisteredTranscripts)
-    slot.set(RegisteredTranscripts(entries=[
-        RegisteredTranscript(provider="codex", thread_id=thread_id, registered_at=0) for thread_id in ids
-    ]))
+    slot.set(
+        RegisteredTranscripts(
+            entries=[RegisteredTranscript(provider="codex", thread_id=thread_id, registered_at=0) for thread_id in ids]
+        )
+    )
     assert slot.path is not None
     return slot.path
 
@@ -74,17 +76,41 @@ def test_unchanged_large_registration_reads_and_validates_once(tmp_path, monkeyp
 def test_cached_sources_preserve_deduplication_and_registration_order(tmp_path):
     slot = SessionSlot(tmp_path, RegisteredTranscripts)
     direct = tmp_path / "direct.jsonl"
-    slot.set(RegisteredTranscripts(entries=[
-        RegisteredTranscript(provider="codex", thread_id="second"),
-        RegisteredTranscript(provider="codex", path=str(direct)),
-        RegisteredTranscript(provider="codex", thread_id="first"),
-        RegisteredTranscript(provider="codex", thread_id="second"),
-        RegisteredTranscript(provider="other", path=str(direct)),
-    ]))
+    slot.set(
+        RegisteredTranscripts(
+            entries=[
+                RegisteredTranscript(provider="codex", thread_id="second"),
+                RegisteredTranscript(provider="codex", path=str(direct)),
+                RegisteredTranscript(provider="codex", thread_id="first"),
+                RegisteredTranscript(provider="codex", thread_id="second"),
+                RegisteredTranscript(provider="other", path=str(direct)),
+            ]
+        )
+    )
     first = transcripts.registered_sources(tmp_path)
     assert first.thread_ids == ("second", "first")
     assert first.direct_paths == (direct,)
     assert transcripts.registered_sources(tmp_path) is first
+
+
+def test_a_window_keeps_only_registrations_recorded_since_it_started(tmp_path):
+    direct = tmp_path / "direct.jsonl"
+    SessionSlot(tmp_path, RegisteredTranscripts).set(
+        RegisteredTranscripts(
+            entries=[
+                RegisteredTranscript(provider="codex", thread_id="stale", registered_at=100),
+                RegisteredTranscript(provider="codex", path=str(direct), registered_at=150),
+                RegisteredTranscript(provider="codex", thread_id="fresh", registered_at=200),
+            ]
+        )
+    )
+    windowed = transcripts.registered_sources(tmp_path, 150_000)
+    assert windowed.thread_ids == ("fresh",)
+    assert windowed.direct_paths == (direct,)
+    assert transcripts.registered_sources(tmp_path, 150_000) is windowed
+    late = transcripts.registered_sources(tmp_path, 250_000)
+    assert late == GraphSources()
+    assert transcripts.registered_sources(tmp_path).thread_ids == ("stale", "fresh")
 
 
 def test_new_registration_is_visible_on_the_next_call(reads):

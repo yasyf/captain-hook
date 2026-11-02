@@ -156,7 +156,9 @@ def test_structured_mcp_grep_uses_existing_scope_guard_through_dispatch(
         pytest.param({"globs": ["!*.md"]}, "deny", id="exclusions-are-not-a-bound"),
         pytest.param({"globs": ["*.py", "**"]}, "deny", id="broad-glob-beside-narrow"),
         pytest.param({"paths": ["."], "budget": 1}, "deny", id="output-budget-is-not-a-bound"),
-        pytest.param({"paths": ["."], "regex": True, "filesWithMatches": True}, "deny", id="output-mode-is-not-a-bound"),
+        pytest.param(
+            {"paths": ["."], "regex": True, "filesWithMatches": True}, "deny", id="output-mode-is-not-a-bound"
+        ),
         pytest.param({"repo": ".", "paths": ["internal/focused"]}, None, id="relative-repo-and-path"),
         pytest.param({"paths": "internal/focused"}, "deny", id="malformed-paths"),
         pytest.param({"paths": ["internal/focused", None]}, "deny", id="incomplete-paths"),
@@ -206,9 +208,7 @@ def test_structured_mcp_grep_keeps_literal_paths_and_other_tools_scoped(
         assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") is None
 
 
-def test_structured_mcp_grep_follows_repository_path_aliases(
-    performance: None, repo: Path, tmp_path: Path
-) -> None:
+def test_structured_mcp_grep_follows_repository_path_aliases(performance: None, repo: Path, tmp_path: Path) -> None:
     alias = tmp_path / "checkout-alias"
     alias.symlink_to(repo, target_is_directory=True)
     nested_alias = tmp_path / "entry" / "checkout"
@@ -401,7 +401,7 @@ def test_bash_search_uses_the_same_known_provenance_classifier(
     for command in [
         f"cd '{roots['collection']}' && rg needle .",
         f"env FIXTURE=1 rg needle '{roots['collection']}'",
-        f'''sh -c "cd '{roots['collection']}' && rg needle ."''',
+        f'''sh -c "cd '{roots["collection"]}' && rg needle ."''',
     ]:
         assert decision(command, roots["checkout"], tmp_path) == "deny"
 
@@ -732,7 +732,9 @@ def test_blocks_listing_at_home_roots(performance: None, home: Path, tmp_path: P
         pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-switch-file"),
         pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/job.json", id="cleanup-job-file"),
         pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload", id="cleanup-one-checkout"),
-        pytest.param("rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload/src", id="cleanup-checkout-subtree"),
+        pytest.param(
+            "rg --files ~/.daemonkit/a/ccx-cleanup/jobs/queued-job/payload/src", id="cleanup-checkout-subtree"
+        ),
         pytest.param("rg paused ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-direct-state-search"),
         pytest.param("cat ~/.daemonkit/a/ccx-cleanup/switch.json", id="cleanup-direct-state-read"),
         pytest.param("find ~/.daemonkit/a/ccx-cleanup -maxdepth 1 -name '*.json'", id="cleanup-shallow-find"),
@@ -909,9 +911,7 @@ def test_classifies_roots_without_walking(
     assert decision("rg --files -g AGENTS.md . internal/focused", repo, tmp_path) is None
     assert decision("rg --files ~", repo, tmp_path / "home") == "deny"
     assert (
-        decision(
-            f"rg --files {home}/.daemonkit/a/ccx-cleanup -g '*.json' -g '*.toml'", repo, tmp_path / "cleanup"
-        )
+        decision(f"rg --files {home}/.daemonkit/a/ccx-cleanup -g '*.json' -g '*.toml'", repo, tmp_path / "cleanup")
         == "deny"
     )
     assert decision("rg --files ~/.daemonkit/a/ccx-cleanup/switch.json", repo, tmp_path / "switch") is None
@@ -1086,7 +1086,7 @@ def test_recursive_grep_uses_the_current_command_without_history(
     from captain_hook.cli import dispatch_event
 
     monkeypatch.setattr(
-        "captain_hook.transcripts.registered_sources", lambda _: pytest.fail("registered history was read")
+        "captain_hook.transcripts.registered_sources", lambda *_: pytest.fail("registered history was read")
     )
     output, _ = dispatch_event(
         repo,
