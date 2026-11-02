@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from captain_hook.util import caching
-from captain_hook.util.caching import LRUDict, StampedCache, WeightedLRUDict, ttl_cache
+from captain_hook.util.caching import LRUDict, StampedCache, WeightedLRUDict, ttl_cache, weighted_lru_cache
 
 
 class TestLRUDict:
@@ -70,6 +70,35 @@ class TestWeightedLRUDict:
         assert dict(d) == {"big": 50}
         d["b"] = 1
         assert dict(d) == {"b": 1}
+
+
+class TestWeightedLruCache:
+    def test_recomputes_a_result_its_weight_budget_evicted(self) -> None:
+        calls: list[str] = []
+
+        @weighted_lru_cache(10, len)
+        def upper(text: str) -> str:
+            calls.append(text)
+            return text.upper()
+
+        assert [upper("aaaa"), upper("bbbb"), upper("aaaa")] == ["AAAA", "BBBB", "AAAA"]
+        upper("cccc")
+        upper("aaaa")
+        upper("bbbb")
+        assert calls == ["aaaa", "bbbb", "cccc", "bbbb"]
+
+    def test_cache_clear_drops_every_result(self) -> None:
+        calls: list[str] = []
+
+        @weighted_lru_cache(10, len)
+        def echo(text: str) -> str:
+            calls.append(text)
+            return text
+
+        echo("a")
+        echo.cache_clear()
+        echo("a")
+        assert calls == ["a", "a"]
 
 
 class TestTtlCache:
