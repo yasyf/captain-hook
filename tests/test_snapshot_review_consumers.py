@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
@@ -803,32 +802,6 @@ def event_reads(monkeypatch) -> Counter[int]:
     return reads
 
 
-def direct_event_refusal(owner, path: Path, index: int):
-    from cc_transcript.snapshots import SnapshotIncomplete
-
-    from captain_hook.snapshots.client import DEFAULT_LIMITS
-
-    context = owner.context | {
-        "registry_generation": owner.owner.store.register_tool_registry(
-            owner.client.tool_registry(), context=owner.context
-        )
-    }
-    session = owner.client.acquire(path)
-    try:
-        with owner.owner.store.borrow_snapshot(
-            session.view()["handle"],
-            context=context,
-            cancellation=owner.owner.token_type(),
-            limits=DEFAULT_LIMITS,
-            deadline_unix_ms=int(time.time() * 1000) + 30_000,
-        ) as snapshot:
-            with pytest.raises(SnapshotIncomplete) as refused:
-                snapshot.events[index]
-    finally:
-        session.release()
-    return refused.value
-
-
 @pytest.mark.usefixtures(native_review_owner.__name__)
 def test_corrections_cover_an_anchor_after_a_turn_larger_than_one_record(tmp_path, settings):
     entries = [*bulky_turn("audit", 16), *corrected_edit("parser")]
@@ -849,7 +822,7 @@ def test_corrections_cover_anchors_whose_windows_together_exceed_the_scope_outpu
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)
-def test_corrections_split_a_batch_whose_combined_window_exceeds_the_scope_output(tmp_path, settings, monkeypatch):
+def test_corrections_project_a_batch_whose_source_windows_exceed_the_scope_output(tmp_path, settings, monkeypatch):
     from captain_hook.review import scan as scan_module
 
     batches: list[int] = []
@@ -870,11 +843,11 @@ def test_corrections_split_a_batch_whose_combined_window_exceeds_the_scope_outpu
     eligible, drafted, refused = prepared_anchors(write_transcript(tmp_path / "s.jsonl", entries), settings)
     assert len(eligible) == 2
     assert (drafted, refused) == (eligible, [])
-    assert batches == [2, 1, 1]
+    assert batches == [2]
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)
-def test_correction_anchor_whose_own_window_exceeds_the_scope_output_is_refused_by_size(tmp_path, settings):
+def test_corrections_project_anchors_whose_source_window_exceeds_the_scope_output(tmp_path, settings):
     entries = [
         *(entry for turn in range(12) for entry in bulky_turn(f"audit-{turn}", 12)),
         *corrected_edit("parser"),
@@ -882,18 +855,12 @@ def test_correction_anchor_whose_own_window_exceeds_the_scope_output_is_refused_
         *corrected_edit("lexer"),
     ]
     eligible, drafted, refused = prepared_anchors(write_transcript(tmp_path / "s.jsonl", entries), settings)
-    [(anchor, refusal)] = refused
     assert len(eligible) == 2
-    assert drafted + Counter([anchor.event_uuid]) == eligible
-    assert refusal.status == "output_limit"
-    assert re.fullmatch(
-        r"activity window of 59 turns \(0\.\.59\) needs \d+ bytes, over the 16777216-byte remaining output budget",
-        refusal.reason,
-    )
+    assert (drafted, refused) == (eligible, [])
 
 
-def test_correction_anchor_whose_window_holds_an_event_over_the_record_bound_is_refused(
-    tmp_path, settings, native_review_owner
+def test_corrections_skip_unneeded_tool_results_over_the_record_bound(
+    tmp_path, settings, native_review_owner, event_reads
 ):
     path = write_transcript(
         tmp_path / "s.jsonl",
@@ -905,11 +872,9 @@ def test_correction_anchor_whose_window_holds_an_event_over_the_record_bound_is_
         ],
     )
     eligible, drafted, refused = prepared_anchors(path, settings)
-    [(anchor, refusal)] = refused
-    assert (drafted, Counter([anchor.event_uuid])) == (Counter(), eligible)
-    assert refusal.status == "output_limit"
-    assert re.fullmatch(r"event 2 needs \d+ bytes, over the 1048576-byte record bound", refusal.reason)
-    assert refusal.reason == direct_event_refusal(native_review_owner, path, 2).reason
+    assert len(eligible) == 1
+    assert (drafted, refused) == (eligible, [])
+    assert event_reads[2] == 0
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)
@@ -958,8 +923,8 @@ def test_review_preparation_refuses_a_candidate_over_the_owned_page_by_size(tmp_
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)
-async def test_scan_refuses_an_oversized_transcript_whole_and_scans_the_rest(tmp_path, store, settings):
-    write_transcript(
+async def test_scan_projects_transcripts_with_oversized_unneeded_tool_results(tmp_path, store, settings):
+    projected = write_transcript(
         tmp_path / "a.jsonl",
         [
             user_text("run a status check"),
@@ -969,8 +934,8 @@ async def test_scan_refuses_an_oversized_transcript_whole_and_scans_the_rest(tmp
         ],
     )
     kept = write_transcript(tmp_path / "b.jsonl", correction_entries())
-    assert await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO) == ScanReport(1, 1, 1)
-    assert set(await store.file_mtimes()) == {str(kept.resolve())}
+    assert await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO) == ScanReport(2, 1, 0)
+    assert set(await store.file_mtimes()) == {str(projected.resolve()), str(kept.resolve())}
     await store.set_meta(f"snapshot_discovery:{dedup_key(str(tmp_path.absolute()))}", None)
     assert await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO) == ScanReport(0, 0, 0)
 
