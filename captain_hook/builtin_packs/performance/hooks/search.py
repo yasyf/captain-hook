@@ -218,9 +218,7 @@ rg_searches_broadly = partial(search_policy.rg_searches_broadly, pack_roots=regi
 searches_broadly = partial(search_policy.searches_broadly, pack_roots=registered_pack_roots)
 ugrep_searches_broadly = partial(search_policy.ugrep_searches_broadly, pack_roots=registered_pack_roots)
 
-SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE = search_policy.shell_search_rules(
-    pack_roots=registered_pack_roots
-)
+SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE = search_policy.shell_search_rules(pack_roots=registered_pack_roots)
 
 
 class BroadMCPGrep(CustomCondition):
@@ -617,7 +615,9 @@ hook(
     block=True,
     max_fires=None,
     tests={
-        Input(command="grep -rn --include='*.py' needle $site", cwd="/Users/alice"): Block(pattern="walks the working directory"),
+        Input(command="grep -rn --include='*.py' needle $site", cwd="/Users/alice"): Block(
+            pattern="walks the working directory"
+        ),
         Input(command="site=; grep -rn --include='*.py' needle $site", cwd="/Users/alice"): Block(),
         Input(command="grep -r --include='*.py' needle $(git rev-parse --show-toplevel)"): Block(),
         Input(command="rg -tpy needle $root"): Block(),

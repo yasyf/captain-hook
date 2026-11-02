@@ -1167,7 +1167,9 @@ def shell_search_rules(*, pack_roots: Callable[[], tuple[Path, ...]]) -> tuple[S
                 CommandPattern(UGREP, only_if=(recursive, pattern_roots_vanish), skip_if=(informational,)),
                 CommandPattern(RG, only_if=(pattern_roots_vanish,), skip_if=(informational, lists_files, reads_stdin)),
                 CommandPattern(FIND, only_if=(find_roots_vanish,), skip_if=(OptionIs("max_depth", range(3)),)),
-                CommandPattern(FD, only_if=(fd_roots_vanish,), skip_if=(informational, OptionIs("max_depth", range(3)))),
+                CommandPattern(
+                    FD, only_if=(fd_roots_vanish,), skip_if=(informational, OptionIs("max_depth", range(3)))
+                ),
                 CommandPattern(DU, only_if=(du_roots_vanish,), skip_if=(informational,)),
             ),
         ),
