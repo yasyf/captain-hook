@@ -17,6 +17,13 @@ const MaxFrameBytes = 1 << 20
 
 const HostPreparedFactMemoryBytes = 512 << 20
 
+// HostRetainedBytes is the owner's retained budget before prepared facts.
+// TODO: drop back to the 1 GiB default once cc-transcript stops admitting a
+// ~3 GiB transient reservation for every acquire (14.45.38 refuses each hook
+// acquire under the default with "accounted storage admission exhausted",
+// while the settled retained total stays near 16 MiB).
+const HostRetainedBytes = 4 << 30
+
 //go:embed schema/*.json
 var schemas embed.FS
 
@@ -146,15 +153,12 @@ func HostConfig(producer string) (json.RawMessage, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-	var facts, retained int64
+	var facts int64
 	if err := json.Unmarshal(config["max_prepared_fact_memory_bytes"], &facts); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(config["max_retained_bytes"], &retained); err != nil {
-		return nil, err
-	}
 	config["max_prepared_fact_memory_bytes"] = json.RawMessage(strconv.FormatInt(HostPreparedFactMemoryBytes, 10))
-	config["max_retained_bytes"] = json.RawMessage(strconv.FormatInt(retained+HostPreparedFactMemoryBytes-facts, 10))
+	config["max_retained_bytes"] = json.RawMessage(strconv.FormatInt(HostRetainedBytes+HostPreparedFactMemoryBytes-facts, 10))
 	if producer != "" {
 		named, err := json.Marshal(producer)
 		if err != nil {
