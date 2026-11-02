@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from itertools import pairwise
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, Block, CommandMatches, CommandSchema, Event, Input, Or, PathMatches, Tool, hook
+from captain_hook import Allow, Block, CommandMatches, CommandSchema, Event, FileFixture, Input, Or, Tool, hook
 from captain_hook.cmd import INFO_OPTIONS, package_directory
+from captain_hook.layout import lane_checkout
+from captain_hook.search_policy import written
 
 if TYPE_CHECKING:
     from captain_hook import Arguments
-    from captain_hook.cmd import Call
+    from captain_hook.cmd import Call, Target
 
-LANES = PathMatches(
-    ("**/.claude/worktrees/**", "**/.orca/workspaces/**", "**/repos/claude/worktrees/**", "**/repos/orca/workspaces/**")
-)
+WARM_LANE = Path("tools", "hooks", "warm-lane.sh")
+TEST_POOLS = {"HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/lanes": 1}'}
 INSTALL_VERBS = {
     "yarn": frozenset({"install", "add", "remove", "up", "dedupe"}),
     "npm": frozenset(
@@ -66,8 +68,24 @@ def installs(call: Call) -> bool:
     return call.name == "yarn" if verb is None else verb.value in INSTALL_VERBS[call.name]
 
 
+def warm_lane(target: Target) -> bool:
+    return (
+        (path := written(target)) is not None
+        and (checkout := lane_checkout(path)) is not None
+        and (checkout / WARM_LANE).is_file()
+    )
+
+
 def installs_in_lane(arguments: Arguments) -> bool:
-    return installs(arguments.call) and any(map(LANES, package_directory(arguments.call)))
+    return installs(arguments.call) and any(map(warm_lane, package_directory(arguments.call)))
+
+
+def in_lane(command: str, *, lane: str = "lanes/monorepo/lane", env: dict[str, str] | None = None) -> Input:
+    return Input(
+        command=f"cd ~/{lane} && {command}",
+        file=FileFixture(home=True, name=f"lanes/monorepo/lane/{WARM_LANE}", content=""),
+        env=TEST_POOLS if env is None else env,
+    )
 
 
 hook(  # capt-hook: no-escape node_modules in a lane comes only from warm-lane, so no lane command may write it
@@ -83,57 +101,51 @@ hook(  # capt-hook: no-escape node_modules in a lane comes only from warm-lane, 
     ),
     block=True,
     tests={
-        Input(command="yarn install --immutable", cwd="/Users/alice/.claude/worktrees/monorepo/storage-config"): Block(
-            pattern="warm-lane"
-        ),
-        Input(command="yarn", cwd="/Users/alice/repos/claude/worktrees/monorepo/lane"): Block(),
-        Input(command="yarn --immutable", cwd="/Users/alice/repos/claude/worktrees/monorepo/lane"): Block(),
-        Input(command="yarn add zod", cwd="/Users/alice/repos/claude/worktrees/monorepo/lane"): Block(),
-        Input(command="yarn --cwd ~/.claude/worktrees/monorepo/lane install", cwd="/Users/alice"): Block(),
-        Input(command="yarn --cwd=/Users/alice/.orca/workspaces/monorepo/lane install", cwd="/"): Block(),
-        Input(command="npm install", cwd="/Users/alice/.orca/workspaces/monorepo/lane"): Block(),
-        Input(command="npm i left-pad", cwd="/Users/alice/.orca/workspaces/monorepo/lane"): Block(),
-        Input(command="npm ci", cwd="/Users/alice/repos/orca/workspaces/7f3c2a10/monorepo/lane"): Block(),
-        Input(command="npm --prefix /Users/alice/.claude/worktrees/app/lane ci", cwd="/"): Block(),
-        Input(command="pnpm install", cwd="/Users/alice/.claude/worktrees/app/lane"): Block(),
-        Input(command="pnpm -C /Users/alice/.claude/worktrees/app/lane i", cwd="/"): Block(),
-        Input(command="pnpm --filter web install", cwd="/Users/alice/.claude/worktrees/app/lane"): Block(),
-        Input(command="bun install", cwd="/Users/alice/repos/claude/worktrees/app/lane"): Block(),
-        Input(command="bun i", cwd="/Users/alice/repos/claude/worktrees/app/lane"): Block(),
-        Input(command="git pull && yarn install", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
-        Input(command="sh -c 'yarn install'", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
-        Input(command="npm in", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
-        Input(command="npm ic", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Block(),
-        Input(
-            command="npm --registry https://registry.npmjs.org install", cwd="/Users/alice/.claude/worktrees/app/lane"
-        ): Block(),
-        Input(command="npm --prefix=$HOME/.claude/worktrees/app/lane install", cwd="/"): Block(),
-        Input(command="npm install --package-lock-only=false", cwd="/Users/alice/.claude/worktrees/app/lane"): Block(),
-        Input(command="npm install --global=false zx", cwd="/Users/alice/.claude/worktrees/app/lane"): Block(),
-        Input(command="yarn biome check src", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="yarn tsc --noEmit -p .", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="yarn run lint", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="yarn -v", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="npm install --help", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(
-            command="yarn install --mode=update-lockfile", cwd="/Users/alice/.claude/worktrees/monorepo/lane"
-        ): Allow(),
-        Input(
-            command="yarn add zod --mode update-lockfile", cwd="/Users/alice/.claude/worktrees/monorepo/lane"
-        ): Allow(),
-        Input(command="npm install -g pnpm", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="npm install --global=true pnpm", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="npm install --package-lock-only=true", cwd="/Users/alice/.claude/worktrees/app/lane"): Allow(),
-        Input(command="npm install --dry-run", cwd="/Users/alice/.claude/worktrees/app/lane"): Allow(),
-        Input(command="cd -- / && npm install", cwd="/Users/alice/.claude/worktrees/app/lane"): Allow(),
-        Input(command="tools/hooks/warm-lane.sh", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(command="yarn install --immutable", cwd="/Users/alice/Code/monorepo"): Allow(),
-        Input(command="cd / && yarn install", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
-        Input(
-            command="yarn --cwd /Users/alice/Code/monorepo install", cwd="/Users/alice/.claude/worktrees/monorepo/lane"
-        ): Allow(),
-        Input(command="yarn install --immutable", cwd="/Users/alice/.vcache/nm-store/3f9a1c"): Allow(),
-        Input(command="yarn install --immutable", cwd="/Users/alice/repos/.cache/nm-store/3f9a1c"): Allow(),
-        Input(command="echo yarn install", cwd="/Users/alice/.claude/worktrees/monorepo/lane"): Allow(),
+        in_lane("yarn install --immutable"): Block(pattern="warm-lane"),
+        in_lane("yarn"): Block(),
+        in_lane("yarn --immutable"): Block(),
+        in_lane("yarn add zod"): Block(),
+        in_lane("yarn --cwd ~/lanes/monorepo/lane install", lane="."): Block(),
+        in_lane("yarn --cwd=$HOME/lanes/monorepo/lane install", lane="."): Block(),
+        in_lane("npm install"): Block(),
+        in_lane("npm i left-pad"): Block(),
+        in_lane("npm ci"): Block(),
+        in_lane("npm --prefix ~/lanes/monorepo/lane ci", lane="."): Block(),
+        in_lane("npm --prefix=$HOME/lanes/monorepo/lane install", lane="."): Block(),
+        in_lane("pnpm install"): Block(),
+        in_lane("pnpm -C ~/lanes/monorepo/lane i", lane="."): Block(),
+        in_lane("pnpm --filter web install"): Block(),
+        in_lane("bun install"): Block(),
+        in_lane("bun i"): Block(),
+        in_lane("git pull && yarn install"): Block(),
+        in_lane("sh -c 'yarn install'"): Block(),
+        in_lane("npm in"): Block(),
+        in_lane("npm ic"): Block(),
+        in_lane("npm --registry https://registry.npmjs.org install"): Block(),
+        in_lane("npm install --package-lock-only=false"): Block(),
+        in_lane("npm install --global=false zx"): Block(),
+        in_lane("yarn --cwd ~/lanes/monorepo/lane/web install", lane="."): Block(),
+        in_lane("yarn install", env={"HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/lanes/monorepo": 0}'}): Block(),
+        in_lane("yarn install", env={}): Allow(),
+        in_lane("yarn install", env={"HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/elsewhere": 1}'}): Allow(),
+        in_lane("yarn install", lane="lanes/monorepo"): Allow(),
+        in_lane("yarn --cwd ~/lanes/app/lane install", lane="."): Allow(),
+        in_lane("yarn biome check src"): Allow(),
+        in_lane("yarn tsc --noEmit -p ."): Allow(),
+        in_lane("yarn run lint"): Allow(),
+        in_lane("yarn -v"): Allow(),
+        in_lane("npm install --help"): Allow(),
+        in_lane("yarn install --mode=update-lockfile"): Allow(),
+        in_lane("yarn add zod --mode update-lockfile"): Allow(),
+        in_lane("npm install -g pnpm"): Allow(),
+        in_lane("npm install --global=true pnpm"): Allow(),
+        in_lane("npm install --package-lock-only=true"): Allow(),
+        in_lane("npm install --dry-run"): Allow(),
+        in_lane("cd -- / && npm install"): Allow(),
+        in_lane("cd / && yarn install"): Allow(),
+        in_lane("tools/hooks/warm-lane.sh"): Allow(),
+        in_lane("yarn --cwd ~/src/monorepo install"): Allow(),
+        in_lane("echo yarn install"): Allow(),
+        Input(command="yarn install --immutable", cwd="/Users/alice/src/monorepo", env=TEST_POOLS): Allow(),
     },
 )

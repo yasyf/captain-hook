@@ -73,15 +73,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A lane cannot install JavaScript dependencies into its worktree.** The performance pack blocks
+- **A lane cannot install JavaScript dependencies into a worktree that links them.** Once a machine
+  lists its worktree pools in `HOOKS_LAYOUT_WORKTREE_POOLS`, the performance pack blocks
   `yarn install`, a bare `yarn`, `yarn add`/`remove`/`up`/`dedupe`, `npm install`/`i`/`ci`,
-  `pnpm install`/`i`/`add`, and `bun install`/`i`/`add` run under `~/.claude/worktrees`,
-  `~/repos/claude/worktrees`, `~/.orca/workspaces`, or `~/repos/orca/workspaces`. It reads the directory
-  from a `cd`, the session's working directory, or the package manager's own `--cwd`, `--prefix`,
-  `--dir`, or `-C`. One monorepo install writes about 216,000 files; the block points at
-  `tools/hooks/warm-lane.sh`, which links `node_modules` to the shared store for the lockfile.
-  `--mode=update-lockfile`, `--package-lock-only`, `--lockfile-only`, and global installs still run, as
-  does every install outside a lane.
+  `pnpm install`/`i`/`add`, and `bun install`/`i`/`add` in a lane of one of those pools whose checkout
+  carries `tools/hooks/warm-lane.sh`. It reads the directory from a `cd`, the session's working
+  directory, or the package manager's own `--cwd`, `--prefix`, `--dir`, or `-C`. The block points at
+  `warm-lane.sh`, which links `node_modules` to a shared store for the lockfile.
+  `--mode=update-lockfile`, `--package-lock-only`, `--lockfile-only`, and global installs still run,
+  as does every install anywhere else. With no pools listed, the guard is off.
 - **An LLM nudge can judge every message the assistant sends.** The `AssistantMessage` prompt context
   carries the prose the assistant wrote right before a `PostToolUse` call, or the message that closes
   the turn on `Stop` and `SubagentStop`. Only the first call after the prose carries it, so each
@@ -152,7 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other channel line answer nothing.
 - **A recursive `grep`, `ugrep`, or `rg` rooted at a broad directory warns once.** The performance pack
   warns on a recursive content search rooted at `/`, a home directory, or a repository root. It also
-  warns on one rooted at a `.claude/worktrees` or `.orca/workspaces` pool, or at the first directory
+  warns on one rooted at a `.claude/worktrees` pool, or at the first directory
   under a scratch root such as `~/.claude/scratch/release-v3`. Roots include `.`, an implicit working directory, `~`, and paths
   reached through `cd`, `sudo`, `timeout`, `sh -c`, and pipelines. Named files, a deeper directory,
   and a positive filename glob such as `--include='*.py'`, `-g '*.json'`, or `-t py` still run. A bare
@@ -165,6 +165,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The search guards read a machine's own directory layout from local config.** The performance
+  pack protects only `~`, `~/.claude` with its plugin cache, transcripts and worktree pool, `~/.cache`,
+  `~/Library` and the temp roots, and a `-g` or `-name` filter still does not bound a search under
+  them. Every other root comes from four variables holding JSON, each empty by default and set in the
+  environment the hooks run in, such as the `env` block of `~/.claude/settings.json`. `~` expands to
+  the hook's home directory.
+  - `HOOKS_LAYOUT_PROTECTED_ROOTS` lists directories no recursive search may walk, apart from the
+    checkouts and lanes inside them.
+  - `HOOKS_LAYOUT_SEARCHABLE_UNITS` lists path globs under those roots that stay searchable.
+  - `HOOKS_LAYOUT_CHECKOUT_COLLECTIONS` lists directories whose children are checkouts. A `find` at a
+    collection is blocked, and each checkout in it stays searchable.
+  - `HOOKS_LAYOUT_WORKTREE_POOLS` maps each worktree pool to the depth of its repo aggregates, `1` for
+    `<pool>/<repo>/<lane>`. A search of the pool or an aggregate is blocked; a lane stays searchable.
 - **The local-build admission block says the host is saturated, not that local builds are banned.**
   The performance pack's block on a local `go build`, `go vet`, `go test`, or `cargo` build read as a
   blanket ban, so agents stopped running the builds and vets a repo allows. It now names the
@@ -172,10 +185,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and says the same command runs once load drops while CI still grades tests. When it blocks is
   unchanged.
 - **`rg --files` at `~`, a worktree pool, or a directory above either is blocked, filename filters
-  included.** The performance pack blocks a file listing rooted at HOME, at a `.claude/worktrees` or
-  `.orca/workspaces` pool, at `~/repos/orca/workspaces` or its `<UUID>` and `<UUID>/<repo>`
-  aggregates, or at a parent of HOME or of those pools, such as `/`, `/Users`, `~/.claude`, `~/.orca`,
-  or `~/repos`. `-g`, `--glob`, `-t`, and `--type` filters do not exempt it. One checkout inside a
+  included.** The performance pack blocks a file listing rooted at HOME, at a `.claude/worktrees`
+  pool, or at a parent of HOME or of that pool, such as `/`, `/Users`, or `~/.claude`. `-g`,
+  `--glob`, `-t`, and `--type` filters do not exempt it. One checkout inside a
   pool, its subtrees, a regular file, `~/.claude/scratch`, and `rg --files .` at a repository root
   still run, as do `--help`, `--version`, and a `--type-list` or `--generate` written after
   `--files`.

@@ -23,6 +23,7 @@ from captain_hook.command_schema_core import (
     matches_command,
 )
 from captain_hook.command_schemas import DU, FD, FIND
+from captain_hook.layout import layout, locally_protected, pooled
 from captain_hook.util.scratch import TEMP_ROOTS
 from captain_hook.util.vcs import common_git_dir, git_dir, is_repo_root
 
@@ -33,15 +34,10 @@ if TYPE_CHECKING:
 
     from captain_hook.cmd import Call, Cmd
 
-POOLS = (
-    ".claude/worktrees",
-    ".orca/workspaces",
-    "repos/claude/worktrees",
-    ".daemonkit/a/ccx-cleanup/jobs",
-)
+POOLS = (".claude/worktrees",)
 
 
-HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1) | {"repos/orca/workspaces": 2}
+HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1)
 
 
 POOL_ROOTS = PathMatches(tuple(f"**/{pool}" for pool in HOME_POOL_LEVELS), unresolved=True)
@@ -90,20 +86,6 @@ PROTECTED_ROOTS = PathMatches(
                 "/.claude/projects/**",
                 "/.claude/worktrees",
                 "/.claude/worktrees/*",
-                "/.orca",
-                "/.orca/workspaces",
-                "/.orca/workspaces/*",
-                "/repos",
-                "/repos/claude",
-                "/repos/claude/worktrees",
-                "/repos/claude/worktrees/*",
-                "/repos/orca",
-                "/repos/orca/workspaces",
-                "/repos/orca/workspaces/*",
-                "/.vcache",
-                "/.vcache/**",
-                "/.daemonkit",
-                "/.daemonkit/**",
                 "/.cache",
                 "/.cache/**",
                 "/Library",
@@ -127,10 +109,6 @@ SCOPED_UNITS = PathMatches(
             "/.claude/plugins/marketplaces/*/**",
             "/.claude/projects/*/memory",
             "/.claude/projects/*/memory/**",
-            "/.vcache/scratch/*",
-            "/.vcache/scratch/*/**",
-            "/.daemonkit/a/ccx-cleanup/jobs/*/payload",
-            "/.daemonkit/a/ccx-cleanup/jobs/*/payload/**",
         )
     )
 )
@@ -745,7 +723,7 @@ def at_home(target: Target) -> bool:
 
 
 def pool_anchors() -> dict[Path, int]:
-    return {Path.home() / pool: levels for pool, levels in HOME_POOL_LEVELS.items()}
+    return {Path.home() / pool: levels for pool, levels in HOME_POOL_LEVELS.items()} | dict(layout().pools)
 
 
 def encloses_roots(root: Path, anchors: Iterable[Path]) -> bool:
@@ -810,6 +788,7 @@ def broad(
         and (
             BROAD_ROOTS(target)
             or at_home(target)
+            or ((lexical := written(target)) is not None and pooled(lexical))
             or (path is not None and is_repo_root(glob_prefix(path)))
             or (
                 (root := canonical(target)) is not None
@@ -826,10 +805,7 @@ def find_searches_broadly(arguments: Arguments) -> bool:
     return not roots.complete or any(
         SYSTEM_ROOTS(target)
         or spans_checkouts(target)
-        or (
-            (root := canonical(target)) is not None
-            and encloses_roots(root, (Path.home() / "Code", Path.home() / "repos"))
-        )
+        or ((root := canonical(target)) is not None and encloses_roots(root, layout().collections))
         for target in roots
     )
 
@@ -1131,7 +1107,9 @@ def protected(target: Target) -> bool:
     if target.value is None or names_files(target) or (root := written(target)) is None or root.is_file():
         return False
     anchor = Target(str(root), str(root), None)
-    return PROTECTED_ROOTS(anchor) and not SCOPED_UNITS(anchor)
+    return (PROTECTED_ROOTS(anchor) or locally_protected(root)) and not (
+        SCOPED_UNITS(anchor) or layout().searchable(anchor)
+    )
 
 
 def any_protected(roots: Targets, cwd: Path | None) -> bool:
@@ -1219,10 +1197,10 @@ FIND_MESSAGE = (
     "e a focused directory, or bound the listing with `-maxdepth 2`."
 )
 PROTECTED_ROOT_MESSAGE = (
-    "A recursive search under `~`, `~/.claude`, `~/repos`, `~/.vcache`, `~/.daemonkit"
-    "`, `~/.cache`, `~/Library` or a temp root walks gigabytes, even with `-g` or `-n"
-    "ame`. Name one checkout or version dir, list the known depth (`ls <dir>/*/job.js"
-    "on`), or ask the owning tool (`ccx vcs cleanup status`)."
+    "A recursive search under `~`, `~/.claude`, `~/.cache`, `~/Library`, a temp root "
+    "or a root `HOOKS_LAYOUT_PROTECTED_ROOTS` names walks gigabytes, even with `-g` o"
+    "r `-name`. Name one checkout or version dir, or list the known depth (`ls <dir>/"
+    "*/<file>`)."
 )
 EMPTY_ROOT_MESSAGE = (
     "A search whose only path is an unquoted expansion such as `$dir` or `$(...)` wal"
