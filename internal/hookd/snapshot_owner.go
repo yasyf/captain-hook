@@ -507,6 +507,14 @@ func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error
 	if err != nil {
 		return nil, s.manager.stopChild(child, errors.New("captain: snapshot owner pipe"), err)
 	}
+	if dir := os.Getenv(ownerRecordEnv); dir != "" {
+		recorded, err := recordOwner(conn, dir, child.PID())
+		if err != nil {
+			_ = conn.Close()
+			return nil, s.manager.stopChild(child, errors.New("captain: snapshot owner recording"), err)
+		}
+		conn = recorded
+	}
 	row, known := newProcSource().probe(child.PID())
 	start := "unknown"
 	if known {
