@@ -62,7 +62,7 @@ def test_release_stages_and_smokes_every_app_asset_before_github_publication() -
     formula = workflow[workflow.index("\n  helper-formula:") :]
 
     assert "uses: ./.github/actions/python-tests" in release_tests
-    assert "needs: release-tests" in build
+    assert "needs:" not in build
     assert "check-version: false" in build
     assert "run-tests: false" in build
     assert "name: dist" in python_assets
@@ -164,7 +164,8 @@ def test_python_publication_waits_for_the_matching_app_smoke(blocked: str) -> No
         dependencies[name] = set(needs[1].strip("[]").split(", ")) if needs else set()
     assert set.union(*dependencies.values()) <= set(jobs)
     assert dependencies["python-assets"] == {"build"}
-    assert dependencies["build"] == {"release-tests"}
+    assert dependencies["build"] == set()
+    assert "release-tests" not in set.union(*dependencies.values())
     assert "smoke-draft" in dependencies["publish-github"]
 
     graph = TopologicalSorter(dependencies)
