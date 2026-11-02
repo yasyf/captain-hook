@@ -29,7 +29,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript[judge]==14.45.35",
+    "cc-transcript[judge]==14.45.36",
     "pydantic>=2.0",
     "jsonschema>=4.26",
     "pydantic-settings>=2.0",
@@ -44,7 +44,7 @@ dependencies = [
     "filelock>=3.24.0",
     "pathspec>=0.12",
     "loguru>=0.7.3",
-    "spawnllm[sdk]>=0.17.3,<0.18",
+    "spawnllm[sdk]>=0.17.4,<0.18",
     "mcp>=2.0,<3",
 ]
 
