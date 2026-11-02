@@ -1,1 +1,1 @@
-{"v":1,"lamport":4,"ops":[{"kind":"set_criterion_status","id":"b1af817c1a37665432eed7ab206e9ebd","status":"met","note":"Durable local hold note0dd3ce9b contains full25decisions, original hash, held workstreams and further retained requests; no prior task criteria changed"}]}
+{"v":1,"lamport":5,"ops":[{"kind":"set_criterion_status","id":"e6e2f249bb790a137bd08306d18ff870","status":"met","note":"Fresh no-model local app-server config/read verified2/depth1/64000; launcher accepts only\u003c=12000byte fresh stdin packets and disables subagents"}]}
