@@ -61,6 +61,7 @@ from captain_hook.confirm import UNCONFIRMED as UNCONFIRMED
 from captain_hook.confirm import Confirm as Confirm
 from captain_hook.context import HookContext as HookContext
 from captain_hook.contexts import AfterEdit as AfterEdit
+from captain_hook.contexts import AssistantMessage as AssistantMessage
 from captain_hook.contexts import BeforeEdit as BeforeEdit
 from captain_hook.contexts import Excerpts as Excerpts
 from captain_hook.contexts import Introduced as Introduced

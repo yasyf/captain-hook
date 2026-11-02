@@ -630,6 +630,7 @@ def input_to_event(
         | {"session_id": inp.session_id or "fixture"}
         | ({"agent_id": inp.agent_id} if inp.agent_id else {})
         | ({"agent_type": inp.agent_type} if inp.agent_type else {})
+        | ({"tool_use_id": inp.tool_use_id} if inp.tool_use_id else {})
     )
 
     if inp.tasks is not None:

@@ -19,6 +19,7 @@ from captain_hook.contexts import (
     PIN_EXCERPT_CAP,
     WORKFLOW_SCRIPT_CAP,
     AfterEdit,
+    AssistantMessage,
     BeforeEdit,
     Excerpts,
     Introduced,
@@ -284,6 +285,92 @@ def prompts_event(*prompts: str) -> Any:
         "Stop",
         transcript=fixture_session([line for p in prompts for line in (T.user(p), T.assistant("ok"))]),
     )
+
+
+def call_event(call: str, *lines: dict[str, Any]) -> Any:
+    return input_to_event(Event.PostToolUse, Input(command="ls", tool_use_id=call, transcript=list(lines)))
+
+
+class TestAssistantMessage:
+    def test_defaults(self) -> None:
+        ctx = AssistantMessage()
+        assert (ctx.tag, ctx.required, ctx.window) == ("assistant_message", True, 40)
+
+    def test_post_tool_use_reads_the_prose_before_its_call(self) -> None:
+        evt = call_event(
+            "call-a",
+            T.user("ship it"),
+            T.assistant("CI failed on the lint step."),
+            T.assistant(T.tool("Bash", id="call-a", command="ls")),
+            T.user(T.result(of="call-a")),
+        )
+        assert AssistantMessage().content(evt) == "CI failed on the lint step."
+
+    def test_prose_and_call_in_one_line(self) -> None:
+        evt = call_event("call-a", T.assistant("Checking the log.", T.tool("Bash", id="call-a", command="ls")))
+        assert AssistantMessage().content(evt) == "Checking the log."
+
+    def test_later_call_of_a_batch_sees_no_prose(self) -> None:
+        evt = call_event(
+            "call-b",
+            T.assistant("Two reads."),
+            T.assistant(T.tool("Bash", id="call-a", command="ls")),
+            T.assistant(T.tool("Bash", id="call-b", command="pwd")),
+        )
+        assert AssistantMessage().content(evt) is None
+
+    def test_call_after_a_result_without_prose_yields_none(self) -> None:
+        evt = call_event(
+            "call-b",
+            T.assistant("Earlier note."),
+            T.assistant(T.tool("Bash", id="call-a", command="ls")),
+            T.user(T.result(of="call-a")),
+            T.assistant(T.tool("Bash", id="call-b", command="pwd")),
+        )
+        assert AssistantMessage().content(evt) is None
+
+    def test_unknown_call_yields_none(self) -> None:
+        evt = call_event("call-z", T.assistant("Prose."), T.assistant(T.tool("Bash", id="call-a", command="ls")))
+        assert AssistantMessage().content(evt) is None
+
+    def test_stop_reads_the_closing_message(self) -> None:
+        evt = mock_event(
+            "Stop",
+            transcript=fixture_session(
+                [
+                    T.assistant("Before the call."),
+                    T.assistant(T.tool("Bash", id="call-a", command="ls")),
+                    T.user(T.result(of="call-a")),
+                    T.assistant("The deploy failed."),
+                    T.assistant("I filed the fix."),
+                ]
+            ),
+        )
+        assert AssistantMessage().content(evt) == "The deploy failed.\n\nI filed the fix."
+
+    def test_stop_after_a_result_yields_none(self) -> None:
+        evt = mock_event(
+            "Stop",
+            transcript=fixture_session(
+                [T.assistant(T.tool("Bash", id="call-a", command="ls")), T.user(T.result(of="call-a"))]
+            ),
+        )
+        assert AssistantMessage().content(evt) is None
+
+    def test_other_events_yield_none(self) -> None:
+        evt = input_to_event(
+            Event.PreToolUse,
+            Input(
+                command="ls",
+                tool_use_id="call-a",
+                transcript=[T.assistant("Prose."), T.assistant(T.tool("Bash", id="call-a", command="ls"))],
+            ),
+        )
+        assert AssistantMessage().content(evt) is None
+
+    def test_required_skips_the_judge_without_a_message(self) -> None:
+        evt = mock_event("Stop", transcript=fixture_session([]))
+        assert apply_contexts(Prompt().system("s"), evt, [AssistantMessage()]) is None
 
 
 class TestUserMessages:
