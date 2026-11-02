@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -457,106 +458,68 @@ func TestAcquireRoutesToTheLeastLoadedMember(t *testing.T) {
 	}
 }
 
-func TestAcquireKeepsOneTranscriptOnOneMember(t *testing.T) {
+func TestWorkerKeyIgnoresTheSession(t *testing.T) {
 	t.Parallel()
-	manager := mustWorkerManager(t)
-	manager.poolSize = 2
-	first := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 3)
-	second := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 0)
-	affinity := affinityForShard(t, manager.poolSize, first.key.shard)
-
-	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live", affinity: affinity})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry != first {
-		t.Fatalf("transcript moved from shard %d to less-loaded shard %d", first.key.shard, second.key.shard)
-	}
-}
-
-func TestAcquireDistributesDifferentTranscripts(t *testing.T) {
-	t.Parallel()
-	manager := mustWorkerManager(t)
-	manager.poolSize = 2
-	members := []*workerEntry{
-		readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 0),
-		readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 0),
-	}
-
-	for shard, member := range members {
-		affinity := affinityForShard(t, manager.poolSize, shard)
-		entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live", affinity: affinity})
+	var keys []workerKey
+	for _, payload := range []string{
+		`{"session_id":"session-a","transcript_path":"/t/a.jsonl"}`,
+		`{"session_id":"session-b","transcript_path":"/t/b.jsonl","agent_id":"agent-1"}`,
+		`{"session_id":"session-c","agent_transcript_path":"/t/c/agent.jsonl"}`,
+	} {
+		request := testEventRequest("PreToolUse")
+		request.Root = "/live"
+		request.PayloadRaw = payload
+		key, err := makeWorkerKey(request)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if entry != member {
-			t.Fatalf("transcript for shard %d routed to shard %d", shard, entry.key.shard)
+		keys = append(keys, key)
+	}
+	for _, key := range keys[1:] {
+		if !reflect.DeepEqual(key, keys[0]) {
+			t.Fatalf("worker key %+v differs from %+v by session alone", key, keys[0])
 		}
 	}
 }
 
-func TestAcquireServesAMissingAffinityShardFromAnIdleMember(t *testing.T) {
+func TestSequentialSessionsLeaveASpareToRetire(t *testing.T) {
 	t.Parallel()
+	now := time.Unix(1<<32, 0)
+	live := t.TempDir()
 	manager := mustWorkerManager(t)
 	manager.poolSize = 2
-	idle := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 0)
+	manager.now = func() time.Time { return now }
 	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
-		t.Errorf("an idle pool started shard %d for a new transcript", key.shard)
+		t.Errorf("sequential load started shard %d", key.shard)
 		worker, _ := silentWorker(t)
 		return worker, nil
 	}
-	key := workerKey{id: "pool", root: "/live", affinity: affinityForShard(t, manager.poolSize, 1)}
+	spare := readyMember(t, manager, workerKey{id: "pool", root: live, shard: 0}, 0)
+	recent := readyMember(t, manager, workerKey{id: "pool", root: live, shard: 1}, 0)
+	manager.mu.Lock()
+	spare.lastUsed = now.Add(-time.Minute)
+	recent.lastUsed = now.Add(-time.Second)
+	manager.mu.Unlock()
 
-	entry, _, err := manager.acquire(t.Context(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager.wg.Wait()
-	if entry != idle {
-		t.Fatalf("a new transcript routed to shard %d, want the idle shard 0", entry.key.shard)
-	}
-}
-
-func TestAcquireGrowsABusyPoolsMissingAffinityShardInTheBackground(t *testing.T) {
-	t.Parallel()
-	manager := mustWorkerManager(t)
-	manager.poolSize = 2
-	shards := make(chan int, maxLiveWorkers)
-	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
-		shards <- key.shard
-		worker, _ := silentWorker(t)
-		return worker, nil
-	}
-	busy := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 1)
-	key := workerKey{id: "pool", root: "/live", affinity: affinityForShard(t, manager.poolSize, 1)}
-
-	first, _, err := manager.acquire(t.Context(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != busy {
-		t.Fatal("a busy pool made the caller wait on the member it started instead of taking the one that was up")
-	}
-	if shard := <-shards; shard != 1 {
-		t.Fatalf("growth started shard %d, want the transcript's shard 1", shard)
-	}
-	manager.wg.Wait()
-	second, _, err := manager.acquire(t.Context(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.key.shard != 1 {
-		t.Fatalf("the transcript routed to shard %d after its shard started, want 1", second.key.shard)
-	}
-}
-
-func affinityForShard(t *testing.T, size, shard int) string {
-	t.Helper()
-	for candidate := 0; ; candidate++ {
-		affinity := fmt.Sprintf("transcript-%d", candidate)
-		if affinityShard(affinity, size) == shard {
-			return affinity
+	for range 4 {
+		entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: live})
+		if err != nil {
+			t.Fatal(err)
 		}
+		if entry != recent {
+			t.Fatalf("sequential load moved to shard %d while shard 1 sat idle", entry.key.shard)
+		}
+		manager.settleLoad(entry)
+		manager.release(entry)
+	}
+	manager.wg.Wait()
+	manager.sweep(now.Add(spareIdleTTL))
+
+	if _, kept := manager.entries[spare.key.member()]; kept {
+		t.Error("sequential load kept the spare member warm past spareIdleTTL")
+	}
+	if _, kept := manager.entries[recent.key.member()]; !kept {
+		t.Error("sweep retired the member serving the load")
 	}
 }
 

@@ -296,7 +296,7 @@ func TestMonitorWarnsJudgesThenEscalatesOnce(t *testing.T) {
 		t.Fatalf("warn payload = %v", payload)
 	}
 	if _, present := payload["agent_id"]; present {
-		t.Fatal("payload carries agent_id, which would move worker affinity")
+		t.Fatal("payload carries agent_id")
 	}
 	process := warn.process()
 	if process["pid"] != float64(testHogPID) || process["ppid"] != float64(testClaudePID) || process["pgid"] != float64(testHogPID) ||
@@ -724,7 +724,7 @@ func TestHostDispatchLeavesTheServiceEstimateUnchanged(t *testing.T) {
 	}
 }
 
-func TestMonitorDispatchesThroughTheWorkerWithSessionAffinity(t *testing.T) {
+func TestMonitorDispatchesThroughTheSessionsWorkerPool(t *testing.T) {
 	t.Parallel()
 	h := newMonitorHarness(t, nil)
 	h.monitor.dispatch = h.manager.dispatch
@@ -770,7 +770,7 @@ func TestMonitorDispatchesThroughTheWorkerWithSessionAffinity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if synthetic.affinity != testTranscript || synthetic.affinity != real.affinity || synthetic.id != real.id {
+		if synthetic.id != real.id {
 			t.Fatalf("synthetic key %+v does not share the session's worker %+v", synthetic, real)
 		}
 	}
