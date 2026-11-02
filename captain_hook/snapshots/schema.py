@@ -43,7 +43,7 @@ def compose(core_directory: Path) -> dict[str, dict[str, Any]]:
     result = DOMAIN_RESULT.json_schema(by_alias=True)
     definitions.update(request.pop("$defs"))
     definitions.update(result.pop("$defs"))
-    for name in ("PrepareReview", "PrepareCorrections", "PrepareHookView"):
+    for name in ("ReviewEvents", "PrepareHookView"):
         fields = definitions[name]["properties"]
         fields["limits"] = {"$ref": "#/$defs/Core_Limits"}
     definitions["PrepareHookView"]["properties"]["view"] = {"$ref": "#/$defs/Core_View"}
@@ -53,8 +53,6 @@ def compose(core_directory: Path) -> dict[str, dict[str, Any]]:
         limits={"$ref": "#/$defs/Core_Limits"},
     )
     definitions["ClassifierResult"]["properties"]["classifier"] = {"$ref": "#/$defs/Core_Classifier"}
-    definitions["PrepareCorrections"]["properties"]["anchors"]["items"] = {"$ref": "#/$defs/Core_EventRef"}
-    definitions["PreparedCorrection"]["properties"]["anchor"] = {"$ref": "#/$defs/Core_EventRef"}
     domain_response = copy.deepcopy(roots["response"])
     for name in ("CompleteResponse", "IncompleteResponse"):
         definition = copy.deepcopy(definitions[f"Core_{name}"])

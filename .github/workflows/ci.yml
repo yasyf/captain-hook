@@ -214,7 +214,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libfaketime
 
-      - name: Replay the recorded stream against both snapshot owners
+      - name: Replay the recorded stream against the snapshot owner twice
         shell: bash
         run: |
           set -euo pipefail
@@ -232,15 +232,9 @@ jobs:
             diff "$out/$1.jsonl" "$out/$2.jsonl" | cut -c1-1500 | head -n 40 || true
             return 1
           }
-          replay python .venv/bin/python -P -m captain_hook.snapshots.worker
-          replay python-again .venv/bin/python -P -m captain_hook.snapshots.worker
-          compare python python-again
-          if [ ! -x .venv/bin/cc-transcript-owner ]; then
-            echo "::error::.venv/bin/cc-transcript-owner is missing; pin a cc-transcript release that ships the Rust snapshot owner"
-            exit 1
-          fi
           replay rust .venv/bin/cc-transcript-owner --build "$build"
-          compare python rust
+          replay rust-again .venv/bin/cc-transcript-owner --build "$build"
+          compare rust rust-again
 
       - name: Retain owner replay outputs
         if: failure()
@@ -459,7 +453,7 @@ jobs:
           unzip -l dist/*.whl | grep -q 'capt_hook_client/guard_literal.py'
           tar tzf dist/*.tar.gz | grep -q 'internal/wireproto/guard.json'
           .wheel-smoke/bin/python -c 'from capt_hook_client import guard_literal as shim; from captain_hook import guard_literal as guard; import inspect; assert inspect.getsource(shim) == inspect.getsource(guard); assert shim.mandatory("PreToolUse", b"{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pkill -x sleep\"}}"); print("guard literal OK")'
-          unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/worker.py'
+          test -x .wheel-smoke/bin/cc-transcript-owner
           unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/schemas/host-request.schema.json'
           .wheel-smoke/bin/python -c 'from captain_hook.snapshots.validation import validator; from cc_transcript.snapshots import TranscriptStore; validator("host-request").check_schema(validator("host-request").schema)'
           if unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'; then exit 1; fi

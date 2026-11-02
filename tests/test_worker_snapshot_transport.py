@@ -12,7 +12,7 @@ import pytest
 
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, Lease
 from captain_hook.snapshots.validation import validator
-from captain_hook.snapshots.worker import empty_usage, failure
+from captain_hook.testing.snapshots import empty_usage, failure
 from captain_hook.worker.protocol import (
     MAX_SNAPSHOT_FRAME,
     EventResponse,

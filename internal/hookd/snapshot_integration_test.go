@@ -20,7 +20,7 @@ import (
 	"github.com/yasyf/captain-hook/internal/snapshots"
 )
 
-func pythonSnapshotOwner(t *testing.T) *snapshotOwner {
+func realSnapshotOwner(t *testing.T) *snapshotOwner {
 	t.Helper()
 	python := os.Getenv("CAPTAIN_TEST_SNAPSHOT_PYTHON")
 	if python == "" {
@@ -40,10 +40,10 @@ func pythonSnapshotOwner(t *testing.T) *snapshotOwner {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return spawnPythonSnapshotOwner(t, python, config)
+	return spawnSnapshotOwner(t, python, config)
 }
 
-func spawnPythonSnapshotOwner(t *testing.T, python string, config []byte) *snapshotOwner {
+func spawnSnapshotOwner(t *testing.T, python string, config []byte) *snapshotOwner {
 	t.Helper()
 	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
@@ -58,7 +58,7 @@ func spawnPythonSnapshotOwner(t *testing.T, python string, config []byte) *snaps
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
-	command := exec.Command(python, "-P", "-m", "captain_hook.snapshots.worker")
+	command := exec.Command(filepath.Join(filepath.Dir(python), "cc-transcript-owner"), "--build", Build)
 	command.Stdin, command.Stdout, command.Stderr = child, child, &stderr
 	if err := command.Start(); err != nil {
 		_ = child.Close()
@@ -85,13 +85,13 @@ func spawnPythonSnapshotOwner(t *testing.T, python string, config []byte) *snaps
 	defer cancel()
 	owner, err := handshakeSnapshotOwner(ctx, conn, config)
 	if err != nil {
-		t.Fatalf("real Python handshake: %v", err)
+		t.Fatalf("real snapshot owner handshake: %v", err)
 	}
 	return owner
 }
 
-func TestSnapshotRealPythonOwnerSharesLoadsAcrossClients(t *testing.T) {
-	owner := pythonSnapshotOwner(t)
+func TestSnapshotRealOwnerSharesLoadsAcrossClients(t *testing.T) {
+	owner := realSnapshotOwner(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	service, err := newSnapshotService(&workerManager{lifetime: ctx, logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})

@@ -8,25 +8,24 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cc_transcript.context import ContextWindow
 from cc_transcript.corrections import Correction
-from cc_transcript.ids import EventRef
-from cc_transcript.mining.candidates import FeedbackCandidate
-from cc_transcript.mining.confidence import from_payload, to_payload
-from cc_transcript.mining.signals import MiningSignal
 from loguru import logger
 
 from captain_hook.snapshots.client import MAX_RESULT_BYTES, EvidenceIncomplete
 from captain_hook.snapshots.client import client_scope as review_client
 
 if TYPE_CHECKING:
-    from captain_hook.review.scan import CorrectionLedger
+    from cc_transcript.ids import EventRef
+    from cc_transcript.mining.candidates import FeedbackCandidate
+    from cc_transcript.models import TranscriptEvent
 
-REVIEW_POLICY = {"id": "captain-review", "version": "1"}
+    from captain_hook.review.scan import CorrectionLedger
+    from captain_hook.snapshots.client import RemoteSession, SnapshotClient
+
 UNFAULTED = "none"
 CORRECTION_PICK = (
     "Which numbered candidate edit does the developer's feedback fault? Pick none when the feedback is not about any "
@@ -65,76 +64,21 @@ class ReviewPolicy:
         self._decisions[canonical, stat.st_dev, stat.st_ino] = log
         return log
 
-    async def prepare_review(self, snapshot: Any, request: Mapping[str, Any]) -> dict[str, Any]:
-        return await prepare_review(snapshot, request, decision_log=self.decision_log)
-
-    async def prepare_corrections(self, snapshot: Any, request: Mapping[str, Any]) -> dict[str, Any]:
-        return await prepare_corrections(snapshot, request)
-
     async def close(self) -> None:
         while self._decisions:
             _, log = self._decisions.popitem()
             await log.close()
 
 
-class MaterializedEvents(Sequence[Any]):
-    def __init__(self, events: Sequence[Any]) -> None:
-        self.events = events
-        self.materialized: dict[int, Any] = {}
-
-    def __len__(self) -> int:
-        return len(self.events)
-
-    def __getitem__(self, index: Any) -> Any:
-        if isinstance(index, slice):
-            return [self[position] for position in range(*index.indices(len(self)))]
-        position = index + len(self) if index < 0 else index
-        if position not in self.materialized:
-            self.materialized[position] = self.events[position]
-        return self.materialized[position]
-
-
-class ProjectionBudget:
-    def __init__(self, *, maximum: int = MAX_RESULT_BYTES, snapshot: Any = None) -> None:
-        self.remaining = maximum
-        self.snapshot = snapshot
-
-    def checkpoint(self) -> None:
-        if self.snapshot is not None:
-            self.snapshot.checkpoint()
-
-    def check_text(self, text: str) -> None:
-        self.checkpoint()
-        if len(text) > self.remaining:
-            self.exceeded()
-
-    def exceeded(self) -> None:
-        if self.snapshot is not None:
-            self.snapshot.consume(output_bytes=MAX_RESULT_BYTES + 1)
-        raise EvidenceIncomplete("output_limit", "review projection exceeds its cumulative output budget")
-
-    def add(self, value: object) -> None:
-        self.checkpoint()
-        size = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
-        if size > self.remaining:
-            self.exceeded()
-        if self.snapshot is not None:
-            self.snapshot.consume(items=1, output_bytes=size)
-        self.remaining -= size
-
-
 class BoundedGit:
-    def __init__(self, snapshot: Any, *, max_bytes: int, max_processes: int = 84) -> None:
-        self.snapshot = snapshot
+    def __init__(self, *, max_bytes: int, max_processes: int = 84) -> None:
         self.remaining = max_bytes
         self.processes = max_processes
 
     def __call__(self, repo: Path, *arguments: str) -> str | None:
-        self.snapshot.checkpoint()
         if self.processes == 0 or self.remaining == 0:
             raise EvidenceIncomplete("incomplete", "correction Git preparation exhausted its work budget")
         self.processes -= 1
-        self.snapshot.consume(items=1)
         command = [
             "git",
             "--no-pager",
@@ -170,7 +114,6 @@ class BoundedGit:
                 selector.register(process.stdout, selectors.EVENT_READ, True)
                 selector.register(process.stderr, selectors.EVENT_READ, False)
                 while selector.get_map():
-                    self.snapshot.checkpoint()
                     if time.monotonic() >= deadline:
                         raise EvidenceIncomplete("deadline", "correction Git preparation timed out")
                     for key, _ in selector.select(timeout=0.05):
@@ -183,7 +126,6 @@ class BoundedGit:
                         self.remaining -= len(chunk)
                         if key.data:
                             chunks.append(chunk)
-                self.snapshot.checkpoint()
                 return (
                     b"".join(chunks).decode(errors="replace")
                     if process.wait(timeout=max(0.001, deadline - time.monotonic())) == 0
@@ -213,186 +155,63 @@ def review_roots(paths: Sequence[str]) -> list[str]:
     )
 
 
-def encode_candidate(signal: Any, candidate: FeedbackCandidate) -> str:
-    from captain_hook.review.scan import rule_parts
-
-    return json.dumps(
-        {
-            "dedup_key": candidate.dedup_key,
-            "source_kind": candidate.source_kind,
-            "occurred_at": candidate.occurred_at.isoformat(),
-            "text": candidate.text,
-            "context_json": candidate.window.to_json(),
-            "signal": to_payload(candidate.signal),
-            "session_id": candidate.session_id,
-            "cc_version": candidate.cc_version,
-            "payload": candidate.payload,
-            "rule_parts": rule_parts(signal),
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+def capture_windows(client: SnapshotClient, session: RemoteSession, anchors: Sequence[EventRef]) -> list[ContextWindow]:
+    return [
+        ContextWindow.from_json(raw)
+        for offset in range(0, len(anchors), 256)
+        for page in client.pages(
+            "capture",
+            view=session.view(),
+            anchors=[asdict(anchor) for anchor in anchors[offset : offset + 256]],
+            before=6,
+            after=2,
+            preview_chars=200,
+        )
+        for raw in page["windows_json"]
+    ]
 
 
-def decode_candidate(raw: str) -> tuple[FeedbackCandidate, tuple[str, ...]]:
-    data = json.loads(raw)
-    window = ContextWindow.from_json(data["context_json"])
-    return FeedbackCandidate(
-        dedup_key=data["dedup_key"],
-        source_kind=data["source_kind"],
-        occurred_at=datetime.fromisoformat(data["occurred_at"]),
-        text=data["text"],
-        window=window,
-        ref=window.anchor,
-        signal=from_payload(data["signal"]),
-        session_id=data["session_id"],
-        cc_version=data["cc_version"],
-        payload=data["payload"],
-    ), tuple(data["rule_parts"])
-
-
-async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_log: Any) -> dict[str, Any]:
-    from cc_transcript.mining import mine_snapshot
-
-    from captain_hook.review.fix import iter_hook_complaint_signals
-    from captain_hook.review.routing import PackIndex
-    from captain_hook.review.scan import (
-        COLLAPSE_DETECTORS,
-        REVIEWER_MARKER,
-        REVIEWER_MINING_SPEC,
-        Detector,
-        resolve_repo_key,
-        survives,
-        to_candidate,
-    )
-    from captain_hook.util import reqenv
-
-    if request["policy"] != REVIEW_POLICY:
-        raise ValueError("unknown review policy")
-    facts = snapshot.source_facts(first_user_contains=REVIEWER_MARKER)
-    cwd = Path(facts["cwds"][0]) if facts["cwds"] else None
-    repo = request.get("repo_key") or next(
-        (key for path in facts["cwds"] if (key := resolve_repo_key(path)) is not None), None
-    )
-    disposition = "reviewer_session" if facts["first_user_contains"] else "no_repo" if repo is None else "eligible"
-    result: dict[str, Any] = {
-        "kind": "review",
-        "source_revision": snapshot.description["source_revision"],
-        "canonical_path": snapshot.description["canonical_path"],
-        "mtime_ns": snapshot.description["mtime_ns"],
-        "repo_key": repo,
-        "cwd": str(cwd) if cwd is not None else None,
-        "disposition": disposition,
-        "candidates_json": [],
-    }
-    if disposition != "eligible":
-        return result
-    budget = ProjectionBudget(maximum=request["limits"]["max_output_bytes"], snapshot=snapshot)
-    budget.add(result)
-    events = MaterializedEvents(snapshot.events)
-    signals: list[MiningSignal] = []
-    signal_chars = 0
-
-    def keep(signal: Any) -> None:
-        nonlocal signal_chars
-        snapshot.checkpoint()
-        floor = request["min_confidence_fix" if signal.kind == "hook_complaint" else "min_confidence"]
-        if signal.signal.confidence < floor or not survives(events, signal):
-            return
-        signal_chars += len(signal.text)
-        if signal_chars > budget.remaining or len(signals) >= request["limits"]["max_items"]:
-            budget.exceeded()
-        signals.append(signal)
-
-    if snapshot.hook_marker_indices:
-        with reqenv.use_request(
-            reqenv.RequestOverrides(
-                env={"CLAUDE_CONFIG_DIR": request["claude_config_dir"]},
-                cwd=str(cwd or Path.home()),
-                client_ppid=0,
-                session_id="",
-            )
-        ):
-            routing = PackIndex.load(cwd)
-        decision_path = Path(request["decision_log_path"]) if request["decision_log_path"] is not None else None
-        decisions = await decision_log(decision_path)
-        async for signal in iter_hook_complaint_signals(events, decisions=decisions, index=routing):
-            keep(signal)
-    for signal in mine_snapshot(snapshot, REVIEWER_MINING_SPEC):
-        keep(signal)
-    shadowed = {
-        (signal.session_id, signal.event_uuid, signal.text)
-        for signal in signals
-        if signal.detector in COLLAPSE_DETECTORS
-    }
-    for signal in signals:
-        snapshot.checkpoint()
-        if (
-            signal.detector == Detector.TRANSCRIPT_MESSAGE
-            and (signal.session_id, signal.event_uuid, signal.text) in shadowed
-        ):
-            continue
-        [window] = snapshot.capture([EventRef(signal.session_id, signal.event_uuid)])
-        raw = encode_candidate(signal, to_candidate(window, signal))
-        budget.add(raw)
-        result["candidates_json"].append(raw)
-
-    return result
-
-
-async def prepare_corrections(snapshot: Any, request: Mapping[str, Any]) -> dict[str, Any]:
+def correction_drafts(
+    events: Sequence[TranscriptEvent], candidates: Sequence[FeedbackCandidate], repo: Path | None
+) -> tuple[list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
+    from cc_transcript.activity import SessionActivity
     from cc_transcript.evidence import harvest_pairs, lower_pair
     from cc_transcript.extract.correct import build_pick_prompt
 
-    if request["policy"] != REVIEW_POLICY:
-        raise ValueError("unknown correction policy")
-    repo = Path(request["repo"]) if request["repo"] is not None else None
+    activity = SessionActivity.from_events(candidates[0].ref.session_id, events)
+    git = BoundedGit(max_bytes=MAX_RESULT_BYTES)
     drafts: list[dict[str, Any]] = []
-    git = BoundedGit(
-        snapshot, max_bytes=min(request["limits"]["max_read_bytes"], request["limits"]["max_output_bytes"])
-    )
-    budget = ProjectionBudget(maximum=request["limits"]["max_output_bytes"], snapshot=snapshot)
-    anchors = [EventRef(**raw_anchor) for raw_anchor in request["anchors"]]
-    from captain_hook.snapshots.client import NATIVE_CLASSIFIER
-
-    activity = snapshot.activity(NATIVE_CLASSIFIER, anchors=anchors, lookback_turns=40, lookahead_turns=120)
-    for raw_anchor, anchor, feedback in zip(request["anchors"], anchors, request["feedback"], strict=True):
-        snapshot.checkpoint()
-        pairs = harvest_pairs(activity, anchor, repo=repo, git_runner=git)
+    refused: list[tuple[EventRef, EvidenceIncomplete]] = []
+    for candidate in candidates:
+        anchor = candidate.ref
+        try:
+            pairs = harvest_pairs(activity, anchor, repo=repo, git_runner=git)
+        except EvidenceIncomplete as exc:
+            refused.append((anchor, exc))
+            continue
         if not pairs or (turn := activity.turn_of(anchor)) is None:
             continue
         choices: list[dict[str, Any]] = []
         for index, pair in enumerate(pairs, 1):
-            snapshot.checkpoint()
-            hunk_chars = sum(len(hunk.old) + len(hunk.new) for hunk in pair.incorrect.hunks)
-            if pair.correction is not None:
-                hunk_chars += sum(len(hunk.old) + len(hunk.new) for hunk in pair.correction.hunks)
-            if hunk_chars > budget.remaining:
-                budget.exceeded()
-            row = lower_pair(activity, anchor, pair, source="captain-hook")
-            if row is None:
+            if (row := lower_pair(activity, anchor, pair, source="captain-hook")) is None:
                 raise ValueError("harvested correction pair lost its pinned anchor")
             if repo is not None:
                 row = replace(row, detail={"repo": str(repo)})
-            choice = {
-                "pair_id": str(index),
-                "overlap": pair.overlap,
-                "correction_json": json.dumps(asdict(row), ensure_ascii=False, separators=(",", ":")),
+            choices.append(
+                {
+                    "pair_id": str(index),
+                    "overlap": pair.overlap,
+                    "correction_json": json.dumps(asdict(row), ensure_ascii=False, separators=(",", ":")),
+                }
+            )
+        drafts.append(
+            {
+                "anchor": asdict(anchor),
+                "prompt": build_pick_prompt(candidate.text, pairs, anchor_turn=turn.index),
+                "choices": choices,
             }
-            budget.add(choice)
-            choices.append(choice)
-        draft = {
-            "anchor": raw_anchor,
-            "prompt": build_pick_prompt(feedback, pairs, anchor_turn=turn.index),
-            "choices": choices,
-        }
-        budget.add({"anchor": raw_anchor, "prompt": draft["prompt"]})
-        drafts.append(draft)
-    return {
-        "kind": "corrections",
-        "source_revision": request["source_revision"],
-        "corrections": drafts,
-    }
+        )
+    return drafts, refused
 
 
 async def jev_pick(prompt: str, count: int) -> str | None:

@@ -165,7 +165,7 @@ func newPythonMonitorHarness(t *testing.T) *pythonMonitorHarness {
 		t.Fatal(err)
 	}
 	snapshotService.start = func(context.Context) (*snapshotOwner, error) {
-		return spawnPythonSnapshotOwner(t, python, snapshotService.config), nil
+		return spawnSnapshotOwner(t, python, snapshotService.config), nil
 	}
 	h.manager.snapshots = snapshotService
 	warmCtx, stopWarm := context.WithTimeout(context.Background(), integrationWait)

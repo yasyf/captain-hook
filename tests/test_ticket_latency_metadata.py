@@ -4,7 +4,7 @@ import pytest
 
 from captain_hook.conditions import UserSaid
 from captain_hook.snapshots.client import HOST_SCHEMA, EvidenceIncomplete, SnapshotClient
-from captain_hook.snapshots.worker import failure
+from captain_hook.testing.snapshots import failure
 from captain_hook.tickets import Allow, Context, Reach, Rule, Tickets
 from captain_hook.tickets import decide as deciding
 

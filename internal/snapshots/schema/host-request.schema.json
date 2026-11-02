@@ -4754,65 +4754,6 @@
       "title": "WorkflowText",
       "type": "object"
     },
-    "CorrectionChoice": {
-      "additionalProperties": false,
-      "properties": {
-        "correction_json": {
-          "maxLength": 1048576,
-          "title": "Correction Json",
-          "type": "string"
-        },
-        "overlap": {
-          "minimum": 0,
-          "title": "Overlap",
-          "type": "number"
-        },
-        "pair_id": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Pair Id",
-          "type": "string"
-        }
-      },
-      "required": [
-        "pair_id",
-        "overlap",
-        "correction_json"
-      ],
-      "title": "CorrectionChoice",
-      "type": "object"
-    },
-    "CorrectionsResult": {
-      "additionalProperties": false,
-      "properties": {
-        "corrections": {
-          "items": {
-            "$ref": "#/$defs/PreparedCorrection"
-          },
-          "maxItems": 256,
-          "title": "Corrections",
-          "type": "array"
-        },
-        "kind": {
-          "const": "corrections",
-          "title": "Kind",
-          "type": "string"
-        },
-        "source_revision": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Source Revision",
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "source_revision",
-        "corrections"
-      ],
-      "title": "CorrectionsResult",
-      "type": "object"
-    },
     "Host_CompleteResponse": {
       "additionalProperties": false,
       "properties": {
@@ -4922,17 +4863,13 @@
                 "mapping": {
                   "classification": "#/$defs/ClassificationResult",
                   "classifier": "#/$defs/ClassifierResult",
-                  "corrections": "#/$defs/CorrectionsResult",
-                  "review": "#/$defs/ReviewResult"
+                  "review_events": "#/$defs/ReviewEventsResult"
                 },
                 "propertyName": "kind"
               },
               "oneOf": [
                 {
-                  "$ref": "#/$defs/CorrectionsResult"
-                },
-                {
-                  "$ref": "#/$defs/ReviewResult"
+                  "$ref": "#/$defs/ReviewEventsResult"
                 },
                 {
                   "$ref": "#/$defs/ClassifierResult"
@@ -5106,17 +5043,13 @@
                 "mapping": {
                   "classification": "#/$defs/ClassificationResult",
                   "classifier": "#/$defs/ClassifierResult",
-                  "corrections": "#/$defs/CorrectionsResult",
-                  "review": "#/$defs/ReviewResult"
+                  "review_events": "#/$defs/ReviewEventsResult"
                 },
                 "propertyName": "kind"
               },
               "oneOf": [
                 {
-                  "$ref": "#/$defs/CorrectionsResult"
-                },
-                {
-                  "$ref": "#/$defs/ReviewResult"
+                  "$ref": "#/$defs/ReviewEventsResult"
                 },
                 {
                   "$ref": "#/$defs/ClassifierResult"
@@ -5166,27 +5099,6 @@
       "title": "IncompleteResponse",
       "type": "object"
     },
-    "Policy": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "const": "captain-review",
-          "title": "Id",
-          "type": "string"
-        },
-        "version": {
-          "const": "1",
-          "title": "Version",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "version"
-      ],
-      "title": "Policy",
-      "type": "object"
-    },
     "PrepareClassifier": {
       "additionalProperties": false,
       "properties": {
@@ -5232,98 +5144,6 @@
         "classifier"
       ],
       "title": "PrepareClassifier",
-      "type": "object"
-    },
-    "PrepareCorrections": {
-      "additionalProperties": false,
-      "properties": {
-        "anchors": {
-          "items": {
-            "$ref": "#/$defs/Core_EventRef"
-          },
-          "maxItems": 256,
-          "title": "Anchors",
-          "type": "array"
-        },
-        "deadline_unix_ms": {
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
-          "title": "Deadline Unix Ms",
-          "type": "integer"
-        },
-        "feedback": {
-          "items": {
-            "maxLength": 1048576,
-            "type": "string"
-          },
-          "maxItems": 256,
-          "title": "Feedback",
-          "type": "array"
-        },
-        "id": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Id",
-          "type": "string"
-        },
-        "limits": {
-          "$ref": "#/$defs/Core_Limits"
-        },
-        "operation": {
-          "const": "prepare_corrections",
-          "title": "Operation",
-          "type": "string"
-        },
-        "path": {
-          "maxLength": 4096,
-          "minLength": 1,
-          "pattern": "^/",
-          "title": "Path",
-          "type": "string"
-        },
-        "policy": {
-          "$ref": "#/$defs/Policy"
-        },
-        "repo": {
-          "anyOf": [
-            {
-              "maxLength": 4096,
-              "minLength": 1,
-              "pattern": "^/",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Repo"
-        },
-        "schema": {
-          "const": "captain.transcript/1",
-          "title": "Schema",
-          "type": "string"
-        },
-        "source_revision": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Source Revision",
-          "type": "string"
-        }
-      },
-      "required": [
-        "schema",
-        "id",
-        "deadline_unix_ms",
-        "limits",
-        "path",
-        "policy",
-        "operation",
-        "source_revision",
-        "anchors",
-        "feedback",
-        "repo"
-      ],
-      "title": "PrepareCorrections",
       "type": "object"
     },
     "PrepareHookView": {
@@ -5389,44 +5209,20 @@
       "title": "PrepareHookView",
       "type": "object"
     },
-    "PrepareReview": {
+    "ReviewEvents": {
       "additionalProperties": false,
       "properties": {
-        "claude_config_dir": {
-          "anyOf": [
-            {
-              "maxLength": 4096,
-              "minLength": 1,
-              "pattern": "^/",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Claude Config Dir"
+        "context_events": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Context Events",
+          "type": "integer"
         },
         "deadline_unix_ms": {
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991,
           "title": "Deadline Unix Ms",
           "type": "integer"
-        },
-        "decision_log_path": {
-          "anyOf": [
-            {
-              "maxLength": 4096,
-              "minLength": 1,
-              "pattern": "^/",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Decision Log Path"
         },
         "id": {
           "maxLength": 256,
@@ -5437,176 +5233,117 @@
         "limits": {
           "$ref": "#/$defs/Core_Limits"
         },
-        "min_confidence": {
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Min Confidence",
-          "type": "number"
-        },
-        "min_confidence_fix": {
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Min Confidence Fix",
-          "type": "number"
-        },
         "operation": {
-          "const": "prepare_review",
+          "const": "review_events",
           "title": "Operation",
           "type": "string"
-        },
-        "path": {
-          "maxLength": 4096,
-          "minLength": 1,
-          "pattern": "^/",
-          "title": "Path",
-          "type": "string"
-        },
-        "policy": {
-          "$ref": "#/$defs/Policy"
-        },
-        "repo_key": {
-          "anyOf": [
-            {
-              "maxLength": 1048576,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Repo Key"
         },
         "schema": {
           "const": "captain.transcript/1",
           "title": "Schema",
           "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/Core_View"
+        },
+        "watermark": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Watermark"
         }
       },
       "required": [
         "schema",
         "id",
+        "operation",
         "deadline_unix_ms",
         "limits",
-        "path",
-        "policy",
-        "operation",
-        "min_confidence",
-        "min_confidence_fix"
+        "view",
+        "watermark",
+        "context_events"
       ],
-      "title": "PrepareReview",
+      "title": "ReviewEvents",
       "type": "object"
     },
-    "PreparedCorrection": {
+    "ReviewEventsResult": {
       "additionalProperties": false,
       "properties": {
-        "anchor": {
-          "$ref": "#/$defs/Core_EventRef"
+        "caught_up": {
+          "title": "Caught Up",
+          "type": "boolean"
         },
-        "choices": {
-          "items": {
-            "$ref": "#/$defs/CorrectionChoice"
-          },
-          "maxItems": 12,
-          "title": "Choices",
-          "type": "array"
+        "event_start": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Event Start",
+          "type": "integer"
         },
-        "prompt": {
-          "maxLength": 1048576,
-          "title": "Prompt",
+        "fresh_start": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Fresh Start",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "review_events",
+          "title": "Kind",
           "type": "string"
-        }
-      },
-      "required": [
-        "anchor",
-        "prompt",
-        "choices"
-      ],
-      "title": "PreparedCorrection",
-      "type": "object"
-    },
-    "ReviewResult": {
-      "additionalProperties": false,
-      "properties": {
-        "candidates_json": {
+        },
+        "record_schema": {
+          "const": "cc-transcript.event/1",
+          "title": "Record Schema",
+          "type": "string"
+        },
+        "records_json": {
           "items": {
             "maxLength": 1048576,
             "type": "string"
           },
           "maxItems": 256,
-          "title": "Candidates Json",
+          "title": "Records Json",
           "type": "array"
         },
-        "canonical_path": {
-          "maxLength": 4096,
-          "minLength": 1,
-          "pattern": "^/",
-          "title": "Canonical Path",
-          "type": "string"
+        "reset": {
+          "title": "Reset",
+          "type": "boolean"
         },
-        "cwd": {
-          "anyOf": [
-            {
-              "maxLength": 4096,
-              "minLength": 1,
-              "pattern": "^/",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Cwd"
+        "skipped": {
+          "items": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 256,
+          "title": "Skipped",
+          "type": "array"
         },
-        "disposition": {
-          "enum": [
-            "eligible",
-            "reviewer_session",
-            "no_repo"
-          ],
-          "title": "Disposition",
-          "type": "string"
-        },
-        "kind": {
-          "const": "review",
-          "title": "Kind",
-          "type": "string"
-        },
-        "mtime_ns": {
-          "pattern": "^[0-9]+$",
-          "title": "Mtime Ns",
-          "type": "string"
-        },
-        "repo_key": {
-          "anyOf": [
-            {
-              "maxLength": 1048576,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Repo Key"
-        },
-        "source_revision": {
+        "watermark": {
           "maxLength": 256,
           "minLength": 1,
-          "title": "Source Revision",
+          "title": "Watermark",
           "type": "string"
         }
       },
       "required": [
         "kind",
-        "source_revision",
-        "canonical_path",
-        "mtime_ns",
-        "repo_key",
-        "cwd",
-        "disposition",
-        "candidates_json"
+        "record_schema",
+        "records_json",
+        "event_start",
+        "fresh_start",
+        "skipped",
+        "watermark",
+        "caught_up",
+        "reset"
       ],
-      "title": "ReviewResult",
+      "title": "ReviewEventsResult",
       "type": "object"
     },
     "SubmitClassifier": {
@@ -5760,19 +5497,15 @@
           "discriminator": {
             "mapping": {
               "prepare_classifier": "#/$defs/PrepareClassifier",
-              "prepare_corrections": "#/$defs/PrepareCorrections",
               "prepare_hook_view": "#/$defs/PrepareHookView",
-              "prepare_review": "#/$defs/PrepareReview",
+              "review_events": "#/$defs/ReviewEvents",
               "submit_classifier": "#/$defs/SubmitClassifier"
             },
             "propertyName": "operation"
           },
           "oneOf": [
             {
-              "$ref": "#/$defs/PrepareReview"
-            },
-            {
-              "$ref": "#/$defs/PrepareCorrections"
+              "$ref": "#/$defs/ReviewEvents"
             },
             {
               "$ref": "#/$defs/PrepareHookView"

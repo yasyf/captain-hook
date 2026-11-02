@@ -8,7 +8,7 @@ import pytest
 
 from captain_hook import cli
 from captain_hook.snapshots.client import CURRENT_CLIENT, SnapshotClient
-from captain_hook.snapshots.worker import empty_usage
+from captain_hook.testing.snapshots import empty_usage
 from captain_hook.types import Event
 from captain_hook.worker.protocol import ProtocolError, decode_snapshot_reply, read_message
 from captain_hook.worker.runtime import ProductRuntime

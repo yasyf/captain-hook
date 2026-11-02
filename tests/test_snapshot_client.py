@@ -27,7 +27,7 @@ from captain_hook.snapshots.client import (
     fails_open,
     foreground_seconds,
 )
-from captain_hook.snapshots.worker import empty_usage, failure
+from captain_hook.testing.snapshots import empty_usage, failure
 
 
 def response(request, data, *, cursor=None):
