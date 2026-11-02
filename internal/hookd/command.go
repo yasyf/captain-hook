@@ -16,6 +16,7 @@ import (
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
+	"github.com/yasyf/daemonkit/artifact"
 )
 
 const (
@@ -398,6 +399,15 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	store, err := artifact.DefaultStore()
+	if err == nil {
+		var removed []artifact.ToolEntry
+		removed, err = pruneProductToolEnvs(store, newProcSource(), Build)
+		fmt.Fprintf(stderr, "captain package: pruned %d old tool envs\n", len(removed))
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "captain package: prune old tool envs: %v\n", err)
 	}
 	return 0
 }
