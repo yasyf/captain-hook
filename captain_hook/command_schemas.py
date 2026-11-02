@@ -191,6 +191,7 @@ FD = CommandSchema(
         ),
         Option("command", ("-x", "--exec", "-X", "--exec-batch"), until=((";",),)),
     ),
+    clustered_values=True,
 )
 
 DU = CommandSchema(
@@ -226,6 +227,7 @@ DU = CommandSchema(
             bool,
         ),
     ),
+    clustered_values=True,
 )
 
 GIT_PUSH = CommandSchema(

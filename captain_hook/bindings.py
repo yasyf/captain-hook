@@ -16,8 +16,8 @@ ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=")
 MUTATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?=|\(\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|\+\+|--|[-+*/%]=)")
 REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 SPECIAL_PARAMETER = re.compile(r"[0-9@*#?$!_-]")
-GUARDED = re.compile(r"#|(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)(?::\?|:[-=][^}])")
-QUOTED_LIST = re.compile(r'"\$(?:@|\{[A-Za-z_][A-Za-z0-9_]*\[[@*]\]\})"')
+GUARDED = re.compile(r"#|(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)(?::\?|:[-=][^}$`])")
+QUOTED_LIST = re.compile(r'"\$(?:@|\{[A-Za-z_][A-Za-z0-9_]*\[@\]\})"')
 WORD_BREAK = frozenset(" \t\n;&|()<>")
 OPERATORS = (
     "<<<",
@@ -321,12 +321,17 @@ def references(raw: str) -> frozenset[str]:
     return frozenset(match.group(1) for match in REFERENCE.finditer(raw))
 
 
+def filled(binding: Binding | None) -> bool:
+    """Whether every value ``binding`` can hold is non-blank."""
+    return isinstance(binding, Known) and all(candidate.strip() for candidate in binding.candidates)
+
+
 def droppable(raw: str) -> bool:
     """Whether ``raw`` is built only from expansions the shell drops when they expand to nothing.
 
     Unquoted parameters and command substitutions qualify, and so do a quoted ``"$@"`` or
     ``"${name[@]}"``. A literal character, a quoted part, arithmetic, or a parameter guarded by
-    ``${name:?}``, ``${#name}``, or a non-empty ``${name:-default}`` keeps the word.
+    ``${name:?}``, ``${#name}``, or a ``${name:-default}`` whose default starts with a literal keeps the word.
     """
     index = 0
     while index < len(raw):
@@ -683,6 +688,7 @@ class Walk:
                 self.pending_loop = len(self.scope.events)
                 self.bind(Event(words[0].start, name, binding))
             case [name, *_] if NAME.fullmatch(name) is not None:
+                self.pending_loop = len(self.scope.events)
                 self.bind(Event(words[0].start, name, Unknown(None)))
             case _:
                 pass

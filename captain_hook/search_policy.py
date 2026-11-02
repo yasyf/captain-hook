@@ -1031,16 +1031,22 @@ def lists_home_or_pool(arguments: Arguments) -> bool:
 
 
 def vanishing(words: Iterable[Word], arguments: Arguments, *, lifted: bool = True) -> bool:
-    written = tuple(word for word in words if word.span is not None)
+    written = tuple(word for word in words if word.span is not None or word.value is None)
     return not arguments.unread and (
         all(map(arguments.call.vanishes, written)) if written else lifted and arguments.call.substituted
     )
 
 
+def lifted_root(arguments: Arguments, operands: tuple[Word, ...]) -> bool:
+    return bool(operands) and arguments.call.lifted_after(operands[0])
+
+
 def pattern_roots_vanish(arguments: Arguments) -> bool:
     operands = arguments.words.get("operands", ())
     pattern_given = any(arguments.values.get(role) for role in PATTERN_ROLES)
-    return vanishing(operands[0 if pattern_given else 1 :], arguments, lifted=pattern_given or bool(operands))
+    return vanishing(
+        operands[0 if pattern_given else 1 :], arguments, lifted=pattern_given or lifted_root(arguments, operands)
+    )
 
 
 def find_roots_vanish(arguments: Arguments) -> bool:
@@ -1049,7 +1055,9 @@ def find_roots_vanish(arguments: Arguments) -> bool:
 
 def fd_roots_vanish(arguments: Arguments) -> bool:
     operands = arguments.words.get("operands", ())
-    return vanishing((*operands[1:], *arguments.words.get("search_path", ())), arguments, lifted=bool(operands))
+    return vanishing(
+        (*operands[1:], *arguments.words.get("search_path", ())), arguments, lifted=lifted_root(arguments, operands)
+    )
 
 
 def du_roots_vanish(arguments: Arguments) -> bool:

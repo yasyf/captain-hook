@@ -13,16 +13,18 @@ from cc_transcript.literals import LITERALS
 from captain_hook.bindings import (
     Known,
     Literal,
+    Ref,
     Resolved,
     Scope,
     Unknown,
     Unresolved,
     dequote,
     droppable,
-    references,
+    filled,
     segments,
     skip_group,
     skip_quoted,
+    tokens,
 )
 from captain_hook.util.globbing import GLOB_LIMIT, glob_matches
 from captain_hook.util.paths import resolve_target
@@ -348,20 +350,37 @@ class Call:
     def vanishes(self, word: Word) -> bool:
         """Whether the shell can drop ``word`` as empty, leaving the program to run on its default operand.
 
-        The word must be :func:`~captain_hook.bindings.droppable`. A ``for`` variable never
-        vanishes, and a word the call can :meth:`resolve` vanishes only when a candidate is blank.
+        The word must be :func:`~captain_hook.bindings.droppable`. A word with a ``for`` variable
+        or a parameter every assignment set non-blank never vanishes, and a word the call can
+        :meth:`resolve` vanishes only when a candidate is blank.
         """
         if word.value is not None or not droppable(word.raw):
             return False
         scope, offset = self.cmd.scope_for(self, word)
-        names = references(word.raw)
-        if offset is not None and names and all(scope.looped(name, offset) for name in names):
+        if offset is not None and any(
+            isinstance(part, Ref) and (scope.looped(part.name, offset) or filled(scope.lookup(part.name, offset)))
+            for part in segments(word.raw) or ()
+        ):
             return False
         match self.resolve(word):
             case Resolved(candidates, _):
                 return any(not candidate.split() for candidate in candidates)
             case _:
                 return True
+
+    def lifted_after(self, word: Word) -> bool:
+        """Whether a bare command substitution the parser lifted out of this call's words is written after ``word``."""
+        if not self.substituted or self.nested or self.source.span is None or word.span is None:
+            return False
+        start, end = (self.cmd.char_offset(offset) for offset in self.source.span)
+        after = self.cmd.char_offset(word.span[1])
+        return any(
+            not token.operator
+            and token.raw.startswith(("$(", "`"))
+            and droppable(token.raw)
+            and start + token.start >= after
+            for token in tokens(self.cmd.raw[start:end])
+        )
 
     def resolved_targets(self, words: tuple[Word, ...]) -> Targets:
         """``words`` as targets, each same-line expansion the call can :meth:`resolve` expanded to its candidates."""
