@@ -96,6 +96,79 @@ def test_native_bash_payload_preserves_focused_searches(search_repo: Path, comma
     assert check(payload(command, search_repo)) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg -l --max-count 1 -e addVolume -g '*.sh' -g '*.py' -g '*.go' -g '*.md "
+        "{home}/.claude/plugins/cache {home}/.claude/plugins/marketplaces",
+        "rg -g '*.py' needle {home}",
+        "rg -tpy needle {home}/.claude/worktrees",
+        "rg -g '*.py' needle {home}/.claude/plugins/cache",
+        "grep -r --include='*.py' needle {home}/.claude/plugins/cache",
+        "ugrep -r -tpy needle {home}/.claude/plugins/marketplaces",
+        "rg --files -g '*.py' {home}/.claude/plugins/cache",
+        "rg --files {home}/.claude/plugins/cache/fixture-marketplace",
+        "rg --files {home}/.claude/plugins/cache/fixture-marketplace/fixture-plugin",
+    ],
+)
+def test_filename_filters_do_not_bound_multi_checkout_roots(search_repo: Path, command: str) -> None:
+    output = check(payload(command.format(home=Path.home()), search_repo))
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("home_cwd", [True, False])
+def test_filtered_implicit_search_uses_its_working_directory(search_repo: Path, home_cwd: bool) -> None:
+    output = check(payload("rg -g '*.py' needle", Path.home() if home_cwd else search_repo))
+    if home_cwd:
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    else:
+        assert output is None
+
+
+@pytest.mark.parametrize("collection", ["Code", "repos", "Library", ".cache", ".codex", ".vcache", ".vcache/scratch"])
+def test_filename_filters_require_a_focused_home_collection_path(search_repo: Path, collection: str) -> None:
+    root = Path.home() / collection
+    focused = root / "focused"
+    focused.mkdir(parents=True)
+    for flags in ("", "-g '*.py'"):
+        output = check(payload(f"rg {flags} needle {root}", Path.home()))
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert check(payload(f"rg {flags} needle {focused}", Path.home())) is None
+
+
+def test_recursive_path_globs_do_not_bound_collection_traversal(search_repo: Path) -> None:
+    root = Path.home() / "Code"
+    focused = root / "focused"
+    focused.mkdir(parents=True)
+    output = check(payload(f"rg needle {root}/**/*.py", Path.home()))
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert check(payload(f"rg needle {focused}/**/*.py", Path.home())) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg -g '*.py' needle {version}",
+        "grep -r --include='*.py' needle {version}",
+        "ugrep -r -tpy needle {version}",
+        "rg --files -g '*.py' {version}",
+        "rg needle {version}/specific.py",
+        "rg --help {cache}",
+        "rg --type-list {cache}",
+    ],
+)
+def test_search_guard_preserves_named_plugin_versions(search_repo: Path, command: str) -> None:
+    cache = Path.home() / ".claude" / "plugins" / "cache"
+    version = cache / "fixture-marketplace" / "fixture-plugin" / "1.0"
+    version.mkdir(parents=True)
+    (version / "specific.py").write_text("needle\n")
+    assert check(payload(command.format(version=version, cache=cache), search_repo)) is None
+
+
 def test_unrelated_native_tools_are_not_reinterpreted(search_repo: Path) -> None:
     raw = payload("rg --files ~", search_repo)
     raw["tool_name"] = "Read"
