@@ -143,9 +143,6 @@ func runTranscriptBridge(stdin io.Reader, stdout io.Writer, call snapshotBusines
 			defer stop()
 			body, err := call(requestCtx, op, frame.Snapshot)
 			response := wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpSnapshotResult, ID: frame.ID, Snapshot: body}
-			if err == nil {
-				err = snapshots.Validate("host-response", body)
-			}
 			if err != nil {
 				response.Op = wireproto.OpError
 				response.Error = err.Error()

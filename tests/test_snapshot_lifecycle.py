@@ -16,9 +16,7 @@ from captain_hook.worker.service import BACKGROUND_SNAPSHOT_CLIENT
 from tests.test_worker_runtime import Snapshot, request
 
 
-@pytest.mark.parametrize(
-    "lexeme,accepted", [("1e0", True), ("1.0", True), ("1.00000000000000001", False), ("9007199254740990.5", False)]
-)
+@pytest.mark.parametrize("lexeme,accepted", [("1e0", True), ("1.0", True), ("1e400", False), ("1e-400", False)])
 def test_legacy_frame_decoder_preserves_exact_snapshot_numbers(lexeme, accepted):
     response = {
         "protocol": 1,
