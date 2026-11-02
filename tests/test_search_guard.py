@@ -187,7 +187,7 @@ def test_standalone_matches_all_registered_search_fixtures(
     with use_state(State()) as state:
         import_pack_module("captain_hook._search_guard_parity", PERFORMANCE_ROOT / "search.py")
         stamp_identity(0, root=PERFORMANCE_ROOT, pack="performance")
-        assert len(state.hooks) == 5
+        assert len(state.hooks) == 6
         for entry in state.hooks:
             assert entry.spec.tests
             for inp in entry.spec.tests:

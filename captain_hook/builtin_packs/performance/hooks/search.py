@@ -218,7 +218,9 @@ rg_searches_broadly = partial(search_policy.rg_searches_broadly, pack_roots=regi
 searches_broadly = partial(search_policy.searches_broadly, pack_roots=registered_pack_roots)
 ugrep_searches_broadly = partial(search_policy.ugrep_searches_broadly, pack_roots=registered_pack_roots)
 
-SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE = search_policy.shell_search_rules(pack_roots=registered_pack_roots)
+SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE, PROTECTED_ROOT_RULE = search_policy.shell_search_rules(
+    pack_roots=registered_pack_roots
+)
 
 
 class BroadMCPGrep(CustomCondition):
@@ -650,5 +652,52 @@ hook(
         Input(command="root=src; du -sh $root$extra"): Allow(),
         Input(command="for dir; do du -sh $dir; done"): Allow(),
         Input(command="echo 'du -sh $dir'"): Allow(),
+    },
+)
+
+
+hook(
+    Event.PreToolUse,
+    only_if=[
+        Tool("Bash"),
+        Or(
+            *(
+                CommandMatches(pattern.schema, only_if=pattern.only_if, skip_if=pattern.skip_if)
+                for pattern in PROTECTED_ROOT_RULE.patterns
+            )
+        ),
+    ],
+    message=(PROTECTED_ROOT_RULE.message),
+    block=True,
+    max_fires=None,
+    tests={
+        Input(command="find ~/.claude/plugins -iname SKILL.md -path '*slack*'"): Block(pattern="walks gigabytes"),
+        Input(command="rg -g '*.md' needle ~/.claude/plugins/cache"): Block(),
+        Input(command="grep -rn --include='*.py' needle ~/.claude/plugins/cache/skills/long-running"): Block(),
+        Input(command="rg --files ~/.claude/plugins/marketplaces"): Block(),
+        Input(command="fd SKILL.md ~/.claude"): Block(),
+        Input(command="du -sh ~/.claude/projects"): Block(),
+        Input(command="rg needle ~/.claude/projects/-Users-alice"): Block(),
+        Input(command="ugrep -r -tpy needle ~/.claude/worktrees/captain-hook"): Block(),
+        Input(command="grep -rn --include='*.py' needle ~"): Block(),
+        Input(command="find ~/repos -name '*.md'"): Block(),
+        Input(command="rg -tpy needle ~/repos/claude/worktrees/cc-skills"): Block(),
+        Input(command="du -sh ~/.vcache"): Block(),
+        Input(command="fd -e py needle ~/.vcache/prek"): Block(),
+        Input(command="rg needle ~/.orca/workspaces"): Block(),
+        Input(command="find /tmp -name '*.log'"): Block(),
+        Input(command="rg needle ~/.claude/plugins/cache/skills/long-running/0.7.861"): Allow(),
+        Input(command="find ~/.claude/plugins/marketplaces/skills -name SKILL.md"): Allow(),
+        Input(command="rg needle ~/.claude/projects/-Users-alice/memory"): Allow(),
+        Input(command="grep -rn needle ~/.claude/worktrees/captain-hook/lane"): Allow(),
+        Input(command="rg -tpy needle ~/repos/claude/worktrees/cc-skills/lane"): Allow(),
+        Input(command="fd -e py needle ~/.vcache/scratch/my-lane"): Allow(),
+        Input(command="du -sh ~/repos/monorepo/node_modules"): Allow(),
+        Input(command="find ~/.claude/plugins -maxdepth 2 -name '*.json'"): Allow(),
+        Input(command="rg needle ~/.claude/skills"): Allow(),
+        Input(command="grep -n needle ~/.claude/settings.json"): Allow(),
+        Input(command="cat ~/.claude/plugins/installed_plugins.json | rg needle"): Allow(),
+        Input(command="rg needle src", cwd="/repo"): Allow(),
+        Input(command="echo 'find ~/.claude/plugins -name x'"): Allow(),
     },
 )

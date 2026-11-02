@@ -41,6 +41,7 @@ from captain_hook.review.repo import resolve_repo_key
 from captain_hook.settings import resolve_state_dir
 from captain_hook.types import Event
 from captain_hook.util import reqenv
+from captain_hook.util.paths import resolve_claude_config_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from captain_hook.review.store import ReviewStore
 
 SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
+PLUGIN_ROOT_ENV = "CLAUDE_CODE_PLUGIN_CACHE_DIR"
 BRAIN_TIER: TModel = "medium"
 BRAIN_ALLOWED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "Agent")
 DISPATCH_EVENTS = frozenset({Event.SessionStart, Event.SessionEnd, Event.Stop})
@@ -441,6 +443,10 @@ def brain_argv(*, max_turns: int, max_budget_usd: float) -> list[str]:
     ]
 
 
+def brain_plugin_root() -> Path:
+    return resolve_claude_config_dir() / "captain-hook" / "headless-plugins"
+
+
 def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
     """Runs the headless PR-drafting brain over the repo's eligible candidates.
 
@@ -452,7 +458,10 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     cannot interrupt this blocking call, so the brain carries its own wall-clock
     bound. The prompt carries the reviewer marker so the brain's own SessionEnd
     self-skips, and ``CAPT_HOOK_SPAWNED=1`` keeps its SessionEnd hook from
-    re-spawning the reviewer.
+    re-spawning the reviewer. The brain loads its one plugin through ``--plugin-dir``,
+    so ``CLAUDE_CODE_PLUGIN_CACHE_DIR`` points it at a private plugin root, and its
+    startup neither sweeps the shared plugin cache for orphans nor re-clones every
+    known marketplace.
 
     Args:
         transcript: The just-ended session's transcript, named in the prompt.
@@ -471,7 +480,7 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
                 brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
                 input=brain_prompt(transcript).encode(),
                 cwd=repo_root,
-                env=reqenv.env_map() | {SPAWNED_ENV: "1"},
+                env=reqenv.env_map() | {SPAWNED_ENV: "1", PLUGIN_ROOT_ENV: str(brain_plugin_root())},
                 stdout=log,
                 stderr=log,
                 check=False,

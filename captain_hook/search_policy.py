@@ -73,6 +73,49 @@ BROAD_ROOTS = PathMatches(
 )
 
 
+PROTECTED_ROOTS = PathMatches(
+    (
+        "~",
+        "~/.claude",
+        "~/.claude/plugins",
+        "~/.claude/plugins/**",
+        "~/.claude/projects",
+        "~/.claude/projects/**",
+        "~/.claude/worktrees",
+        "~/.claude/worktrees/*",
+        "~/.claude/scratch",
+        "~/.claude/scratch/*",
+        "~/.orca",
+        "~/.orca/workspaces",
+        "~/.orca/workspaces/*",
+        "~/repos",
+        "~/repos/claude",
+        "~/repos/claude/worktrees",
+        "~/repos/claude/worktrees/*",
+        "~/repos/orca",
+        "~/repos/orca/workspaces",
+        "~/repos/orca/workspaces/*",
+        "~/.vcache",
+        "~/.vcache/**",
+        *(pattern for root in TEMP_ROOTS for pattern in (str(root), f"{root}/*", f"{root}/*/*/T")),
+    )
+)
+
+
+SCOPED_UNITS = PathMatches(
+    (
+        "~/.claude/plugins/cache/*/*/*",
+        "~/.claude/plugins/cache/*/*/*/**",
+        "~/.claude/plugins/marketplaces/*",
+        "~/.claude/plugins/marketplaces/*/**",
+        "~/.claude/projects/*/memory",
+        "~/.claude/projects/*/memory/**",
+        "~/.vcache/scratch/*",
+        "~/.vcache/scratch/*/**",
+    )
+)
+
+
 PATTERN_ROLES = ("patterns", "pattern_files", "query")
 
 
@@ -1064,6 +1107,41 @@ def du_roots_vanish(arguments: Arguments) -> bool:
     return "from" not in arguments.values and vanishing(arguments.words.get("operands", ()), arguments)
 
 
+def protected(target: Target) -> bool:
+    if target.value is None or names_files(target) or (root := written(target)) is None or root.is_file():
+        return False
+    anchor = Target(str(root), str(root), None)
+    return PROTECTED_ROOTS(anchor) and not SCOPED_UNITS(anchor)
+
+
+def any_protected(roots: Targets, cwd: Path | None) -> bool:
+    return any(map(protected, roots or (Target(".", ".", cwd),)))
+
+
+def searches_protected(arguments: Arguments) -> bool:
+    return any_protected(named_roots(arguments), arguments.cwd)
+
+
+def rg_searches_protected(arguments: Arguments) -> bool:
+    return any_protected(
+        arguments.paths("operands") if lists_files(arguments) else named_roots(arguments), arguments.cwd
+    )
+
+
+def finds_protected(arguments: Arguments) -> bool:
+    return any_protected(arguments.paths("roots"), arguments.cwd)
+
+
+def fd_searches_protected(arguments: Arguments) -> bool:
+    operands = arguments.words.get("operands", ())
+    roots = arguments.call.resolved_targets((*operands[1:], *arguments.words.get("search_path", ())))
+    return any_protected(roots, arguments.cwd)
+
+
+def du_protected(arguments: Arguments) -> bool:
+    return any_protected(arguments.paths("operands"), arguments.cwd)
+
+
 def mcp_searches_broadly(
     fields: dict[str, Any], cwd: Path | None, *, pack_roots: Callable[[], tuple[Path, ...]]
 ) -> bool:
@@ -1119,6 +1197,12 @@ FIND_MESSAGE = (
     "A `find` rooted at a filesystem, home, or checkout pool is a broad filesystem se"
     "arch that walks every dependency tree. Run `ccx repo locate <name>` instead, nam"
     "e a focused directory, or bound the listing with `-maxdepth 2`."
+)
+PROTECTED_ROOT_MESSAGE = (
+    "A recursive search rooted at `~`, `~/.claude` or its `plugins`, `projects` and `"
+    "worktrees`, `~/repos`, `~/.vcache`, `~/.orca` or a temp root walks gigabytes. Na"
+    "me one checkout, scratch lane or plugin version dir (`claude plugin list` gives "
+    "the version), or read transcripts with `cc-transcript grep`."
 )
 EMPTY_ROOT_MESSAGE = (
     "A search whose only path is an unquoted expansion such as `$dir` or `$(...)` wal"
@@ -1179,6 +1263,19 @@ def shell_search_rules(*, pack_roots: Callable[[], tuple[Path, ...]]) -> tuple[S
                     FD, only_if=(fd_roots_vanish,), skip_if=(informational, OptionIs("max_depth", range(3)))
                 ),
                 CommandPattern(DU, only_if=(du_roots_vanish,), skip_if=(informational,)),
+            ),
+        ),
+        ShellSearchRule(
+            PROTECTED_ROOT_MESSAGE,
+            (
+                CommandPattern(GREP, only_if=(recursive, searches_protected), skip_if=(informational,)),
+                CommandPattern(UGREP, only_if=(recursive, searches_protected), skip_if=(informational,)),
+                CommandPattern(RG, only_if=(rg_searches_protected,), skip_if=(informational, reads_stdin)),
+                CommandPattern(FIND, only_if=(finds_protected,), skip_if=(OptionIs("max_depth", range(3)),)),
+                CommandPattern(
+                    FD, only_if=(fd_searches_protected,), skip_if=(informational, OptionIs("max_depth", range(3)))
+                ),
+                CommandPattern(DU, only_if=(du_protected,), skip_if=(informational,)),
             ),
         ),
     )
