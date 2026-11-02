@@ -142,7 +142,8 @@ func TestHostConfigurationGrowsRetentionByItsFactCacheBudget(t *testing.T) {
 	if host["max_prepared_fact_memory_bytes"] != 512<<20 || host["max_retained_bytes"] != 4480<<20 {
 		t.Fatalf("host fact memory=%d retained=%d", host["max_prepared_fact_memory_bytes"], host["max_retained_bytes"])
 	}
-	if backgroundHeadroom(host) != backgroundHeadroom(library) || backgroundHeadroom(host) != 384<<20 {
+	grown := HostRetainedBytes - library["max_retained_bytes"]
+	if backgroundHeadroom(host) != backgroundHeadroom(library)+grown || backgroundHeadroom(host) != 3456<<20 {
 		t.Fatalf("background headroom host=%d library=%d", backgroundHeadroom(host), backgroundHeadroom(library))
 	}
 	for key, want := range library {
