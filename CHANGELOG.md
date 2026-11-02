@@ -23,8 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     runs the previous registry while the rebuild finishes.
   - Session state that comes back unchanged is no longer rewritten. Of the prompt-time state
     writes in a day, 94% were unchanged, and each one could take up to 19 s while the disk was busy.
-  - A hook waiting on a session-state lock stops waiting once its request gives up on it, instead of
-    holding a fan-out thread until the lock frees.
 - **`capt-hook helper install` installs the latest release.** It landed whatever version the
   Homebrew Cellar held and reported success once the host reached that version. A Cellar behind a
   hand-installed host was package-installed over it, and a Cellar behind the latest release ended

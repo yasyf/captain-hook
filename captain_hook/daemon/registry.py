@@ -119,6 +119,10 @@ def marker_lock(path: Path) -> FileLock:
     return FileLock(str(path.with_name(f"{path.name}.lock")))
 
 
+def request_stopped() -> bool:
+    return reqenv.abandon_signal().is_set() or reqenv.deadline_within(0)
+
+
 def shared_generation(path: Path) -> LanguageGeneration | None:
     try:
         text = path.read_text()
@@ -136,7 +140,7 @@ def _language_markers(root: Path, *, since: float) -> tuple[str, ...]:
     ):
         return hit.languages
     if hit is None or since != ANY_AGE:
-        return _renew(root, path, stamp, since, cancel_check=reqenv.stopped)
+        return _renew(root, path, stamp, since, cancel_check=request_stopped)
     try:
         return _renewal(root, path, stamp).result(timeout=MARKER_WAIT_SECONDS)
     except TimeoutError:

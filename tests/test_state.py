@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import os
 import re
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from filelock import FileLock, Timeout
 from pydantic import BaseModel
 
 import captain_hook
@@ -28,7 +24,6 @@ from captain_hook.state import (
     record_fire,
 )
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-from captain_hook.util import reqenv
 
 PACKS_DIR = Path(captain_hook.__file__).resolve().parent / "builtin_packs"
 
@@ -177,7 +172,8 @@ class TestStateStore:
         assert slot.get() is None
 
     def test_mutate_rewrites_only_a_changed_model(self, tmp_path: Path) -> None:
-        slot = SessionStore(tmp_path)[DefaultModel]
+        store = SessionStore(tmp_path)
+        slot = store[DefaultModel]
         slot.set(DefaultModel(value=1))
         with patch("captain_hook.util.fs.os.replace", wraps=os.replace) as persist:
             with slot.mutate() as model:
@@ -186,37 +182,22 @@ class TestStateStore:
             with slot.mutate() as model:
                 model.value = 2
             assert persist.call_count == 1
-            slot.delete()
             slot.set(DefaultModel(value=2))
-            assert persist.call_count == 2
+            assert persist.call_count == 1
         assert slot.get() == DefaultModel(value=2)
 
-    @pytest.mark.parametrize("stop", ["abandon", "deadline", "fan-out"])
-    def test_mutate_stops_waiting_on_a_held_lock_once_nobody_waits_on_the_hook(self, tmp_path: Path, stop: str) -> None:
-        slot = SessionStore(tmp_path)[DefaultModel]
-        abandon, cutoff = threading.Event(), reqenv.Cutoff()
-        deadline_unix_ms = int((time.time() + 0.5) * 1000) if stop == "deadline" else 0
-        overrides = reqenv.RequestOverrides(
-            env={}, cwd=str(tmp_path), client_ppid=1, session_id="s", deadline_unix_ms=deadline_unix_ms, abandon=abandon
-        )
-
-        def wait() -> None:
-            with reqenv.use_request(overrides), reqenv.abandonable(cutoff), slot.mutate() as model:
-                model.value = 9
-
-        assert slot.path is not None
-        with FileLock(str(slot.path.with_name(slot.path.name + ".lock"))), ThreadPoolExecutor(max_workers=1) as pool:
-            waiter = pool.submit(wait)
-            time.sleep(0.2)
-            assert not waiter.done()
-            match stop:
-                case "abandon":
-                    abandon.set()
-                case "fan-out":
-                    cutoff.set()
-            with pytest.raises(Timeout):
-                waiter.result(timeout=10)
-        assert not slot.path.exists()
+    @pytest.mark.parametrize("change", ["deleted", "rewritten"])
+    def test_set_persists_over_whatever_another_slot_left_behind(self, tmp_path: Path, change: str) -> None:
+        store = SessionStore(tmp_path)
+        slot = store[DefaultModel]
+        slot.set(DefaultModel(value=1))
+        match change:
+            case "deleted":
+                store[DefaultModel].delete()
+            case "rewritten":
+                store[DefaultModel].set(DefaultModel(value=5))
+        slot.set(DefaultModel(value=1))
+        assert store[DefaultModel].get() == DefaultModel(value=1)
 
     def test_generic_type(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
