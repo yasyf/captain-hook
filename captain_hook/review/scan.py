@@ -449,7 +449,7 @@ async def ingest(
 
 
 def correction_pages(
-    client: Any, session: Any, batch: Sequence[FeedbackCandidate], repo: str | None
+    client: Any, path: Path, source_revision: str, batch: Sequence[FeedbackCandidate], repo: str | None
 ) -> tuple[list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
     from captain_hook.snapshots.client import EvidenceIncomplete
     from captain_hook.snapshots.review import REVIEW_POLICY
@@ -459,7 +459,8 @@ def correction_pages(
             client.pages(
                 "prepare_corrections",
                 domain=True,
-                view=session.view(),
+                path=str(path),
+                source_revision=source_revision,
                 policy=REVIEW_POLICY,
                 anchors=[asdict(candidate.ref) for candidate in batch],
                 feedback=[candidate.text for candidate in batch],
@@ -472,8 +473,8 @@ def correction_pages(
         if len(batch) == 1:
             return [], [(batch[0].ref, exc)]
     middle = len(batch) // 2
-    first, first_refused = correction_pages(client, session, batch[:middle], repo)
-    second, second_refused = correction_pages(client, session, batch[middle:], repo)
+    first, first_refused = correction_pages(client, path, source_revision, batch[:middle], repo)
+    second, second_refused = correction_pages(client, path, source_revision, batch[middle:], repo)
     return first + second, first_refused + second_refused
 
 
@@ -520,48 +521,48 @@ def prepare_source(
     from captain_hook.snapshots.review import REVIEW_POLICY, ProjectionBudget, decode_candidate
     from captain_hook.util.paths import resolve_claude_config_dir
 
-    session = client.acquire(path)
     budget = ProjectionBudget()
-    try:
-        prepared: dict[str, Any] | None = None
-        candidates: list[str] = []
-        for page in client.pages(
-            "prepare_review",
-            domain=True,
-            view=session.view(),
-            policy=REVIEW_POLICY,
-            min_confidence=settings.min_confidence,
-            min_confidence_fix=settings.min_confidence_fix,
-            repo_key=repo_key,
-            decision_log_path=str(decision_path.absolute())
-            if (decision_path := decisions_db_path()) is not None
-            else None,
-            claude_config_dir=str(resolve_claude_config_dir().absolute()),
-        ):
-            if prepared is None:
-                prepared = dict(page)
-            budget.add(page)
-            candidates.extend(page["candidates_json"])
+    prepared: dict[str, Any] | None = None
+    candidates: list[str] = []
+    for page in client.pages(
+        "prepare_review",
+        domain=True,
+        path=str(path.absolute()),
+        policy=REVIEW_POLICY,
+        min_confidence=settings.min_confidence,
+        min_confidence_fix=settings.min_confidence_fix,
+        repo_key=repo_key,
+        decision_log_path=str(decision_path.absolute()) if (decision_path := decisions_db_path()) is not None else None,
+        claude_config_dir=str(resolve_claude_config_dir().absolute()),
+    ):
         if prepared is None:
-            raise ValueError("review preparation completed without metadata")
-        prepared["candidates_json"] = candidates
-        eligible = [
-            candidate for raw in candidates if (candidate := decode_candidate(raw)[0]).source_kind != HOOK_COMPLAINT
-        ]
-        if eligible:
-            completed = recorded([candidate.ref for candidate in eligible])
-            eligible = [candidate for candidate in eligible if candidate.ref not in completed]
-        corrections: list[dict[str, Any]] = []
-        refused: list[tuple[EventRef, EvidenceIncomplete]] = []
-        for offset in range(0, len(eligible), 256):
-            pages, batch_refused = correction_pages(client, session, eligible[offset : offset + 256], prepared["cwd"])
-            for page in pages:
-                budget.add(page)
-                corrections.extend(page["corrections"])
-            refused.extend(batch_refused)
-        return prepared, corrections, refused
-    finally:
-        session.release()
+            prepared = dict(page)
+        budget.add(page)
+        candidates.extend(page["candidates_json"])
+    if prepared is None:
+        raise ValueError("review preparation completed without metadata")
+    prepared["candidates_json"] = candidates
+    eligible = [
+        candidate for raw in candidates if (candidate := decode_candidate(raw)[0]).source_kind != HOOK_COMPLAINT
+    ]
+    if eligible:
+        completed = recorded([candidate.ref for candidate in eligible])
+        eligible = [candidate for candidate in eligible if candidate.ref not in completed]
+    corrections: list[dict[str, Any]] = []
+    refused: list[tuple[EventRef, EvidenceIncomplete]] = []
+    for offset in range(0, len(eligible), 256):
+        pages, batch_refused = correction_pages(
+            client,
+            Path(prepared["canonical_path"]),
+            prepared["source_revision"],
+            eligible[offset : offset + 256],
+            prepared["cwd"],
+        )
+        for page in pages:
+            budget.add(page)
+            corrections.extend(page["corrections"])
+        refused.extend(batch_refused)
+    return prepared, corrections, refused
 
 
 async def scan_transcript(
