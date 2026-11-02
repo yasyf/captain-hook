@@ -5238,13 +5238,30 @@
           "title": "Operation",
           "type": "string"
         },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
         "schema": {
           "const": "captain.transcript/1",
           "title": "Schema",
           "type": "string"
         },
-        "view": {
-          "$ref": "#/$defs/Core_View"
+        "source_revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Revision"
         },
         "watermark": {
           "anyOf": [
@@ -5266,7 +5283,8 @@
         "operation",
         "deadline_unix_ms",
         "limits",
-        "view",
+        "path",
+        "source_revision",
         "watermark",
         "context_events"
       ],
@@ -5276,6 +5294,13 @@
     "ReviewEventsResult": {
       "additionalProperties": false,
       "properties": {
+        "canonical_path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^/",
+          "title": "Canonical Path",
+          "type": "string"
+        },
         "caught_up": {
           "title": "Caught Up",
           "type": "boolean"
@@ -5295,6 +5320,11 @@
         "kind": {
           "const": "review_events",
           "title": "Kind",
+          "type": "string"
+        },
+        "mtime_ns": {
+          "pattern": "^[0-9]+$",
+          "title": "Mtime Ns",
           "type": "string"
         },
         "record_schema": {
@@ -5325,6 +5355,12 @@
           "title": "Skipped",
           "type": "array"
         },
+        "source_revision": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
         "watermark": {
           "maxLength": 256,
           "minLength": 1,
@@ -5334,6 +5370,9 @@
       },
       "required": [
         "kind",
+        "source_revision",
+        "canonical_path",
+        "mtime_ns",
         "record_schema",
         "records_json",
         "event_start",

@@ -368,6 +368,9 @@ class Bridge:
 
 @dataclass(frozen=True, slots=True)
 class ReviewEvents:
+    source_revision: str
+    canonical_path: str
+    mtime_ns: int
     events: tuple[TranscriptEvent, ...]
     positions: tuple[int, ...]
     fresh_start: int
@@ -690,20 +693,20 @@ class SnapshotClient:
         session.release()
         return classified
 
-    def review_events(
-        self, session: RemoteSession, *, watermark: str | None, context_events: int, max_pages: int
-    ) -> ReviewEvents:
+    def review_events(self, path: Path, *, watermark: str | None, context_events: int, max_pages: int) -> ReviewEvents:
         from cc_transcript.snapshots import SnapshotIncomplete, decode_projection
 
         events: list[TranscriptEvent] = []
         positions: list[int] = []
         fresh_start: int | None = None
+        revision: str | None = None
         pages = 0
         while pages < max_pages:
             [data] = self.pages(
                 "review_events",
                 domain=True,
-                view=session.view(),
+                path=str(path.absolute()),
+                source_revision=revision,
                 watermark=watermark,
                 context_events=context_events if fresh_start is None else 0,
             )
@@ -724,11 +727,21 @@ class SnapshotClient:
                 if position not in skipped
             )
             fresh_start = data["fresh_start"] if fresh_start is None else fresh_start
+            revision = data["source_revision"]
             watermark = data["watermark"]
             pages += bool(positions) and positions[-1] >= fresh_start
             if data["caught_up"]:
                 break
-        return ReviewEvents(tuple(events), tuple(positions), fresh_start, watermark, data["caught_up"])
+        return ReviewEvents(
+            data["source_revision"],
+            data["canonical_path"],
+            int(data["mtime_ns"]),
+            tuple(events),
+            tuple(positions),
+            fresh_start,
+            watermark,
+            data["caught_up"],
+        )
 
     def close_pending(self) -> None:
         self._defer_cleanup = False

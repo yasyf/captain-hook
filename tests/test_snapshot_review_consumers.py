@@ -271,19 +271,18 @@ async def test_prompt_is_frozen_after_first_preparation(monkeypatch):
     assert fidelities == {"key": "full"}
 
 
-async def test_source_preparation_releases_lease_on_incomplete(settings):
-    released = []
-    session = SimpleNamespace(release=lambda: released.append(True))
-
+async def test_source_preparation_pages_events_without_holding_a_lease(settings):
     def review_events(*args, **kwargs):
         raise EvidenceIncomplete("output_limit", "bounded")
 
-    client = SimpleNamespace(acquire=lambda path: session, review_events=review_events)
+    def acquire(path):
+        raise AssertionError("paging review events holds no lease")
+
+    client = SimpleNamespace(acquire=acquire, review_events=review_events)
     with pytest.raises(EvidenceIncomplete):
         await prepare_source(
             client, Path("/unused"), settings, ReviewState(), policy=ReviewPolicy(), recorded=nothing_recorded
         )
-    assert released == [True]
 
 
 async def test_incomplete_source_cannot_advance_scan_checkpoint(store, settings, monkeypatch):

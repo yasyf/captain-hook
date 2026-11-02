@@ -38,7 +38,14 @@ class FixtureSnapshot:
         fresh = int(watermark) if watermark is not None and int(watermark) <= len(self.events) else 0
         start = max(0, fresh - context_events)
         return ReviewEvents(
-            tuple(self.events[start:]), tuple(range(start, len(self.events))), fresh, str(len(self.events)), True
+            self.description["source_revision"],
+            self.description["canonical_path"],
+            int(self.description["mtime_ns"]),
+            tuple(self.events[start:]),
+            tuple(range(start, len(self.events))),
+            fresh,
+            str(len(self.events)),
+            True,
         )
 
 
@@ -76,9 +83,15 @@ class FixtureOwner:
             release=lease.release,
         )
 
-    def review_events(self, session, *, watermark, context_events, max_pages):
-        self.calls.append(("review_events", {"watermark": watermark, "context_events": context_events}))
-        return self.snapshots[session.view()["handle"]["lease_id"]].review_events(watermark, context_events)
+    def review_events(self, path, *, watermark, context_events, max_pages):
+        self.calls.append(
+            ("review_events", {"path": str(path), "watermark": watermark, "context_events": context_events})
+        )
+        try:
+            snapshot = FixtureSnapshot(Path(path), None)
+        except (ValueError, KeyError) as exc:
+            raise EvidenceIncomplete("parse_error", str(exc)) from exc
+        return snapshot.review_events(watermark, context_events)
 
     def pages(self, operation, **arguments):
         self.calls.append((operation, arguments))

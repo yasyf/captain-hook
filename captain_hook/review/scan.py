@@ -553,53 +553,57 @@ async def prepare_source(
 ) -> PreparedSource:
     from captain_hook.snapshots.review import capture_windows, correction_drafts
 
-    session = await asyncio.to_thread(client.acquire, path)
-    try:
-        window = await asyncio.to_thread(
-            client.review_events,
-            session,
-            watermark=state.watermark,
-            context_events=REVIEW_CONTEXT_EVENTS,
-            max_pages=REVIEW_PASS_PAGES,
-        )
-        state = (ReviewState() if window.fresh_start == 0 else state).observe(window.events, window.watermark)
-        prepared = PreparedSource(
-            canonical_path=str(session.path),
-            mtime_ns=int(session.lease.description["mtime_ns"]),
-            repo_key=repo_key or state.repo_key,
-            state=state,
-            caught_up=window.caught_up,
-        )
-        if state.reviewer or prepared.repo_key is None:
-            return prepared
-        events = window.events
-        cwd = Path(state.cwd) if state.cwd is not None else None
-        signals = await fresh_signals(events, bisect_left(window.positions, window.fresh_start), cwd=cwd, policy=policy)
-        kept = await asyncio.to_thread(
-            lambda: collapse_cross_detector(
-                list(
-                    candidates_from(
-                        events,
-                        signals,
-                        capture=lambda anchors: capture_windows(client, session, anchors),
-                        min_confidence=settings.min_confidence,
-                        min_confidence_fix=settings.min_confidence_fix,
-                    )
+    window = await asyncio.to_thread(
+        client.review_events,
+        path,
+        watermark=state.watermark,
+        context_events=REVIEW_CONTEXT_EVENTS,
+        max_pages=REVIEW_PASS_PAGES,
+    )
+    state = (ReviewState() if window.fresh_start == 0 else state).observe(window.events, window.watermark)
+    prepared = PreparedSource(
+        canonical_path=window.canonical_path,
+        mtime_ns=window.mtime_ns,
+        repo_key=repo_key or state.repo_key,
+        state=state,
+        caught_up=window.caught_up,
+    )
+    if state.reviewer or prepared.repo_key is None:
+        return prepared
+    events = window.events
+    cwd = Path(state.cwd) if state.cwd is not None else None
+    signals = await fresh_signals(events, bisect_left(window.positions, window.fresh_start), cwd=cwd, policy=policy)
+
+    def capture(anchors: Sequence[EventRef]) -> list[ContextWindow]:
+        session = client.acquire(Path(window.canonical_path))
+        try:
+            return capture_windows(client, session, anchors)
+        finally:
+            session.release()
+
+    kept = await asyncio.to_thread(
+        lambda: collapse_cross_detector(
+            list(
+                candidates_from(
+                    events,
+                    signals,
+                    capture=capture,
+                    min_confidence=settings.min_confidence,
+                    min_confidence_fix=settings.min_confidence_fix,
                 )
             )
         )
-        eligible = [candidate for _, candidate in kept if candidate.source_kind != HOOK_COMPLAINT]
-        completed = await recorded([candidate.ref for candidate in eligible]) if eligible else set()
-        pending = [candidate for candidate in eligible if candidate.ref not in completed]
-        corrections, refused = await asyncio.to_thread(correction_drafts, events, pending, cwd) if pending else ([], [])
-        return replace(
-            prepared,
-            candidates=tuple((candidate, rule_parts(sig)) for sig, candidate in kept),
-            corrections=tuple(corrections),
-            refused=tuple(refused),
-        )
-    finally:
-        await asyncio.to_thread(session.release)
+    )
+    eligible = [candidate for _, candidate in kept if candidate.source_kind != HOOK_COMPLAINT]
+    completed = await recorded([candidate.ref for candidate in eligible]) if eligible else set()
+    pending = [candidate for candidate in eligible if candidate.ref not in completed]
+    corrections, refused = await asyncio.to_thread(correction_drafts, events, pending, cwd) if pending else ([], [])
+    return replace(
+        prepared,
+        candidates=tuple((candidate, rule_parts(sig)) for sig, candidate in kept),
+        corrections=tuple(corrections),
+        refused=tuple(refused),
+    )
 
 
 async def scan_transcript(
