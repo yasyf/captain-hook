@@ -5267,13 +5267,6 @@
           "title": "Operation",
           "type": "string"
         },
-        "path": {
-          "maxLength": 4096,
-          "minLength": 1,
-          "pattern": "^/",
-          "title": "Path",
-          "type": "string"
-        },
         "policy": {
           "$ref": "#/$defs/Policy"
         },
@@ -5296,11 +5289,8 @@
           "title": "Schema",
           "type": "string"
         },
-        "source_revision": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Source Revision",
-          "type": "string"
+        "view": {
+          "$ref": "#/$defs/Core_View"
         }
       },
       "required": [
@@ -5308,10 +5298,9 @@
         "id",
         "deadline_unix_ms",
         "limits",
-        "path",
+        "view",
         "policy",
         "operation",
-        "source_revision",
         "anchors",
         "feedback",
         "repo"
@@ -5447,13 +5436,6 @@
           "title": "Operation",
           "type": "string"
         },
-        "path": {
-          "maxLength": 4096,
-          "minLength": 1,
-          "pattern": "^/",
-          "title": "Path",
-          "type": "string"
-        },
         "policy": {
           "$ref": "#/$defs/Policy"
         },
@@ -5474,6 +5456,9 @@
           "const": "captain.transcript/1",
           "title": "Schema",
           "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/Core_View"
         }
       },
       "required": [
@@ -5481,7 +5466,7 @@
         "id",
         "deadline_unix_ms",
         "limits",
-        "path",
+        "view",
         "policy",
         "operation",
         "min_confidence",
@@ -5581,17 +5566,10 @@
             }
           ],
           "title": "Repo Key"
-        },
-        "source_revision": {
-          "maxLength": 256,
-          "minLength": 1,
-          "title": "Source Revision",
-          "type": "string"
         }
       },
       "required": [
         "kind",
-        "source_revision",
         "canonical_path",
         "mtime_ns",
         "repo_key",

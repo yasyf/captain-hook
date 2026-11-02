@@ -45,8 +45,8 @@ def compose(core_directory: Path) -> dict[str, dict[str, Any]]:
     definitions.update(result.pop("$defs"))
     for name in ("PrepareReview", "PrepareCorrections", "PrepareHookView"):
         fields = definitions[name]["properties"]
+        fields["view"] = {"$ref": "#/$defs/Core_View"}
         fields["limits"] = {"$ref": "#/$defs/Core_Limits"}
-    definitions["PrepareHookView"]["properties"]["view"] = {"$ref": "#/$defs/Core_View"}
     definitions["PrepareClassifier"]["properties"].update(
         handle={"$ref": "#/$defs/Core_Handle"},
         classifier={"$ref": "#/$defs/Core_Classifier"},

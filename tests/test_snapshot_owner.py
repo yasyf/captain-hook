@@ -578,7 +578,7 @@ def test_owner_binds_registry_content_without_changing_authority():
         return failure(body["id"], "missing", "fixture")
 
     owner = object.__new__(Owner)
-    owner.store = SimpleNamespace(register_tool_registry=register, request_agent=native_call)
+    owner.store = SimpleNamespace(register_tool_registry=register, request=native_call)
     owner.incomplete_type = type("SnapshotIncomplete", (Exception,), {})
     owner.registry_generations = {}
     owner.registry_guard = threading.Lock()
@@ -596,9 +596,7 @@ def owner_with(native_call):
     from captain_hook.snapshots.worker import Owner
 
     owner = object.__new__(Owner)
-    owner.store = SimpleNamespace(
-        register_tool_registry=lambda registry, *, context: "fixture", request_agent=native_call
-    )
+    owner.store = SimpleNamespace(register_tool_registry=lambda registry, *, context: "fixture", request=native_call)
     owner.incomplete_type = SnapshotIncomplete
     owner.registry_generations = {}
     owner.registry_guard = threading.Lock()
@@ -893,27 +891,25 @@ def test_owner_missing_failure_renders_safe_context_through_its_message(logcap):
 
 
 def test_owner_failure_without_counters_renders_them_unknown_and_no_handle(logcap):
-    private = "/fixture/transcript-private.jsonl"
     body = {
         "schema": HOST_SCHEMA,
         "id": "request-2",
         "operation": "prepare_review",
         "policy": {"id": "other", "version": "1"},
-        "path": private,
+        "view": {"handle": {"owner_epoch": "owner", "snapshot_id": "snapshot", "lease_id": "lease-fixture-secret"}},
     }
 
     response = owner_with(lambda *_, **__: pytest.fail("native store was called")).call(body, context(), object(), [])
 
     assert response == failure("request-2", "invalid_request", "unregistered Captain evidence policy")
-    digest = hashlib.sha256(json.dumps({"path": private}, sort_keys=True).encode()).hexdigest()[:16]
     assert re.fullmatch(
         "INFO captain_hook\\.snapshots\\.worker: snapshot request failed: operation='prepare_review' "
-        f"request_id='request-2' deadline_unix_ms=None resource_kind='path' resource_count=1 resource_sha256='{digest}' "
+        "request_id='request-2' deadline_unix_ms=None resource_kind='view' resource_count=None resource_sha256=None "
         "status='invalid_request' elapsed_ms=\\d+\\.\\d usage='unknown' "
         "execution_path='unknown_error' cursor_in_sha256=None cursor_out_sha256=None\n",
         logcap.text,
     )
-    assert private not in logcap.text
+    assert "lease-fixture-secret" not in logcap.text
     assert "owner_epoch" not in logcap.text
 
 

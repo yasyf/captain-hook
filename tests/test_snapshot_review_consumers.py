@@ -285,9 +285,9 @@ async def test_owner_mining_captures_same_borrowed_snapshot(monkeypatch, tmp_pat
     snapshot = SimpleNamespace(
         events=events,
         source_facts=lambda **kwargs: {"cwds": [], "first_user_contains": False},
-        hook_marker_indices=(),
+        prose_rows=lambda: iter(()),
         capture=capture,
-        description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123", "source_revision": "fixture"},
+        description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123"},
         checkpoint=lambda: None,
         consume=lambda **kwargs: None,
         mine_json=lambda spec, formats: _native.mine_events(events, spec, [entry[:3] for entry in formats]),
@@ -321,8 +321,8 @@ async def test_below_confidence_signal_never_materializes_an_event(monkeypatch, 
     snapshot = SimpleNamespace(
         events=NoEvents(),
         source_facts=lambda **kwargs: {"cwds": [], "first_user_contains": False},
-        hook_marker_indices=(),
-        description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123", "source_revision": "fixture"},
+        prose_rows=lambda: iter(()),
+        description={"canonical_path": str(tmp_path / "source.jsonl"), "mtime_ns": "123"},
         checkpoint=lambda: None,
         consume=lambda **kwargs: None,
     )
@@ -339,20 +339,18 @@ async def test_below_confidence_signal_never_materializes_an_event(monkeypatch, 
     assert result["candidates_json"] == []
 
 
-def test_source_preparation_has_no_lease_on_incomplete(settings):
-    calls = []
+def test_source_preparation_releases_lease_on_incomplete(settings):
+    released = []
+    session = SimpleNamespace(view=lambda: {}, release=lambda: released.append(True))
 
     def pages(*args, **kwargs):
-        calls.append((args, kwargs))
         yield {"kind": "review", "candidates_json": [], "cwd": None}
         raise EvidenceIncomplete("output_limit", "bounded")
 
-    client = SimpleNamespace(pages=pages)
+    client = SimpleNamespace(acquire=lambda path: session, pages=pages)
     with pytest.raises(EvidenceIncomplete):
         prepare_source(client, Path("/unused"), settings, recorded=nothing_recorded)
-    assert len(calls) == 1
-    assert calls[0][0] == ("prepare_review",)
-    assert calls[0][1]["path"] == "/unused"
+    assert released == [True]
 
 
 async def test_incomplete_source_cannot_advance_scan_checkpoint(store, settings, monkeypatch):
@@ -713,9 +711,9 @@ def prepared_batches(monkeypatch) -> list[list[str]]:
     batches: list[list[str]] = []
     split = scan_module.correction_pages
 
-    def counted(client, path, source_revision, batch, repo):
+    def counted(client, session, batch, repo):
         batches.append([candidate.ref.event_uuid for candidate in batch])
-        return split(client, path, source_revision, batch, repo)
+        return split(client, session, batch, repo)
 
     monkeypatch.setattr(scan_module, "correction_pages", counted)
     return batches
@@ -852,9 +850,9 @@ def test_corrections_split_a_batch_whose_combined_window_exceeds_the_scope_outpu
     batches: list[int] = []
     split = scan_module.correction_pages
 
-    def counted(client, path, source_revision, batch, repo):
+    def counted(client, session, batch, repo):
         batches.append(len(batch))
-        return split(client, path, source_revision, batch, repo)
+        return split(client, session, batch, repo)
 
     monkeypatch.setattr(scan_module, "correction_pages", counted)
     entries = [

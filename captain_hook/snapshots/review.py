@@ -254,7 +254,7 @@ def decode_candidate(raw: str) -> tuple[FeedbackCandidate, tuple[str, ...]]:
 async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_log: Any) -> dict[str, Any]:
     from cc_transcript.mining import mine_snapshot
 
-    from captain_hook.review.fix import iter_hook_complaint_signals
+    from captain_hook.review.fix import iter_hook_complaint_signals, prose_marker
     from captain_hook.review.routing import PackIndex
     from captain_hook.review.scan import (
         COLLAPSE_DETECTORS,
@@ -277,7 +277,6 @@ async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_
     disposition = "reviewer_session" if facts["first_user_contains"] else "no_repo" if repo is None else "eligible"
     result: dict[str, Any] = {
         "kind": "review",
-        "source_revision": snapshot.description["source_revision"],
         "canonical_path": snapshot.description["canonical_path"],
         "mtime_ns": snapshot.description["mtime_ns"],
         "repo_key": repo,
@@ -304,7 +303,10 @@ async def prepare_review(snapshot: Any, request: Mapping[str, Any], *, decision_
             budget.exceeded()
         signals.append(signal)
 
-    if snapshot.hook_marker_indices:
+    if any(
+        prose_marker(row["role"], row["text"], is_sidechain=row["is_sidechain"], is_meta=row["is_meta"]) is not None
+        for row in snapshot.prose_rows()
+    ):
         with reqenv.use_request(
             reqenv.RequestOverrides(
                 env={"CLAUDE_CONFIG_DIR": request["claude_config_dir"]},
@@ -353,9 +355,7 @@ async def prepare_corrections(snapshot: Any, request: Mapping[str, Any]) -> dict
     )
     budget = ProjectionBudget(maximum=request["limits"]["max_output_bytes"], snapshot=snapshot)
     anchors = [EventRef(**raw_anchor) for raw_anchor in request["anchors"]]
-    from captain_hook.snapshots.client import NATIVE_CLASSIFIER
-
-    activity = snapshot.activity(NATIVE_CLASSIFIER, anchors=anchors, lookback_turns=40, lookahead_turns=120)
+    activity = snapshot.activity(request["view"]["classifier"], anchors=anchors, lookback_turns=40, lookahead_turns=120)
     for raw_anchor, anchor, feedback in zip(request["anchors"], anchors, request["feedback"], strict=True):
         snapshot.checkpoint()
         pairs = harvest_pairs(activity, anchor, repo=repo, git_runner=git)
