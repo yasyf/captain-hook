@@ -388,7 +388,11 @@ async def prepare_corrections(snapshot: Any, request: Mapping[str, Any]) -> dict
         }
         budget.add({"anchor": raw_anchor, "prompt": draft["prompt"]})
         drafts.append(draft)
-    return {"kind": "corrections", "corrections": drafts}
+    return {
+        "kind": "corrections",
+        "source_revision": request["source_revision"],
+        "corrections": drafts,
+    }
 
 
 async def jev_pick(prompt: str, count: int) -> str | None:

@@ -471,6 +471,7 @@ async def test_correction_drafts_keep_full_hunks_without_post_model_snapshot_acc
         snapshot,
         {
             "policy": REVIEW_POLICY,
+            "source_revision": "fixture-revision",
             "view": {"classifier": {}},
             "anchors": [asdict(EventRef(SessionId("sess-1"), EventUuid("feedback")))],
             "feedback": [CORRECTION],
@@ -478,6 +479,7 @@ async def test_correction_drafts_keep_full_hunks_without_post_model_snapshot_acc
             "limits": {"max_output_bytes": 1048576, "max_read_bytes": 1048576},
         },
     )
+    assert prepared["source_revision"] == "fixture-revision"
     borrowed[0] = False
     recorded = []
 
@@ -542,6 +544,7 @@ async def test_correction_hunks_rejected_before_copying(monkeypatch):
             snapshot,
             {
                 "policy": REVIEW_POLICY,
+                "source_revision": "fixture-revision",
                 "view": {"classifier": {}},
                 "anchors": [asdict(window().anchor)],
                 "feedback": ["feedback"],
