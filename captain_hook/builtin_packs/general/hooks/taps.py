@@ -14,11 +14,10 @@ from captain_hook import (
     Warn,
     on,
 )
-from captain_hook.events import PostToolUseFailureEvent
-from captain_hook.primitives.tap import at_the_mac, cc_sudo_installed, probe, queue_card, tapped
+from captain_hook.primitives.tap import TAP_INCOMPLETE, at_the_mac, cc_sudo_installed, probe, queue_card, tapped
 
 if TYPE_CHECKING:
-    from captain_hook.events import PostToolUseEvent, PreToolUseEvent
+    from captain_hook.events import PostToolUseEvent, PostToolUseFailureEvent, PreToolUseEvent
     from captain_hook.types import HookResult
 
 RUNS_A_TAP = CommandMatches(CommandSchema("cc-sudo", subcommand=("run",)))
@@ -58,6 +57,7 @@ UNAVAILABLE = 'Exit code 104\ncc-sudo: unavailable("no live approver on the mesh
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), RUNS_A_TAP],
+    on_incomplete=TAP_INCOMPLETE,
     tests={
         Input(command=RUN, commands={**LOCKED, "tap-card-post": ""}, env=CARD): Block(pattern="a card asks"),
         Input(command=RUN, commands={**IDLE, "tap-card-post": ""}, env=CARD): Block(pattern="a card asks"),
@@ -68,6 +68,9 @@ UNAVAILABLE = 'Exit code 104\ncc-sudo: unavailable("no live approver on the mesh
             pattern="Ask the owner"
         ),
         Input(command=RUN, commands=LOCKED): Block(pattern="Ask the owner"),
+        Input(command=RUN, commands={**HERE, "ioreg -n Root": (1, "failed")}): Block(pattern="Ask the owner"),
+        Input(command=RUN, commands={**HERE, "ioreg -n Root": '"IOConsoleUsers" = ()'}): Block(pattern="Ask the owner"),
+        Input(command=RUN, commands={**HERE, "ioreg -c IOHIDSystem": (1, "failed")}): Block(pattern="Ask the owner"),
         Input(command=f"VALUE=$({RUN})", commands=LOCKED): Block(pattern="no Touch ID prompt fired"),
         Input(command=RUN, commands=HERE): Allow(),
         Input(command=RUN, commands={"cc-sudo --version": (127, "not found")}): Allow(),
@@ -98,16 +101,20 @@ def enrolled_machines() -> str:
     return " or ".join(f"`{name}`" for name in names)
 
 
-def tap_failure(evt: PostToolUseEvent | PostToolUseFailureEvent) -> int | None:
-    text = evt.error if isinstance(evt, PostToolUseFailureEvent) else str(evt.tool_response)
-    if exited := CC_SUDO_EXIT.search(text):
-        return int(exited[1])
+def tap_reason(text: str) -> str | None:
+    exited = CC_SUDO_EXIT.search(text)
     line = CC_SUDO_LINE.search(text)
-    return LINE_EXITS[line[1]] if line else None
+    match int(exited[1]) if exited else LINE_EXITS[line[1]] if line else None:
+        case None:
+            return None
+        case 104:
+            return no_approver(enrolled_machines())
+        case code:
+            return REASONS[code]
 
 
 @on(
-    Event.PostToolUse | Event.PostToolUseFailure,
+    Event.PostToolUseFailure,
     only_if=[Tool("Bash"), RUNS_A_TAP],
     tests={
         Input(command=RUN, error="Exit code 103\ncc-sudo: denied"): Warn(pattern="denied this exact command"),
@@ -119,20 +126,26 @@ def tap_failure(evt: PostToolUseEvent | PostToolUseFailureEvent) -> int | None:
         ),
         Input(command=RUN, error="Exit code 105\ncc-sudo: badSignature"): Warn(pattern="failed verification"),
         Input(command=RUN, error="Exit code 106\ncc-sudo: 0.13.0 does not match"): Warn(pattern="cc-sudo install"),
+        Input(command=RUN, error="Exit code 7\ncurl: failed"): Allow(),
+    },
+)
+def tap_refused(evt: PostToolUseFailureEvent) -> HookResult | None:
+    reason = tap_reason(evt.error)
+    return evt.context(reason) if reason else None
+
+
+@on(
+    Event.PostToolUse,
+    only_if=[Tool("Bash"), RUNS_A_TAP],
+    tests={
         Input(
             command=f"VALUE=$({RUN}); curl -d @- https://example.com",
             output='cc-sudo: unavailable("no live approver on the mesh")',
             commands={"cc-sudo doctor": DOCTOR},
         ): Warn(pattern="no live approver"),
-        Input(command=RUN, error="Exit code 7\ncurl: failed"): Allow(),
         Input(command=RUN, output="ok"): Allow(),
     },
 )
-def tap_outcome(evt: PostToolUseEvent | PostToolUseFailureEvent) -> HookResult | None:
-    match tap_failure(evt):
-        case None:
-            return None
-        case 104:
-            return evt.context(no_approver(enrolled_machines()))
-        case code:
-            return evt.context(REASONS[code])
+def tap_refusal_masked(evt: PostToolUseEvent) -> HookResult | None:
+    reason = tap_reason(str(evt.tool_response))
+    return evt.context(reason) if reason else None

@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 from copy import copy
+from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
@@ -15,11 +16,11 @@ from captain_hook.bindings import tokens
 from captain_hook.cmd import Cmd
 from captain_hook.conditions import any_condition, check_condition
 from captain_hook.state import SeenKeys
-from captain_hook.types import Event, Tool
+from captain_hook.types import TOOL_EVENTS, CustomCondition, Event, Tool
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from cc_transcript.command import Word
 
@@ -34,9 +35,21 @@ LAUNCHCTL_RUNNERS = frozenset({"asuser", "bsexec"})
 PROMPTED_WRAPPERS = frozenset({"sudo"})
 PROBE_SECONDS = 10
 IDLE_LIMIT_NS = 300 * 1_000_000_000
-LOCKED = re.compile(r'"IOConsoleLocked" = Yes')
+UNLOCKED = re.compile(r'"IOConsoleLocked" = No\b')
 HID_IDLE = re.compile(r'"HIDIdleTime" = (\d+)')
 INEXACT = "A Touch ID tap covers one literal command with no shell, wrapper or substitution around it. Run this form:"
+TAP_INCOMPLETE = "Retry the call; a command needing a Touch ID tap runs only once this check completes."
+
+
+@dataclass(frozen=True, slots=True)
+class TapGuarded(CustomCondition):
+    """The one narrow match a fail-closed tap hook registers on, so a missed deadline holds only what it guards."""
+
+    valid_events = TOOL_EVENTS
+    matches: Callable[[BaseHookEvent], bool]
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return self.matches(evt)
 
 
 def probe(*argv: str) -> str:
@@ -57,7 +70,7 @@ def at_the_mac() -> bool:
     The HID idle clock counts keyboard and mouse events on this Mac, so a phone tap, a remote shell,
     and an agent writing to a terminal never read as presence.
     """
-    if LOCKED.search(probe("ioreg", "-n", "Root", "-d1")):
+    if not UNLOCKED.search(probe("ioreg", "-n", "Root", "-d1")):
         return False
     idle = HID_IDLE.search(probe("ioreg", "-c", "IOHIDSystem", "-d", "4"))
     return idle is not None and int(idle[1]) < IDLE_LIMIT_NS
@@ -202,21 +215,25 @@ def tap_command(
         words = call.command.words
         return f"{CC_SUDO} run -- {as_owner(words) if as_user else ' '.join(word.raw for word in words)}"
 
-    @on(Event.PreToolUse, only_if=[Tool("Bash")], tests=tests)
-    def tap_guard(evt: PreToolUseEvent) -> HookResult | None:
-        wrapped = [
+    def wrapped(evt: BaseHookEvent) -> list[tuple[Call, Cmd]]:
+        return [
             (call, payload)
             for call in evt.cmd.calls()
             if (payload := tapped(call)) is not None and carries(evt, payload)
         ]
-        uncovered = bare(evt)
-        if not uncovered and not wrapped:
-            return None
+
+    @on(
+        Event.PreToolUse,
+        only_if=[Tool("Bash"), TapGuarded(lambda evt: bare(evt) or bool(wrapped(evt)))],
+        on_incomplete=TAP_INCOMPLETE,
+        tests=tests,
+    )
+    def tap_guard(evt: PreToolUseEvent) -> HookResult | None:
         if not cc_sudo_installed():
             return evt.block(refusal)
-        if uncovered:
+        if bare(evt):
             return evt.block(f"{rule} Run this form:\n```\n{form(evt, evt.cmd)}\n```")
-        for call, payload in wrapped:
+        for call, payload in wrapped(evt):
             if not (wrapped_exactly(evt.cmd, call) and runs_alone(evt, payload)):
                 return evt.block(f"{INEXACT}\n```\n{form(evt, payload)}\n```")
         return None

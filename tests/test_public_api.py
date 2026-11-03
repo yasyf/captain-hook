@@ -252,6 +252,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "set_tool_input",
     "style",
     "subject_kind",
+    "tap_command",
     "text_matches",
     "util",
     "warn_command",

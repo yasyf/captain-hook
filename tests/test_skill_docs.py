@@ -48,6 +48,7 @@ EVENT_DESCRIPTIONS: dict[Event, tuple[str, str]] = {
 
 PRIMITIVES: dict[str, Callable[..., object]] = {
     "block_command": captain_hook.block_command,
+    "tap_command": captain_hook.tap_command,
     "warn_command": captain_hook.warn_command,
     "rewrite_command": captain_hook.rewrite_command,
     "set_tool_input": captain_hook.set_tool_input,
@@ -67,6 +68,12 @@ PRIMITIVES: dict[str, Callable[..., object]] = {
 
 PRIMITIVE_DESCRIPTIONS = {
     "block_command": '`PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."`',
+    "tap_command": (
+        '`PreToolUse` + `Tool("Bash")`; refuses a matching command naming its `cc-sudo run -- <command>` form and '
+        "passes that form, so the owner's Touch ID tap covers one literal command; `refusal` where no `cc-sudo` "
+        "exists. The general pack holds every tap while the owner is away from the Mac and queues a card through "
+        "`HOOKS_TAP_CARD_COMMAND`"
+    ),
     "warn_command": "warns, never blocks",
     "rewrite_command": (
         '`PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally '
