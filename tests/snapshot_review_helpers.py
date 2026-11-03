@@ -34,8 +34,12 @@ class FixtureSnapshot:
             self.activities[session_id] = SessionActivity.from_events(session_id, self.events)
         return self.activities[session_id]
 
+    def mark(self, position):
+        return f"{position}:{repr(self.events[position - 1]) if position else ''}"
+
     def review_events(self, watermark, context_events):
-        fresh = int(watermark) if watermark is not None and int(watermark) <= len(self.events) else 0
+        position = int(watermark.partition(":")[0]) if watermark is not None else 0
+        fresh = position if position <= len(self.events) and self.mark(position) == watermark else 0
         start = max(0, fresh - context_events)
         return ReviewEvents(
             self.description["source_revision"],
@@ -44,7 +48,7 @@ class FixtureSnapshot:
             tuple(self.events[start:]),
             tuple(range(start, len(self.events))),
             fresh,
-            str(len(self.events)),
+            self.mark(len(self.events)),
             True,
         )
 
