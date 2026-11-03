@@ -1607,6 +1607,40 @@ def test_denies_without_touching_transcript_evidence(
     assert evt.ctx.transcript.pins.pending == 0
 
 
+class TestLaunchdDashboard:
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "com.long-running.durable-agents-rebuild.dashboard",
+            "gui/$(id -u)/com.long-running.durable-agents-rebuild.dashboard",
+        ],
+    )
+    def test_a_dashboard_kickstart_names_the_verb_that_restarts_it(
+        self, general_pack: None, tmp_path: Path, label: str
+    ) -> None:
+        target = label if label.startswith("gui/") else f"gui/501/{label}"
+        message = decide(f"launchctl kickstart -k {target}", tmp_path)
+        assert message is not None
+        assert "`lr dashboard restart`" in message
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "com.example.orca-serve",
+            "com.apple.Terminal",
+            "com.long-running.durable-agents-rebuild.supervisor",
+            "com.long-running.durable-agents-rebuild.dashboard-desk",
+        ],
+    )
+    def test_any_other_kickstart_still_blocks_without_the_verb(
+        self, general_pack: None, tmp_path: Path, label: str
+    ) -> None:
+        message = decide(f"launchctl kickstart -k gui/501/{label}", tmp_path)
+        assert message is not None
+        assert "may host sessions" in message
+        assert "lr dashboard restart" not in message
+
+
 SERVE_KICK = "launchctl kickstart -k system/com.example.orca-serve"
 SERVE_WEDGED = "kickstart com.example.orca-serve, it is wedged"
 OWNER_AT = INLINE_STARTED + timedelta(minutes=5)

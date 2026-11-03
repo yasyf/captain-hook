@@ -203,6 +203,7 @@ LAUNCHCTL_ENDINGS = frozenset(
 )
 LAUNCHD_SERVICE_VERBS = frozenset({"bootout", "kickstart", "disable", "stop", "remove", "kill"})
 LAUNCHD_DOMAINS = frozenset({"gui", "user", "pid", "login"})
+DRIVE_DASHBOARD = re.compile(r"\bcom\.long-running\.[\w-]+\.dashboard(?![\w.-])")
 APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)\b|keystroke\s+"q"')
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
 PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
@@ -1489,12 +1490,17 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         return None
     spelling = spell(call)
     arguments = LAUNCHCTL.bind(call)
+    dashboard = (
+        " A drive dashboard's job hosts no session: `lr dashboard restart` restarts it and prints its URL."
+        if DRIVE_DASHBOARD.search(call.source.raw)
+        else ""
+    )
     if (service := launchd_service(call, arguments, scan)) is not None:
         verb, label = service
         action = Proposal(place={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
         message = (
             f"BLOCKED: `{spelling}` stops, unloads, or restarts launchd service `{clip(label, 40)}`, which may host "
-            f"sessions. Inspect it with `launchctl print`, or ask the owner to {LATER_SESSION}."
+            f"sessions. Inspect it with `launchctl print`, or ask the owner to {LATER_SESSION}.{dashboard}"
         )
         return lift(evt, LAUNCHD_STOP, action, message)
     match arguments.values.get("verb", ()):
@@ -1506,7 +1512,7 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         case (str() as verb,) if verb in LAUNCHCTL_ENDINGS:
             return (
                 f"BLOCKED: `{spelling}` stops, unloads, restarts, or reboots a launchd service or domain that may host "
-                "sessions. Inspect it with `launchctl list` or `launchctl print <target>` instead."
+                f"sessions. Inspect it with `launchctl list` or `launchctl print <target>` instead.{dashboard}"
             )
         case () if not arguments.operands_complete:
             return (
@@ -1580,6 +1586,12 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
             },
         ): Block(),
         guarded(command="launchctl kickstart -k system/com.example.host"): Block(),
+        guarded(command="launchctl kickstart -k gui/501/com.long-running.d1.dashboard"): Block(
+            pattern="`lr dashboard restart` restarts it"
+        ),
+        guarded(command="launchctl kickstart -k gui/$(id -u)/com.long-running.d1.dashboard"): Block(
+            pattern="`lr dashboard restart` restarts it"
+        ),
         guarded(command="launchctl $verb gui/501"): Block(pattern="at run time"),
         guarded(command="launchctl -q bootout gui/501/com.example.orca-serve"): Block(
             pattern="hides its launchctl verb behind `-q`"

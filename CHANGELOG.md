@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refused restart of a drive dashboard names the command that does it.** The sessions pack refuses
+  `launchctl kickstart`, `bootout` and the other stopping verbs on any launchd job, because one may host
+  sessions. A long-running drive's dashboard job, `com.long-running.<drive>.dashboard`, hosts none, and
+  the refusal for it now names `lr dashboard restart`, which restarts that job and prints its URL. The
+  refusal itself stands, and every other label's message is unchanged.
 - **The host updates while the Homebrew formula trails the newest release.** `capt-hook update run` and
   `capt-hook helper install` landed a Cellar build only when it reached the newest GitHub tag. Tags land
   faster than the formula follows, so a host stayed on an old build while every newer Cellar build was
