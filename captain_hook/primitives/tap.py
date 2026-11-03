@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 CC_SUDO = "cc-sudo"
 CARD_COMMAND_ENV = "HOOKS_TAP_CARD_COMMAND"
 CARD_SCOPE = "tap-card"
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 LAUNCHCTL_RUNNERS = frozenset({"asuser", "bsexec"})
 PROMPTED_WRAPPERS = frozenset({"sudo"})
 PROBE_SECONDS = 10
@@ -79,7 +80,8 @@ def at_the_mac() -> bool:
 def queue_card(evt: BaseHookEvent, command: str) -> bool:
     """Ask the owner for a tap through ``HOOKS_TAP_CARD_COMMAND``, once per exact command in a session.
 
-    The configured command receives the request as its last argument. Returns whether the ask
+    The configured command receives the request as its last argument and runs as the calling session,
+    so a poster that files under the caller's identity needs no name of its own. Returns whether the ask
     stands, so a box with nothing configured or a poster that failed leaves the ask to the agent.
     """
     if not (poster := reqenv.getenv(CARD_COMMAND_ENV)):
@@ -89,7 +91,12 @@ def queue_card(evt: BaseHookEvent, command: str) -> bool:
     request = f"A lane needs the owner's Touch ID tap and the owner is away from this Mac: {command}"
     try:
         posted = subprocess.run(
-            [*shlex.split(poster), request], capture_output=True, text=True, timeout=PROBE_SECONDS, check=False
+            [*shlex.split(poster), request],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_SECONDS,
+            check=False,
+            env={**reqenv.env_map(), SESSION_ENV: evt.session_id},
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
