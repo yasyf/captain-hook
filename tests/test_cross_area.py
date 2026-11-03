@@ -100,7 +100,7 @@ class TestDeclarativeHookE2E:
 class TestHandlerHookE2E:
     """VAL-CROSS-002"""
 
-    def test_handler_warn_produces_allow_json(self) -> None:
+    def test_handler_warn_produces_context_json(self) -> None:
 
         @on(Event.PreToolUse, only_if=[Tool("Edit"), FilePath("*.py")])
         def check_style(evt: BaseHookEvent) -> HookResult | None:
@@ -110,7 +110,7 @@ class TestHandlerHookE2E:
 
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "check style"
-        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "permissionDecision" not in output["hookSpecificOutput"]
 
     def test_nonmatching_file_passes(self) -> None:
 
@@ -149,7 +149,7 @@ class TestHandlerHookE2E:
 
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "check style"
-        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "permissionDecision" not in output["hookSpecificOutput"]
 
 
 class TestInPlanModeCondition:
@@ -804,7 +804,7 @@ class TestCLISubprocess:
         )
         assert result.returncode == 0
         output = json.loads(result.stdout)
-        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "permissionDecision" not in output["hookSpecificOutput"]
         assert "caution" in output["hookSpecificOutput"]["additionalContext"]
 
 

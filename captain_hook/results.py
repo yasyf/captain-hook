@@ -84,10 +84,14 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
     ``ResourcePressure`` takes only the proceed acknowledgement capt-hookd parses: a warn or allow renders it,
     anything else renders nothing.
 
-    Codex fails a hook whose envelope its schema does not name. It takes ``permissionDecision: allow`` only
-    beside ``updatedInput`` and reads a ``PostToolUse`` or ``UserPromptSubmit`` block from the top-level
-    ``decision``, so under ``CAPT_HOOK_PROVIDER=codex`` a warn or allow carries no approval and those two
-    events block the way ``Stop`` does.
+    Only an ``allow`` grants permission. A ``warn`` is pure ``additionalContext``, and a ``rewrite`` is
+    ``updatedInput`` alone, so Claude Code's permission rules and mode judge the rewritten call; a rewrite
+    another hook approved (``approve=True``) carries that approval.
+
+    Codex fails a hook whose envelope its schema does not name. It takes ``updatedInput`` only beside
+    ``permissionDecision: allow`` and reads a ``PostToolUse`` or ``UserPromptSubmit`` block from the
+    top-level ``decision``, so under ``CAPT_HOOK_PROVIDER=codex`` an allow carries no approval, a rewrite
+    always does, and those two events block the way ``Stop`` does.
     """
     codex = reqenv.provider() == "codex"
     if event is Event.ResourcePressure:
@@ -107,23 +111,17 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
     if codex and event in (Event.PostToolUse | Event.UserPromptSubmit) and result.action is Action.block:
         return {"decision": "block", "reason": result.message}
 
-    approval = {} if codex else {"permissionDecision": "allow"}
+    approval = {"permissionDecision": "allow"}
     match result.action:
         case Action.block:
             return block_permission_envelope(event.name, result.message)
         case Action.warn:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": event.name,
-                    "additionalContext": result.message,
-                    **(approval if event is Event.PreToolUse and result.approve else {}),
-                }
-            }
+            return {"hookSpecificOutput": {"hookEventName": event.name, "additionalContext": result.message}}
         case Action.allow:
             return {
                 "hookSpecificOutput": {
                     "hookEventName": event.name,
-                    **approval,
+                    **({} if codex else approval),
                     **({"additionalContext": result.message} if result.message else {}),
                 }
             }
@@ -131,7 +129,7 @@ def format_output(event: Event, result: HookResult) -> Envelope | None:
             return {
                 "hookSpecificOutput": {
                     "hookEventName": event.name,
-                    "permissionDecision": "allow",
+                    **(approval if codex or result.approve else {}),
                     "updatedInput": result.updated_input,
                     **({"additionalContext": result.note} if result.note else {}),
                 }
@@ -161,16 +159,12 @@ def combine(
     block has fired, a later *handler-backed* hook's result is dropped unless it opted into the deny
     advisory, so a block earlier in registration order renders the same envelope however the hooks
     interleaved. Message-only declarative hooks always count, but only opted-in warnings join the
-    deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an allow carrying
-    corrected input, so a broad approval must not drop another hook's rewrite; among rewrites the
+    deny. Absent a block, a ``rewrite`` beats a plain ``allow``, so a broad approval must not drop
+    another hook's rewrite, and the rewrite carries that approval (``approve=True``); a rewrite no hook
+    approved grants nothing, leaving the call to Claude Code's permission flow. Among rewrites the
     first wins, else the first allow, else the accumulated warns surface alone. Warns are never lost
     to a winner either: they ride along on the winning allow/rewrite as its advisory context
     (``additionalContext``), joined after the rewrite's own note.
-
-    A warn's ``approve`` flag survives the warn-only merge: the rebuilt result carries
-    ``any(contributing warns' approve)``, so a context-only merge (every part ``approve=False``,
-    e.g. ``evt.context``) stays rider-free while a warn+context merge keeps the ``PreToolUse``
-    ``permissionDecision: allow`` rider. The block/allow/rewrite winners carry their own decision.
     """
     approval: HookResult | None = None
     rewrite: HookResult | None = None
@@ -178,7 +172,6 @@ def combine(
     blocks: list[str] = []
     warns: list[str] = []
     deny_advisories: list[str] = []
-    warn_approve = False
     notices: list[str] = []
     for index, entry in enumerate(entries):
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
@@ -206,11 +199,10 @@ def combine(
                 rewrite = r
             case HookResult(action=Action.allow) as r if approval is None:
                 approval = r
-            case HookResult(action=Action.warn, message=msg) as r if msg:
+            case HookResult(action=Action.warn, message=msg) if msg:
                 warns.append(msg)
                 if entry.spec.advisory_on_deny:
                     deny_advisories.append(msg)
-                warn_approve = warn_approve or r.approve
             case _:
                 pass
 
@@ -220,6 +212,8 @@ def combine(
             event, HookResult(action=Action.block, message=join_block_messages(blocks, deny_advisories))
         )
     elif (winner := rewrite or approval) is not None:
+        if rewrite and approval:
+            winner = replace(rewrite, approve=True)
         if warns:
             winner = (
                 replace(winner, note="\n\n".join(([winner.note] if winner.note else []) + warns))
@@ -228,9 +222,7 @@ def combine(
             )
         envelope = format_output(event, winner)
     elif warns:
-        envelope = format_output(
-            event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve)
-        )
+        envelope = format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns)))
     if not notices or event is Event.PreCompact:
         return envelope
     return (envelope or {}) | {"systemMessage": "\n\n".join(notices)}

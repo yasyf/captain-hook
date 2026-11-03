@@ -436,7 +436,7 @@ class TestDispatch:
             mock_tool_event("Write", event=Event.PreToolUse, file="main.py", content="x = 1"),
         )
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "permissionDecision" not in result["hookSpecificOutput"]
         assert "Remember to run tests" in result["hookSpecificOutput"]["additionalContext"]
 
     def test_skip_if_testfile_bypasses_hook(self, tmp_path: Path) -> None:

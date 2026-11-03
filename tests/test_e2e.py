@@ -259,7 +259,7 @@ class TestEventDispatchRoundTrip:
         output = format_output(Event.PreToolUse, result)
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "be careful"
-        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "permissionDecision" not in output["hookSpecificOutput"]
 
     def test_e2e_040_format_output_stop_block(self) -> None:
         result = HookResult(action=Action.block, message="incomplete")

@@ -1000,10 +1000,9 @@ class HookResult:
     """The return value from a hook handler, specifying the action and optional message.
 
     ``updated_input`` and ``note`` carry the ``rewrite`` action's replacement tool
-    input and the advisory context surfaced alongside it. ``approve`` gates the
-    ``PreToolUse`` ``permissionDecision: allow`` rider a ``warn`` normally carries:
-    ``False`` surfaces the message as pure ``additionalContext`` without pre-approving
-    the tool (the ``evt.context`` variant). ``system_message`` is shown to the user as
+    input and the advisory context surfaced alongside it. ``approve`` marks a rewrite
+    another hook's ``allow`` approved; a rewrite without it leaves the rewritten call to
+    Claude Code's permission flow. ``system_message`` is shown to the user as
     Claude Code's top-level ``systemMessage`` alongside whatever the action renders, including
     a ``Stop`` that allows; ``PreCompact``, whose stdout is plain text, drops it. ``confirm`` sends
     a ``block`` through a small model before it lands (``evt.block(..., confirm=Confirm(...))``).
@@ -1013,7 +1012,7 @@ class HookResult:
     message: str | None = None
     updated_input: dict[str, Any] | None = None
     note: str | None = None
-    approve: bool = True
+    approve: bool = False
     system_message: str | None = None
     confirm: Confirm | None = None
 

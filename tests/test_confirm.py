@@ -62,9 +62,7 @@ def test_the_framework_stops_waiting_at_the_timeout(tmp_path: Path) -> None:
     started = time.monotonic()
     result = execute_hook(entry(Confirm(rule=RULE, timeout_s=0.2)), push(ctx))
     assert time.monotonic() - started < 1.0
-    assert result == HookResult(
-        action=Action.warn, message="queued_push: allowed, could not confirm in 0.2 s", approve=False
-    )
+    assert result == HookResult(action=Action.warn, message="queued_push: allowed, could not confirm in 0.2 s")
 
 
 def test_a_failed_call_allows_with_a_note(tmp_path: Path) -> None:
@@ -72,7 +70,7 @@ def test_a_failed_call_allows_with_a_note(tmp_path: Path) -> None:
     ctx.decide = MagicMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
     result = execute_hook(entry(Confirm(rule=RULE)), push(ctx))
     assert result == HookResult(
-        action=Action.warn, message="queued_push: allowed, the confirm step failed (RuntimeError)", approve=False
+        action=Action.warn, message="queued_push: allowed, the confirm step failed (RuntimeError)"
     )
 
 
@@ -81,7 +79,7 @@ def test_a_rejected_request_allows_with_a_note(tmp_path: Path) -> None:
     ctx.decide = MagicMock(side_effect=DecideError(401, "bad key"))  # type: ignore[method-assign]
     result = execute_hook(entry(Confirm(rule=RULE)), push(ctx))
     assert result == HookResult(
-        action=Action.warn, message="queued_push: allowed, the confirm step got no answer from Jev", approve=False
+        action=Action.warn, message="queued_push: allowed, the confirm step got no answer from Jev"
     )
 
 
@@ -93,11 +91,11 @@ def test_a_failure_note_lands_once_per_session_and_hook(tmp_path: Path) -> None:
     assert execute_hook(guard, push(ctx, "git push origin main")) is None
     other = RegisteredHook(spec=guard.spec, name="other_push")
     assert execute_hook(other, push(ctx)) == HookResult(
-        action=Action.warn, message="other_push: allowed, the confirm step failed (RuntimeError)", approve=False
+        action=Action.warn, message="other_push: allowed, the confirm step failed (RuntimeError)"
     )
     ctx.decide.side_effect = TimeoutError()
     assert execute_hook(guard, push(ctx)) == HookResult(
-        action=Action.warn, message="queued_push: allowed, the confirm step got no answer from Jev", approve=False
+        action=Action.warn, message="queued_push: allowed, the confirm step got no answer from Jev"
     )
     assert ctx.decide.call_count == 4
 
@@ -108,7 +106,7 @@ def test_a_busy_note_ledger_still_surfaces_the_note(tmp_path: Path) -> None:
     with FileLock(f"{ctx.session[ConfirmNotes].path}.lock"):
         result = execute_hook(entry(Confirm(rule=RULE)), push(ctx))
     assert result == HookResult(
-        action=Action.warn, message="queued_push: allowed, the confirm step failed (RuntimeError)", approve=False
+        action=Action.warn, message="queued_push: allowed, the confirm step failed (RuntimeError)"
     )
 
 

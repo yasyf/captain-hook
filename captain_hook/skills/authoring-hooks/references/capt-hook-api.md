@@ -80,7 +80,7 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `block_command` | `(pattern, *, reason, hint=None, only_if=(), skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
 | `tap_command` | `(*, only_if, rule, refusal, as_user=False, skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; refuses a matching command naming its `cc-sudo run -- <command>` form and passes that form, so the owner's Touch ID tap covers one literal command; `refusal` where no `cc-sudo` exists. The general pack holds every tap while the owner is away from the Mac and queues a card through `HOOKS_TAP_CARD_COMMAND` |
 | `warn_command` | `(pattern, *, message, only_if=(), skip_if=(), tests=None, events=Event.PostToolUse)` | warns, never blocks |
-| `rewrite_command` | `(pattern=None, replace=None, *, only_if=(), skip_if=(), to=None, block=None, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
+| `rewrite_command` | `(pattern=None, replace=None, *, only_if=(), skip_if=(), to=None, block=None, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; the permission mode judges the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
 | `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), guards_waiting=None, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None, transcript_events=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()`, off with `guards_waiting=False` |
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), guards_waiting=None, block=False, advisory_on_deny=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None, transcript_events=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
@@ -223,10 +223,10 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.permission_mode` | e.g. `"plan"` |
 | `evt.ctx.t` | the session as a `cc_transcript.query.Session` (turns, tool calls, text) |
 | `evt.block(msg)` / `evt.warn(msg)` / `evt.allow()` | build the `HookResult` to return |
-| `evt.context(msg)` | `evt.warn` minus the `PreToolUse` auto-approve rider — inject `additionalContext` without approving the call |
+| `evt.context(msg)` | the same result as `evt.warn`: `additionalContext` that approves nothing |
 | `system_message=` on `evt.allow` / `evt.warn` / `evt.context` / `evt.block` | text shown to the user as Claude Code's top-level `systemMessage`, even on a `Stop` that allows; dropped on `PreCompact` |
-| `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse and PermissionRequest** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` (dropped on `PermissionRequest`) |
-| `evt.rewrite(updated_input, *, note=None)` | **PreToolUse and PermissionRequest** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
+| `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse and PermissionRequest** — rewrite a Bash command in place (keeps the rest of the tool input); on `PreToolUse` the permission mode judges the rewritten call, and on `PermissionRequest` the rewrite answers the dialog with allow; `note` surfaces as `additionalContext` (dropped on `PermissionRequest`) |
+| `evt.rewrite(updated_input, *, note=None)` | **PreToolUse and PermissionRequest** — replace the tool input wholesale with `updated_input` (same tool schema); approves only on `PermissionRequest`, as `rewrite_command` |
 
 `evt.command.q` predicates for compound commands:
 

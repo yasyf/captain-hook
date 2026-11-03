@@ -166,33 +166,10 @@ class TestFormatOutput:
         assert output["hookSpecificOutput"]["permissionDecisionReason"] == "not allowed"
         assert output["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
 
-    def test_pre_tool_use_warn(self) -> None:
+    def test_pre_tool_use_warn_grants_no_permission(self) -> None:
         result = HookResult(action=Action.warn, message="be careful")
         output = format_output(Event.PreToolUse, result)
-        assert output is not None
-        hso = output["hookSpecificOutput"]
-        assert hso["additionalContext"] == "be careful"
-        assert hso["permissionDecision"] == "allow"
-        assert hso["hookEventName"] == "PreToolUse"
-
-    def test_pre_tool_use_context_omits_permission_decision(self) -> None:
-        # A context result (warn with approve=False) surfaces its message as pure
-        # additionalContext and drops the PreToolUse allow rider a plain warn carries.
-        result = HookResult(action=Action.warn, message="just context", approve=False)
-        output = format_output(Event.PreToolUse, result)
-        assert output is not None
-        hso = output["hookSpecificOutput"]
-        assert hso["additionalContext"] == "just context"
-        assert "permissionDecision" not in hso
-
-    def test_post_tool_use_context_unchanged(self) -> None:
-        # Non-PreToolUse warns never carried the rider; approve=False leaves them identical.
-        result = HookResult(action=Action.warn, message="ctx", approve=False)
-        output = format_output(Event.PostToolUse, result)
-        assert output is not None
-        hso = output["hookSpecificOutput"]
-        assert hso["additionalContext"] == "ctx"
-        assert "permissionDecision" not in hso
+        assert output == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "be careful"}}
 
     def test_pre_tool_use_allow(self) -> None:
         result = HookResult(action=Action.allow)
@@ -208,11 +185,26 @@ class TestFormatOutput:
         )
         output = format_output(Event.PreToolUse, result)
         assert output is not None
-        hso = output["hookSpecificOutput"]
-        assert hso["hookEventName"] == "PreToolUse"
-        assert hso["permissionDecision"] == "allow"
-        assert hso["updatedInput"] == {"command": "ccx read x --full"}
-        assert hso["additionalContext"] == "ran ccx"
+        assert output == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": {"command": "ccx read x --full"},
+                "additionalContext": "ran ccx",
+            }
+        }
+
+    def test_pre_tool_use_rewrite_carries_another_hooks_approval(self) -> None:
+        result = HookResult(action=Action.rewrite, updated_input={"command": "git status"}, approve=True)
+        output = format_output(Event.PreToolUse, result)
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    def test_pre_tool_use_rewrite_on_codex_carries_allow(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CAPT_HOOK_PROVIDER", "codex")
+        result = HookResult(action=Action.rewrite, updated_input={"command": "git status"})
+        output = format_output(Event.PreToolUse, result)
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
 
     def test_pre_tool_use_rewrite_without_note_omits_additional_context(self) -> None:
         result = HookResult(action=Action.rewrite, updated_input={"command": "ccx find **"})
@@ -256,7 +248,6 @@ class TestFormatOutput:
         "result",
         [
             pytest.param(HookResult(action=Action.warn, message="Keep the plan path."), id="warn"),
-            pytest.param(HookResult(action=Action.warn, message="Keep the plan path.", approve=False), id="context"),
             pytest.param(HookResult(action=Action.allow, message="Keep the plan path."), id="allow"),
         ],
     )
@@ -641,10 +632,13 @@ class TestDispatch:
 
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
-        hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert hso["updatedInput"] == {"command": "ccx read x --full"}
-        assert hso["additionalContext"] == "n"
+        assert result == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": {"command": "ccx read x --full"},
+                "additionalContext": "n",
+            }
+        }
 
     def test_rewrite_beats_earlier_plain_allow(self) -> None:
         # A broad approve firing first must not drop a later hook's corrected input:
@@ -844,7 +838,6 @@ class TestDispatch:
         assert "permissionDecision" not in hso
 
     def test_two_context_only_stay_rider_free(self) -> None:
-        # The context-only merge path rebuilds the warn; approve stays False so no rider regains.
         @on(Event.PreToolUse)
         def c1(evt: Any) -> HookResult:
             return evt.context("a")
@@ -859,8 +852,7 @@ class TestDispatch:
         assert hso["additionalContext"] == "a\n\nb"
         assert "permissionDecision" not in hso
 
-    def test_warn_plus_context_keeps_rider(self) -> None:
-        # any(contributing warns' approve): a plain warn in the merge keeps the allow rider.
+    def test_warn_plus_context_grants_no_permission(self) -> None:
         @on(Event.PreToolUse)
         def warner(evt: Any) -> HookResult:
             return evt.warn("plain warn")
@@ -872,7 +864,7 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         hso = result["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecision" not in hso
         assert "plain warn" in hso["additionalContext"]
         assert "extra context" in hso["additionalContext"]
 
@@ -1248,14 +1240,14 @@ class TestAgentAttribution:
         hso = rendered(LANE_BASH | {"tool_input": {"command": "gt submit", "description": "status"}})[
             "hookSpecificOutput"
         ]
-        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecision" not in hso
         assert hso["updatedInput"] == {"command": EXPORT + "ccx vcs stack submit", "description": "status"}
         assert hso["additionalContext"] == "rewrote"
 
     def test_export_keeps_a_warn_without_granting_approval(self) -> None:
         @on(Event.PreToolUse)
         def warner(evt: Any) -> HookResult:
-            return HookResult(action=Action.warn, message="careful", approve=False)
+            return HookResult(action=Action.warn, message="careful")
 
         hso = rendered()["hookSpecificOutput"]
         assert "permissionDecision" not in hso

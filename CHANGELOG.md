@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rewrite or a warning no longer approves the call it rides on.** On `PreToolUse`, every
+  `evt.rewrite`, `evt.rewrite_command`, `rewrite_command()` primitive and plain `evt.warn` or nudge
+  answered `permissionDecision: allow`. Claude Code honors that allow over the permission mode, so a
+  `claude -p --permission-mode dontAsk` child ran any command a hook rewrote or advised on, with no
+  allow rule naming it. A rewrite now returns `updatedInput` alone, and Claude Code checks its rules
+  and mode against the rewritten call. A warning is `additionalContext` alone. Only `approve()`,
+  `llm_approve()` and `evt.allow()` grant permission, and a rewrite another hook approved keeps that
+  approval. Under Codex, which rejects `updatedInput` without an allow, a rewrite still carries one.
+  `evt.context` is now the same result as `evt.warn`, and `HookResult.approve` defaults to `False`.
+  Inline tests now fail a `PreToolUse` hook that answers allow where its test does not expect
+  `Allow(explicit=True)`.
 - **A refused restart of a drive dashboard names the command that does it.** The sessions pack refuses
   `launchctl kickstart`, `bootout` and the other stopping verbs on any launchd job, because one may host
   sessions. A long-running drive's dashboard job, `com.long-running.<drive>.dashboard`, hosts none, and

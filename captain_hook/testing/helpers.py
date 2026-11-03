@@ -36,6 +36,7 @@ from captain_hook.events import (
 )
 from captain_hook.hook_lint import result_violations
 from captain_hook.prompt import Prompt
+from captain_hook.results import format_output
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import RemoteSession
 from captain_hook.testing.session_cache import SessionCache
@@ -873,6 +874,12 @@ def fresh_tickets(seeds: list[Ticket] | None) -> None:
         store.mint(ticket)
 
 
+def approves(event: Event, result: HookResult | None) -> bool:
+    """Whether *result* renders as a ``PreToolUse`` approval, which lets the call skip the permission mode."""
+    envelope = format_output(event, result) if result is not None and event is Event.PreToolUse else None
+    return isinstance(envelope, dict) and envelope["hookSpecificOutput"].get("permissionDecision") == "allow"
+
+
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
     from captain_hook.app import _state, is_planning_agent_skip
 
@@ -911,6 +918,12 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                                     else None
                                 )
                         assert_result(hook_result, expected, entry.name)
+                        assert not approves(evt.event, hook_result) or (
+                            isinstance(expected, Allow) and expected.explicit
+                        ), (
+                            f"[{entry.name}] answers permissionDecision allow on a call its test does not mark "
+                            "Allow(explicit=True); a rewrite or a warn leaves the call to the permission mode"
+                        )
                         assert hook_result is None or not (copy := result_violations(hook_result)), (
                             f"[{entry.name}] message misses the copy bar: {'; '.join(copy)}"
                         )
