@@ -169,7 +169,7 @@ ORCA_PAYLOADS = {
 HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
 ORCA_STOP_FIX = (
-    "Only the root coordinating its Run stops a done lane: one literal worker-stop, or `orca-gc --done <ctx>`."
+    "Only the root coordinating its Run stops a done lane: one literal worker-stop, or `orca-reclaim.py --done <ctx>`."
 )
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
 CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
@@ -236,7 +236,7 @@ AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 SETTLED_COMMANDS = {**INLINE_COMMANDS, **inline_class_rulings(), **inline_run("term_root")}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
 settling = partial(guarded, env={"ORCA_TERMINAL_HANDLE": "term_root"})
-ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
+ORCA_GC = "orca-reclaim.py"
 STOPPED = "ctx_a0f447e7e42c"
 INTERRUPTED = "term_4137f7d4-c749-445f-bb84-7dbd162da898"
 OWN_LANE = {**SETTLED_COMMANDS, "orca orchestration worker-list": inline_worker(INTERRUPTED, "running", "working")}

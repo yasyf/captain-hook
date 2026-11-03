@@ -151,7 +151,7 @@ SETTLED = INLINE_COMMANDS | inline_class_rulings() | inline_run("term_root")
 ROOT = {"ORCA_TERMINAL_HANDLE": "term_root"}
 SETTLED_WORKER = {"dispatchId": "ctx_settled", "dispatchStatus": "completed", "runId": "run_inline"}
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
-ORCA_GC = ".agents/skills/orca/scripts/orca-gc"
+ORCA_GC = "orca-reclaim.py"
 CLOSE_FIX = (
     "Close only an idle orphan this session created, or ask the owner to name it in a cc-notes answer for a later "
     "session."
@@ -1206,7 +1206,7 @@ class TestTerminalClose:
         [
             f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_d83bbb927995",
             f"{ORCA_GC} --run run_7715a23a5657 --dispatch ctx_1 --dispatch ctx_2",
-            f"/Users/dev/monorepo/{ORCA_GC} --run run_1",
+            f"/Users/dev/.claude/plugins/cache/skills/long-running/0.7.1/bin/{ORCA_GC} --run run_1",
             f"cd /Users/dev/monorepo && {ORCA_GC} --run run_1 --dispatch ctx_1 2>&1 | tail -20",
         ],
     )
