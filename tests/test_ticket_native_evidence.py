@@ -338,8 +338,6 @@ def test_selected_acting_tail_preserves_its_existing_scope(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("large_bytes", [32, 2 * 1024 * 1024])
 def test_native_instruction_evidence_keeps_words_without_successful_tool_payloads(tmp_path, monkeypatch, large_bytes):
-    from captain_hook.snapshots.client import DEFAULT_LIMITS
-
     first = "first offer " + "a" * 430
     last = "last offer " + "z" * 430
     command = T.tool("Bash", id="unused-input", command="x" * large_bytes)
@@ -363,11 +361,13 @@ def test_native_instruction_evidence_keeps_words_without_successful_tool_payload
     exchange = fixture.client._exchange
 
     def recorded(wrapper):
-        requests.append(wrapper["request"])
+        request = wrapper["request"]
+        requests.append(request)
+        if request["operation"] == "query":
+            request["limits"] = request["limits"] | {"max_output_bytes": 4096}
         return exchange(wrapper)
 
     monkeypatch.setattr(fixture.client, "_exchange", recorded)
-    monkeypatch.setitem(DEFAULT_LIMITS, "max_output_bytes", 4096)
     try:
         if large_bytes > 4096:
             baseline = fixture.load(path)
