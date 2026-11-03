@@ -201,7 +201,7 @@ SETTLED = frozenset({"completed", "failed"})
 CLASS_RULINGS = ("c9b27c1", "6190a4a")
 SETTLED_CLOSE_RULES = (
     "The owner's standing rulings in the evidence cover a class of Orca terminal closes rather than one named "
-    "terminal: c9b27c1 lets the root close a settled dispatch's idle terminal, as orca-gc does, and 6190a4a lets it "
+    "terminal: c9b27c1 lets the root close a settled dispatch's idle terminal, as orca-reclaim.py does, and 6190a4a lets it "
     "close an orphan terminal its own failed launch created. The proposed action's payload is Orca's record for the "
     "terminal: the dispatch holding it, its Run, and that dispatch's status. The guard has already proven the status "
     "is completed or failed, the terminal's agent idles at a prompt, and the caller is the root session coordinating "
