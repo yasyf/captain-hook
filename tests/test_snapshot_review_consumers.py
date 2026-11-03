@@ -204,6 +204,22 @@ def test_failed_session_is_not_downgraded_to_summary_or_poison_healthy_session()
     assert wire.released == ["good"]
 
 
+def test_windows_that_would_overflow_one_frame_hydrate_in_separate_requests(monkeypatch):
+    from captain_hook.snapshots import review as review_module
+
+    monkeypatch.setattr(review_module, "HYDRATE_REQUEST_BYTES", 1)
+    wire = Wire()
+    token = CURRENT_CLIENT.set(SnapshotClient(wire))
+    try:
+        result = render_review_windows(
+            [window("a"), window("a")], source_paths=["/fixtures/a.jsonl"] * 2, render=render_budget()
+        )
+    finally:
+        CURRENT_CLIENT.reset(token)
+    assert [call["operation"] for call in wire.calls] == ["acquire", "hydrate", "hydrate", "release"]
+    assert all(isinstance(item, RenderedEvidence) for item in result)
+
+
 def test_a_window_with_no_transcript_path_is_missing_without_asking_the_owner():
     wire = Wire()
     token = CURRENT_CLIENT.set(SnapshotClient(wire))

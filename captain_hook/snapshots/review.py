@@ -6,7 +6,7 @@ import selectors
 import subprocess
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from captain_hook.review.scan import CorrectionLedger
     from captain_hook.snapshots.client import RemoteSession, SnapshotClient
 
+HYDRATE_REQUEST_BYTES = 512 * 1024
 UNFAULTED = "none"
 CORRECTION_PICK = (
     "Which numbered candidate edit does the developer's feedback fault? Pick none when the feedback is not about any "
@@ -36,6 +37,19 @@ CORRECTION_PICK = (
 
 def review_client() -> AbstractContextManager[SnapshotClient]:
     return client_scope(retry_retained=False)
+
+
+def hydrate_batches(batch: Sequence[tuple[int, ContextWindow]]) -> Iterator[list[tuple[int, ContextWindow]]]:
+    selected: list[tuple[int, ContextWindow]] = []
+    size = 0
+    for item in batch:
+        encoded = len(json.dumps(item[1].to_json()))
+        if selected and (size + encoded > HYDRATE_REQUEST_BYTES or len(selected) == 256):
+            yield selected
+            selected, size = [], 0
+        selected.append(item)
+        size += encoded
+    yield selected
 
 
 class ReviewPolicy:
@@ -287,8 +301,7 @@ def render_review_windows(
             lease = None
             try:
                 lease = client.acquire(path, classifier=NATIVE_CLASSIFIER).lease
-                for offset in range(0, len(batch), 256):
-                    selected = batch[offset : offset + 256]
+                for selected in hydrate_batches(batch):
                     outputs = [
                         output
                         for page in client.pages(
@@ -318,7 +331,8 @@ def render_review_windows(
                             raise SnapshotProtocolError("hydrate returned invalid availability")
             except EvidenceIncomplete as exc:
                 for index, _ in batch:
-                    rendered[index] = None if exc.status == "missing" else exc
+                    if not isinstance(rendered[index], RenderedEvidence):
+                        rendered[index] = None if exc.status == "missing" else exc
             finally:
                 if lease is not None:
                     lease.release()
