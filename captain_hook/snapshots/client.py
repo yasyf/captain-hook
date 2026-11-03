@@ -119,9 +119,7 @@ type ScalarValue = bool | int | str | None
 def graph_deadline(client: SnapshotClient) -> int:
     from captain_hook.util import reqenv
 
-    deadline = int((time.time() + GRAPH_WORK_SECONDS) * 1000)
-    if client.foreground_deadline_unix_ms is not None:
-        deadline = min(deadline, client.foreground_deadline_unix_ms)
+    deadline = client.foreground_deadline_unix_ms or int((time.time() + GRAPH_WORK_SECONDS) * 1000)
     if (request := reqenv.current()) is not None and request.deadline_unix_ms:
         deadline = min(deadline, request.deadline_unix_ms - 1000)
     if deadline <= int(time.time() * 1000):
@@ -573,9 +571,12 @@ class SnapshotClient:
         result = self.call(operation, domain=domain, **arguments)
         output_bytes = 0
         cursor = result.get("cursor")
+        deadline_unix_ms = arguments.get("deadline_unix_ms")
         try:
             while True:
                 status = result.get("status")
+                if status == "stale_cursor" and deadline_unix_ms and time.time() * 1000 >= int(deadline_unix_ms):
+                    status, result = "deadline", result | {"reason": "a paged query outlasted its deadline"}
                 if status not in {"ok", "incomplete"}:
                     from loguru import logger
 

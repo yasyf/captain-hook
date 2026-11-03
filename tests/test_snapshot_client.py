@@ -26,6 +26,7 @@ from captain_hook.snapshots.client import (
     SnapshotClient,
     fails_open,
     foreground_seconds,
+    graph_deadline,
 )
 from captain_hook.testing.snapshots import empty_usage, failure
 
@@ -1016,6 +1017,50 @@ def test_a_deadline_while_queueing_returns_the_refusal_it_queued_behind(monkeypa
         "prepared_cache_bytes_read": 4096 * refusals,
         "requests_failed": refusals,
     }
+
+
+@pytest.mark.parametrize(
+    ("foreground", "want"),
+    [
+        pytest.param(105_000, 105_000, id="a-dispatch-budget-outlasts-the-graph-seconds"),
+        pytest.param(100_500, 100_500, id="a-dispatch-budget-inside-the-graph-seconds"),
+        pytest.param(None, 100_750, id="no-dispatch-budget-takes-the-graph-seconds"),
+    ],
+)
+def test_a_graph_query_runs_to_the_end_of_the_dispatch_budget(monkeypatch, foreground, want):
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: 100.0)
+    client = SnapshotClient(lambda _: pytest.fail("a deadline needs no request"))
+    client.foreground_deadline_unix_ms = foreground
+
+    assert graph_deadline(client) == want
+
+
+@pytest.mark.parametrize(
+    ("now", "status"),
+    [
+        pytest.param(100.5, "stale_cursor", id="before-the-query-deadline"),
+        pytest.param(101.0, "deadline", id="at-the-query-deadline"),
+    ],
+)
+def test_a_cursor_lost_at_its_query_deadline_reports_the_deadline(monkeypatch, now, status):
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr("captain_hook.snapshots.client.time.time", lambda: clock.now)
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        if request["operation"] != "resume":
+            return response(request, {"kind": "records"}, cursor="next")
+        clock.now = now
+        reason = "cursor expired or belongs to another owner"
+        return {"schema": HOST_SCHEMA, "response": failure(request["id"], "stale_cursor", reason)}
+
+    client = SnapshotClient(exchange)
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete) as caught:
+        list(client.pages("query_graph", query={"kind": "events"}, deadline_unix_ms=101_000))
+
+    assert caught.value.status == status
 
 
 @pytest.mark.parametrize(
