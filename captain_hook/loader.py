@@ -192,6 +192,30 @@ def register_fault_announcements() -> None:
         return None
 
 
+def register_load_error_warnings(errors: Sequence[LoadError]) -> None:
+    notice = "\n".join(
+        f"captain-hook: {error.source} did not load ({type(error.exc).__name__}: {error.exc}), "
+        "so its hooks are not running."
+        for error in errors
+    )
+
+    @on(
+        Event.PreToolUse | Event.PermissionRequest,
+        respect_gitignore=False,
+        advisory_on_deny=True,
+        source_file=__file__,
+    )
+    def warn_unloaded_hooks(evt: BaseHookEvent) -> HookResult:
+        from captain_hook.types import Action, HookResult
+
+        return HookResult(
+            action=Action.warn,
+            message=notice,
+            approve=False,
+            system_message=notice if evt.event is Event.PermissionRequest else None,
+        )
+
+
 def discover_pack(name: str, pack_dir: Path) -> None:
     from captain_hook.packs.manager import pack_module_name
 
