@@ -203,7 +203,7 @@ LAUNCHCTL_ENDINGS = frozenset(
 )
 LAUNCHD_SERVICE_VERBS = frozenset({"bootout", "kickstart", "disable", "stop", "remove", "kill"})
 LAUNCHD_DOMAINS = frozenset({"gui", "user", "pid", "login"})
-DRIVE_DASHBOARD = re.compile(r"\bcom\.long-running\.[\w-]+\.dashboard(?![\w.-])")
+DRIVE_DASHBOARD_RESTART = "Run `lr dashboard restart` instead, which restarts the drive dashboard and prints its URL."
 APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)\b|keystroke\s+"q"')
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
 PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
@@ -1485,22 +1485,33 @@ def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, 
     return None if label is None else (verb, label)
 
 
+def drive_dashboard(arguments: Arguments) -> bool:
+    match arguments.words.get("targets", ()):
+        case (*_, last):
+            prefix, _, kind = last.raw.rpartition("/")[2].rpartition(".")
+            drive = prefix.removeprefix("com.long-running.")
+            return kind == "dashboard" and drive != prefix and drive != "" and "." not in drive
+        case _:
+            return False
+
+
 def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Ungranted | None:
     if call.name != "launchctl":
         return None
     spelling = spell(call)
     arguments = LAUNCHCTL.bind(call)
-    dashboard = (
-        " A drive dashboard's job hosts no session: `lr dashboard restart` restarts it and prints its URL."
-        if DRIVE_DASHBOARD.search(call.source.raw)
-        else ""
-    )
+    dashboard = drive_dashboard(arguments)
     if (service := launchd_service(call, arguments, scan)) is not None:
         verb, label = service
         action = Proposal(place={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
         message = (
             f"BLOCKED: `{spelling}` stops, unloads, or restarts launchd service `{clip(label, 40)}`, which may host "
-            f"sessions. Inspect it with `launchctl print`, or ask the owner to {LATER_SESSION}.{dashboard}"
+            "sessions. "
+            + (
+                DRIVE_DASHBOARD_RESTART
+                if dashboard
+                else f"Inspect it with `launchctl print`, or ask the owner to {LATER_SESSION}."
+            )
         )
         return lift(evt, LAUNCHD_STOP, action, message)
     match arguments.values.get("verb", ()):
@@ -1512,7 +1523,12 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         case (str() as verb,) if verb in LAUNCHCTL_ENDINGS:
             return (
                 f"BLOCKED: `{spelling}` stops, unloads, restarts, or reboots a launchd service or domain that may host "
-                f"sessions. Inspect it with `launchctl list` or `launchctl print <target>` instead.{dashboard}"
+                "sessions. "
+                + (
+                    DRIVE_DASHBOARD_RESTART
+                    if dashboard
+                    else "Inspect it with `launchctl list` or `launchctl print <target>` instead."
+                )
             )
         case () if not arguments.operands_complete:
             return (
