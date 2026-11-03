@@ -24,6 +24,7 @@ from capt_hook_client.client import HOST
 if TYPE_CHECKING:
     from cc_transcript.activity import ToolUse
     from cc_transcript.ids import ToolUseId
+    from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import PredicateInputs
     from cc_transcript.render import Budget
 
@@ -365,6 +366,18 @@ class Bridge:
                 self._process = None
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewEvents:
+    source_revision: str
+    canonical_path: str
+    mtime_ns: int
+    events: tuple[TranscriptEvent, ...]
+    positions: tuple[int, ...]
+    fresh_start: int
+    watermark: str
+    caught_up: bool
+
+
 class SnapshotClient:
     def __init__(
         self,
@@ -679,6 +692,52 @@ class SnapshotClient:
         )
         session.release()
         return classified
+
+    def review_events(self, path: Path, *, watermark: str | None, context_events: int, max_pages: int) -> ReviewEvents:
+        from cc_transcript.snapshots import SnapshotIncomplete, decode_projection
+
+        events: list[TranscriptEvent] = []
+        positions: list[int] = []
+        fresh_start: int | None = None
+        revision: str | None = None
+        cursor = 0
+        pages = 0
+        while pages < max_pages:
+            [data] = self.pages(
+                "review_events",
+                domain=True,
+                path=str(path.absolute()),
+                source_revision=revision,
+                watermark=watermark,
+                context_events=context_events if fresh_start is None else max(fresh_start - cursor, 0),
+            )
+            if data["kind"] != "review_events":
+                raise SnapshotProtocolError("review event page returned an unexpected projection")
+            try:
+                events.extend(
+                    decode_projection(data["record_schema"], data["records_json"], tool_registry=self.tool_registry())
+                )
+            except SnapshotIncomplete as exc:
+                raise EvidenceIncomplete(exc.status, exc.reason) from exc
+            skipped = set(data["skipped"])
+            cursor = data["event_start"] + len(data["records_json"]) + len(skipped)
+            positions.extend(position for position in range(data["event_start"], cursor) if position not in skipped)
+            fresh_start = data["fresh_start"] if fresh_start is None else fresh_start
+            revision = data["source_revision"]
+            watermark = data["watermark"]
+            pages += cursor > fresh_start
+            if data["caught_up"]:
+                break
+        return ReviewEvents(
+            data["source_revision"],
+            data["canonical_path"],
+            int(data["mtime_ns"]),
+            tuple(events),
+            tuple(positions),
+            fresh_start,
+            watermark,
+            data["caught_up"],
+        )
 
     def close_pending(self) -> None:
         self._defer_cleanup = False

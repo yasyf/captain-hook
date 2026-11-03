@@ -446,7 +446,7 @@ func (s *snapshotService) call(ctx context.Context, request json.RawMessage, cal
 	switch {
 	case metadata.Operation == "release":
 		slots, queue = s.releaseSlots, s.releaseQueue
-	case metadata.Operation == "prepare_review", metadata.Operation == "prepare_corrections", callContext.Admission != "hook":
+	case callContext.Admission != "hook":
 		slots, queue = s.reviewSlots, s.reviewQueue
 	}
 	return s.admit(ctx, slots, queue, request, callContext)
@@ -489,11 +489,11 @@ func maxTime(a, b time.Time) time.Time {
 }
 
 func (s *snapshotService) startOwner(ctx context.Context) (*snapshotOwner, error) {
-	python, err := installedPython()
+	binary, err := installedTool("cc-transcript-owner")
 	if err != nil {
 		return nil, err
 	}
-	cmd := daemonkit.Cmd{Path: python, Args: []string{"-P", "-m", "captain_hook.snapshots.worker"},
+	cmd := daemonkit.Cmd{Path: binary, Args: []string{"--build", Build},
 		Dir: filepath.Clean(os.TempDir()), Env: workerBaseEnvironment(os.Environ()), Session: true}
 	spawnCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
 	defer cancel()

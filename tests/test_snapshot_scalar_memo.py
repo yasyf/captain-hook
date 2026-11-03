@@ -12,7 +12,7 @@ from captain_hook.snapshots.client import (
     RemoteSession,
     SnapshotClient,
 )
-from captain_hook.snapshots.worker import failure
+from captain_hook.testing.snapshots import failure
 from tests.test_snapshot_client import description, response
 
 

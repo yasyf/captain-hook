@@ -214,7 +214,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libfaketime
 
-      - name: Replay the recorded stream against both snapshot owners
+      - name: Replay the recorded stream against the snapshot owner twice
         shell: bash
         run: |
           set -euo pipefail
@@ -232,15 +232,9 @@ jobs:
             diff "$out/$1.jsonl" "$out/$2.jsonl" | cut -c1-1500 | head -n 40 || true
             return 1
           }
-          replay python .venv/bin/python -P -m captain_hook.snapshots.worker
-          replay python-again .venv/bin/python -P -m captain_hook.snapshots.worker
-          compare python python-again
-          if [ ! -x .venv/bin/cc-transcript-owner ]; then
-            echo "::error::.venv/bin/cc-transcript-owner is missing; pin a cc-transcript release that ships the Rust snapshot owner"
-            exit 1
-          fi
           replay rust .venv/bin/cc-transcript-owner --build "$build"
-          compare python rust
+          replay rust-again .venv/bin/cc-transcript-owner --build "$build"
+          compare rust rust-again
 
       - name: Retain owner replay outputs
         if: failure()
@@ -322,42 +316,13 @@ jobs:
           uv run --no-sync pytest -n 0 -s \
             tests/test_foreground_evidence_budgets.py::test_async_hooks_read_the_transcript_after_the_foreground_deadline
 
-      - name: Verify graph deadlines do not replay as evidence
-        if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
-        shell: bash
-        run: |
-          baseline="$RUNNER_TEMP/graph-deadline-progress-before"
-          git fetch --no-tags --depth=1 origin 130a8f0a8457e20fd06f73a28bbc7c3aee9752e1
-          git worktree add --detach "$baseline" 130a8f0a8457e20fd06f73a28bbc7c3aee9752e1
-          test "$(git -C "$baseline" rev-parse HEAD)" = 130a8f0a8457e20fd06f73a28bbc7c3aee9752e1
-          cp tests/testdata/snapshot-graph-deadline-before.py.txt "$baseline/tests/test_snapshot_graph_deadline_progress.py"
-          (cd "$baseline" && uv sync --locked --extra dev)
-          if (cd "$baseline" && PYTHONPATH="$baseline:$baseline/tests" "$baseline/.venv/bin/python" -m pytest tests/test_snapshot_graph_deadline_progress.py::test_prepare_graph_deadline_is_not_evidence_for_a_later_request -n 0 -s) > "$RUNNER_TEMP/graph-deadline-progress-negative.log" 2>&1; then
-            cat "$RUNNER_TEMP/graph-deadline-progress-negative.log"
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/graph-deadline-progress-negative.log"
-          grep -F 'GRAPH_DEADLINE_REPLAY_PREVENTED_PROGRESS' "$RUNNER_TEMP/graph-deadline-progress-negative.log"
-          grep -F 'FAILED tests/test_snapshot_graph_deadline_progress.py::test_prepare_graph_deadline_is_not_evidence_for_a_later_request' "$RUNNER_TEMP/graph-deadline-progress-negative.log"
-          grep -F '1 failed' "$RUNNER_TEMP/graph-deadline-progress-negative.log"
-          uv run --no-sync pytest tests/test_snapshot_graph_deadline_progress.py -n 0 -s > "$RUNNER_TEMP/graph-deadline-progress-positive.log" 2>&1
-          cat "$RUNNER_TEMP/graph-deadline-progress-positive.log"
-          grep -F '5 passed' "$RUNNER_TEMP/graph-deadline-progress-positive.log"
-
-      - name: Retain graph deadline replay controls
-        if: always() && matrix.os == 'ubuntu-latest' && matrix.shard == 0
-        uses: actions/upload-artifact@v7
-        with:
-          name: graph-deadline-progress-controls
-          path: ${{ runner.temp }}/graph-deadline-progress-*.log
-
       - name: Verify the immutable Slack outer timing regression
         if: matrix.os == 'ubuntu-latest' && matrix.shard == 0
         run: |
           baseline="$RUNNER_TEMP/slack-ticket-timing-before"
           git fetch --no-tags --depth=1 origin 2068d95872684b5a6ac729b38b5b09a361709d74
           git worktree add --detach "$baseline" 2068d95872684b5a6ac729b38b5b09a361709d74
-          cp tests/test_ticket_latency_metadata.py "$baseline/tests/test_ticket_latency_metadata.py"
+          sed 's/^from captain_hook.testing.snapshots import failure$/from captain_hook.snapshots.worker import failure/' tests/test_ticket_latency_metadata.py > "$baseline/tests/test_ticket_latency_metadata.py"
           (cd "$baseline" && uv sync --locked --extra dev)
           if (cd "$baseline" && PYTHONPATH="$baseline:$baseline/tests" "$baseline/.venv/bin/python" -m pytest 'tests/test_ticket_latency_metadata.py::test_slack_outer_ticket_timings[mint-slack]' -n 0 -s) > "$RUNNER_TEMP/slack-ticket-timing-negative.log" 2>&1; then
             cat "$RUNNER_TEMP/slack-ticket-timing-negative.log"
@@ -459,7 +424,7 @@ jobs:
           unzip -l dist/*.whl | grep -q 'capt_hook_client/guard_literal.py'
           tar tzf dist/*.tar.gz | grep -q 'internal/wireproto/guard.json'
           .wheel-smoke/bin/python -c 'from capt_hook_client import guard_literal as shim; from captain_hook import guard_literal as guard; import inspect; assert inspect.getsource(shim) == inspect.getsource(guard); assert shim.mandatory("PreToolUse", b"{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"pkill -x sleep\"}}"); print("guard literal OK")'
-          unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/worker.py'
+          test -x .wheel-smoke/bin/cc-transcript-owner
           unzip -l dist/*.whl | grep -q 'captain_hook/snapshots/schemas/host-request.schema.json'
           .wheel-smoke/bin/python -c 'from captain_hook.snapshots.validation import validator; from cc_transcript.snapshots import TranscriptStore; validator("host-request").check_schema(validator("host-request").schema)'
           if unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'; then exit 1; fi

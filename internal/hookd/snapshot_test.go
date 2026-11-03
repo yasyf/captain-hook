@@ -912,10 +912,10 @@ func TestTranscriptBridgeSendsAnEventsRequestsOnTheEventOp(t *testing.T) {
 
 func TestCaptainDomainRequestUsesGeneratedIngressSchema(t *testing.T) {
 	request := map[string]any{"schema": "captain.transcript/1", "tool_registry": []any{}, "request": map[string]any{
-		"schema": "captain.transcript/1", "id": "one", "operation": "prepare_review", "deadline_unix_ms": time.Now().Add(time.Second).UnixMilli(),
-		"limits": map[string]int{"max_read_bytes": 1024, "max_source_read_bytes": 1024, "max_events": 10, "max_items": 10, "max_output_bytes": 1024, "max_discovery_entries": 10, "max_sources": 10},
-		"path":   "/fixture/transcript.jsonl",
-		"policy": map[string]string{"id": "captain-review", "version": "1"}, "min_confidence": 0.5, "min_confidence_fix": 0.25,
+		"schema": "captain.transcript/1", "id": "one", "operation": "review_events", "deadline_unix_ms": time.Now().Add(time.Second).UnixMilli(),
+		"limits":          map[string]int{"max_read_bytes": 1024, "max_source_read_bytes": 1024, "max_events": 10, "max_items": 10, "max_output_bytes": 1024, "max_discovery_entries": 10, "max_sources": 10},
+		"path":            "/fixture/transcript.jsonl",
+		"source_revision": nil, "watermark": nil, "context_events": 8,
 	}}
 	body, err := wireproto.Marshal(request)
 	if err != nil {
@@ -941,9 +941,9 @@ func TestCaptainDomainRequestUsesGeneratedIngressSchema(t *testing.T) {
 	if err := <-done; err == nil || err.Error() != "fixture" {
 		t.Fatalf("domain dispatch=%v", err)
 	}
-	invalid := bytes.Replace(body, []byte(`"min_confidence":0.5`), []byte(`"min_confidence":-1`), 1)
+	invalid := bytes.Replace(body, []byte(`"context_events":8`), []byte(`"context_events":-1`), 1)
 	if _, err := service.call(context.Background(), invalid, userSnapshotContext("invalid-domain", "review", 501)); err == nil {
-		t.Fatal("negative confidence admitted")
+		t.Fatal("negative context window admitted")
 	}
 	select {
 	case frame := <-frames:

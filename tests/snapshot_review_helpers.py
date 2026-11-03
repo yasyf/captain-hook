@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,10 +9,10 @@ from cc_transcript import parse_events_from_bytes
 from cc_transcript.activity import SessionActivity
 from cc_transcript.context import ContextWindow, HydratedWindow, capture_windows, hydrate_from_activity
 from cc_transcript.filterspec import event_meta
+from cc_transcript.ids import EventRef
 from cc_transcript.render import Budget
 
-from captain_hook.snapshots.client import CURRENT_CLIENT, DEFAULT_LIMITS, NATIVE_CLASSIFIER, EvidenceIncomplete
-from captain_hook.snapshots.review import ReviewPolicy
+from captain_hook.snapshots.client import CURRENT_CLIENT, NATIVE_CLASSIFIER, EvidenceIncomplete, ReviewEvents
 
 
 class FixtureSnapshot:
@@ -29,65 +28,29 @@ class FixtureSnapshot:
         }
         self.activities = {}
 
-    @property
-    def hook_marker_indices(self):
-        from captain_hook.review.fix import turn_marker
-
-        return tuple(index for index, event in enumerate(self.events) if turn_marker(event))
-
-    def source_facts(self, *, first_user_contains):
-        from cc_transcript.models import UserEvent
-
-        return {
-            "cwds": list(
-                dict.fromkeys(
-                    meta.cwd
-                    for event in self.events
-                    if (meta := event_meta(event)) is not None and meta.cwd is not None
-                )
-            ),
-            "first_user_contains": next(
-                (
-                    bool(first_user_contains) and first_user_contains in event.text
-                    for event in self.events
-                    if isinstance(event, UserEvent)
-                ),
-                False,
-            ),
-        }
-
-    def prose_rows(self):
-        from cc_transcript.models import AssistantEvent, UserEvent
-
-        for index, event in enumerate(self.events):
-            if isinstance(event, (UserEvent, AssistantEvent)) and event.text.strip():
-                yield {
-                    "event_index": index,
-                    "role": "user" if isinstance(event, UserEvent) else "assistant",
-                    "text": event.text,
-                    "is_sidechain": event.meta.is_sidechain,
-                    "is_meta": event.meta.is_meta,
-                }
-
     def activity(self, classifier, **kwargs):
         session_id = next(meta.session_id for event in self.events if (meta := event_meta(event)) is not None)
         if session_id not in self.activities:
             self.activities[session_id] = SessionActivity.from_events(session_id, self.events)
         return self.activities[session_id]
 
-    def mine_json(self, spec_json, formats):
-        from cc_transcript import _native
+    def mark(self, position):
+        return f"{position}:{repr(self.events[position - 1]) if position else ''}"
 
-        return _native.mine_events(self.events, spec_json, [entry[:3] for entry in formats])
-
-    def capture(self, anchors):
-        return capture_windows(self.raw, anchors)
-
-    def checkpoint(self):
-        pass
-
-    def consume(self, **kwargs):
-        pass
+    def review_events(self, watermark, context_events):
+        position = int(watermark.partition(":")[0]) if watermark is not None else 0
+        fresh = position if position <= len(self.events) and self.mark(position) == watermark else 0
+        start = max(0, fresh - context_events)
+        return ReviewEvents(
+            self.description["source_revision"],
+            self.description["canonical_path"],
+            int(self.description["mtime_ns"]),
+            tuple(self.events[start:]),
+            tuple(range(start, len(self.events))),
+            fresh,
+            self.mark(len(self.events)),
+            True,
+        )
 
 
 class FixtureOwner:
@@ -95,7 +58,6 @@ class FixtureOwner:
         self._defer_cleanup = False
         self._leases = set()
         self.foreground_deadline_unix_ms = None
-        self.policy = ReviewPolicy()
         self.snapshots = {}
         self.calls = []
         self.released = []
@@ -113,10 +75,27 @@ class FixtureOwner:
             self.snapshots[token] = FixtureSnapshot(path, handle)
         except (ValueError, KeyError) as exc:
             raise EvidenceIncomplete("parse_error", str(exc)) from exc
-        lease = SimpleNamespace(require=lambda: handle, release=lambda: self.released.append(token))
-        return SimpleNamespace(
-            view=lambda: {"handle": handle, "classifier": dict(classifier)}, lease=lease, release=lease.release
+        lease = SimpleNamespace(
+            require=lambda: handle,
+            release=lambda: self.released.append(token),
+            description=self.snapshots[token].description,
         )
+        return SimpleNamespace(
+            view=lambda: {"handle": handle, "classifier": dict(classifier)},
+            lease=lease,
+            path=path,
+            release=lease.release,
+        )
+
+    def review_events(self, path, *, watermark, context_events, max_pages):
+        self.calls.append(
+            ("review_events", {"path": str(path), "watermark": watermark, "context_events": context_events})
+        )
+        try:
+            snapshot = FixtureSnapshot(Path(path), None)
+        except (ValueError, KeyError) as exc:
+            raise EvidenceIncomplete("parse_error", str(exc)) from exc
+        return snapshot.review_events(watermark, context_events)
 
     def pages(self, operation, **arguments):
         self.calls.append((operation, arguments))
@@ -137,13 +116,10 @@ class FixtureOwner:
                         }
                     )
             yield {"kind": "discovered", "entries": entries, "checkpoint": "fixture-checkpoint"}
-        elif operation in {"prepare_review", "prepare_corrections"}:
-            path = Path(arguments["path"])
-            snapshot = FixtureSnapshot(path, None)
-            if operation == "prepare_corrections":
-                assert arguments["source_revision"] == snapshot.description["source_revision"]
-            handler = self.policy.prepare_review if operation == "prepare_review" else self.policy.prepare_corrections
-            yield asyncio.run(handler(snapshot, arguments | {"limits": DEFAULT_LIMITS}))
+        elif operation == "capture":
+            snapshot = self.snapshots[arguments["view"]["handle"]["lease_id"]]
+            windows = capture_windows(snapshot.raw, [EventRef(**anchor) for anchor in arguments["anchors"]])
+            yield {"kind": "captured", "windows_json": [window.to_json() for window in windows]}
         elif operation == "resolve":
             result = []
             for session in arguments["session_ids"]:
@@ -219,4 +195,3 @@ def owner_fixture(monkeypatch):
         yield owner
     finally:
         CURRENT_CLIENT.reset(token)
-        asyncio.run(owner.policy.close())

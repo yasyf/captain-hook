@@ -4,12 +4,12 @@ The fact-recognition mechanism lives in :mod:`cc_transcript.mining` (the
 six CREATE-mode user-correction detectors) and
 :mod:`captain_hook.review.fix` (the FIX-mode :func:`~captain_hook.review.fix.iter_hook_complaint_signals`
 detector over assistant turns); this module injects the reviewer's policy over
-raw core transcript events read via :func:`cc_transcript.parser.stream` and
-persists every surviving signal through one ingest codepath into
-:class:`~captain_hook.review.store.ReviewStore`. Each surviving signal captures
-its durable :class:`~cc_transcript.context.ContextWindow` via
-:func:`~cc_transcript.context.capture_window` over the transcript's raw
-bytes. The candidate floors partition
+the events the snapshot owner pages past each transcript's stored watermark
+(:meth:`~captain_hook.snapshots.client.SnapshotClient.review_events`), with
+:data:`REVIEW_CONTEXT_EVENTS` of lookback, and persists every surviving signal
+through one ingest codepath into :class:`~captain_hook.review.store.ReviewStore`.
+Each surviving signal captures its durable :class:`~cc_transcript.context.ContextWindow`
+through the owner's ``capture`` operation. The candidate floors partition
 by kind: user-correction kinds gate under :data:`STRICT_USER` (event prefilter,
 trigger-absence disqualification, the ``min_confidence`` floor) while
 ``hook_complaint`` gates under the ``STRICT_FIX`` floor (``min_confidence_fix``)
@@ -29,7 +29,9 @@ so two sessions' complaints about one hook collapse to one candidate.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+from bisect import bisect_left
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -70,7 +72,7 @@ from captain_hook.review.repo import RepoKey, resolve_repo_key
 from captain_hook.review.store import CandidateKind
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
     from typing import Any
 
     from cc_transcript.context import ContextWindow
@@ -80,10 +82,17 @@ if TYPE_CHECKING:
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
-    from captain_hook.snapshots.client import EvidenceIncomplete
+    from captain_hook.snapshots.client import EvidenceIncomplete, SnapshotClient
+    from captain_hook.snapshots.review import ReviewPolicy
 
 REVIEWER_MARKER = "capt-hook-session-reviewer"
 """The token the reviewer's own headless sessions carry in their first user message."""
+
+REVIEW_CONTEXT_EVENTS = 1024
+"""Events before a transcript's watermark that each pass re-reads so detectors see their lookback."""
+
+REVIEW_PASS_PAGES = 64
+"""Owner pages one pass holds in memory before it ingests them and asks for the rest."""
 
 
 class Detector(StrEnum):
@@ -356,8 +365,8 @@ def candidates_from(
         yield sig, to_candidate(window, sig)
 
 
-def is_reviewer_session(events: Sequence[TranscriptEvent]) -> bool:
-    return next((REVIEWER_MARKER in event.text for event in events if isinstance(event, UserEvent)), False)
+def is_reviewer_session(events: Sequence[TranscriptEvent]) -> bool | None:
+    return next((REVIEWER_MARKER in event.text for event in events if isinstance(event, UserEvent)), None)
 
 
 def transcript_repo(events: Sequence[TranscriptEvent]) -> RepoKey | None:
@@ -395,30 +404,56 @@ def collapse_cross_detector(
     ]
 
 
-async def ingest(
-    store: ReviewStore,
-    prepared: Mapping[str, Any],
-    *,
-    corrections: Sequence[Mapping[str, Any]],
-    ledger: CorrectionLedger,
-    repo_key: RepoKey | None = None,
-) -> ScanReport:
+@dataclass(frozen=True, slots=True)
+class ReviewState:
+    watermark: str | None = None
+    reviewer: bool | None = None
+    cwd: str | None = None
+    repo_key: RepoKey | None = None
+
+    @classmethod
+    def load(cls, raw: str | None) -> ReviewState:
+        return cls() if raw is None else cls(**json.loads(raw))
+
+    def dump(self) -> str:
+        return json.dumps(asdict(self))
+
+    def observe(self, events: Sequence[TranscriptEvent], watermark: str) -> ReviewState:
+        return ReviewState(
+            watermark=watermark,
+            reviewer=self.reviewer if self.reviewer is not None else is_reviewer_session(events),
+            cwd=self.cwd or (str(cwd) if (cwd := transcript_cwd(events)) is not None else None),
+            repo_key=self.repo_key or transcript_repo(events),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedSource:
+    canonical_path: str
+    mtime_ns: int
+    repo_key: RepoKey | None
+    state: ReviewState
+    caught_up: bool
+    candidates: tuple[tuple[FeedbackCandidate, tuple[str, ...]], ...] = ()
+    corrections: tuple[Mapping[str, Any], ...] = ()
+    refused: tuple[tuple[EventRef, EvidenceIncomplete], ...] = ()
+
+
+async def ingest(store: ReviewStore, prepared: PreparedSource, *, ledger: CorrectionLedger) -> ScanReport:
     from cc_transcript.mining.store import event_row, now
 
-    from captain_hook.snapshots.review import decode_candidate, record_correction_drafts
+    from captain_hook.snapshots.review import record_correction_drafts
 
-    repo_key = repo_key or prepared["repo_key"]
     kept = [
-        (replace(candidate, payload=dict(candidate.payload or {}) | {"source_path": prepared["canonical_path"]}), rule)
-        for raw in prepared["candidates_json"]
-        for candidate, rule in [decode_candidate(raw)]
+        (replace(candidate, payload=dict(candidate.payload or {}) | {"source_path": prepared.canonical_path}), rule)
+        for candidate, rule in prepared.candidates
     ]
     async with store.db.transaction():
         ingested_at = now()
         inserted = len(await store.db.insert_candidates([event_row(candidate, ingested_at) for candidate, _ in kept]))
-        await store.db.record_file(prepared["canonical_path"], int(prepared["mtime_ns"]) / 1_000_000_000)
+        await store.db.record_file(prepared.canonical_path, prepared.mtime_ns / 1_000_000_000)
         for candidate, rule in kept:
-            if repo_key is None:
+            if (repo_key := prepared.repo_key) is None:
                 raise ValueError("prepared candidates require a repository identity")
             evidence = candidate.payload or {}
             candidate_id = (
@@ -444,43 +479,12 @@ async def ingest(
                 session_id=candidate.ref.session_id,
                 occurred_at=candidate.occurred_at,
             )
-    await record_correction_drafts(corrections, ledger=ledger)
+    await record_correction_drafts(prepared.corrections, ledger=ledger)
     return ScanReport(scanned=1, inserted=inserted)
-
-
-def correction_pages(
-    client: Any, path: Path, source_revision: str, batch: Sequence[FeedbackCandidate], repo: str | None
-) -> tuple[list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
-    from captain_hook.snapshots.client import EvidenceIncomplete
-    from captain_hook.snapshots.review import REVIEW_POLICY
-
-    try:
-        return list(
-            client.pages(
-                "prepare_corrections",
-                domain=True,
-                path=str(path),
-                source_revision=source_revision,
-                policy=REVIEW_POLICY,
-                anchors=[asdict(candidate.ref) for candidate in batch],
-                feedback=[candidate.text for candidate in batch],
-                repo=repo,
-            )
-        ), []
-    except EvidenceIncomplete as exc:
-        if exc.status != "output_limit":
-            raise
-        if len(batch) == 1:
-            return [], [(batch[0].ref, exc)]
-    middle = len(batch) // 2
-    first, first_refused = correction_pages(client, path, source_revision, batch[:middle], repo)
-    second, second_refused = correction_pages(client, path, source_revision, batch[middle:], repo)
-    return first + second, first_refused + second_refused
 
 
 class CorrectionLedger:
     def __init__(self) -> None:
-        self.loop = asyncio.get_running_loop()
         self.log: CorrectionLog | None = None
 
     async def __aenter__(self) -> CorrectionLedger:
@@ -505,64 +509,111 @@ class CorrectionLedger:
         }
         return {anchor for anchor in anchors if (anchor.session_id, anchor.event_uuid) in keys}
 
-    def recorded_from_thread(self, anchors: Sequence[EventRef]) -> set[EventRef]:
-        return asyncio.run_coroutine_threadsafe(self.recorded(anchors), self.loop).result()
 
-
-def prepare_source(
-    client: Any,
-    path: Path,
-    settings: ReviewSettings,
-    repo_key: RepoKey | None = None,
-    *,
-    recorded: Callable[[Sequence[EventRef]], set[EventRef]],
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[tuple[EventRef, EvidenceIncomplete]]]:
+async def fresh_signals(
+    events: Sequence[TranscriptEvent], fresh: int, *, cwd: Path | None, policy: ReviewPolicy
+) -> list[MiningSignal]:
     from captain_hook.decisions import decisions_db_path
-    from captain_hook.snapshots.review import REVIEW_POLICY, ProjectionBudget, decode_candidate
+    from captain_hook.review.fix import iter_hook_complaint_signals, turn_marker
+    from captain_hook.review.routing import PackIndex
+    from captain_hook.util import reqenv
     from captain_hook.util.paths import resolve_claude_config_dir
 
-    budget = ProjectionBudget()
-    prepared: dict[str, Any] | None = None
-    candidates: list[str] = []
-    for page in client.pages(
-        "prepare_review",
-        domain=True,
-        path=str(path.absolute()),
-        policy=REVIEW_POLICY,
-        min_confidence=settings.min_confidence,
-        min_confidence_fix=settings.min_confidence_fix,
-        repo_key=repo_key,
-        decision_log_path=str(decision_path.absolute()) if (decision_path := decisions_db_path()) is not None else None,
-        claude_config_dir=str(resolve_claude_config_dir().absolute()),
-    ):
-        if prepared is None:
-            prepared = dict(page)
-        budget.add(page)
-        candidates.extend(page["candidates_json"])
-    if prepared is None:
-        raise ValueError("review preparation completed without metadata")
-    prepared["candidates_json"] = candidates
-    eligible = [
-        candidate for raw in candidates if (candidate := decode_candidate(raw)[0]).source_kind != HOOK_COMPLAINT
-    ]
-    if eligible:
-        completed = recorded([candidate.ref for candidate in eligible])
-        eligible = [candidate for candidate in eligible if candidate.ref not in completed]
-    corrections: list[dict[str, Any]] = []
-    refused: list[tuple[EventRef, EvidenceIncomplete]] = []
-    for offset in range(0, len(eligible), 256):
-        pages, batch_refused = correction_pages(
-            client,
-            Path(prepared["canonical_path"]),
-            prepared["source_revision"],
-            eligible[offset : offset + 256],
-            prepared["cwd"],
+    complaints: list[MiningSignal] = []
+    if any(turn_marker(event) is not None for event in events[fresh:]):
+        with reqenv.use_request(
+            reqenv.RequestOverrides(
+                env={"CLAUDE_CONFIG_DIR": str(resolve_claude_config_dir().absolute())},
+                cwd=str(cwd or Path.home()),
+                client_ppid=0,
+                session_id="",
+            )
+        ):
+            routing = PackIndex.load(cwd)
+        decisions = await policy.decision_log(
+            decision_path.absolute() if (decision_path := decisions_db_path()) is not None else None
         )
-        for page in pages:
-            budget.add(page)
-            corrections.extend(page["corrections"])
-        refused.extend(batch_refused)
-    return prepared, corrections, refused
+        complaints = [
+            signal
+            async for signal in iter_hook_complaint_signals(events, decisions=decisions, index=routing)
+            if signal.event_index >= fresh
+        ]
+    return complaints + [signal for signal in detect(events) if signal.event_index >= fresh]
+
+
+async def prepare_source(
+    client: SnapshotClient,
+    path: Path,
+    settings: ReviewSettings,
+    state: ReviewState,
+    repo_key: RepoKey | None = None,
+    *,
+    policy: ReviewPolicy,
+    recorded: Callable[[Sequence[EventRef]], Awaitable[set[EventRef]]],
+) -> PreparedSource:
+    from captain_hook.snapshots.review import capture_windows, correction_drafts
+
+    window = await asyncio.to_thread(
+        client.review_events,
+        path,
+        watermark=state.watermark,
+        context_events=REVIEW_CONTEXT_EVENTS,
+        max_pages=REVIEW_PASS_PAGES,
+    )
+    state = (ReviewState() if window.fresh_start == 0 else state).observe(window.events, window.watermark)
+    prepared = PreparedSource(
+        canonical_path=window.canonical_path,
+        mtime_ns=window.mtime_ns,
+        repo_key=repo_key or state.repo_key,
+        state=state,
+        caught_up=window.caught_up,
+    )
+    if state.reviewer or prepared.repo_key is None:
+        return prepared
+    events = window.events
+    cwd = Path(state.cwd) if state.cwd is not None else None
+    signals = await fresh_signals(events, bisect_left(window.positions, window.fresh_start), cwd=cwd, policy=policy)
+
+    def capture(anchors: Sequence[EventRef]) -> list[ContextWindow]:
+        session = client.acquire(Path(window.canonical_path))
+        try:
+            return capture_windows(client, session, anchors)
+        finally:
+            session.release()
+
+    kept = await asyncio.to_thread(
+        lambda: collapse_cross_detector(
+            list(
+                candidates_from(
+                    events,
+                    signals,
+                    capture=capture,
+                    min_confidence=settings.min_confidence,
+                    min_confidence_fix=settings.min_confidence_fix,
+                )
+            )
+        )
+    )
+    eligible = [candidate for _, candidate in kept if candidate.source_kind != HOOK_COMPLAINT]
+    completed = await recorded([candidate.ref for candidate in eligible]) if eligible else set()
+    pending = [candidate for candidate in eligible if candidate.ref not in completed]
+    if not pending:
+        return replace(prepared, candidates=tuple((candidate, rule_parts(sig)) for sig, candidate in kept))
+    ahead = (
+        ()
+        if window.caught_up
+        else await asyncio.to_thread(
+            client.review_events, path, watermark=window.watermark, context_events=0, max_pages=1
+        )
+    )
+    lookahead = ahead.events if ahead and ahead.fresh_start else ()
+    corrections, refused = await asyncio.to_thread(correction_drafts, (*events, *lookahead), pending, cwd)
+    return replace(
+        prepared,
+        candidates=tuple((candidate, rule_parts(sig)) for sig, candidate in kept),
+        corrections=tuple(corrections),
+        refused=tuple(refused),
+    )
 
 
 async def scan_transcript(
@@ -576,7 +627,8 @@ async def scan(
 ) -> ScanReport:
     from loguru import logger
 
-    from captain_hook.snapshots.review import review_client
+    from captain_hook.snapshots.client import EvidenceIncomplete
+    from captain_hook.snapshots.review import ReviewPolicy, review_client
 
     roots = sorted({str(path.absolute()) for path in transcripts})
     if not roots:
@@ -585,48 +637,63 @@ async def scan(
     checkpoint = await store.meta(checkpoint_key)
     scanned = inserted = refused = 0
     next_checkpoint = None
-    from captain_hook.snapshots.client import EvidenceIncomplete
-
-    async with CorrectionLedger() as ledger:
-        with review_client() as client:
-            try:
-                pages = await asyncio.to_thread(
-                    lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint))
-                )
-            except EvidenceIncomplete as exc:
-                if exc.status != "stale_cursor":
-                    raise
-                pages = await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=None)))
-            for page in pages:
-                next_checkpoint = page["checkpoint"]
-                for entry in page["entries"]:
-                    if entry["state"] != "present":
-                        continue
-                    path = entry["path"]
-                    revision_key = f"snapshot_revision:{dedup_key(path)}"
-                    refused_key = f"snapshot_refused:{dedup_key(path)}"
-                    if entry["revision"] in {await store.meta(revision_key), await store.meta(refused_key)}:
-                        continue
-                    try:
-                        prepared, corrections, anchors_refused = await asyncio.to_thread(
-                            prepare_source, client, Path(path), settings, repo_key, recorded=ledger.recorded_from_thread
-                        )
-                    except EvidenceIncomplete as exc:
-                        if exc.status not in {"output_limit", "source_limit", "entry_limit"}:
-                            raise
-                        logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
-                        await store.set_meta(refused_key, entry["revision"])
-                        refused += 1
-                        continue
-                    for anchor, refusal in anchors_refused:
-                        logger.bind(
-                            transcript=path, session_id=anchor.session_id, event_uuid=anchor.event_uuid
-                        ).warning(f"correction evidence refused: {refusal.reason}")
-                    report = await ingest(store, prepared, corrections=corrections, ledger=ledger, repo_key=repo_key)
-                    await store.set_meta(revision_key, entry["revision"])
-                    scanned += report.scanned
-                    inserted += report.inserted
-                    refused += len(anchors_refused)
+    policy = ReviewPolicy()
+    try:
+        async with CorrectionLedger() as ledger:
+            with review_client() as client:
+                try:
+                    pages = await asyncio.to_thread(
+                        lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint))
+                    )
+                except EvidenceIncomplete as exc:
+                    if exc.status != "stale_cursor":
+                        raise
+                    pages = await asyncio.to_thread(
+                        lambda: list(client.pages("discover", roots=roots, checkpoint=None))
+                    )
+                for page in pages:
+                    next_checkpoint = page["checkpoint"]
+                    for entry in page["entries"]:
+                        if entry["state"] != "present":
+                            continue
+                        path = entry["path"]
+                        revision_key = f"snapshot_revision:{dedup_key(path)}"
+                        refused_key = f"snapshot_refused:{dedup_key(path)}"
+                        state_key = f"snapshot_review:{dedup_key(path)}"
+                        if entry["revision"] in {await store.meta(revision_key), await store.meta(refused_key)}:
+                            continue
+                        while True:
+                            try:
+                                prepared = await prepare_source(
+                                    client,
+                                    Path(path),
+                                    settings,
+                                    ReviewState.load(await store.meta(state_key)),
+                                    repo_key,
+                                    policy=policy,
+                                    recorded=ledger.recorded,
+                                )
+                            except EvidenceIncomplete as exc:
+                                if exc.status not in {"output_limit", "source_limit", "entry_limit"}:
+                                    raise
+                                logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
+                                await store.set_meta(refused_key, entry["revision"])
+                                refused += 1
+                                break
+                            for anchor, refusal in prepared.refused:
+                                logger.bind(
+                                    transcript=path, session_id=anchor.session_id, event_uuid=anchor.event_uuid
+                                ).warning(f"correction evidence refused: {refusal.reason}")
+                            report = await ingest(store, prepared, ledger=ledger)
+                            await store.set_meta(state_key, prepared.state.dump())
+                            inserted += report.inserted
+                            refused += len(prepared.refused)
+                            if prepared.caught_up:
+                                await store.set_meta(revision_key, entry["revision"])
+                                scanned += report.scanned
+                                break
+    finally:
+        await policy.close()
     if next_checkpoint is not None:
         await store.set_meta(checkpoint_key, next_checkpoint)
     return ScanReport(scanned, inserted, refused)

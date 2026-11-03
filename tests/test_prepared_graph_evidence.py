@@ -487,7 +487,7 @@ def test_a_prepared_graph_that_stays_expired_after_one_more_preparation_is_typed
 def test_failed_graph_release_retries_when_request_client_closes(monkeypatch):
     from captain_hook.snapshots import client as snapshot_client
     from captain_hook.snapshots.client import PreparedGraphEvidence, PreparedGraphHandle
-    from captain_hook.snapshots.worker import failure
+    from captain_hook.testing.snapshots import failure
     from tests.test_snapshot_client import response
 
     releases = []

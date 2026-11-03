@@ -1032,6 +1032,10 @@ func installProductToolEnv(ctx context.Context) error {
 }
 
 func installedPython() (string, error) {
+	return installedTool("python")
+}
+
+func installedTool(name string) (string, error) {
 	store, err := artifact.DefaultStore()
 	if err != nil {
 		return "", err
@@ -1044,5 +1048,5 @@ func installedPython() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(entrypoint), "python"), nil
+	return filepath.Join(filepath.Dir(entrypoint), name), nil
 }

@@ -1,60 +1,76 @@
-from unittest.mock import Mock
+from __future__ import annotations
 
-from captain_hook.snapshots.client import HOST_SCHEMA
-from captain_hook.snapshots.review import REVIEW_POLICY
-from captain_hook.snapshots.worker import Owner, empty_usage
+import json
+from collections.abc import Iterator
+from pathlib import Path
 
+import pytest
 
-def owner(store):
-    value = Owner.__new__(Owner)
-    value.store = store
-    value.review_inputs = {}
-    value.registry_generation = Mock(return_value="registry")
-    value.incomplete_type = type("Incomplete", (Exception,), {})
-    value._run_policy = Mock(return_value={"kind": "review", "source_revision": "revision", "candidates_json": []})
-    return value
+from captain_hook.snapshots.client import CORE_SCHEMA, HOST_SCHEMA
+from captain_hook.testing.snapshots import FixtureOwner
 
 
-def request():
-    return {
-        "schema": HOST_SCHEMA,
-        "id": "registered",
-        "operation": "prepare_review",
-        "policy": REVIEW_POLICY,
-        "path": "/source.jsonl",
-    }
-
-
-def test_policy_publishes_inside_native_scope_without_raw_acquisition():
-    events = []
-    frame = Mock(usage=empty_usage(), work={})
-    frame.publish_projection.side_effect = lambda request, **arguments: (
-        events.append("publish") or arguments | {"complete": True, "cursor": None}
+def user(index: int) -> str:
+    return (
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": f"u{index}",
+                "sessionId": "s",
+                "timestamp": "2026-01-02T03:04:05Z",
+                "message": {"content": f"hello {index}"},
+            }
+        )
+        + "\n"
     )
-    store = Mock()
-
-    def consume(path, **arguments):
-        events.append("open")
-        result = arguments["handler"](frame)
-        events.append("closed")
-        return result
-
-    store.run_registered_review.side_effect = consume
-    result = owner(store).call(request(), {}, object(), [])
-    assert events == ["open", "publish", "closed"]
-    assert result["status"] == "ok"
-    assert result["data"]["source_revision"] == "revision"
-    store.borrow_snapshot.assert_not_called()
-    store.run_registered_review.assert_called_once()
 
 
-def test_unfinished_source_fails_open_once_without_policy_or_retry():
-    store = Mock()
-    store.run_registered_review.return_value = {"kind": "review_preparation", "usage": empty_usage()}
-    evaluator = owner(store)
-    result = evaluator.call(request(), {}, object(), [])
-    assert result["status"] == "deadline"
-    assert not result["complete"]
-    store.run_registered_review.assert_called_once()
-    store.borrow_snapshot.assert_not_called()
-    evaluator._run_policy.assert_not_called()
+@pytest.fixture
+def owner() -> Iterator[FixtureOwner]:
+    fixture = FixtureOwner()
+    try:
+        yield fixture
+    finally:
+        fixture.close()
+
+
+def active_leases(owner: FixtureOwner) -> int:
+    reply = owner.exchange(
+        {
+            "schema": HOST_SCHEMA,
+            "tool_registry": [],
+            "request": {"schema": CORE_SCHEMA, "id": "stats", "operation": "stats"},
+        }
+    )
+    return reply["response"]["data"]["gauges"]["active_leases"]
+
+
+def test_review_events_page_a_registered_source_past_its_watermark_without_holding_a_lease(
+    tmp_path: Path, owner: FixtureOwner
+) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_text(user(0) + user(1))
+    first = owner.client.review_events(path, watermark=None, context_events=0, max_pages=4)
+    assert (first.positions, first.fresh_start, first.caught_up) == ((0, 1), 0, True)
+    assert first.canonical_path == str(path.resolve())
+    assert first.mtime_ns == path.stat().st_mtime_ns
+    assert active_leases(owner) == 0
+
+    with path.open("a") as handle:
+        handle.write(user(2))
+    second = owner.client.review_events(path, watermark=first.watermark, context_events=1, max_pages=4)
+    assert (second.positions, second.fresh_start, second.caught_up) == ((1, 2), 2, True)
+    assert second.source_revision != first.source_revision
+    assert active_leases(owner) == 0
+
+
+def test_review_events_page_lookback_wider_than_one_page_without_a_gap(tmp_path: Path, owner: FixtureOwner) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(user(index) for index in range(300)))
+    first = owner.client.review_events(path, watermark=None, context_events=0, max_pages=4)
+    assert (first.positions[-1], first.caught_up) == (299, True)
+
+    with path.open("a") as handle:
+        handle.write(user(300))
+    second = owner.client.review_events(path, watermark=first.watermark, context_events=300, max_pages=1)
+    assert (second.positions, second.fresh_start, second.caught_up) == (tuple(range(301)), 300, True)
