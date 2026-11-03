@@ -419,13 +419,6 @@ class ReviewStore:
         """Returns the recorded ``path`` to ``mtime`` map for incremental scans."""
         return await self.db.file_mtimes()
 
-    async def transcript_path(self, session_id: str) -> str | None:
-        """Returns a session's most recently scanned transcript, for rows recorded without a ``source_path``."""
-        rows = await self.db.sql(
-            "SELECT path FROM files WHERE path LIKE ? ORDER BY mtime DESC LIMIT 1", (f"%/{session_id}.jsonl",)
-        )
-        return str(rows[0]["path"]) if rows else None
-
     async def record_file_scan(self, path: str, mtime: float, candidates: Sequence[FeedbackCandidate]) -> int:
         """Records a scanned file and its candidates in one transaction."""
         return await self.db.record_file_scan(path, mtime, candidates)

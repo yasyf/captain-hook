@@ -271,11 +271,9 @@ class TestListShowThreshold:
         result = invoke("skip", "999", "--reason", "gone", root=scanned_repo)
         assert result.exit_code != 0
 
-    def test_evidence_finds_the_scanned_transcript_of_a_row_without_a_path(
-        self, tmp_path: Path, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch
+    def test_evidence_passes_no_path_for_a_row_without_one(
+        self, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        transcript = write_transcript(tmp_path / "sess-1.jsonl", correction_entries(cwd=str(scanned_repo)))
-        assert invoke("scan", "--transcript", str(transcript), root=scanned_repo).exit_code == 0
         seen: list[str | None] = []
 
         def capture(windows: object, *, source_paths: list[str | None], render: object) -> list[None]:
@@ -292,7 +290,7 @@ class TestListShowThreshold:
         monkeypatch.setattr("captain_hook.snapshots.review.render_review_windows", capture)
         result = invoke("evidence", "1", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert seen == [str(transcript)]
+        assert seen == [None]
 
     def test_reconsider_reports_how_many_candidates_it_rearmed(self, scanned_repo: Path) -> None:
         result = invoke("reconsider", root=scanned_repo)
