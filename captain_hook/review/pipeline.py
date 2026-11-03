@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
+import importlib.metadata
 import json
 import os
 import subprocess
@@ -490,6 +491,13 @@ def brain_plugin_root() -> Path:
     return resolve_claude_config_dir() / "captain-hook" / "headless-plugins"
 
 
+def brain_constraints() -> Path:
+    (path := review_log_path().with_name("brain-constraints.txt")).write_text(
+        f"capt-hook=={importlib.metadata.version('capt-hook')}\n"
+    )
+    return path
+
+
 def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
     """Runs the headless PR-drafting brain over the repo's eligible candidates.
 
@@ -504,7 +512,9 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     re-spawning the reviewer. The brain loads its one plugin through ``--plugin-dir``,
     so ``CLAUDE_CODE_PLUGIN_CACHE_DIR`` points it at a private plugin root, and its
     startup neither sweeps the shared plugin cache for orphans nor re-clones every
-    known marketplace.
+    known marketplace. ``UV_CONSTRAINT`` pins the brain's ``uvx --isolated capt-hook`` to this
+    build: the transcript owner answers only its exact build, and PyPI usually runs ahead of the
+    host, so an unpinned ``review evidence`` could verify nothing.
 
     Args:
         transcript: The just-ended session's transcript, named in the prompt.
@@ -523,7 +533,12 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
                 brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
                 input=brain_prompt(transcript).encode(),
                 cwd=repo_root,
-                env=reqenv.env_map() | {SPAWNED_ENV: "1", PLUGIN_ROOT_ENV: str(brain_plugin_root())},
+                env=reqenv.env_map()
+                | {
+                    SPAWNED_ENV: "1",
+                    PLUGIN_ROOT_ENV: str(brain_plugin_root()),
+                    "UV_CONSTRAINT": str(brain_constraints()),
+                },
                 stdout=log,
                 stderr=log,
                 check=False,
