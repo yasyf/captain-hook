@@ -47,6 +47,7 @@ GENERAL_HOOKS = {
     "sessions",
     "spawns",
     "stops",
+    "taps",
     "tooling",
     "tools",
     "zsh",

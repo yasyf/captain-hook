@@ -10,6 +10,7 @@ The [Guide](../guide/how-it-works.qmd) how-tos teach which one to reach for.
 | Primitive | Action | Default events | Inline tests? | Use |
 |-----------|--------|----------------|:-------------:|-----|
 | `block_command` | block | `PreToolUse` | ✓ | command |
+| `tap_command` | block unless tapped | `PreToolUse` | ✓ | command |
 | `warn_command` | warn | `PostToolUse` | ✓ | command |
 | `rewrite_command` | rewrite (or block) | `PreToolUse` | ✓ | command |
 | `rewrite_command_occurrences` | rewrite (or block) | `PreToolUse` | ✓ | command |
@@ -44,6 +45,9 @@ which one to reach for, with worked examples.
 ```python
 block_command(pattern: str | list[str], *, reason: str, hint: str | None = None,
               tests: InlineTests | None = None) -> None
+
+tap_command(*, only_if: Sequence[TCondition], rule: str, refusal: str, as_user: bool = False,
+            skip_if: Sequence[TCondition] = (), tests: InlineTests | None = None) -> None
 
 warn_command(pattern: str | list[str], *, message: str, tests: InlineTests | None = None,
              events: Event = Event.PostToolUse) -> None
