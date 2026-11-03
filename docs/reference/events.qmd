@@ -73,7 +73,8 @@ child, so the child is left running and is not warned about again. The host does
 delivers it to the session.
 
 `PreToolUse` and `PermissionRequest` prevent an action. A `PreToolUse` block denies the tool
-call outright, and a `PermissionRequest` result answers the pending dialog. `allow` and
+call outright, a `PreToolUse` rewrite replaces its input and leaves the rewritten call to Claude Code's
+permission rules and mode, and a `PermissionRequest` result answers the pending dialog. `allow` and
 `rewrite` approve it silently, `block` denies it with the message shown to the user, and
 `None` or a warn lets the dialog show normally. `Stop` and `SubagentStop` force the agent to
 keep going. A `MessageDisplay` rewrite replaces what the user sees of one reply chunk, and
