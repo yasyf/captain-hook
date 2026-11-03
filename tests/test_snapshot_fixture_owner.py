@@ -1,4 +1,6 @@
 import json
+import subprocess
+from pathlib import Path
 
 from captain_hook.testing.helpers import fixture_line
 from captain_hook.testing.snapshots import FixtureOwner
@@ -9,11 +11,15 @@ def write_messages(path, *messages):
     path.write_text("".join(json.dumps(fixture_line(i, message)) + "\n" for i, message in enumerate(messages)))
 
 
-def test_fixture_owner_keeps_pinned_generation_and_never_launches_helper(tmp_path, monkeypatch):
-    def no_process(*args, **kwargs):
-        raise AssertionError("fixture evidence must stay in process")
+def test_fixture_owner_keeps_pinned_generation_and_launches_only_the_owner(tmp_path, monkeypatch):
+    launched = []
+    popen = subprocess.Popen
 
-    monkeypatch.setattr("subprocess.Popen", no_process)
+    def owner_only(argv, *args, **kwargs):
+        launched.append(Path(argv[0]).name)
+        return popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr("subprocess.Popen", owner_only)
     source = tmp_path / "fixture.jsonl"
     write_messages(source, raw_text("user", "first prompt"), raw_text("assistant", "first answer"))
     fixture = FixtureOwner()
@@ -25,7 +31,8 @@ def test_fixture_owner_keeps_pinned_generation_and_never_launches_helper(tmp_pat
             waiting_tools=[], human_facing_tools=[], tool_registry_generation="fixture"
         )
         first_stats = fixture.client.call("stats")["data"]["counters"]
-        write_messages(source, raw_text("user", "replacement prompt"))
+        write_messages(staged := tmp_path / "staged.jsonl", raw_text("user", "replacement prompt"))
+        staged.replace(source)
         assert original.user_text == "first prompt"
         replacement = fixture.load(source)
         assert replacement.user_text == "replacement prompt"
@@ -42,6 +49,7 @@ def test_fixture_owner_keeps_pinned_generation_and_never_launches_helper(tmp_pat
         replacement.release()
     finally:
         fixture.close()
+    assert launched == ["cc-transcript-owner"]
 
 
 def test_fixture_configured_classifier_stays_in_caller_scope(tmp_path, monkeypatch):
