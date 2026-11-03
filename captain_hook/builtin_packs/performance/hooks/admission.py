@@ -3,13 +3,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, Block, Event, HookResult, Input, Tool, on
-from captain_hook.util.builds import LOAD_PER_CORE, HostLoad, is_local_build
+from captain_hook.util.builds import LOAD_PER_CORE, ROUTE_PROBE, HostLoad, is_local_build, routes_off_host
 
 if TYPE_CHECKING:
     from captain_hook import PreToolUseEvent
 
 SATURATED = {LOAD_PER_CORE: "0"}
 HEALTHY = {LOAD_PER_CORE: "1000000"}
+ROUTED = {**SATURATED, ROUTE_PROBE: "true"}
+ONLY_CARGO_ROUTES = {**SATURATED, ROUTE_PROBE: """sh -c '[ "$0" = cargo ]'"""}
+HATCH_KEEPS_IT_HERE = {**SATURATED, ROUTE_PROBE: """sh -c '[ -z "${CARGO_LOCAL:-}" ]'"""}
 
 
 @on(
@@ -35,13 +38,23 @@ HEALTHY = {LOAD_PER_CORE: "1000000"}
         Input(command="remote-builder exec --lane go -- go test ./...", env=SATURATED): Allow(),
         Input(command="go version && cargo metadata --format-version 1", env=SATURATED): Allow(),
         Input(command="git commit -m 'go build fix'", env=SATURATED): Allow(),
+        Input(command="cargo build -p server", env=ROUTED): Allow(),
+        Input(command="cargo check", env={**SATURATED, ROUTE_PROBE: "false"}): Block(pattern="load gate"),
+        Input(command="cargo check", env={**SATURATED, ROUTE_PROBE: "no-such-route-probe"}): Block(),
+        Input(command="/opt/homebrew/bin/cargo check", env=ROUTED): Block(),
+        Input(command="timeout 600 cargo check", env=ROUTED): Block(),
+        Input(command="cargo check && go test ./...", env=ONLY_CARGO_ROUTES): Block(),
+        Input(command="cargo check", env=ONLY_CARGO_ROUTES): Allow(),
+        Input(command="CARGO_LOCAL=1 cargo check", env=HATCH_KEEPS_IT_HERE): Block(),
+        Input(command="cargo check", env=HATCH_KEEPS_IT_HERE): Allow(),
     },
 )
 def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
-    if not any(is_local_build(call) for call in evt.cmd.calls()):
+    builds = [call for call in evt.cmd.calls() if is_local_build(call)]
+    if not builds:
         return None
     host = HostLoad.sample()
-    if not host.saturated:
+    if not host.saturated or all(routes_off_host(call) for call in builds):
         return None
     return evt.block(
         f"Host load is {host.load / host.cores:.2f} per core, at or above the {host.limit:g} limit; "
