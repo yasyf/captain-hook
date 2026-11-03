@@ -829,6 +829,17 @@ def test_a_build_does_not_invalidate_its_own_fingerprint(project: CliState) -> N
 # --- registry cache behaviour ----------------------------------------------------------
 
 
+def test_a_new_fingerprint_lets_go_of_the_snapshot_it_replaces(project: CliState) -> None:
+    reg = Registry(project)
+    first = reg.get()
+    (Path(project.hooks) / "h.py").write_text(HOOK.replace("message='m'", "message='edited'"))
+
+    second = reg.get()
+
+    assert second is not first
+    assert [snapshot is second for snapshot in reg._cache.values()] == [True]
+
+
 def test_cache_hit_returns_same_snapshot_object(project: CliState) -> None:
     reg = Registry(project)
     snap = reg.get()

@@ -262,7 +262,7 @@ class RegistrySnapshot:
 
 
 class Registry:
-    def __init__(self, cli_state: CliState, *, maxsize: int = 8) -> None:
+    def __init__(self, cli_state: CliState, *, maxsize: int = 1) -> None:
         self._cli_state = cli_state
         self._cache: LRUDict[Fingerprint, RegistrySnapshot] = LRUDict(maxsize)
         self._build_lock = threading.Lock()
