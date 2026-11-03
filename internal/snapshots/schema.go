@@ -15,7 +15,11 @@ import (
 
 const MaxFrameBytes = 1 << 20
 
-const HostPreparedFactMemoryBytes = 512 << 20
+const (
+	HostPreparedFactMemoryBytes = 512 << 20
+	HostPendingLoads            = 27
+	HostReservedHookLoads       = 24
+)
 
 //go:embed schema/*.json
 var schemas embed.FS
@@ -155,6 +159,8 @@ func HostConfig(producer string) (json.RawMessage, error) {
 	}
 	config["max_prepared_fact_memory_bytes"] = json.RawMessage(strconv.FormatInt(HostPreparedFactMemoryBytes, 10))
 	config["max_retained_bytes"] = json.RawMessage(strconv.FormatInt(retained+HostPreparedFactMemoryBytes-facts, 10))
+	config["max_pending_loads"] = json.RawMessage(strconv.Itoa(HostPendingLoads))
+	config["reserved_hook_loads"] = json.RawMessage(strconv.Itoa(HostReservedHookLoads))
 	if producer != "" {
 		named, err := json.Marshal(producer)
 		if err != nil {

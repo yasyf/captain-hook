@@ -497,6 +497,7 @@ class SnapshotClient:
         retry_until = started + CLEANUP_SECONDS if operation == "release" else None
         admission_deadline_unix_ms = int((time.time() + self._preparation_seconds) * 1000)
         retry_delay = 0.01
+        refused: dict[str, Any] | None = None
         while True:
             with self._guard:
                 self._counter += 1
@@ -508,6 +509,8 @@ class SnapshotClient:
                 and operation != "release"
                 and int(time.time() * 1000) >= self.foreground_deadline_unix_ms
             ):
+                if refused is not None:
+                    return with_observed_usage(refused, observed)
                 from loguru import logger
 
                 logger.bind(
@@ -518,6 +521,8 @@ class SnapshotClient:
                     elapsed_ms=round((time.monotonic() - started) * 1000, 1),
                 ).info("foreground transcript deadline exhausted")
                 raise EvidenceIncomplete("deadline", "foreground transcript deadline exhausted")
+            if refused is not None:
+                observed |= summed_usage(observed, refused["usage"])
             request: dict[str, object] = {
                 "schema": HOST_SCHEMA if domain else CORE_SCHEMA,
                 "id": request_id,
@@ -560,7 +565,7 @@ class SnapshotClient:
                 retry_until = monotonic_deadline(horizon)
             if (remaining := retry_until - time.monotonic()) <= 0:
                 return with_observed_usage(result, observed)
-            observed |= summed_usage(observed, result["usage"])
+            refused = result
             time.sleep(min(retry_delay, remaining))
             retry_delay = min(retry_delay * 2, 0.1)
 

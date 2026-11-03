@@ -145,8 +145,14 @@ func TestHostConfigurationGrowsRetentionByItsFactCacheBudget(t *testing.T) {
 	if backgroundHeadroom(host) != backgroundHeadroom(library) || backgroundHeadroom(host) != 384<<20 {
 		t.Fatalf("background headroom host=%d library=%d", backgroundHeadroom(host), backgroundHeadroom(library))
 	}
+	if backgroundLoads := func(config map[string]int64) int64 {
+		return config["max_pending_loads"] - config["reserved_hook_loads"]
+	}; backgroundLoads(host) != backgroundLoads(library) || host["reserved_hook_loads"] != 24 {
+		t.Fatalf("host loads=%d reserved=%d library loads=%d reserved=%d", host["max_pending_loads"], host["reserved_hook_loads"], library["max_pending_loads"], library["reserved_hook_loads"])
+	}
+	hostBudgets := map[string]bool{"max_prepared_fact_memory_bytes": true, "max_retained_bytes": true, "max_pending_loads": true, "reserved_hook_loads": true}
 	for key, want := range library {
-		if key != "max_prepared_fact_memory_bytes" && key != "max_retained_bytes" && host[key] != want {
+		if !hostBudgets[key] && host[key] != want {
 			t.Fatalf("%s=%d want library default %d", key, host[key], want)
 		}
 	}
