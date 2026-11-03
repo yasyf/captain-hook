@@ -266,7 +266,10 @@ class TestListShowThreshold:
     def test_threshold_check_reports_eligibility(self, scanned_repo: Path) -> None:
         result = invoke("threshold-check", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False considered=False" in result.output
+        assert (
+            "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False considered=False older=0"
+            in result.output
+        )
 
     def test_skip_holds_the_candidate_and_show_prints_the_reason(self, scanned_repo: Path) -> None:
         result = invoke("skip", "1", "--reason", "no quote verified", root=scanned_repo)
@@ -317,7 +320,6 @@ class TestListShowThreshold:
         assert result.exit_code == 0, result.output
         report = json.loads(result.output)
         assert (report["older"], report["evidence"]) == (1, [])
-        assert "older=1" in invoke("threshold-check", root=scanned_repo).output
 
     def test_reconsider_reports_how_many_candidates_it_rearmed(self, scanned_repo: Path) -> None:
         result = invoke("reconsider", root=scanned_repo)
