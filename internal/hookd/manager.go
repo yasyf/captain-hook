@@ -45,7 +45,7 @@ const (
 
 	spareIdleTTL = 2 * time.Minute
 
-	workerMemoryCeiling = 512 << 20
+	workerMemoryCeiling = 320 << 20
 	bloatedIdleTTL      = time.Minute
 
 	workerSweepInterval = time.Minute
