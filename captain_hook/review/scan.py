@@ -597,7 +597,17 @@ async def prepare_source(
     eligible = [candidate for _, candidate in kept if candidate.source_kind != HOOK_COMPLAINT]
     completed = await recorded([candidate.ref for candidate in eligible]) if eligible else set()
     pending = [candidate for candidate in eligible if candidate.ref not in completed]
-    corrections, refused = await asyncio.to_thread(correction_drafts, events, pending, cwd) if pending else ([], [])
+    if not pending:
+        return replace(prepared, candidates=tuple((candidate, rule_parts(sig)) for sig, candidate in kept))
+    ahead = (
+        ()
+        if window.caught_up
+        else await asyncio.to_thread(
+            client.review_events, path, watermark=window.watermark, context_events=0, max_pages=1
+        )
+    )
+    lookahead = ahead.events if ahead and ahead.fresh_start else ()
+    corrections, refused = await asyncio.to_thread(correction_drafts, (*events, *lookahead), pending, cwd)
     return replace(
         prepared,
         candidates=tuple((candidate, rule_parts(sig)) for sig, candidate in kept),

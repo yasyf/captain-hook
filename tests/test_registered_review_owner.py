@@ -62,3 +62,15 @@ def test_review_events_page_a_registered_source_past_its_watermark_without_holdi
     assert (second.positions, second.fresh_start, second.caught_up) == ((1, 2), 2, True)
     assert second.source_revision != first.source_revision
     assert active_leases(owner) == 0
+
+
+def test_review_events_page_lookback_wider_than_one_page_without_a_gap(tmp_path: Path, owner: FixtureOwner) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(user(index) for index in range(300)))
+    first = owner.client.review_events(path, watermark=None, context_events=0, max_pages=4)
+    assert (first.positions[-1], first.caught_up) == (299, True)
+
+    with path.open("a") as handle:
+        handle.write(user(300))
+    second = owner.client.review_events(path, watermark=first.watermark, context_events=300, max_pages=1)
+    assert (second.positions, second.fresh_start, second.caught_up) == (tuple(range(301)), 300, True)

@@ -700,6 +700,7 @@ class SnapshotClient:
         positions: list[int] = []
         fresh_start: int | None = None
         revision: str | None = None
+        cursor = 0
         pages = 0
         while pages < max_pages:
             [data] = self.pages(
@@ -708,7 +709,7 @@ class SnapshotClient:
                 path=str(path.absolute()),
                 source_revision=revision,
                 watermark=watermark,
-                context_events=context_events if fresh_start is None else 0,
+                context_events=context_events if fresh_start is None else max(fresh_start - cursor, 0),
             )
             if data["kind"] != "review_events":
                 raise SnapshotProtocolError("review event page returned an unexpected projection")
@@ -719,17 +720,12 @@ class SnapshotClient:
             except SnapshotIncomplete as exc:
                 raise EvidenceIncomplete(exc.status, exc.reason) from exc
             skipped = set(data["skipped"])
-            positions.extend(
-                position
-                for position in range(
-                    data["event_start"], data["event_start"] + len(data["records_json"]) + len(skipped)
-                )
-                if position not in skipped
-            )
+            cursor = data["event_start"] + len(data["records_json"]) + len(skipped)
+            positions.extend(position for position in range(data["event_start"], cursor) if position not in skipped)
             fresh_start = data["fresh_start"] if fresh_start is None else fresh_start
             revision = data["source_revision"]
             watermark = data["watermark"]
-            pages += bool(positions) and positions[-1] >= fresh_start
+            pages += cursor > fresh_start
             if data["caught_up"]:
                 break
         return ReviewEvents(
