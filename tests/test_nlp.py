@@ -460,6 +460,16 @@ class TestNlpScanCompound:
         assert len(nlp_scan(clauses, text)) == 1
 
 
+class TestLoadedPipeline:
+    def test_drops_ner_and_keeps_the_stages_signals_read(self) -> None:
+        from captain_hook.state import RESOURCES
+
+        token = RESOURCES.spacy("The tests were running")[3]
+
+        assert "ner" not in RESOURCES.spacy.pipe_names
+        assert (token.lemma_, token.tag_, token.dep_) == ("run", "VBG", "ROOT")
+
+
 class TestDepRelated:
     def test_related_verb_object(self) -> None:
         from captain_hook.state import RESOURCES

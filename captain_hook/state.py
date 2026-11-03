@@ -55,15 +55,19 @@ if TYPE_CHECKING:
     from captain_hook.types import Signals
 
 
+UNUSED_SPACY_PIPES = ("ner",)
+"""Pipeline stages no signal reads, left out to keep each worker's model smaller and parses faster."""
+
+
 def load_spacy() -> spacy.language.Language:
     import spacy
 
     from captain_hook.util.model_cache import MODEL_NAME, cached_pipeline
 
     if spacy.util.is_package(MODEL_NAME):
-        return spacy.load(MODEL_NAME)
+        return spacy.load(MODEL_NAME, exclude=UNUSED_SPACY_PIPES)
     if cached := cached_pipeline():
-        return spacy.load(cached)
+        return spacy.load(cached, exclude=UNUSED_SPACY_PIPES)
     raise RuntimeError(
         f"spaCy model {MODEL_NAME!r} is not installed. "
         "Run `uvx capt-hook init` to provision NLP resources, or install the model "
