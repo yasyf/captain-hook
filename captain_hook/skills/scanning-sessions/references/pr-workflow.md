@@ -99,9 +99,9 @@ uvx --isolated capt-hook review slots --repo <target_repo_key> --kind <create|fi
 ```
 
 Pass the candidate's kind: each kind has its own pool, so a full create pool never
-blocks a fix. When it exits 1 (`free=0`), log the skip and leave the candidate `watching` — no
-commit, no push, no branch left behind; the slot frees when an open PR merges,
-closes, or goes stale. Output format and exit semantics: [review CLI](review-cli.md).
+blocks a fix. When it exits 1 (`free=0`), record nothing and leave the candidate `watching` — no
+`review skip`, no commit, no push, no branch left behind; it comes back when an open PR
+merges, closes, or goes stale. Output format and exit semantics: [review CLI](review-cli.md).
 
 ```bash
 git -C "$worktree" add .claude/hooks/<slug>.py
