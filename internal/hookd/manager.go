@@ -41,7 +41,7 @@ const (
 	// per-invocation scratch checkouts, short-lived worktrees — mints keys that
 	// are never revisited, and without a TTL their interpreters are held until
 	// the daemon restarts.
-	workerIdleTTL = 30 * time.Minute
+	workerIdleTTL = 10 * time.Minute
 
 	spareIdleTTL = 2 * time.Minute
 
