@@ -43,6 +43,7 @@ GENERAL_HOOKS = {
     "questions",
     "review",
     "rulings",
+    "secret_stores",
     "sessions",
     "spawns",
     "stops",

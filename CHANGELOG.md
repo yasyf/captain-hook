@@ -73,6 +73,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An agent cannot read a secret store.** The general pack blocks `aws ssm get-parameter`,
+  `get-parameters`, `get-parameters-by-path`, and `get-parameter-history` with `--with-decryption`
+  or `--cli-input-json`/`--cli-input-yaml`, `aws secretsmanager get-secret-value` and
+  `batch-get-secret-value`, `op read`, `op inject`, `op run`, `op document get`, `op item get` with
+  `--reveal`, `--otp`, `--fields`, or `--format`, `security find-generic-password` and
+  `find-internet-password` with `-w` or `-g`, `chamber read`, `export`, `exec`, and `env`, and
+  `gcloud secrets versions access`. Listing names still runs: `aws ssm describe-parameters`, a
+  `get-parameter` without decryption, `op item list`, `chamber list`, `gcloud secrets list`. `aws`
+  and `op` global value options such as `--profile` and `--account` now count as leading options, so
+  `Runs` and subcommand schemas read the verb after them.
 - **A lane cannot install JavaScript dependencies into a worktree that links them.** Once a machine
   lists its worktree pools in `HOOKS_LAYOUT_WORKTREE_POOLS`, the performance pack blocks
   `yarn install`, a bare `yarn`, `yarn add`/`remove`/`up`/`dedupe`, `npm install`/`i`/`ci`,
