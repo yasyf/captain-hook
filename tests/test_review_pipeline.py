@@ -197,7 +197,9 @@ async def seed_corrections(
     )
 
 
-async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str = "fs1") -> int:
+async def seed_eligible_fix(
+    store: ReviewStore, *, repo: RepoKey, session: str = "fs1", occurred_at: str = "2026-06-01T10:00:00+00:00"
+) -> int:
     candidate_id = await store.ensure_candidate(
         repo,
         kind=CandidateKind.FIX,
@@ -217,13 +219,13 @@ async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str =
     await store.db.execute(
         "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
         "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')",
-        (key, HOOK_COMPLAINT, session, "2026-06-01T10:00:00+00:00", "that reminder misfired again", payload),
+        (key, HOOK_COMPLAINT, session, occurred_at, "that reminder misfired again", payload),
     )
     await store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
         session_id=SessionId(session),
-        occurred_at=datetime.fromisoformat("2026-06-01T10:00:00+00:00"),
+        occurred_at=datetime.fromisoformat(occurred_at),
     )
     await store.record_verdict(
         DedupKey(key),
@@ -1832,6 +1834,41 @@ class TestReviewSession:
         assert (report.brain_prs, report.brain_skips, report.brain_failed, report.brain_deferred) == (1, 0, 0, 1)
         async with await ReviewStore.open(settings.db_path) as store:
             assert await store.brain_outcome(candidate_id) is None
+
+    async def test_only_observations_inside_the_window_can_make_a_candidate_eligible(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db", evidence_window_days=30)
+        brains = install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+            status = await store.threshold_status(candidate_id, settings=settings)
+            unbounded = await store.threshold_status(
+                candidate_id, settings=ReviewSettings(db_path=settings.db_path, evidence_window_days=36500)
+            )
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
+        held = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (status.sessions, status.days, status.single_observation, status.older) == (0, 0, False, 1)
+        assert (unbounded.sessions, unbounded.days, unbounded.single_observation, unbounded.older) == (1, 1, True, 0)
+        assert status.evidence == unbounded.evidence
+        assert (held.eligible, held.brain, len(brains)) == ((), False, 0)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await seed_eligible_fix(
+                store,
+                repo=GIT_REPO_KEY,
+                session="fs2",
+                occurred_at=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
+            )
+            batched = await store.threshold_statuses(await store.candidates(GIT_REPO_KEY), settings=settings)
+
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (batched[candidate_id].sessions, batched[candidate_id].older) == (1, 1)
+        assert (report.eligible, report.brain, len(brains)) == ((candidate_id,), True, 1)
 
     async def test_the_brain_runs_from_the_main_checkout_of_a_linked_worktree(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch

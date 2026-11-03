@@ -38,7 +38,8 @@ user feedback next pass.
   already enforced by the CLI's eligibility call.
 - **Re-verify every quote before acting.** Each candidate's verbatim correction must
   appear in a real session transcript; an unverifiable candidate is skipped, never
-  PR'd.
+  PR'd. Only observations from the last 30 days can support a PR: `review evidence`
+  returns nothing older, and no quote from any other source may stand in for it.
 - **All writes happen in a worktree or temp-dir clone off the target repo's
   `origin/<default>`** — never commit on the user's checkout. Procedure:
   [PR workflow](references/pr-workflow.md). The run starts in the repo's main checkout,
@@ -140,8 +141,9 @@ For each eligible candidate, verify its recorded quotes through the shared trans
 uvx --isolated capt-hook review evidence <ID>
 ```
 
-Use only evidence entries with `verified=true`. The command returns bounded context,
-its snapshot reference, session id, event id and observation date. Cite that provenance
+Use only evidence entries with `verified=true`. The command returns observations from the
+last 30 days with their bounded context, snapshot reference, session id, event id and
+observation date; `older` counts the observations it left out. Cite that provenance
 in the PR's Evidence section. A missing reference, incomplete preparation or quote
 outside the rendered budget does not establish that the quote never existed; skip
 that candidate with `review skip <ID> --reason "<why>"`. Leave it `watching`: capt-hook

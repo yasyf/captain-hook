@@ -151,17 +151,26 @@ The eligibility verdict — the source of truth. Without `ID`, reports every can
 the repo:
 
 ```
-#12 eligible=True sessions=3/3 days=2/2 open_prs=0/2 watching=True considered=False
+#12 eligible=True sessions=3/3 days=2/2 open_prs=0/2 watching=True considered=False older=0
 ```
 
-Counts are **judge-accepted** observations only (distinct sessions, distinct UTC days);
-unjudged observations count as not-yet. `eligible=True` already accounts for the
+Counts are **judge-accepted** observations from the last 30 days only (distinct sessions,
+distinct UTC days); unjudged observations count as not-yet. `older` counts accepted
+observations past that window, which cannot support a PR, so a candidate with only older
+evidence stays listed and ineligible. `eligible=True` already accounts for the
 watching flag, the candidate kind's open-PR cap, and `considered` — never re-derive any
 of this. `considered=True` means the brain recorded a skip, or its run failed, with the
 candidate at this exact accepted evidence; it stays ineligible until a new or re-judged
 observation or a reopen changes that evidence, or `review reconsider` re-arms it. `open_prs`
 counts live open PRs of the candidate's kind by the repo each PR targets, parsed from the
 PR's URL.
+
+### `review evidence <ID> [--limit <n>]`
+
+Verifies a candidate's recorded quotes against their transcripts and prints JSON. It reads
+only observations from the last `window_days` (30), oldest first, and `older` counts the
+ones it left out. A row recorded without a path is looked up by session in the scan's file
+roster. `complete` is false when more rows sit past `--limit` or a row failed to render.
 
 ### `review skip <ID> --reason <why>`
 
