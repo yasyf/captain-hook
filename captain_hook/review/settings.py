@@ -35,7 +35,8 @@ class ReviewSettings(HooksSettings):
     """Session-reviewer settings, backed by environment variables with ``HOOKS_REVIEW_`` prefix.
 
     The threshold knobs gate when a candidate becomes PR-eligible (the ``*_fix``
-    variants apply to hook-misfire fix candidates), the judge knobs bound the
+    variants apply to hook-misfire fix candidates), ``evidence_window_days`` limits
+    which observations can support a PR, the judge knobs bound the
     per-session LLM verdict pass, the ``triage_*`` knobs bound the cheaper junk
     pre-screen that runs before it, and ``brain_max_turns``/``brain_max_budget_usd``
     cap the headless PR-drafting agent and ``brain_deadline_seconds`` kills a
@@ -51,6 +52,7 @@ class ReviewSettings(HooksSettings):
     min_days: int = 2
     max_open_prs: int = 2
     stale_after_days: int = 30
+    evidence_window_days: int = 30
     min_confidence: Confidence = MEDIUM
     min_sessions_fix: int = 2
     min_days_fix: int = 0

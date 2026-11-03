@@ -270,7 +270,8 @@ def show(candidate_id: int) -> None:
         click.echo(f"{key}: {value}")
     click.echo(
         f"thresholds: sessions={status.sessions} days={status.days} open_prs={status.open_prs} "
-        f"single_observation={status.single_observation} eligible={ok} considered={status.considered}"
+        f"single_observation={status.single_observation} eligible={ok} considered={status.considered} "
+        f"older={status.older}"
     )
     if outcome is not None:
         click.echo(
@@ -291,7 +292,7 @@ def show(candidate_id: int) -> None:
 @click.argument("candidate_id", type=int)
 @click.option("--limit", type=click.IntRange(1, 40), default=10)
 def evidence(candidate_id: int, limit: int) -> None:
-    """Verify recorded quotes against bounded, pinned transcript evidence."""
+    """Verify recorded quotes from the evidence window against bounded, pinned transcript evidence."""
     import asyncio
     import json
     from dataclasses import asdict
@@ -299,22 +300,35 @@ def evidence(candidate_id: int, limit: int) -> None:
     from cc_transcript.context import ContextWindow
 
     from captain_hook.review.judge import CONTEXT_BUDGET, TRIGGER_BUDGET
+    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.store import evidence_cutoff
     from captain_hook.snapshots.review import RenderedEvidence, render_review_windows
+
+    settings = ReviewSettings()
 
     async def body(store: ReviewStore) -> dict[str, object]:
         await store.candidate(candidate_id)
+        cutoff = evidence_cutoff(settings)
         rows = await store.db.sql(
             "SELECT e.text, e.context_json, e.occurred_at, e.payload_json FROM candidate_observations o "
             "JOIN feedback_events e ON e.dedup_key = o.dedup_key "
-            "WHERE o.candidate_id = ? ORDER BY o.id LIMIT ?",
-            (candidate_id, limit + 1),
+            "WHERE o.candidate_id = ? AND o.occurred_at >= ? ORDER BY o.id LIMIT ?",
+            (candidate_id, cutoff, limit + 1),
+        )
+        older = await store.db.sql(
+            "SELECT count(*) AS older FROM candidate_observations WHERE candidate_id = ? AND occurred_at < ?",
+            (candidate_id, cutoff),
         )
         selected = rows[:limit]
         windows = [ContextWindow.from_json(str(row["context_json"])) for row in selected]
         rendered = await asyncio.to_thread(
             render_review_windows,
             windows,
-            source_paths=[json.loads(str(row["payload_json"])).get("source_path") for row in selected],
+            source_paths=[
+                json.loads(str(row["payload_json"])).get("source_path")
+                or await store.transcript_path(window.anchor.session_id)
+                for row, window in zip(selected, windows, strict=True)
+            ],
             render={
                 "before": asdict(CONTEXT_BUDGET),
                 "trigger": asdict(TRIGGER_BUDGET),
@@ -323,6 +337,8 @@ def evidence(candidate_id: int, limit: int) -> None:
         )
         return {
             "candidate_id": candidate_id,
+            "window_days": settings.evidence_window_days,
+            "older": older[0]["older"],
             "complete": len(rows) <= limit and not any(isinstance(item, Exception) for item in rendered),
             "evidence": [
                 {
@@ -375,7 +391,7 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
             lines.append(
                 f"#{cid} eligible={eligible} {progress}"
                 f" open_prs={status.open_prs}/{open_pr_cap(status.kind, settings=settings)} watching={status.watching}"
-                f" considered={status.considered}"
+                f" considered={status.considered} older={status.older}"
             )
         return lines
 

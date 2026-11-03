@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -62,6 +62,18 @@ async def seed_pr_open(url: str, *, rule: str = "r", repo: RepoKey = GIT_REPO_KE
         )
         await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url, pr_opened_at=datetime.now(UTC))
         return candidate_id
+
+
+async def age_observations(*, days: int, drop_paths: bool) -> None:
+    async with await ReviewStore.open(db_path()) as store:
+        await store.db.execute(
+            "UPDATE candidate_observations SET occurred_at = ?",
+            ((datetime.now(UTC) - timedelta(days=days)).isoformat(),),
+        )
+        if drop_paths:
+            await store.db.execute(
+                "UPDATE feedback_events SET payload_json = json_remove(payload_json, '$.source_path')"
+            )
 
 
 async def seed_pack_fix() -> int:
@@ -254,7 +266,10 @@ class TestListShowThreshold:
     def test_threshold_check_reports_eligibility(self, scanned_repo: Path) -> None:
         result = invoke("threshold-check", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False considered=False" in result.output
+        assert (
+            "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False considered=False older=0"
+            in result.output
+        )
 
     def test_skip_holds_the_candidate_and_show_prints_the_reason(self, scanned_repo: Path) -> None:
         result = invoke("skip", "1", "--reason", "no quote verified", root=scanned_repo)
@@ -271,26 +286,40 @@ class TestListShowThreshold:
         result = invoke("skip", "999", "--reason", "gone", root=scanned_repo)
         assert result.exit_code != 0
 
-    def test_evidence_passes_no_path_for_a_row_without_one(
-        self, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch
+    def test_evidence_finds_the_transcript_of_a_recent_row_without_a_path(
+        self, tmp_path: Path, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        transcript = write_transcript(tmp_path / "sess-1.jsonl", correction_entries(cwd=str(scanned_repo)))
+        assert invoke("scan", "--transcript", str(transcript), root=scanned_repo).exit_code == 0
         seen: list[str | None] = []
 
         def capture(windows: object, *, source_paths: list[str | None], render: object) -> list[None]:
             seen.extend(source_paths)
             return [None for _ in source_paths]
 
-        async def drop_paths() -> None:
-            async with await ReviewStore.open(db_path()) as store:
-                await store.db.execute(
-                    "UPDATE feedback_events SET payload_json = json_remove(payload_json, '$.source_path')"
-                )
-
-        asyncio.run(drop_paths())
+        asyncio.run(age_observations(days=29, drop_paths=True))
+        monkeypatch.setenv("HOOKS_REVIEW_EVIDENCE_WINDOW_DAYS", "30")
         monkeypatch.setattr("captain_hook.snapshots.review.render_review_windows", capture)
         result = invoke("evidence", "1", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert seen == [None]
+        assert seen == [str(transcript)]
+        report = json.loads(result.output)
+        assert (report["window_days"], report["older"], len(report["evidence"])) == (30, 0, 1)
+
+    def test_evidence_never_renders_a_row_older_than_the_window(
+        self, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def forbidden(windows: list[object], *, source_paths: list[str | None], render: object) -> list[None]:
+            assert windows == []
+            return []
+
+        asyncio.run(age_observations(days=31, drop_paths=False))
+        monkeypatch.setenv("HOOKS_REVIEW_EVIDENCE_WINDOW_DAYS", "30")
+        monkeypatch.setattr("captain_hook.snapshots.review.render_review_windows", forbidden)
+        result = invoke("evidence", "1", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        report = json.loads(result.output)
+        assert (report["older"], report["evidence"]) == (1, [])
 
     def test_reconsider_reports_how_many_candidates_it_rearmed(self, scanned_repo: Path) -> None:
         result = invoke("reconsider", root=scanned_repo)

@@ -58,6 +58,11 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(autouse=True)
+def evidence_window_spans_fixture_dates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOOKS_REVIEW_EVIDENCE_WINDOW_DAYS", "36500")
+
+
+@pytest.fixture(autouse=True)
 def deny_installed_processes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CAPT_HOOK_TEST_NO_LIVE", "1")
     start = subprocess.Popen
