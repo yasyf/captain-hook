@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "37 9 * * *"
+    - cron: "37 5 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
