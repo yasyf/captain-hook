@@ -94,6 +94,9 @@ REVIEW_CONTEXT_EVENTS = 1024
 REVIEW_PASS_PAGES = 64
 """Owner pages one pass holds in memory before it ingests them and asks for the rest."""
 
+DEFERRED_STATUSES = frozenset({"retained_limit", "lease_limit", "deadline"})
+"""Owner refusals that say nothing about the transcript, so the next pass asks again."""
+
 
 class Detector(StrEnum):
     INTERRUPT = "interrupt"
@@ -233,11 +236,13 @@ class ScanReport:
         scanned: The number of transcripts parsed and recorded.
         inserted: The number of newly inserted feedback events.
         refused: The number of transcripts and correction anchors whose evidence exceeds its bound.
+        deferred: The number of transcripts the owner could not serve now, which the next pass retries.
     """
 
     scanned: int
     inserted: int
     refused: int = 0
+    deferred: int = 0
 
 
 def reason_kept(text: str) -> bool:
@@ -616,6 +621,17 @@ async def prepare_source(
     )
 
 
+async def discovered_pages(client: SnapshotClient, roots: list[str], checkpoint: str | None) -> list[dict[str, Any]]:
+    from captain_hook.snapshots.client import EvidenceIncomplete
+
+    try:
+        return await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint)))
+    except EvidenceIncomplete as exc:
+        if exc.status != "stale_cursor":
+            raise
+    return await asyncio.to_thread(lambda: list(client.pages("discover", roots=roots, checkpoint=None)))
+
+
 async def scan_transcript(
     store: ReviewStore, path: Path, *, settings: ReviewSettings, repo_key: RepoKey | None = None
 ) -> ScanReport:
@@ -635,22 +651,19 @@ async def scan(
         return ScanReport(0, 0)
     checkpoint_key = f"snapshot_discovery:{dedup_key(*roots)}"
     checkpoint = await store.meta(checkpoint_key)
-    scanned = inserted = refused = 0
+    scanned = inserted = refused = deferred = 0
     next_checkpoint = None
     policy = ReviewPolicy()
     try:
         async with CorrectionLedger() as ledger:
             with review_client() as client:
                 try:
-                    pages = await asyncio.to_thread(
-                        lambda: list(client.pages("discover", roots=roots, checkpoint=checkpoint))
-                    )
+                    pages = await discovered_pages(client, roots, checkpoint)
                 except EvidenceIncomplete as exc:
-                    if exc.status != "stale_cursor":
+                    if exc.status not in DEFERRED_STATUSES:
                         raise
-                    pages = await asyncio.to_thread(
-                        lambda: list(client.pages("discover", roots=roots, checkpoint=None))
-                    )
+                    logger.warning(f"transcript discovery deferred to the next pass: {exc.status}: {exc.reason}")
+                    return ScanReport(0, 0, deferred=1)
                 for page in pages:
                     next_checkpoint = page["checkpoint"]
                     for entry in page["entries"]:
@@ -674,6 +687,13 @@ async def scan(
                                     recorded=ledger.recorded,
                                 )
                             except EvidenceIncomplete as exc:
+                                if exc.status in DEFERRED_STATUSES:
+                                    logger.bind(transcript=path).warning(
+                                        f"transcript evidence deferred to the next pass: {path}: "
+                                        f"{exc.status}: {exc.reason}"
+                                    )
+                                    deferred += 1
+                                    break
                                 if exc.status not in {"output_limit", "source_limit", "entry_limit"}:
                                     raise
                                 logger.bind(transcript=path).warning(f"transcript evidence refused: {exc.reason}")
@@ -694,6 +714,6 @@ async def scan(
                                 break
     finally:
         await policy.close()
-    if next_checkpoint is not None:
+    if next_checkpoint is not None and not deferred:
         await store.set_meta(checkpoint_key, next_checkpoint)
-    return ScanReport(scanned, inserted, refused)
+    return ScanReport(scanned, inserted, refused, deferred)
