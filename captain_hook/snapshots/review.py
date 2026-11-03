@@ -15,10 +15,11 @@ from cc_transcript.context import ContextWindow
 from cc_transcript.corrections import Correction
 from loguru import logger
 
-from captain_hook.snapshots.client import MAX_RESULT_BYTES, EvidenceIncomplete
-from captain_hook.snapshots.client import client_scope as review_client
+from captain_hook.snapshots.client import MAX_RESULT_BYTES, EvidenceIncomplete, client_scope
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     from cc_transcript.ids import EventRef
     from cc_transcript.mining.candidates import FeedbackCandidate
     from cc_transcript.models import TranscriptEvent
@@ -31,6 +32,10 @@ CORRECTION_PICK = (
     "Which numbered candidate edit does the developer's feedback fault? Pick none when the feedback is not about any "
     "of them."
 )
+
+
+def review_client() -> AbstractContextManager[SnapshotClient]:
+    return client_scope(retry_retained=False)
 
 
 class ReviewPolicy:

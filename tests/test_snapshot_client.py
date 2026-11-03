@@ -907,6 +907,41 @@ def test_retain_queues_for_admission_within_the_foreground_deadline():
     assert len(requests) == 3
 
 
+def test_a_client_that_does_not_retry_admission_refuses_after_one_request():
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+
+    client = SnapshotClient(exchange, retry_retained=False)
+    client.bind_tool_registry({})
+
+    with pytest.raises(EvidenceIncomplete) as refused:
+        client.review_events(Path("/tmp/root.jsonl"), watermark=None, context_events=1, max_pages=1)
+
+    assert refused.value.status == "retained_limit"
+    assert [request["operation"] for request in requests] == ["review_events"]
+
+
+def test_a_client_that_does_not_retry_admission_still_retries_a_release():
+    requests = []
+
+    def exchange(wrapper):
+        request = wrapper["request"]
+        requests.append(request)
+        if len(requests) < 3:
+            return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy")}
+        return response(request, {"kind": "released", "released": True})
+
+    client = SnapshotClient(exchange, retry_retained=False)
+    client.bind_tool_registry({})
+
+    assert client.call("release", handle={"owner_epoch": "owner", "lease_id": "lease"})["status"] == "ok"
+    assert len(requests) == 3
+
+
 def test_call_returns_the_usage_of_every_reply_it_retried():
     requests = []
     busy_usage = {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096}

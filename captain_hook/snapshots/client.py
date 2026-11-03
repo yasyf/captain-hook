@@ -388,6 +388,7 @@ class SnapshotClient:
         root_warm_scheduler: Callable[[SnapshotClient, Path, Mapping[str, str], int | None], None] | None = None,
         defer_cleanup: bool = False,
         foreground_seconds: float | None = None,
+        retry_retained: bool = True,
     ) -> None:
         self._exchange = exchange
         self._cleanup_exchange = cleanup_exchange or exchange
@@ -398,6 +399,7 @@ class SnapshotClient:
         self._defer_cleanup = defer_cleanup
         self._deferred_cursors: set[tuple[str, str | None]] = set()
         self._foreground_seconds = foreground_seconds
+        self._retry_retained = retry_retained
         self.foreground_deadline_unix_ms: int | None = None
         self._prefix = uuid.uuid4().hex
         self._counter = 0
@@ -545,7 +547,11 @@ class SnapshotClient:
             ):
                 observed |= summed_usage(observed, result["usage"])
                 raise EvidenceIncomplete("deadline", "lease expired at the foreground transcript deadline")
-            if result.get("status") != "retained_limit" or operation in CURSOR_CONSUMING_OPERATIONS:
+            if (
+                result.get("status") != "retained_limit"
+                or operation in CURSOR_CONSUMING_OPERATIONS
+                or not (self._retry_retained or operation == "release")
+            ):
                 return with_observed_usage(result, observed)
             if retry_until is None:
                 horizon = int(request.get("deadline_unix_ms", admission_deadline_unix_ms))
@@ -1832,14 +1838,18 @@ def observing(predicates: Iterable[tuple[str, str]]) -> Iterator[ObserverPlan | 
 
 
 @contextmanager
-def client_scope(*, defer_cleanup: bool = False, event: int = 0) -> Iterator[SnapshotClient]:
+def client_scope(
+    *, defer_cleanup: bool = False, event: int = 0, retry_retained: bool = True
+) -> Iterator[SnapshotClient]:
     from captain_hook.snapshots.validation import wire_numbers
 
     if (current := CURRENT_CLIENT.get()) is not None:
         yield current
         return
     bridge = Bridge(event=event)
-    client = SnapshotClient(lambda value: wire_numbers(bridge(value)), defer_cleanup=defer_cleanup)
+    client = SnapshotClient(
+        lambda value: wire_numbers(bridge(value)), defer_cleanup=defer_cleanup, retry_retained=retry_retained
+    )
     token = CURRENT_CLIENT.set(client)
     try:
         yield client

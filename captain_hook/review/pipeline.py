@@ -72,6 +72,7 @@ class SpawnReport:
         scanned: How many transcripts the incremental scan parsed.
         inserted: How many new feedback events the scan recorded.
         refused: How many transcripts and correction anchors the scan refused because their evidence exceeds its bound.
+        deferred: How many transcripts the owner could not serve now, which the next pass retries.
         triaged: How many surviving create events the junk pre-screen classified.
         triage_junk: How many of those the pre-screen marked junk.
         triage_rejected: How many candidates the pre-screen retired without a judge call.
@@ -95,6 +96,7 @@ class SpawnReport:
     scanned: int = 0
     inserted: int = 0
     refused: int = 0
+    deferred: int = 0
     triaged: int = 0
     triage_junk: int = 0
     triage_rejected: int = 0
@@ -680,6 +682,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
             scanned=scan_report.scanned,
             inserted=scan_report.inserted,
             refused=scan_report.refused,
+            deferred=scan_report.deferred,
             sweep=sweep,
         )
         with judge_lock(settings) as claimed:

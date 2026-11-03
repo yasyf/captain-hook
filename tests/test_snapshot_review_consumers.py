@@ -704,6 +704,56 @@ async def test_a_scan_pages_a_long_transcript_across_passes_until_caught_up(
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)
+async def test_a_scan_skips_a_transcript_the_owner_refuses_and_reviews_it_on_the_next_pass(
+    tmp_path, store, settings, prepared_batches, monkeypatch
+):
+    parser, lexer = corrected_edit("parser"), corrected_edit("lexer")
+    refused = write_transcript(tmp_path / "a.jsonl", parser)
+    write_transcript(tmp_path / "b.jsonl", lexer)
+    owner = CURRENT_CLIENT.get()
+    review_events = owner.review_events
+    requests = Counter()
+
+    def refused_once(path, **arguments):
+        requests[path] += 1
+        if path == refused and requests[path] == 1:
+            raise EvidenceIncomplete("retained_limit", "accounted storage admission exhausted")
+        return review_events(path, **arguments)
+
+    monkeypatch.setattr(owner, "review_events", refused_once)
+    checkpoint_key = f"snapshot_discovery:{dedup_key(str(tmp_path.absolute()))}"
+
+    first = await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)
+
+    assert (first.scanned, first.refused, first.deferred) == (1, 0, 1)
+    assert requests[refused] == 1
+    assert prepared_batches == [[anchor_uuid(lexer)]]
+    assert await store.meta(f"snapshot_refused:{dedup_key(str(refused))}") is None
+    assert await store.meta(f"snapshot_revision:{dedup_key(str(refused))}") is None
+    assert await store.meta(checkpoint_key) is None
+
+    second = await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)
+
+    assert (second.scanned, second.refused, second.deferred) == (1, 0, 0)
+    assert prepared_batches == [[anchor_uuid(lexer)], [anchor_uuid(parser)]]
+    assert await store.meta(checkpoint_key) == "fixture-checkpoint"
+
+
+@pytest.mark.usefixtures(native_review_owner.__name__)
+async def test_a_scan_ends_quietly_when_the_owner_refuses_discovery(tmp_path, store, settings, monkeypatch):
+    write_transcript(tmp_path / "a.jsonl", corrected_edit("parser"))
+
+    def refused(operation, **arguments):
+        raise EvidenceIncomplete("retained_limit", "accounted storage admission exhausted")
+
+    monkeypatch.setattr(CURRENT_CLIENT.get(), "pages", refused)
+
+    report = await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)
+
+    assert report == ScanReport(0, 0, deferred=1)
+
+
+@pytest.mark.usefixtures(native_review_owner.__name__)
 async def test_corrections_cover_an_anchor_after_a_turn_larger_than_one_record(tmp_path, settings):
     entries = [*bulky_turn("audit", 16), *corrected_edit("parser")]
     eligible, drafted, refused = await prepared_anchors(write_transcript(tmp_path / "s.jsonl", entries), settings)
