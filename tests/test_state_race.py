@@ -240,7 +240,7 @@ class TestNlpLoadRace:
 
         loads: list[str] = []
 
-        def slow_load(*_args: object) -> object:
+        def slow_load(*_args: object, **_kwargs: object) -> object:
             loads.append(resource)
             time.sleep(0.05)
             return object()
@@ -284,7 +284,7 @@ class TestNlpLoadRace:
         pipeline = object()
         monkeypatch.setattr(spacy.util, "is_package", lambda _name: True)
 
-        def load_pipeline(_name: str) -> object:
+        def load_pipeline(_name: str, **_kwargs: object) -> object:
             slow_load("spacy")
             return pipeline
 
