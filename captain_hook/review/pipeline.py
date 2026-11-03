@@ -85,6 +85,8 @@ class SpawnReport:
         brain_prs: How many candidates the brain moved into ``pr_open`` this pass.
         brain_skips: How many eligible candidates the brain left ``watching`` — a
             logged skip (vanished target, no verifiable evidence), not a failure.
+        brain_held: How many candidates cross their thresholds but stay held because
+            the brain already considered them at their current evidence.
         synced_merged: How many open PRs merged, accepting their candidate.
         synced_closed: How many open PRs closed, rejecting their candidate.
         synced_kept: How many open PRs stayed open (fresh or ``gh``-unreachable).
@@ -108,6 +110,7 @@ class SpawnReport:
     brain_seconds: float | None = None
     brain_prs: int = 0
     brain_skips: int = 0
+    brain_held: int = 0
     synced_merged: int = 0
     synced_closed: int = 0
     synced_kept: int = 0
@@ -644,7 +647,8 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     Scan, judge, and PR sync run whenever the repo is watched — verdicts
     amortize per session, and summary-fidelity verdicts re-judge once their
     windows hydrate again — and the brain spawns only when at least one
-    candidate is eligible. The scan sweeps the transcript's whole parent
+    candidate is eligible, which a candidate it already considered is not until
+    its evidence changes. The scan sweeps the transcript's whole parent
     directory through the mtime watermark, so ending one session also picks up
     the corrections of every still-open sibling session in the same repo, while
     the brain still acts only on the current cwd's eligible candidates.
@@ -666,7 +670,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
 
     from captain_hook.review.judge import judge_pass
     from captain_hook.review.scan import scan
-    from captain_hook.review.store import CandidateStatus, ReviewStore
+    from captain_hook.review.store import CandidateStatus, ReviewStore, crosses_thresholds
     from captain_hook.review.sync import sync_open_prs
     from captain_hook.review.triage import triage_pass
 
@@ -704,7 +708,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     brain = False
     brain_exit: int | None = None
     brain_seconds: float | None = None
-    brain_prs = brain_skips = 0
+    brain_prs = brain_skips = brain_held = 0
     # The global lock spans the eligibility read through the brain and the pr_open set-diff,
     # so a concurrent pass — in this repo or any other sharing the db — can neither
     # double-spawn nor leak its transitions into this count.
@@ -712,12 +716,18 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         with brain_lock(settings) as claimed:
             if claimed:
                 async with await ReviewStore.open(settings.db_path) as store:
-                    eligible_ids: list[int] = []
-                    for row in await store.candidates(repo, status=CandidateStatus.WATCHING):
-                        candidate_id = int(str(row["id"]))
-                        if await store.eligible(candidate_id, settings=settings):
-                            eligible_ids.append(candidate_id)
-                    eligible = tuple(eligible_ids)
+                    statuses = await store.threshold_statuses(
+                        await store.candidates(repo, status=CandidateStatus.WATCHING), settings=settings
+                    )
+                    eligible = tuple(
+                        candidate_id
+                        for candidate_id, status in statuses.items()
+                        if crosses_thresholds(status, settings=settings)
+                    )
+                    brain_held = sum(
+                        status.considered and crosses_thresholds(replace(status, considered=False), settings=settings)
+                        for status in statuses.values()
+                    )
                     opened_before = await pr_open_ids(store, repo)
                 if eligible:
                     brain = True
@@ -725,7 +735,12 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
                     brain_exit, brain_seconds = outcome.exit_code, outcome.seconds
                     async with await ReviewStore.open(settings.db_path) as store:
                         brain_prs = len(await pr_open_ids(store, repo) - opened_before)
-                        brain_skips = len(set(eligible) & await watching_ids(store, repo))
+                        left_watching = set(eligible) & await watching_ids(store, repo)
+                        brain_skips = len(left_watching)
+                        for candidate_id in left_watching:
+                            await store.record_brain_outcome(
+                                candidate_id, evidence=statuses[candidate_id].evidence, exit_code=outcome.exit_code
+                            )
             else:
                 logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
     return replace(
@@ -736,6 +751,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         brain_seconds=brain_seconds,
         brain_prs=brain_prs,
         brain_skips=brain_skips,
+        brain_held=brain_held,
         synced_merged=sync.accepted if sync else 0,
         synced_closed=sync.rejected if sync else 0,
         synced_kept=(sync.kept + sync.unreachable) if sync else 0,

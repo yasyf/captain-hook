@@ -184,9 +184,12 @@ uvx capt-hook review list             # the repo's candidates and their status
 uvx capt-hook review show <id>        # one candidate's row and threshold status
 uvx capt-hook review threshold-check  # which candidates currently cross the bar
 uvx capt-hook review sync-prs         # fold merged/closed PR states back into candidates
+uvx capt-hook review reconsider       # re-arm candidates the brain already considered
 ```
 
 `update` moves a candidate's status by hand — useful when you want to override the automatic flow.
+
+The brain runs only for candidates it has not yet considered at their current evidence. A candidate it leaves `watching` shows `considered=True` and costs no further run until a new or re-judged observation changes its evidence. Run `reconsider` after fixing whatever made the brain skip it.
 
 ## Turn it off
 

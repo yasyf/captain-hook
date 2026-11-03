@@ -252,7 +252,12 @@ class TestListShowThreshold:
     def test_threshold_check_reports_eligibility(self, scanned_repo: Path) -> None:
         result = invoke("threshold-check", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False" in result.output
+        assert "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False considered=False" in result.output
+
+    def test_reconsider_reports_how_many_candidates_it_rearmed(self, scanned_repo: Path) -> None:
+        result = invoke("reconsider", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert result.output == "0 candidate(s) re-armed\n"
 
 
 class TestUpdateAndSyncPrs:

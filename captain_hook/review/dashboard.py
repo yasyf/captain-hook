@@ -129,7 +129,7 @@ def pr_link(view: CandidateView) -> str:
 def lead_detail(view: CandidateView, settings: ReviewSettings) -> str:
     match stage_of(view):
         case Stage.WATCHING:
-            return progress_text(view, settings)
+            return f"{'brain considered  ·  ' if view.threshold.considered else ''}{progress_text(view, settings)}"
         case Stage.ELIGIBLE:
             return f"ready  ·  {progress_text(view, settings)}"
         case _:

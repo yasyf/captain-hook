@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from typing import TYPE_CHECKING
@@ -22,6 +22,7 @@ from captain_hook.review.dashboard import (
     REJECTED_COLLAPSE_N,
     Stage,
     brain_segment,
+    lead_detail,
     pr_description,
     progress_text,
     render,
@@ -281,6 +282,13 @@ class TestProgress:
         )
         assert "sessions" in text and "1/2" in text
         assert "days" not in text
+
+    def test_a_candidate_the_brain_considered_says_so(self) -> None:
+        settings = ReviewSettings()
+        watching = view(status="watching", sessions=3, days=2)
+        considered = replace(watching, threshold=replace(watching.threshold, considered=True))
+        assert "brain considered" in lead_detail(considered, settings)
+        assert "brain considered" not in lead_detail(watching, settings)
 
 
 class TestRenderFrame:

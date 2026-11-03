@@ -253,24 +253,30 @@ def show(candidate_id: int) -> None:
 
     async def body(
         store: ReviewStore,
-    ) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...]]:
+    ) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...], dict[str, object] | None]:
         return (
             await store.candidate(candidate_id),
             await store.threshold_status(candidate_id, settings=settings),
             await store.eligible(candidate_id, settings=settings),
             await store.correction_evidence(candidate_id),
+            await store.brain_outcome(candidate_id),
         )
 
     try:
-        row, status, ok, evidence = run_store(body)
+        row, status, ok, evidence, outcome = run_store(body)
     except LookupError as exc:
         raise click.ClickException(str(exc)) from exc
     for key, value in row.items():
         click.echo(f"{key}: {value}")
     click.echo(
         f"thresholds: sessions={status.sessions} days={status.days} open_prs={status.open_prs} "
-        f"single_observation={status.single_observation} eligible={ok}"
+        f"single_observation={status.single_observation} eligible={ok} considered={status.considered}"
     )
+    if outcome is not None:
+        click.echo(
+            f"brain: {outcome['outcome']} exit={outcome['exit_code']} at {outcome['considered_at']} "
+            f"evidence={outcome['evidence']}"
+        )
     if row["pack_name"]:
         click.echo(
             f"routing: target_repo={row['repo_key']} pack={row['pack_name']} origin_repo={row['origin_repo_key']}"
@@ -371,6 +377,7 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
             lines.append(
                 f"#{cid} eligible={eligible} {progress}"
                 f" open_prs={status.open_prs}/{open_pr_cap(status.kind, settings=settings)} watching={status.watching}"
+                f" considered={status.considered}"
             )
         return lines
 
@@ -382,6 +389,23 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
         click.echo("no candidates")
     for line in lines:
         click.echo(line)
+
+
+@review.command()
+@click.argument("candidate_id", type=int, required=False)
+@click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
+@click.pass_obj
+def reconsider(state: CliState, candidate_id: int | None, repo_: str | None) -> None:
+    """Make candidates the brain already considered eligible again without new evidence."""
+
+    async def body(store: ReviewStore) -> int:
+        return await store.reconsider(
+            [candidate_id]
+            if candidate_id is not None
+            else [int(str(row["id"])) for row in await store.candidates(resolve_repo(repo_, state.root))]
+        )
+
+    click.echo(f"{run_store(body)} candidate(s) re-armed")
 
 
 @review.command()
