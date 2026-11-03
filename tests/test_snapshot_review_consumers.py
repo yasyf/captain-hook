@@ -742,7 +742,15 @@ async def test_a_scan_skips_a_transcript_the_owner_refuses_and_reviews_it_on_the
     write_transcript(tmp_path / "b.jsonl", lexer)
     owner = CURRENT_CLIENT.get()
     review_events = owner.review_events
+    discovery_pages = owner.pages
+    checkpoints = []
     requests = Counter()
+
+    def recorded_pages(operation, **arguments):
+        for page in discovery_pages(operation, **arguments):
+            if operation == "discover":
+                checkpoints.append(page["checkpoint"])
+            yield page
 
     def refused_once(path, **arguments):
         requests[path] += 1
@@ -751,6 +759,7 @@ async def test_a_scan_skips_a_transcript_the_owner_refuses_and_reviews_it_on_the
         return review_events(path, **arguments)
 
     monkeypatch.setattr(owner, "review_events", refused_once)
+    monkeypatch.setattr(owner, "pages", recorded_pages)
     checkpoint_key = f"snapshot_discovery:{dedup_key(str(tmp_path.absolute()))}"
 
     first = await scan(store, settings=settings, transcripts=[tmp_path], repo_key=REPO)
@@ -766,7 +775,8 @@ async def test_a_scan_skips_a_transcript_the_owner_refuses_and_reviews_it_on_the
 
     assert (second.scanned, second.refused, second.deferred) == (1, 0, 0)
     assert prepared_batches == [[anchor_uuid(lexer)], [anchor_uuid(parser)]]
-    assert await store.meta(checkpoint_key) is not None
+    assert checkpoints
+    assert await store.meta(checkpoint_key) == checkpoints[-1]
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)
