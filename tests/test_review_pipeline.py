@@ -159,6 +159,7 @@ def synthetic(text: str, signal: CandidateSignal) -> FeedbackCandidate:
         ref=anchor,
         session_id=SessionId("s1"),
         signal=signal,
+        payload={"source_path": "/fixture-transcripts/s1.jsonl"},
     )
 
 
@@ -186,7 +187,12 @@ async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str =
         misfire_class="refire",
     )
     key = dedup_key("hook_complaint", session, FIX_TARGET_HOOK)
-    payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(VERY_HIGH), ("marker",)))})
+    payload = json.dumps(
+        {
+            "signal": to_payload(CandidateSignal(Confidence(VERY_HIGH), ("marker",))),
+            "source_path": f"/fixture-transcripts/{session}.jsonl",
+        }
+    )
     await store.db.execute(
         "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
         "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')",
@@ -1015,6 +1021,7 @@ class TestJudgePass:
             payload = json.dumps(
                 {
                     "signal": to_payload(firm()),
+                    "source_path": "/fixture-transcripts/complaint.jsonl",
                     "target_hook_name": "status_nudge:nudge_c424798f",
                     "event": "PreToolUse",
                     "action": "warn",

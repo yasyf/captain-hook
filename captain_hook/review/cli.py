@@ -299,7 +299,7 @@ def evidence(candidate_id: int, limit: int) -> None:
     from cc_transcript.context import ContextWindow
 
     from captain_hook.review.judge import CONTEXT_BUDGET, TRIGGER_BUDGET
-    from captain_hook.snapshots.review import RenderedEvidence, render_review_windows, review_roots
+    from captain_hook.snapshots.review import RenderedEvidence, render_review_windows
 
     async def body(store: ReviewStore) -> dict[str, object]:
         await store.candidate(candidate_id)
@@ -311,12 +311,10 @@ def evidence(candidate_id: int, limit: int) -> None:
         )
         selected = rows[:limit]
         windows = [ContextWindow.from_json(str(row["context_json"])) for row in selected]
-        source_paths = [json.loads(str(row["payload_json"])).get("source_path") for row in selected]
         rendered = await asyncio.to_thread(
             render_review_windows,
             windows,
-            source_paths=source_paths,
-            roots=review_roots(list(await store.file_mtimes())) if None in source_paths else [],
+            source_paths=[json.loads(str(row["payload_json"])).get("source_path") for row in selected],
             render={
                 "before": asdict(CONTEXT_BUDGET),
                 "trigger": asdict(TRIGGER_BUDGET),
