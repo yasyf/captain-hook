@@ -552,7 +552,7 @@ def test_an_actor_confirm_failure_notes_once_and_keeps_provider_text_out(
             for c in ("git push origin feat", "git push origin main")
         ]
     message = "queued_push: allowed, the confirm step got no answer from Jev"
-    assert results == [HookResult(action=Action.warn, message=message, approve=False), None]
+    assert results == [HookResult(action=Action.warn, message=message), None]
     assert keys == [SENTINEL, SENTINEL]
     assert "decide (jev) failed" in logcap.text
     assert not [secret for secret in (PROVIDER_TEXT, OTHER, SENTINEL) if secret in logcap.text]

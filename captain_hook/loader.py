@@ -211,7 +211,6 @@ def register_load_error_warnings(errors: Sequence[LoadError]) -> None:
         return HookResult(
             action=Action.warn,
             message=notice,
-            approve=False,
             system_message=notice if evt.event is Event.PermissionRequest else None,
         )
 

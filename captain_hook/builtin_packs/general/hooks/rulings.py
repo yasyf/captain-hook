@@ -223,7 +223,6 @@ def nudge(found: list[tuple[Ruling, str]]) -> HookResult:
     ids = " ".join(f"`{r.short}`" for r, _ in found)
     return HookResult(
         action=Action.warn,
-        approve=False,
         message=f"This change may contradict the standing decisions {ids}. Read each with `ccn show <id>` and fix "
         "the change where it does.",
         system_message="rules_nudge: " + "; ".join(f"{r.short} ({r.title}): {sentence}" for r, sentence in found),

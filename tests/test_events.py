@@ -571,9 +571,6 @@ class TestWarnParts:
     def test_warn_action_is_warn(self) -> None:
         assert make_event(StopEvent, {}).warn("x").action is Action.warn
 
-    def test_warn_approves_by_default(self) -> None:
-        assert make_event(StopEvent, {}).warn("x").approve is True
-
 
 class TestContextParts:
     @pytest.mark.parametrize(
@@ -585,13 +582,10 @@ class TestContextParts:
         ],
     )
     def test_context_shares_warn_rendering(self, parts: tuple[object, ...], expected: str) -> None:
-        # context renders identically to warn — same _render_part path — but never pre-approves.
         assert make_event(StopEvent, {}).context(*parts).message == expected
 
-    def test_context_is_warn_action_without_approve(self) -> None:
-        result = make_event(StopEvent, {}).context("x")
-        assert result.action is Action.warn
-        assert result.approve is False
+    def test_context_is_a_warn(self) -> None:
+        assert make_event(StopEvent, {}).context("x") == make_event(StopEvent, {}).warn("x")
 
 
 class TestTranscriptPath:

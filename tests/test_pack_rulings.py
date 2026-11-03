@@ -18,6 +18,8 @@ from captain_hook.builtin_packs.general.hooks.rulings import (
     nudge,
     shortlist,
 )
+from captain_hook.results import format_output
+from captain_hook.types import Event
 
 LEDGER = Ruling(*LEDGER_RULING)
 SLACK = Ruling(*SLACK_RULING)
@@ -64,7 +66,7 @@ def test_named_drops_ids_the_shortlist_never_offered() -> None:
 
 def test_nudge_shows_the_sentence_to_the_user_without_approving_the_call() -> None:
     result = nudge([(LEDGER, "resolve.go reads the applied commit from the ledger.")])
-    assert result.approve is False
+    assert "permissionDecision" not in format_output(Event.PreToolUse, result)["hookSpecificOutput"]
     assert "`ec2881e`" in (result.message or "")
     assert "resolve.go reads the applied commit from the ledger." in (result.system_message or "")
 

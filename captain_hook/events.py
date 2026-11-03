@@ -618,14 +618,8 @@ class BaseHookEvent:
         )
 
     def context(self, *parts: str | tuple[str, object] | object, system_message: str | None = None) -> HookResult:
-        r"""Emit advisory context exactly like :meth:`warn`, but without pre-approving the tool.
-
-        Renders and joins *parts* through the same path as :meth:`warn`, then returns a
-        ``warn``-action result with ``approve=False``. On ``PreToolUse`` this drops the
-        ``permissionDecision: allow`` rider a plain warn carries, so the message surfaces as
-        pure ``additionalContext`` and Claude Code's own permission flow still decides the tool.
-        """
-        return replace(self.warn(*parts, system_message=system_message), approve=False)
+        """Emit advisory context: the same ``warn`` result as :meth:`warn`, which approves nothing."""
+        return self.warn(*parts, system_message=system_message)
 
     def block(self, message: str, *, confirm: Confirm | None = None, system_message: str | None = None) -> HookResult:
         """Block with ``message``; with ``confirm``, only once a small model confirms the match.
@@ -794,7 +788,7 @@ class ToolRewriteEvent(ToolHookEvent):
     """
 
     def rewrite(self, updated_input: dict[str, Any], *, note: str | None = None) -> HookResult:
-        """Allow the tool but replace its input with ``updated_input`` (Claude Code's ``updatedInput``).
+        """Replace the tool's input with ``updated_input`` (Claude Code's ``updatedInput``), granting no permission.
 
         ``updated_input`` must satisfy the same tool's schema; ``note`` surfaces as
         ``additionalContext`` so the model sees that its input was rewritten.
@@ -809,7 +803,7 @@ class ToolRewriteEvent(ToolHookEvent):
         return self.rewrite({**self._tool_input, "command": new_command}, note=note)
 
     def rewrite_content(self, transform: Callable[[str], str], *, note: str | None = None) -> HookResult | None:
-        """Rewrite each editable-content field through ``transform``, allowing the tool with the result.
+        """Rewrite each editable-content field through ``transform``, leaving the rewritten call to the permission mode.
 
         Maps the transform onto whichever field holds new source for this tool — an Edit's
         ``new_string``, a Write's ``content``, a NotebookEdit's ``new_source``, or every span of a

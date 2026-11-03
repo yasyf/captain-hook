@@ -119,7 +119,7 @@ The regex condition would have matched here too: `Command(r"git\s+stash")` searc
 
 **Format the verdict.** The block renders as a `PreToolUse` deny envelope on stdout, `permissionDecision: "deny"` with the message as `permissionDecisionReason`. Claude Code reads the deny and skips the tool call. Claude sees the reason and reaches for `jj shelve`.
 
-Set `block=False` and the same trace ends in a warning instead. The envelope swaps `permissionDecision: "deny"` for `additionalContext`, so Claude reads the message as advice and the tool still runs.
+Set `block=False` and the same trace ends in a warning instead. The envelope swaps `permissionDecision: "deny"` for `additionalContext`, so Claude reads the message as advice and the call goes to Claude Code's permission rules and mode, as if no hook had answered. Only an `allow`, from `approve()` or `evt.allow()`, grants permission; a warning or a rewrite never does.
 
 ## A hook is data, not a script
 

@@ -397,7 +397,7 @@ class TestRmTrashRewrite:
     def assert_rewrite(result: dict[str, Any] | None, command: str) -> dict[str, Any]:
         assert result is not None
         output = result["hookSpecificOutput"]
-        assert output["permissionDecision"] == "allow"
+        assert "permissionDecision" not in output
         assert output["updatedInput"] == {"command": command}
         assert "Trash" in output["additionalContext"]
         return output

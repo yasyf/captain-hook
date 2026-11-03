@@ -764,7 +764,7 @@ class TestLift:
         ticket = minted()
         result = execute_hook(entry(declared(action=proposal)), event(tmp_path))
         assert result == HookResult(
-            action=Action.warn, message=f"needs_ticket: allowed by ticket `{ticket.id}` (seed).", approve=False
+            action=Action.warn, message=f"needs_ticket: allowed by ticket `{ticket.id}` (seed)."
         )
 
     def test_a_hook_with_tickets_keeps_its_block_and_tells_the_user_why(self, tmp_path: Path) -> None:

@@ -128,7 +128,7 @@ def assert_not_denied(result: dict[str, Any] | None) -> None:
 def rewritten_command(result: dict[str, Any] | None) -> str:
     assert result is not None
     output = result["hookSpecificOutput"]
-    assert output["permissionDecision"] == "allow"
+    assert "permissionDecision" not in output
     assert_meets_copy_bar(output["additionalContext"])
     return output["updatedInput"]["command"]
 

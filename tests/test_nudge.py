@@ -75,7 +75,7 @@ class TestNudgeWhenTrue:
 
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "Watch out!"
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "permissionDecision" not in result["hookSpecificOutput"]
 
 
 class TestNudgeWhenFalse:

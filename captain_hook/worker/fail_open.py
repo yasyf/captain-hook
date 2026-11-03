@@ -77,7 +77,7 @@ def tally_fail_open(event: Event | None, session_id: str, gaps: Sequence[str]) -
 
 
 def fail_open_envelope(event: Event, message: str) -> dict[str, Any]:
-    context = format_output(event, HookResult(action=Action.warn, message=message, approve=False))
+    context = format_output(event, HookResult(action=Action.warn, message=message))
     if event in (Event.Stop | Event.SubagentStop) or not isinstance(context, dict):
         context = {}
     return context | {"systemMessage": message}

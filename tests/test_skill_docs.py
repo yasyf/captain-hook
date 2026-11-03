@@ -77,7 +77,8 @@ PRIMITIVE_DESCRIPTIONS = {
     "warn_command": "warns, never blocks",
     "rewrite_command": (
         '`PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally '
-        "via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command"
+        "via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; "
+        "the permission mode judges the rewritten command"
     ),
     "set_tool_input": (
         "`PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never "
