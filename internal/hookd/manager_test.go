@@ -498,19 +498,86 @@ func readyMember(t *testing.T, manager *workerManager, key workerKey, load int) 
 	return entry
 }
 
-func TestAcquireRoutesToTheLeastLoadedMember(t *testing.T) {
+func saturatedMember(t *testing.T, manager *workerManager, key workerKey) *workerEntry {
+	t.Helper()
+	entry := readyMember(t, manager, key, 1)
+	entry.service = 2 * poolSpillWait
+	return entry
+}
+
+func TestAcquirePacksOntoTheRecentMemberBelowTheSpillWait(t *testing.T) {
 	t.Parallel()
+	now := time.Unix(1<<32, 0)
+	manager := mustWorkerManager(t)
+	manager.poolSize = 3
+	manager.now = func() time.Time { return now }
+	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
+		t.Errorf("load below the spill wait started shard %d", key.shard)
+		worker, _ := silentWorker(t)
+		return worker, nil
+	}
+	recent := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 3)
+	recent.service = 200 * time.Millisecond
+	recent.lastUsed = now.Add(-time.Second)
+	spare := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 0)
+	spare.lastUsed = now.Add(-time.Minute)
+
+	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != recent {
+		t.Fatalf("acquire routed to shard %d, want the recent member while its queue is %s", entry.key.shard, recent.queueWait())
+	}
+	manager.wg.Wait()
+}
+
+func TestAcquireSpillsPastASaturatedMember(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1<<32, 0)
 	manager := mustWorkerManager(t)
 	manager.poolSize = 2
-	loaded := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 3)
-	spare := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 1)
+	manager.now = func() time.Time { return now }
+	recent := saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0})
+	recent.lastUsed = now.Add(-time.Second)
+	spare := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 0)
+	spare.lastUsed = now.Add(-time.Minute)
 
 	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry != spare {
-		t.Fatalf("acquire routed to the member with load %d over the one with load %d", loaded.load, spare.load)
+		t.Fatalf("acquire stayed on shard %d behind a %s queue with a spare idle", entry.key.shard, recent.queueWait())
+	}
+}
+
+func TestAcquireTakesTheShortestQueueWhenEveryMemberIsSaturated(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	manager.poolSize = 2
+	longer := saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0})
+	longer.load = 3
+	shorter := saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1})
+
+	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != shorter {
+		t.Fatalf("acquire took shard %d, want the shorter queue on shard %d", entry.key.shard, shorter.key.shard)
+	}
+}
+
+func TestQueueWaitChargesAnUnseededMemberTheServiceFloor(t *testing.T) {
+	t.Parallel()
+	unseeded := &workerEntry{load: 10}
+	if unseeded.saturated() {
+		t.Fatalf("%d calls at the floor read as saturated at %s", unseeded.load, unseeded.queueWait())
+	}
+	unseeded.load = 11
+	if !unseeded.saturated() {
+		t.Fatalf("%d calls at the floor read as unsaturated at %s", unseeded.load, unseeded.queueWait())
 	}
 }
 
@@ -590,7 +657,7 @@ func TestBusyPoolGrowsOneMemberAtATime(t *testing.T) {
 		return worker, nil
 	}
 	key := workerKey{id: "pool", root: "/live"}
-	first := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 1)
+	first := saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0})
 
 	entry, _, err := manager.acquire(t.Context(), key)
 	if err != nil {
@@ -610,6 +677,7 @@ func TestBusyPoolGrowsOneMemberAtATime(t *testing.T) {
 
 	manager.mu.Lock()
 	second.load = 1
+	second.service = 2 * poolSpillWait
 	manager.mu.Unlock()
 	if _, _, err := manager.acquire(t.Context(), key); err != nil {
 		t.Fatal(err)
@@ -628,7 +696,7 @@ func TestAPoolMemberStillStartingHoldsGrowth(t *testing.T) {
 	worker, _ := silentWorker(t)
 	started, release := stallStart(manager, worker, nil)
 	defer close(release)
-	readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 1)
+	saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0})
 
 	if _, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"}); err != nil {
 		t.Fatal(err)
@@ -655,7 +723,7 @@ func TestAnEphemeralPoolNeverGrows(t *testing.T) {
 		return worker, nil
 	}
 	key := workerKey{id: "scratch", root: "/tmp/scratch"}
-	entry := readyMember(t, manager, key, 1)
+	entry := saturatedMember(t, manager, key)
 	entry.ephemeral = true
 
 	if _, _, err := manager.acquire(t.Context(), key); err != nil {

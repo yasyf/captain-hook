@@ -29,9 +29,12 @@ const (
 
 	maxLiveWorkers = 64
 
-	maxWorkersPerRoot = 8
+	maxWorkersPerRoot = 3
 
 	serviceSmoothing = 4
+
+	poolSpillWait      = time.Second
+	memberServiceFloor = 100 * time.Millisecond
 
 	// workerIdleTTL retires an interpreter no dispatch has wanted for this
 	// long. The cache is keyed on root, so a machine whose roots churn —
@@ -40,7 +43,7 @@ const (
 	// the daemon restarts.
 	workerIdleTTL = 30 * time.Minute
 
-	spareIdleTTL = 5 * time.Minute
+	spareIdleTTL = 2 * time.Minute
 
 	workerMemoryCeiling = 512 << 20
 	bloatedIdleTTL      = time.Minute
@@ -111,6 +114,25 @@ func (e *workerEntry) idle() bool {
 	return e.started() && e.inflight == 0 && e.load == 0 && e.background == 0
 }
 
+func (e *workerEntry) queueWait() time.Duration {
+	return time.Duration(e.load) * max(e.service, memberServiceFloor)
+}
+
+func (e *workerEntry) saturated() bool {
+	return e.queueWait() > poolSpillWait
+}
+
+func (e *workerEntry) routesBefore(other *workerEntry) bool {
+	switch {
+	case e.saturated() != other.saturated():
+		return other.saturated()
+	case e.saturated():
+		return e.queueWait() < other.queueWait()
+	default:
+		return e.lastUsed.After(other.lastUsed)
+	}
+}
+
 func (e *workerEntry) observe(concurrency int, elapsed time.Duration) {
 	sample := elapsed / time.Duration(concurrency)
 	if e.service == 0 {
@@ -151,8 +173,7 @@ func (m *workerManager) poolLocked(id string) pool {
 			view.starting = entry
 			continue
 		}
-		if view.ready == nil || entry.load < view.ready.load ||
-			entry.load == view.ready.load && entry.lastUsed.After(view.ready.lastUsed) {
+		if view.ready == nil || entry.routesBefore(view.ready) {
 			view.ready = entry
 		}
 	}
@@ -352,7 +373,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 			evicted = victim.worker
 		}
 		entry, leave = m.startMemberLocked(key, view.shard, deadline)
-	case entry.load > 0 && !entry.ephemeral && view.starting == nil && view.size < m.poolSize &&
+	case entry.saturated() && !entry.ephemeral && view.starting == nil && view.size < m.poolSize &&
 		len(m.entries) < maxLiveWorkers:
 		m.startMemberLocked(key, view.shard, time.Time{})
 	}
