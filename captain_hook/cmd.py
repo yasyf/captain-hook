@@ -48,6 +48,19 @@ COMMAND_VALUE_FLAGS: dict[str, tuple[str, ...]] = {
     "npm": ("-C", "--prefix", "-w", "--workspace", "--registry", "--userconfig", "--cache", "--loglevel"),
     "pnpm": ("-C", "--dir", "-F", "--filter", "--registry", "--loglevel"),
     "bun": ("--cwd", "--filter"),
+    "aws": (
+        "--profile",
+        "--region",
+        "--output",
+        "--endpoint-url",
+        "--query",
+        "--color",
+        "--ca-bundle",
+        "--cli-read-timeout",
+        "--cli-connect-timeout",
+        "--cli-binary-format",
+    ),
+    "op": ("--account", "--config", "--encoding", "--format", "--session"),
 }
 PACKAGE_DIRECTORY_FLAGS: dict[str, frozenset[str]] = {
     "yarn": frozenset({"--cwd"}),
