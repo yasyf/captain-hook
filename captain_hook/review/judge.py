@@ -259,10 +259,11 @@ async def judge_pass(
     one queue by :meth:`~captain_hook.review.store.ReviewStore.judge_queue`.
 
     Incremental and idempotent: each verdict persists as soon as its call
-    completes, a failed row stays unjudged and is retried on the next pass, and
-    re-running over a fully judged corpus is a no-op. Rows whose heuristic
-    signal confidence sits below :data:`~cc_transcript.mining.NOISE_FLOOR` are
-    never sent. Slug suggestions are drawn only when prior evidence exists, and a
+    completes, a failed row stays unjudged and is retried when the rotating queue
+    comes back to it, and re-running over a fully judged corpus is a no-op. Rows
+    whose heuristic signal confidence sits below
+    :data:`~cc_transcript.mining.NOISE_FLOOR`, and rows with no recorded transcript
+    path, are never sent. Slug suggestions are drawn only when prior evidence exists, and a
     per-row retrieval failure surfaces as a
     :class:`~cc_transcript.judge.JudgeError`, counting the row failed for the next
     pass rather than cancelling this one. The static embedder pre-warms off the
@@ -295,14 +296,12 @@ async def judge_pass(
         refresh_summary=refresh_summary,
         limit=limit if limit is not None else settings.max_judge_calls_per_session,
     )
-    from captain_hook.snapshots.review import RenderedEvidence, render_review_windows, review_roots
+    from captain_hook.snapshots.review import RenderedEvidence, render_review_windows
 
-    source_paths = [json.loads(str(row["payload_json"])).get("source_path") for row in dispatch]
     windows = await asyncio.to_thread(
         render_review_windows,
         [ContextWindow.from_json(str(row["context_json"])) for row in dispatch],
-        source_paths=source_paths,
-        roots=review_roots(list(await store.file_mtimes())) if None in source_paths else [],
+        source_paths=[json.loads(str(row["payload_json"]))["source_path"] for row in dispatch],
         render={"before": asdict(CONTEXT_BUDGET), "trigger": asdict(TRIGGER_BUDGET), "after": asdict(CONTEXT_BUDGET)},
     )
     rendered = {

@@ -208,7 +208,8 @@ def signal_confidence(payload_json: object) -> Confidence:
 
 
 def judge_worthy(row: Mapping[str, object]) -> bool:
-    return signal_confidence(row["payload_json"]) >= NOISE_FLOOR
+    payload: dict[str, Any] = json.loads(str(row["payload_json"])) if row["payload_json"] else {}
+    return "source_path" in payload and from_payload(payload["signal"]).confidence >= NOISE_FLOOR
 
 
 @dataclass(frozen=True, slots=True)
@@ -1484,15 +1485,18 @@ ORDER BY repo
             for ref in await self._judge_refs(fix=fix, prompt_version=version, refresh_summary=refresh_summary)
         ]
         cursor_key = f"judge_summary_cursor:{self.versions.create}:{self.versions.fix}"
+        fresh_cursor_key = f"judge_fresh_cursor:{self.versions.create}:{self.versions.fix}"
         if limit is not None:
             refs = [ref for ref in refs if judge_worthy(ref)]
             cursor = int(await self.meta(cursor_key) or "0")
-            fresh = [ref for ref in refs if ref["verdict_id"] is None]
+            fresh_cursor = int(await self.meta(fresh_cursor_key) or "0")
+            fresh = sorted((ref for ref in refs if ref["verdict_id"] is None), key=lambda ref: int(str(ref["id"])))
             summaries = sorted(
                 (ref for ref in refs if ref["verdict_id"] is not None), key=lambda ref: int(str(ref["id"]))
             )
             refs = (
-                fresh
+                [ref for ref in fresh if int(str(ref["id"])) > fresh_cursor]
+                + [ref for ref in fresh if int(str(ref["id"])) <= fresh_cursor]
                 + [ref for ref in summaries if int(str(ref["id"])) > cursor]
                 + [ref for ref in summaries if int(str(ref["id"])) <= cursor]
             )[:limit]
@@ -1512,6 +1516,8 @@ ORDER BY repo
                 kept.append(row)
         if limit is not None and (summaries := [ref for ref in refs if ref["verdict_id"] is not None]):
             await self.set_meta(cursor_key, str(summaries[-1]["id"]))
+        if limit is not None and (fresh := [ref for ref in refs if ref["verdict_id"] is None]):
+            await self.set_meta(fresh_cursor_key, str(fresh[-1]["id"]))
         return kept
 
     async def _judge_refs(self, *, fix: bool, prompt_version: int, refresh_summary: bool) -> list[dict[str, object]]:

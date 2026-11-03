@@ -63,10 +63,6 @@ def native_review_owner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iter
         return await open_corrections(path or tmp_path / "corrections.db")
 
     monkeypatch.setattr("captain_hook.snapshots.client.Bridge.__init__", forbidden_bridge)
-    monkeypatch.setattr(
-        "captain_hook.snapshots.review.review_roots",
-        lambda paths: sorted({str(Path(path).parent) for path in paths if Path(path).is_absolute()}),
-    )
     monkeypatch.setattr("cc_transcript.extract.correct.usable_backend", lambda: None)
     monkeypatch.setattr("spawnllm.extract", forbidden_extract)
     monkeypatch.setattr("spawnllm.decide", AsyncMock(side_effect=TimeoutError("no jev in review tests")))

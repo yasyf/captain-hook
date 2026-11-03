@@ -139,23 +139,14 @@ class Wire:
         request = envelope["request"]
         self.calls.append(request)
         match request["operation"]:
-            case "resolve":
-                session = request["session_ids"][0]
+            case "acquire":
+                session = Path(request["path"]).stem
                 if session == self.bad_session:
                     return response(envelope, None, status="parse_error")
-                details = description(HANDLE | {"lease_id": session})
+                if session == self.missing_session:
+                    return response(envelope, None, status="missing")
                 return response(
-                    envelope,
-                    {
-                        "kind": "resolved",
-                        "sessions": [
-                            {
-                                "session_id": session,
-                                "status": "missing" if session == self.missing_session else "ok",
-                                "description": None if session == self.missing_session else details,
-                            }
-                        ],
-                    },
+                    envelope, {"kind": "acquired", "description": description(HANDLE | {"lease_id": session})}
                 )
             case "hydrate":
                 return response(
@@ -184,14 +175,13 @@ def test_render_groups_sessions_and_releases_before_return():
     try:
         result = render_review_windows(
             [window("a"), window("b"), window("a")],
-            source_paths=[None, None, None],
-            roots=["/fixtures"],
+            source_paths=["/fixtures/a.jsonl", "/fixtures/b.jsonl", "/fixtures/a.jsonl"],
             render=render_budget(),
         )
     finally:
         CURRENT_CLIENT.reset(token)
     assert wire.released == ["a", "b"]
-    assert [call["operation"] for call in wire.calls] == ["resolve", "hydrate", "release"] * 2
+    assert [call["operation"] for call in wire.calls] == ["acquire", "hydrate", "release"] * 2
     assert all(isinstance(item, RenderedEvidence) for item in result)
     assert result[0].reference == "transcript:epoch:source:1"
     assert result[0].text == result[2].text
@@ -203,8 +193,7 @@ def test_failed_session_is_not_downgraded_to_summary_or_poison_healthy_session()
     try:
         result = render_review_windows(
             [window("bad"), window("good"), window("gone")],
-            source_paths=[None, None, None],
-            roots=["/fixtures"],
+            source_paths=["/fixtures/bad.jsonl", "/fixtures/good.jsonl", "/fixtures/gone.jsonl"],
             render=render_budget(),
         )
     finally:
@@ -215,37 +204,15 @@ def test_failed_session_is_not_downgraded_to_summary_or_poison_healthy_session()
     assert wire.released == ["good"]
 
 
-def test_partial_resolve_releases_already_issued_lease():
+def test_a_window_with_no_transcript_path_is_missing_without_asking_the_owner():
     wire = Wire()
-
-    def exchange(envelope):
-        if envelope["request"]["operation"] == "resolve":
-            return response(
-                envelope,
-                {
-                    "kind": "resolved",
-                    "sessions": [
-                        {
-                            "session_id": "session",
-                            "status": "ok",
-                            "description": description(HANDLE),
-                        }
-                    ],
-                },
-                status="incomplete",
-                cursor="next",
-            )
-        if envelope["request"]["operation"] == "resume":
-            return response(envelope, None, status="incomplete")
-        return wire(envelope)
-
-    token = CURRENT_CLIENT.set(SnapshotClient(exchange))
+    token = CURRENT_CLIENT.set(SnapshotClient(wire))
     try:
-        [result] = render_review_windows([window()], source_paths=[None], roots=["/fixtures"], render=render_budget())
+        [result] = render_review_windows([window()], source_paths=[None], render=render_budget())
     finally:
         CURRENT_CLIENT.reset(token)
-    assert isinstance(result, EvidenceIncomplete)
-    assert wire.released == ["lease"]
+    assert result is None
+    assert wire.calls == []
 
 
 async def test_prompt_is_frozen_after_first_preparation(monkeypatch):
@@ -859,7 +826,6 @@ async def test_judge_known_source_avoids_unrelated_corpus_metadata(
 ):
     from captain_hook.review.judge import judge_pass
     from captain_hook.review.scan import scan_transcript
-    from captain_hook.snapshots import review as review_module
     from tests.review_helpers import install_fake_embedder, install_judge, install_resolved_model
 
     for index in range(unrelated):
@@ -880,26 +846,18 @@ async def test_judge_known_source_avoids_unrelated_corpus_metadata(
         return result
 
     file_roster_reads = []
-    root_normalizations = []
     file_mtimes = store.file_mtimes
-    review_roots = review_module.review_roots
 
     async def counted_roster():
         file_roster_reads.append(True)
         return await file_mtimes()
 
-    def counted_roots(paths):
-        root_normalizations.append(True)
-        return review_roots(paths)
-
     monkeypatch.setattr(store, "file_mtimes", counted_roster)
-    monkeypatch.setattr(review_module, "review_roots", counted_roots)
     monkeypatch.setattr(native_review_owner.client, "_exchange", counted)
     report = await judge_pass(store, settings=settings)
     examined = sum(item["discovery_entries_examined"] for item in usage)
     assert examined == 0
     assert file_roster_reads == []
-    assert root_normalizations == []
     assert "resolve" not in operations
     assert report.judged == len(calls) == 1
     judged = await store.db.sql("SELECT fidelity FROM verdicts ORDER BY id")

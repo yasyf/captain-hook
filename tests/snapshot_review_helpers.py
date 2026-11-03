@@ -73,6 +73,8 @@ class FixtureOwner:
         handle = {"owner_epoch": "fixture", "snapshot_id": str(path), "generation": token, "lease_id": token}
         try:
             self.snapshots[token] = FixtureSnapshot(path, handle)
+        except FileNotFoundError as exc:
+            raise EvidenceIncomplete("missing", str(exc)) from exc
         except (ValueError, KeyError) as exc:
             raise EvidenceIncomplete("parse_error", str(exc)) from exc
         lease = SimpleNamespace(
@@ -120,26 +122,6 @@ class FixtureOwner:
             snapshot = self.snapshots[arguments["view"]["handle"]["lease_id"]]
             windows = capture_windows(snapshot.raw, [EventRef(**anchor) for anchor in arguments["anchors"]])
             yield {"kind": "captured", "windows_json": [window.to_json() for window in windows]}
-        elif operation == "resolve":
-            result = []
-            for session in arguments["session_ids"]:
-                found = None
-                for root in arguments["roots"]:
-                    for path in sorted(Path(root).rglob("*.jsonl")):
-                        try:
-                            events = parse_events_from_bytes(path.read_bytes())
-                        except (ValueError, KeyError):
-                            continue
-                        if any(
-                            (meta := event_meta(event)) is not None and meta.session_id == session for event in events
-                        ):
-                            remote = self.acquire(path)
-                            found = self.snapshots[remote.view()["handle"]["lease_id"]].description
-                            break
-                    if found is not None:
-                        break
-                result.append({"session_id": session, "status": "ok" if found else "missing", "description": found})
-            yield {"kind": "resolved", "sessions": result}
         elif operation == "hydrate":
             bundle = {item["session_id"]: self.snapshots[item["handle"]["lease_id"]] for item in arguments["handles"]}
             results = []
@@ -185,10 +167,6 @@ def owner_fixture(monkeypatch):
 
     monkeypatch.setattr("captain_hook.snapshots.client.Bridge.__init__", forbidden_bridge)
     monkeypatch.setattr("captain_hook.snapshots.review.review_client", lambda: nullcontext(owner))
-    monkeypatch.setattr(
-        "captain_hook.snapshots.review.review_roots",
-        lambda paths: sorted({str(Path(path).parent) for path in paths if Path(path).is_absolute()}),
-    )
     monkeypatch.setattr("captain_hook.snapshots.review.record_correction_drafts", AsyncMock())
     monkeypatch.setattr("captain_hook.review.scan.CorrectionLedger.recorded", AsyncMock(return_value=set()))
     try:

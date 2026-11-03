@@ -119,7 +119,12 @@ async def seed(
     heuristic: float = MEDIUM,
     source_kind: str = "transcript_message",
 ) -> None:
-    payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
+    payload = json.dumps(
+        {
+            "signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",))),
+            "source_path": f"/fixture-transcripts/{session}.jsonl",
+        }
+    )
     await store.db.execute(INSERT_EVENT, (key, source_kind, session, occurred, f"text {key}", payload))
     await store.record_observation(
         candidate_id,
@@ -1166,6 +1171,27 @@ class TestPerLaneVersions:
 
         monkeypatch.setattr(store.db, "sql", forbidden_read)
         assert await store.judge_queue(limit=0) == []
+
+    async def test_judge_queue_rotates_past_rows_that_keep_failing(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        for i in range(3):
+            await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
+        passes = [[row["dedup_key"] for row in await store.judge_queue(limit=2)] for _ in range(3)]
+        assert passes == [["k0", "k1"], ["k2", "k0"], ["k1", "k2"]]
+
+    async def test_judge_queue_and_backlog_leave_out_rows_with_no_transcript_path(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "old", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await seed(store, candidate_id, "new", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        rows = await store.db.sql("SELECT payload_json FROM feedback_events WHERE dedup_key = 'old'")
+        payload = json.loads(str(rows[0]["payload_json"]))
+        del payload["source_path"]
+        await store.db.execute(
+            "UPDATE feedback_events SET payload_json = ? WHERE dedup_key = 'old'", (json.dumps(payload),)
+        )
+        assert [row["dedup_key"] for row in await store.judge_queue(limit=40)] == ["new"]
+        assert await store.judge_backlog() == 1
+        assert len(await store.db.sql("SELECT id FROM feedback_events WHERE dedup_key = 'old'")) == 1
 
     async def test_judge_queue_limit_excludes_noise_before_loading_context(self, store: ReviewStore) -> None:
         candidate_id = await create_candidate(store)
