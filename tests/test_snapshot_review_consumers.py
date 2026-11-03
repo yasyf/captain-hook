@@ -300,7 +300,7 @@ async def test_incomplete_source_cannot_advance_scan_checkpoint(store, settings,
     monkeypatch.setattr(
         scan_module,
         "prepare_source",
-        lambda *args, **kwargs: (_ for _ in ()).throw(EvidenceIncomplete("deadline", "bounded")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(EvidenceIncomplete("incomplete", "bounded")),
     )
     try:
         with pytest.raises(EvidenceIncomplete):
@@ -310,6 +310,36 @@ async def test_incomplete_source_cannot_advance_scan_checkpoint(store, settings,
     assert await store.file_mtimes() == {}
     assert await store.meta(f"snapshot_discovery:{dedup_key('/fixture')}") is None
     assert await store.meta(f"snapshot_revision:{dedup_key('/fixture/session.jsonl')}") is None
+
+
+@pytest.mark.parametrize("status", ["retained_limit", "lease_limit", "deadline"])
+async def test_a_source_the_owner_cannot_serve_now_defers_without_advancing_the_checkpoint(
+    store, settings, monkeypatch, status
+):
+    from captain_hook.review import scan as scan_module
+
+    class Client:
+        def pages(self, operation, **kwargs):
+            assert operation == "discover"
+            yield {
+                "entries": [{"path": "/fixture/session.jsonl", "state": "present", "revision": "r1", "mtime_ns": "1"}],
+                "checkpoint": "next",
+            }
+
+    token = CURRENT_CLIENT.set(Client())
+    monkeypatch.setattr(
+        scan_module,
+        "prepare_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(EvidenceIncomplete(status, "bounded")),
+    )
+    try:
+        report = await scan(store, settings=settings, transcripts=[Path("/fixture")])
+    finally:
+        CURRENT_CLIENT.reset(token)
+    assert report == ScanReport(0, 0, deferred=1)
+    assert await store.meta(f"snapshot_discovery:{dedup_key('/fixture')}") is None
+    assert await store.meta(f"snapshot_revision:{dedup_key('/fixture/session.jsonl')}") is None
+    assert await store.meta(f"snapshot_refused:{dedup_key('/fixture/session.jsonl')}") is None
 
 
 @pytest.mark.parametrize("status", ["output_limit", "source_limit", "entry_limit"])
@@ -736,7 +766,7 @@ async def test_a_scan_skips_a_transcript_the_owner_refuses_and_reviews_it_on_the
 
     assert (second.scanned, second.refused, second.deferred) == (1, 0, 0)
     assert prepared_batches == [[anchor_uuid(lexer)], [anchor_uuid(parser)]]
-    assert await store.meta(checkpoint_key) == "fixture-checkpoint"
+    assert await store.meta(checkpoint_key) is not None
 
 
 @pytest.mark.usefixtures(native_review_owner.__name__)

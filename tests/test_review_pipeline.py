@@ -1372,6 +1372,7 @@ class TestSpawnSession:
             "scanned": 1,
             "inserted": 0,
             "refused": 0,
+            "deferred": 0,
             "triaged": 0,
             "triage_junk": 0,
             "triage_rejected": 0,
