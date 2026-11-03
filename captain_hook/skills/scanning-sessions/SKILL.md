@@ -48,7 +48,9 @@ user feedback next pass.
   `uvx --isolated capt-hook review skip <id> --reason "<why>"`, wherever this skill says
   a candidate is skipped or a skip is logged. The candidate stays `watching` and comes
   back only with new evidence or after `review reconsider`. A candidate you neither PR
-  nor skip is recorded as a failed run, which an operator has to read.
+  nor skip is recorded as a failed run, which an operator has to read. A full target
+  pool is the exception: it is not a skip, so record nothing for the candidates left and
+  finish; they come back when a slot frees.
 - **The PR lands where the edited or created file lives.** A **new** hook file always
   lands in the watched repo's `.claude/hooks/` — packs ship to every capt-hook user,
   so a repo-specific or preference-shaped rule never targets a pack repo. An **edit**

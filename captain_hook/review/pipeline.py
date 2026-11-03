@@ -87,6 +87,8 @@ class SpawnReport:
             (vanished target, no verifiable evidence), which is a decision, not a failure.
         brain_failed: How many eligible candidates the run left with neither a PR nor a
             recorded skip, so the brain never decided them.
+        brain_deferred: How many eligible candidates stopped crossing their thresholds during
+            the run, normally because its PRs filled their pool; they return on their own.
         brain_held: How many candidates cross their thresholds but stay held because
             the brain already considered them at their current evidence.
         synced_merged: How many open PRs merged, accepting their candidate.
@@ -113,6 +115,7 @@ class SpawnReport:
     brain_prs: int = 0
     brain_skips: int = 0
     brain_failed: int = 0
+    brain_deferred: int = 0
     brain_held: int = 0
     synced_merged: int = 0
     synced_closed: int = 0
@@ -713,7 +716,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     brain = False
     brain_exit: int | None = None
     brain_seconds: float | None = None
-    brain_prs = brain_skips = brain_failed = brain_held = 0
+    brain_prs = brain_skips = brain_failed = brain_deferred = brain_held = 0
     # The global lock spans the eligibility read through the brain and the pr_open set-diff,
     # so a concurrent pass — in this repo or any other sharing the db — can neither
     # double-spawn nor leak its transitions into this count.
@@ -746,11 +749,15 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
                         for candidate_id in set(eligible) & await watching_ids(store, repo):
                             if await store.brain_outcome(candidate_id) != prior_outcomes[candidate_id]:
                                 brain_skips += 1
-                                continue
-                            brain_failed += 1
-                            await store.record_brain_failure(
-                                candidate_id, evidence=statuses[candidate_id].evidence, exit_code=outcome.exit_code
-                            )
+                            elif crosses_thresholds(
+                                await store.threshold_status(candidate_id, settings=settings), settings=settings
+                            ):
+                                brain_failed += 1
+                                await store.record_brain_failure(
+                                    candidate_id, evidence=statuses[candidate_id].evidence, exit_code=outcome.exit_code
+                                )
+                            else:
+                                brain_deferred += 1
             else:
                 logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
     return replace(
@@ -762,6 +769,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         brain_prs=brain_prs,
         brain_skips=brain_skips,
         brain_failed=brain_failed,
+        brain_deferred=brain_deferred,
         brain_held=brain_held,
         synced_merged=sync.accepted if sync else 0,
         synced_closed=sync.rejected if sync else 0,

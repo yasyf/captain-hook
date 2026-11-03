@@ -1412,6 +1412,7 @@ class TestSpawnSession:
             "brain_prs": 0,
             "brain_skips": 0,
             "brain_failed": 0,
+            "brain_deferred": 0,
             "brain_held": 0,
             "synced_merged": 0,
             "synced_closed": 0,
@@ -1784,6 +1785,51 @@ class TestReviewSession:
             0,
             "exit 0 with no decision recorded",
         )
+
+    async def test_a_candidate_whose_pool_filled_during_the_run_is_deferred_not_failed(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db", max_open_prs_fix=1)
+        install_resolved_model(monkeypatch)
+
+        def open_other_pr() -> None:
+            async def do_open() -> None:
+                async with await ReviewStore.open(settings.db_path) as store:
+                    other = await store.ensure_candidate(
+                        GIT_REPO_KEY,
+                        kind=CandidateKind.FIX,
+                        rule="other",
+                        source_kind=SourceKind(HOOK_COMPLAINT),
+                        target_source_file=FIX_TARGET_FILE,
+                        target_hook_name="other",
+                        misfire_class="refire",
+                    )
+                    await store.transition(
+                        other,
+                        CandidateStatus.PR_OPEN,
+                        pr_url="https://github.com/yasyf/scratch/pull/9",
+                        pr_opened_at=datetime.now(UTC),
+                    )
+
+            asyncio.run(do_open())
+
+        def fake(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
+            thread = threading.Thread(target=open_other_pr)
+            thread.start()
+            thread.join()
+            return BrainOutcome(exit_code=0, seconds=1.0, log_path=review_log_path())
+
+        monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", fake)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (report.brain_prs, report.brain_skips, report.brain_failed, report.brain_deferred) == (1, 0, 0, 1)
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert await store.brain_outcome(candidate_id) is None
 
     async def test_the_brain_runs_from_the_main_checkout_of_a_linked_worktree(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
