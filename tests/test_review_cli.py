@@ -102,6 +102,8 @@ class TestGroupSurface:
             "list",
             "show",
             "threshold-check",
+            "skip",
+            "reconsider",
             "slots",
             "update",
             "sync-prs",
@@ -253,6 +255,44 @@ class TestListShowThreshold:
         result = invoke("threshold-check", root=scanned_repo)
         assert result.exit_code == 0, result.output
         assert "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False considered=False" in result.output
+
+    def test_skip_holds_the_candidate_and_show_prints_the_reason(self, scanned_repo: Path) -> None:
+        result = invoke("skip", "1", "--reason", "no quote verified", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert result.output == "#1 skipped: no quote verified\n"
+        shown = invoke("show", "1", root=scanned_repo)
+        assert "brain: skipped at " in shown.output
+        assert "reason=no quote verified" in shown.output
+        assert "considered=True" in invoke("threshold-check", root=scanned_repo).output
+        assert invoke("reconsider", "--failed", root=scanned_repo).output == "0 candidate(s) re-armed\n"
+        assert invoke("reconsider", root=scanned_repo).output == "1 candidate(s) re-armed\n"
+
+    def test_skip_rejects_an_unknown_candidate(self, scanned_repo: Path) -> None:
+        result = invoke("skip", "999", "--reason", "gone", root=scanned_repo)
+        assert result.exit_code != 0
+
+    def test_evidence_finds_the_scanned_transcript_of_a_row_without_a_path(
+        self, tmp_path: Path, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = write_transcript(tmp_path / "sess-1.jsonl", correction_entries(cwd=str(scanned_repo)))
+        assert invoke("scan", "--transcript", str(transcript), root=scanned_repo).exit_code == 0
+        seen: list[str | None] = []
+
+        def capture(windows: object, *, source_paths: list[str | None], render: object) -> list[None]:
+            seen.extend(source_paths)
+            return [None for _ in source_paths]
+
+        async def drop_paths() -> None:
+            async with await ReviewStore.open(db_path()) as store:
+                await store.db.execute(
+                    "UPDATE feedback_events SET payload_json = json_remove(payload_json, '$.source_path')"
+                )
+
+        asyncio.run(drop_paths())
+        monkeypatch.setattr("captain_hook.snapshots.review.render_review_windows", capture)
+        result = invoke("evidence", "1", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert seen == [str(transcript)]
 
     def test_reconsider_reports_how_many_candidates_it_rearmed(self, scanned_repo: Path) -> None:
         result = invoke("reconsider", root=scanned_repo)

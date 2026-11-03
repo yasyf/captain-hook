@@ -41,7 +41,14 @@ user feedback next pass.
   PR'd.
 - **All writes happen in a worktree or temp-dir clone off the target repo's
   `origin/<default>`** — never commit on the user's checkout. Procedure:
-  [PR workflow](references/pr-workflow.md).
+  [PR workflow](references/pr-workflow.md). The run starts in the repo's main checkout,
+  because the session's own worktree may already be gone: run read-only
+  `capt-hook review` commands from it and nothing else.
+- **Record every skip.** A skip is
+  `uvx --isolated capt-hook review skip <id> --reason "<why>"`, wherever this skill says
+  a candidate is skipped or a skip is logged. The candidate stays `watching` and comes
+  back only with new evidence or after `review reconsider`. A candidate you neither PR
+  nor skip is recorded as a failed run, which an operator has to read.
 - **The PR lands where the edited or created file lives.** A **new** hook file always
   lands in the watched repo's `.claude/hooks/` — packs ship to every capt-hook user,
   so a repo-specific or preference-shaped rule never targets a pack repo. An **edit**
@@ -77,7 +84,7 @@ user feedback next pass.
   the session immediately. After the authoring-hooks skill returns, keep going in the
   same run: the job is done only when every eligible candidate either has
   `uvx --isolated capt-hook review update <id> pr_open --pr-url <url>` recorded for a created PR
-  or has been explicitly skipped with a logged reason. Summaries come last, after
+  or has `uvx --isolated capt-hook review skip <id> --reason "<why>"` recorded. Summaries come last, after
   Step 7 — never between steps.
 - **Stay inside the workflow.** Never edit the user's checkout or any
   `.claude/settings*.json` (settings edits stall headless runs on a permission
@@ -105,6 +112,7 @@ Review Progress:
   - [ ] Step 6: Slot check (review slots --repo <the Step-3 target> --kind <kind>), then commit,
          push, gh pr create (Issue/Fix/Example body per pr-workflow.md)
   - [ ] Step 7: review update <ID> pr_open --pr-url <url>
+- [ ] Per candidate skipped at any step: review skip <ID> --reason "<why>"
 - [ ] Step 8: Final report
 ```
 
@@ -134,9 +142,9 @@ Use only evidence entries with `verified=true`. The command returns bounded cont
 its snapshot reference, session id, event id and observation date. Cite that provenance
 in the PR's Evidence section. A missing reference, incomplete preparation or quote
 outside the rendered budget does not establish that the quote never existed; skip
-that candidate and record the reason. Leave it `watching`: capt-hook holds a candidate
-you leave `watching` until its evidence changes, so it comes back on a later pass only
-with new evidence or after `review reconsider`. Do not read or search raw transcript
+that candidate with `review skip <ID> --reason "<why>"`. Leave it `watching`: capt-hook
+holds a skipped candidate until its evidence changes, so it comes back on a later pass
+only with new evidence or after `review reconsider`. Do not read or search raw transcript
 files to supplement this result.
 
 For **fix** candidates the quote is Claude's own complaint (an assistant turn), and

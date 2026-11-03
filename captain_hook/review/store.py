@@ -419,6 +419,13 @@ class ReviewStore:
         """Returns the recorded ``path`` to ``mtime`` map for incremental scans."""
         return await self.db.file_mtimes()
 
+    async def transcript_path(self, session_id: str) -> str | None:
+        """Returns a session's most recently scanned transcript, for rows recorded without a ``source_path``."""
+        rows = await self.db.sql(
+            "SELECT path FROM files WHERE path LIKE ? ORDER BY mtime DESC LIMIT 1", (f"%/{session_id}.jsonl",)
+        )
+        return str(rows[0]["path"]) if rows else None
+
     async def record_file_scan(self, path: str, mtime: float, candidates: Sequence[FeedbackCandidate]) -> int:
         """Records a scanned file and its candidates in one transaction."""
         return await self.db.record_file_scan(path, mtime, candidates)
@@ -1153,29 +1160,36 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         """
         return crosses_thresholds(await self.threshold_status(candidate_id, settings=settings), settings=settings)
 
-    async def record_brain_outcome(self, candidate_id: int, *, evidence: str, exit_code: int) -> None:
-        """Records that a brain run ended with a candidate still ``watching``.
-
-        :func:`crosses_thresholds` then holds the candidate until its accepted
-        evidence differs from ``evidence``. A non-zero exit holds it too, so a brain
-        that keeps failing cannot spend on an unchanged set; ``review reconsider``
-        re-arms it after the failure is fixed.
+    async def record_brain_skip(self, candidate_id: int, *, evidence: str, reason: str) -> None:
+        """Records the brain's decision against a PR, holding the candidate until its evidence changes.
 
         Args:
-            candidate_id: The candidate the brain left ``watching``.
+            candidate_id: The candidate the brain decided on.
+            evidence: The candidate's current :attr:`ThresholdStatus.evidence`.
+            reason: Why the candidate gets no PR.
+        """
+        await self._record_brain_outcome(candidate_id, outcome="skipped", evidence=evidence, reason=reason)
+
+    async def record_brain_failure(self, candidate_id: int, *, evidence: str, exit_code: int) -> None:
+        """Records that a brain run ended without deciding a candidate, holding it until reconsidered.
+
+        Args:
+            candidate_id: The candidate the run left undecided.
             evidence: The :attr:`ThresholdStatus.evidence` the brain was spawned over.
             exit_code: The brain's exit code.
         """
+        await self._record_brain_outcome(
+            candidate_id,
+            outcome="failed",
+            evidence=evidence,
+            reason=f"exit {exit_code}" if exit_code else "exit 0 with no decision recorded",
+            exit_code=exit_code,
+        )
+
+    async def _record_brain_outcome(self, candidate_id: int, *, outcome: str, evidence: str, **fields: object) -> None:
         await self.set_meta(
             f"{BRAIN_OUTCOME_PREFIX}{candidate_id}",
-            json.dumps(
-                {
-                    "outcome": "skipped" if exit_code == 0 else "failed",
-                    "exit_code": exit_code,
-                    "evidence": evidence,
-                    "considered_at": now(),
-                }
-            ),
+            json.dumps({"outcome": outcome, "evidence": evidence, "considered_at": now(), **fields}),
         )
 
     async def brain_outcome(self, candidate_id: int) -> dict[str, object] | None:
@@ -1183,11 +1197,12 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         value = await self.meta(f"{BRAIN_OUTCOME_PREFIX}{candidate_id}")
         return json.loads(value) if value is not None else None
 
-    async def reconsider(self, candidate_ids: Sequence[int]) -> int:
+    async def reconsider(self, candidate_ids: Sequence[int], *, failed_only: bool = False) -> int:
         """Makes held candidates eligible again without new evidence, keeping their recorded outcomes.
 
         Args:
             candidate_ids: The candidates to re-arm.
+            failed_only: Leave candidates the brain recorded a skip for held.
 
         Returns:
             How many of them had an outcome holding them.
@@ -1195,7 +1210,7 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         rearmed = 0
         for candidate_id in candidate_ids:
             outcome = await self.brain_outcome(candidate_id)
-            if outcome is None or outcome["evidence"] is None:
+            if outcome is None or outcome["evidence"] is None or (failed_only and outcome["outcome"] != "failed"):
                 continue
             await self.set_meta(f"{BRAIN_OUTCOME_PREFIX}{candidate_id}", json.dumps(outcome | {"evidence": None}))
             rearmed += 1
