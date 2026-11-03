@@ -106,6 +106,7 @@ EXPORTS: dict[str, str] = {
     "block_command": "captain_hook.primitives.commands",
     "rewrite_command": "captain_hook.primitives.commands",
     "rewrite_command_occurrences": "captain_hook.primitives.commands",
+    "tap_command": "captain_hook.primitives.tap",
     "warn_command": "captain_hook.primitives.commands",
     "diff_lint": "captain_hook.primitives.lint",
     "lint": "captain_hook.primitives.lint",

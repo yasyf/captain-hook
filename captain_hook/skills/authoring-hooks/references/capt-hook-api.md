@@ -78,6 +78,7 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | Primitive | Signature (keyword-only after `*`) | Defaults |
 |---|---|---|
 | `block_command` | `(pattern, *, reason, hint=None, only_if=(), skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
+| `tap_command` | `(*, only_if, rule, refusal, as_user=False, skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; refuses a matching command naming its `cc-sudo run -- <command>` form and passes that form, so the owner's Touch ID tap covers one literal command; `refusal` where no `cc-sudo` exists. The general pack holds every tap while the owner is away from the Mac and queues a card through `HOOKS_TAP_CARD_COMMAND` |
 | `warn_command` | `(pattern, *, message, only_if=(), skip_if=(), tests=None, events=Event.PostToolUse)` | warns, never blocks |
 | `rewrite_command` | `(pattern=None, replace=None, *, only_if=(), skip_if=(), to=None, block=None, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |

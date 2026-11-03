@@ -129,6 +129,7 @@ from captain_hook.primitives.permissions import llm_approve as llm_approve
 from captain_hook.primitives.provision import install_binary as install_binary
 from captain_hook.primitives.rewrite import rewrite_code as rewrite_code
 from captain_hook.primitives.rewrite import set_tool_input as set_tool_input
+from captain_hook.primitives.tap import tap_command as tap_command
 from captain_hook.primitives.workflow import Artifact as Artifact
 from captain_hook.primitives.workflow import Step as Step
 from captain_hook.primitives.workflow import Workflow as Workflow
