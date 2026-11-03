@@ -168,7 +168,9 @@ PR's URL.
 Records the brain's decision against a PR. `review show` prints it as
 `brain: skipped ... reason=<why>`, and the candidate is held until its evidence changes.
 A candidate an eligible run leaves with neither a PR nor a recorded skip gets
-`brain: failed` instead, with the exit code in its reason, and is held the same way.
+`brain: failed` instead, with the exit code in its reason, and is held the same way,
+unless the run filled its open-PR pool: then it records nothing and the candidate returns
+when a slot frees.
 
 ### `review reconsider [ID] [--repo <key>] [--failed]`
 
@@ -188,7 +190,9 @@ PR's URL). With `--kind` it prints that pool alone and exits 1 when its `free=0`
 without it, it exits 1 only when every pool is full. The brain runs it immediately
 before `gh pr create`, passing whatever repo the PR targets — for any pack-targeted
 PR, routed fix or create-as-edit alike, that is the pack repo's key — and the
-candidate's kind. A full target pool is a logged skip, not an error.
+candidate's kind. A full target pool is not a skip and not an error: record nothing for
+that candidate or any you have not reached, and finish with the final report. They come
+back when a slot frees.
 
 ### `review update <ID> <status> [--pr-url <url>] [--pr-title <title>]`
 

@@ -612,6 +612,11 @@ class TestBrainSegment:
                 id="skip-only-run-is-dim",
             ),
             pytest.param(
+                {"eligible": [1, 2], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 1, "brain_deferred": 1},
+                ("brain: exit 0 · 5s · 1 PR", "dim"),
+                id="candidate-waiting-on-a-slot-is-dim",
+            ),
+            pytest.param(
                 {"eligible": [1, 2], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 1, "brain_skips": 1},
                 ("brain: exit 0 · 5s · 1 PR", "dim"),
                 id="pr-plus-skip-covering-eligible-is-dim",
