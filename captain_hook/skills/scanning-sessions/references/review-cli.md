@@ -151,14 +151,24 @@ The eligibility verdict — the source of truth. Without `ID`, reports every can
 the repo:
 
 ```
-#12 eligible=True sessions=3/3 days=2/2 open_prs=0/2 watching=True
+#12 eligible=True sessions=3/3 days=2/2 open_prs=0/2 watching=True considered=False
 ```
 
 Counts are **judge-accepted** observations only (distinct sessions, distinct UTC days);
 unjudged observations count as not-yet. `eligible=True` already accounts for the
-watching flag and the candidate kind's open-PR cap — never re-derive any of this. `open_prs`
+watching flag, the candidate kind's open-PR cap, and `considered` — never re-derive any
+of this. `considered=True` means a brain run already ended with the candidate at this
+exact accepted evidence still `watching`; it stays ineligible until a new or re-judged
+observation or a reopen changes that evidence, or `review reconsider` re-arms it. `open_prs`
 counts live open PRs of the candidate's kind by the repo each PR targets, parsed from the
 PR's URL.
+
+### `review reconsider [ID] [--repo <key>]`
+
+Makes candidates the brain already considered eligible again without new evidence, for
+use after fixing whatever made the brain skip them. Without `ID`, re-arms every candidate
+in the repo. The recorded outcome stays visible in `review show`. An operator command:
+the brain never runs it.
 
 ### `review slots [--repo <key>] [--kind create|fix]`
 

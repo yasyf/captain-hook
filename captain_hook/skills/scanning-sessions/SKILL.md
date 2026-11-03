@@ -134,8 +134,10 @@ Use only evidence entries with `verified=true`. The command returns bounded cont
 its snapshot reference, session id, event id and observation date. Cite that provenance
 in the PR's Evidence section. A missing reference, incomplete preparation or quote
 outside the rendered budget does not establish that the quote never existed; skip
-that candidate and record the reason. Leave it `watching` for a later pass. Do not
-read or search raw transcript files to supplement this result.
+that candidate and record the reason. Leave it `watching`: capt-hook holds a candidate
+you leave `watching` until its evidence changes, so it comes back on a later pass only
+with new evidence or after `review reconsider`. Do not read or search raw transcript
+files to supplement this result.
 
 For **fix** candidates the quote is Claude's own complaint (an assistant turn), and
 two extra checks gate the draft:

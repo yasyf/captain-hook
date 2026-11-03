@@ -1384,6 +1384,7 @@ class TestSpawnSession:
             "brain_seconds": None,
             "brain_prs": 0,
             "brain_skips": 0,
+            "brain_held": 0,
             "synced_merged": 0,
             "synced_closed": 0,
             "synced_kept": 0,
@@ -1700,6 +1701,88 @@ class TestReviewSession:
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert report.eligible == (candidate_id,)
         assert (report.brain, report.brain_exit, report.brain_prs, report.brain_skips) == (True, 0, 0, 1)
+
+    async def test_an_unchanged_eligible_set_spawns_no_second_brain(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        brains = install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
+        first = await review_session(transcript, cwd=str(git_repo), settings=settings)
+        second = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (first.eligible, first.brain, first.brain_held) == ((candidate_id,), True, 0)
+        assert (second.eligible, second.brain, second.brain_held) == ((), False, 1)
+        assert len(brains) == 1
+        async with await ReviewStore.open(settings.db_path) as store:
+            outcome = await store.brain_outcome(candidate_id)
+            status = await store.threshold_status(candidate_id, settings=settings)
+            batched = await store.threshold_statuses(await store.candidates(GIT_REPO_KEY), settings=settings)
+            assert await store.eligible(candidate_id, settings=settings) is False
+        assert outcome is not None
+        assert (outcome["outcome"], outcome["exit_code"], outcome["evidence"]) == ("skipped", 0, status.evidence)
+        assert status.considered is True
+        assert batched[candidate_id] == status
+
+    async def test_new_evidence_makes_a_considered_candidate_eligible_again(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        brains = install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+        await review_session(transcript, cwd=str(git_repo), settings=settings)
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert await seed_eligible_fix(store, repo=GIT_REPO_KEY, session="fs2") == candidate_id
+
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (report.eligible, report.brain, report.brain_held) == ((candidate_id,), True, 0)
+        assert len(brains) == 2
+
+    async def test_a_failed_brain_run_holds_its_set_until_reconsidered(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_resolved_model(monkeypatch)
+        runs: list[Path] = []
+
+        def failing_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
+            runs.append(transcript)
+            return BrainOutcome(exit_code=3, seconds=1.0, log_path=review_log_path())
+
+        monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", failing_brain)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
+        await review_session(transcript, cwd=str(git_repo), settings=settings)
+        held = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (held.brain, held.brain_held, len(runs)) == (False, 1, 1)
+        async with await ReviewStore.open(settings.db_path) as store:
+            outcome = await store.brain_outcome(candidate_id)
+            assert outcome is not None
+            assert (outcome["outcome"], outcome["exit_code"]) == ("failed", 3)
+            assert await store.reconsider([candidate_id]) == 1
+            assert await store.reconsider([candidate_id]) == 0
+            kept = await store.brain_outcome(candidate_id)
+            assert kept is not None
+            assert kept["outcome"] == "failed"
+            assert await store.eligible(candidate_id, settings=settings) is True
+
+        rearmed = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (rearmed.brain, len(runs)) == (True, 2)
 
     async def test_concurrent_passes_spawn_at_most_one_brain(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch

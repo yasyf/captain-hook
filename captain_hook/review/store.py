@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from captain_hook.review.sync import CachedPrState, PrState
 
 PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
+BRAIN_OUTCOME_PREFIX = "brain_outcome:"
 QUERY_PAGE_SIZE = 256
 
 CANDIDATES_QUERY = """
@@ -227,6 +228,10 @@ class ThresholdStatus:
         single_observation: Whether any observation is both judge-accepted and
             heuristically at least ``min_confidence_fix_single`` — the fix-mode
             single-observation path.
+        evidence: The token naming the accepted evidence behind these counts, which
+            a new or re-judged observation or a reopen changes.
+        considered: Whether the brain already considered the candidate at exactly
+            ``evidence`` and left it ``watching``, which holds it from eligibility.
     """
 
     kind: CandidateKind
@@ -236,6 +241,12 @@ class ThresholdStatus:
     days: int
     open_prs: int
     single_observation: bool
+    evidence: str = ""
+    considered: bool = False
+
+
+def evidence_token(generation: object, observation_ids: Sequence[int]) -> str:
+    return f"{generation}:{len(observation_ids)}:{max(observation_ids, default=0)}"
 
 
 def threshold_targets(status: ThresholdStatus, settings: ReviewSettings) -> tuple[tuple[str, int, int], ...]:
@@ -267,10 +278,13 @@ def crosses_thresholds(status: ThresholdStatus, *, settings: ReviewSettings) -> 
     need the ``min_sessions_fix``/``min_days_fix`` pair or one observation that is
     both judge-accepted and heuristically at least ``min_confidence_fix_single``.
     Both require the repo watched and a free slot in their own kind's pool
-    (:func:`open_pr_cap`), so open create PRs never hold fix candidates back.
+    (:func:`open_pr_cap`), so open create PRs never hold fix candidates back. A
+    candidate the brain already considered at its current evidence is held until
+    that evidence changes, so an unchanged candidate costs no further brain run.
     """
     if (
         status.status != CandidateStatus.WATCHING
+        or status.considered
         or not status.watching
         or status.open_prs >= open_pr_cap(status.kind, settings=settings)
     ):
@@ -1099,7 +1113,7 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
 
         accepted = await self.db.sql(
             f"""
-SELECT o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
+SELECT o.id AS observation_id, o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
 FROM candidate_observations o
 JOIN {VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
 JOIN feedback_events e ON e.dedup_key = o.dedup_key
@@ -1108,6 +1122,8 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
 """,
             (self.versions.of(kind), candidate_id, settings.min_judge_confidence, since, since),
         )
+        evidence = evidence_token(candidates[0]["generation"], [int(row["observation_id"]) for row in accepted])
+        outcome = await self.brain_outcome(candidate_id)
 
         return ThresholdStatus(
             kind=kind,
@@ -1119,6 +1135,8 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
             single_observation=any(
                 signal_confidence(row["payload_json"]) >= settings.min_confidence_fix_single for row in accepted
             ),
+            evidence=evidence,
+            considered=outcome is not None and outcome["evidence"] == evidence,
         )
 
     async def eligible(self, candidate_id: int, *, settings: ReviewSettings) -> bool:
@@ -1133,6 +1151,54 @@ WHERE o.candidate_id = ? AND v.{ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
             settings: The thresholds and judge knobs to check under.
         """
         return crosses_thresholds(await self.threshold_status(candidate_id, settings=settings), settings=settings)
+
+    async def record_brain_outcome(self, candidate_id: int, *, evidence: str, exit_code: int) -> None:
+        """Records that a brain run ended with a candidate still ``watching``.
+
+        :func:`crosses_thresholds` then holds the candidate until its accepted
+        evidence differs from ``evidence``. A non-zero exit holds it too, so a brain
+        that keeps failing cannot spend on an unchanged set; ``review reconsider``
+        re-arms it after the failure is fixed.
+
+        Args:
+            candidate_id: The candidate the brain left ``watching``.
+            evidence: The :attr:`ThresholdStatus.evidence` the brain was spawned over.
+            exit_code: The brain's exit code.
+        """
+        await self.set_meta(
+            f"{BRAIN_OUTCOME_PREFIX}{candidate_id}",
+            json.dumps(
+                {
+                    "outcome": "skipped" if exit_code == 0 else "failed",
+                    "exit_code": exit_code,
+                    "evidence": evidence,
+                    "considered_at": now(),
+                }
+            ),
+        )
+
+    async def brain_outcome(self, candidate_id: int) -> dict[str, object] | None:
+        """Returns the last recorded brain outcome for a candidate, or ``None`` before its first."""
+        value = await self.meta(f"{BRAIN_OUTCOME_PREFIX}{candidate_id}")
+        return json.loads(value) if value is not None else None
+
+    async def reconsider(self, candidate_ids: Sequence[int]) -> int:
+        """Makes held candidates eligible again without new evidence, keeping their recorded outcomes.
+
+        Args:
+            candidate_ids: The candidates to re-arm.
+
+        Returns:
+            How many of them had an outcome holding them.
+        """
+        rearmed = 0
+        for candidate_id in candidate_ids:
+            outcome = await self.brain_outcome(candidate_id)
+            if outcome is None or outcome["evidence"] is None:
+                continue
+            await self.set_meta(f"{BRAIN_OUTCOME_PREFIX}{candidate_id}", json.dumps(outcome | {"evidence": None}))
+            rearmed += 1
+        return rearmed
 
     async def pr_summary(self, candidate_id: int, *, settings: ReviewSettings) -> str | None:
         """Returns the candidate's most-confident accepted verdict summary — what its PR would do.
@@ -1230,7 +1296,7 @@ ORDER BY o.id
         placeholders = ",".join("?" * len(ids))
         accepted_rows = await self.db.sql(
             f"""
-SELECT o.candidate_id, o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
+SELECT o.id AS observation_id, o.candidate_id, o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
 FROM candidate_observations o
 JOIN candidates c ON c.id = o.candidate_id
 JOIN {VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge'
@@ -1250,9 +1316,15 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{ACCEPTED_COLUMN} = 1 AND v.confi
 
         open_prs = await self.open_pr_targets(settings=settings)
 
+        outcome_rows = await self.db.sql(
+            "SELECT key, value FROM review_meta WHERE key LIKE ?", (f"{BRAIN_OUTCOME_PREFIX}%",)
+        )
+        held = {str(row["key"]): json.loads(str(row["value"]))["evidence"] for row in outcome_rows}
+
         def status_for(row: Mapping[str, object]) -> ThresholdStatus:
             obs = accepted.get(int(str(row["id"])), [])
             watching_repo = str(row["origin_repo_key"] or row["repo_key"])
+            evidence = evidence_token(row["generation"], [int(str(o["observation_id"])) for o in obs])
             return ThresholdStatus(
                 kind=(kind := CandidateKind(str(row["candidate_kind"]))),
                 status=CandidateStatus(str(row["status"])),
@@ -1263,6 +1335,8 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{ACCEPTED_COLUMN} = 1 AND v.confi
                 single_observation=any(
                     signal_confidence(o["payload_json"]) >= settings.min_confidence_fix_single for o in obs
                 ),
+                evidence=evidence,
+                considered=held.get(f"{BRAIN_OUTCOME_PREFIX}{row['id']}") == evidence,
             )
 
         return {int(str(row["id"])): status_for(row) for row in rows}
