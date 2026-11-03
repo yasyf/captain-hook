@@ -314,11 +314,7 @@ def evidence(candidate_id: int, limit: int) -> None:
         rendered = await asyncio.to_thread(
             render_review_windows,
             windows,
-            source_paths=[
-                json.loads(str(row["payload_json"])).get("source_path")
-                or await store.transcript_path(window.anchor.session_id)
-                for row, window in zip(selected, windows, strict=True)
-            ],
+            source_paths=[json.loads(str(row["payload_json"])).get("source_path") for row in selected],
             render={
                 "before": asdict(CONTEXT_BUDGET),
                 "trigger": asdict(TRIGGER_BUDGET),
