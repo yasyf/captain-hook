@@ -38,7 +38,12 @@ INSERT_EVENT = (
 
 
 def _medium_payload() -> str:
-    return json.dumps({"signal": to_payload(CandidateSignal(Confidence(MEDIUM), ("marker",)))})
+    return json.dumps(
+        {
+            "source_path": "/fixture-transcripts/s.jsonl",
+            "signal": to_payload(CandidateSignal(Confidence(MEDIUM), ("marker",))),
+        }
+    )
 
 
 async def seed(store: ReviewStore, candidate_id: int, key: str, *, session: str, occurred: str) -> None:
