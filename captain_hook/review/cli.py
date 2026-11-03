@@ -274,8 +274,8 @@ def show(candidate_id: int) -> None:
     )
     if outcome is not None:
         click.echo(
-            f"brain: {outcome['outcome']} exit={outcome['exit_code']} at {outcome['considered_at']} "
-            f"evidence={outcome['evidence']}"
+            f"brain: {outcome['outcome']} at {outcome['considered_at']} evidence={outcome['evidence']} "
+            f"reason={outcome.get('reason')}"
         )
     if row["pack_name"]:
         click.echo(
@@ -314,7 +314,11 @@ def evidence(candidate_id: int, limit: int) -> None:
         rendered = await asyncio.to_thread(
             render_review_windows,
             windows,
-            source_paths=[json.loads(str(row["payload_json"])).get("source_path") for row in selected],
+            source_paths=[
+                json.loads(str(row["payload_json"])).get("source_path")
+                or await store.transcript_path(window.anchor.session_id)
+                for row, window in zip(selected, windows, strict=True)
+            ],
             render={
                 "before": asdict(CONTEXT_BUDGET),
                 "trigger": asdict(TRIGGER_BUDGET),
@@ -390,17 +394,39 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
 
 
 @review.command()
+@click.argument("candidate_id", type=int)
+@click.option("--reason", required=True, help="Why the candidate gets no PR; shown by `review show`")
+def skip(candidate_id: int, reason: str) -> None:
+    """Record the brain's decision against a PR, holding the candidate until its evidence changes."""
+    from captain_hook.review.settings import ReviewSettings
+
+    settings = ReviewSettings()
+
+    async def body(store: ReviewStore) -> None:
+        status = await store.threshold_status(candidate_id, settings=settings)
+        await store.record_brain_skip(candidate_id, evidence=status.evidence, reason=reason)
+
+    try:
+        run_store(body)
+    except LookupError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"#{candidate_id} skipped: {reason}")
+
+
+@review.command()
 @click.argument("candidate_id", type=int, required=False)
 @click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
+@click.option("--failed", is_flag=True, help="Only candidates a failed brain run left undecided")
 @click.pass_obj
-def reconsider(state: CliState, candidate_id: int | None, repo_: str | None) -> None:
+def reconsider(state: CliState, candidate_id: int | None, repo_: str | None, failed: bool) -> None:
     """Make candidates the brain already considered eligible again without new evidence."""
 
     async def body(store: ReviewStore) -> int:
         return await store.reconsider(
             [candidate_id]
             if candidate_id is not None
-            else [int(str(row["id"])) for row in await store.candidates(resolve_repo(repo_, state.root))]
+            else [int(str(row["id"])) for row in await store.candidates(resolve_repo(repo_, state.root))],
+            failed_only=failed,
         )
 
     click.echo(f"{run_store(body)} candidate(s) re-armed")

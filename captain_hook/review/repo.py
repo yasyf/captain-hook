@@ -32,6 +32,18 @@ def git_output(cwd: str, *args: str) -> str | None:
     return out if proc.returncode == 0 and (out := proc.stdout.strip()) else None
 
 
+def main_checkout(cwd: str) -> Path:
+    """Returns the repo's primary working tree, which outlives any linked worktree ``cwd`` sits in.
+
+    A bare repo has no primary working tree, so ``cwd`` itself is returned.
+    """
+    listing = git_output(cwd, "worktree", "list", "--porcelain") or ""
+    primary = listing.split("\n\n", 1)[0].splitlines()
+    if len(primary) < 2 or primary[1] == "bare":
+        return Path(cwd)
+    return Path(primary[0].removeprefix("worktree "))
+
+
 def normalize_origin(url: str) -> str:
     """Collapse SSH and HTTPS forms of one remote to a single ``host/path`` key (no scheme, user, or ``.git``)."""
     url = re.sub(r"^\w+://", "", url.strip().removesuffix(".git"))

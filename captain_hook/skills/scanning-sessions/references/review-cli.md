@@ -157,18 +157,26 @@ the repo:
 Counts are **judge-accepted** observations only (distinct sessions, distinct UTC days);
 unjudged observations count as not-yet. `eligible=True` already accounts for the
 watching flag, the candidate kind's open-PR cap, and `considered` — never re-derive any
-of this. `considered=True` means a brain run already ended with the candidate at this
-exact accepted evidence still `watching`; it stays ineligible until a new or re-judged
+of this. `considered=True` means the brain recorded a skip, or its run failed, with the
+candidate at this exact accepted evidence; it stays ineligible until a new or re-judged
 observation or a reopen changes that evidence, or `review reconsider` re-arms it. `open_prs`
 counts live open PRs of the candidate's kind by the repo each PR targets, parsed from the
 PR's URL.
 
-### `review reconsider [ID] [--repo <key>]`
+### `review skip <ID> --reason <why>`
+
+Records the brain's decision against a PR. `review show` prints it as
+`brain: skipped ... reason=<why>`, and the candidate is held until its evidence changes.
+A candidate an eligible run leaves with neither a PR nor a recorded skip gets
+`brain: failed` instead, with the exit code in its reason, and is held the same way.
+
+### `review reconsider [ID] [--repo <key>] [--failed]`
 
 Makes candidates the brain already considered eligible again without new evidence, for
-use after fixing whatever made the brain skip them. Without `ID`, re-arms every candidate
-in the repo. The recorded outcome stays visible in `review show`. An operator command:
-the brain never runs it.
+use after fixing whatever made the brain skip them or its run fail. Without `ID`, re-arms
+every candidate in the repo; `--failed` limits that to candidates a failed run left
+undecided. The recorded outcome stays visible in `review show`. An operator command: the
+brain never runs it.
 
 ### `review slots [--repo <key>] [--kind create|fix]`
 

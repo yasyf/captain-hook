@@ -141,6 +141,26 @@ def install_brain(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, Path]]:
     return calls
 
 
+def install_skipping_brain(monkeypatch: pytest.MonkeyPatch, *, settings: ReviewSettings, exit_code: int = 0) -> None:
+    def record() -> None:
+        async def skip_watching() -> None:
+            async with await ReviewStore.open(settings.db_path) as store:
+                for row in await store.candidates(GIT_REPO_KEY, status=CandidateStatus.WATCHING):
+                    candidate_id = int(str(row["id"]))
+                    status = await store.threshold_status(candidate_id, settings=settings)
+                    await store.record_brain_skip(candidate_id, evidence=status.evidence, reason="no quote verified")
+
+        asyncio.run(skip_watching())
+
+    def fake(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
+        thread = threading.Thread(target=record)
+        thread.start()
+        thread.join()
+        return BrainOutcome(exit_code=exit_code, seconds=1.0, log_path=review_log_path())
+
+    monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", fake)
+
+
 def synthetic(text: str, signal: CandidateSignal) -> FeedbackCandidate:
     anchor = EventRef(SessionId("s1"), EventUuid(f"u-{dedup_key('transcript_message', 's1', text)}"))
     return FeedbackCandidate(
@@ -1391,6 +1411,7 @@ class TestSpawnSession:
             "brain_seconds": None,
             "brain_prs": 0,
             "brain_skips": 0,
+            "brain_failed": 0,
             "brain_held": 0,
             "synced_merged": 0,
             "synced_closed": 0,
@@ -1695,7 +1716,52 @@ class TestReviewSession:
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert (report.brain, report.brain_exit, report.brain_prs) == (True, 0, 1)
 
-    async def test_brain_skips_counts_eligible_candidates_left_watching(
+    async def test_a_recorded_skip_counts_as_a_skip_and_keeps_its_reason(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_skipping_brain(monkeypatch, settings=settings)
+        install_resolved_model(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+        assert report.eligible == (candidate_id,)
+        assert (report.brain, report.brain_exit, report.brain_prs, report.brain_skips, report.brain_failed) == (
+            True,
+            0,
+            0,
+            1,
+            0,
+        )
+        async with await ReviewStore.open(settings.db_path) as store:
+            outcome = await store.brain_outcome(candidate_id)
+            assert await store.eligible(candidate_id, settings=settings) is False
+        assert outcome is not None
+        assert (outcome["outcome"], outcome["reason"]) == ("skipped", "no quote verified")
+
+    async def test_a_recorded_skip_survives_a_run_that_then_exits_nonzero(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_skipping_brain(monkeypatch, settings=settings, exit_code=3)
+        install_resolved_model(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+
+        assert (report.brain_exit, report.brain_skips, report.brain_failed) == (3, 1, 0)
+        async with await ReviewStore.open(settings.db_path) as store:
+            outcome = await store.brain_outcome(candidate_id)
+            assert await store.reconsider([candidate_id], failed_only=True) == 0
+        assert outcome is not None
+        assert outcome["outcome"] == "skipped"
+
+    async def test_a_clean_exit_that_decided_nothing_is_a_failed_run(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
@@ -1705,9 +1771,40 @@ class TestReviewSession:
             await store.enable(GIT_REPO_KEY)
             candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
-        assert report.eligible == (candidate_id,)
-        assert (report.brain, report.brain_exit, report.brain_prs, report.brain_skips) == (True, 0, 0, 1)
+
+        assert (report.brain_exit, report.brain_skips, report.brain_failed) == (0, 0, 1)
+        async with await ReviewStore.open(settings.db_path) as store:
+            outcome = await store.brain_outcome(candidate_id)
+            assert await store.reconsider([candidate_id], failed_only=True) == 1
+        assert outcome is not None
+        assert (outcome["outcome"], outcome["exit_code"], outcome["reason"]) == (
+            "failed",
+            0,
+            "exit 0 with no decision recorded",
+        )
+
+    async def test_the_brain_runs_from_the_main_checkout_of_a_linked_worktree(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        brains = install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
+        git = ["git", "-C", str(git_repo)]
+        subprocess.run(
+            [*git, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c"], check=True
+        )
+        linked = tmp_path / "linked"
+        subprocess.run([*git, "worktree", "add", "-q", "-b", "lane", str(linked)], check=True)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+
+        await review_session(transcript, cwd=str(linked), settings=settings)
+
+        assert [root for _, root in brains] == [git_repo.resolve()]
 
     async def test_an_unchanged_eligible_set_spawns_no_second_brain(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
@@ -1732,7 +1829,7 @@ class TestReviewSession:
             batched = await store.threshold_statuses(await store.candidates(GIT_REPO_KEY), settings=settings)
             assert await store.eligible(candidate_id, settings=settings) is False
         assert outcome is not None
-        assert (outcome["outcome"], outcome["exit_code"], outcome["evidence"]) == ("skipped", 0, status.evidence)
+        assert (outcome["outcome"], outcome["exit_code"], outcome["evidence"]) == ("failed", 0, status.evidence)
         assert status.considered is True
         assert batched[candidate_id] == status
 
