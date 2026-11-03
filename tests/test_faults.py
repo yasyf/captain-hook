@@ -172,3 +172,80 @@ def test_the_cap_makes_room_for_the_newest_fault() -> None:
     lines = faults.drain()
     assert len(lines) <= faults.MAX_RECORDS
     assert any("async review dispatch" in line for line in lines)
+
+
+MISSING_READER = ImportError("cannot import name 'project_request_body' from 'cc_transcript.parser'")
+
+
+def test_discover_registers_the_load_error_warning_only_while_a_hook_file_fails(tmp_path: Path) -> None:
+    from captain_hook.app import _state
+    from captain_hook.cli import CliState
+
+    (hooks := tmp_path / ".claude" / "hooks").mkdir(parents=True)
+    (hooks / "__init__.py").write_text("")
+    (hooks / "merge_guard.py").write_text("from cc_transcript.parser import no_such_reader\n")
+    CliState(root=tmp_path, hooks=str(hooks)).discover()
+    assert any(h.name == "warn_unloaded_hooks" for h in _state.hooks)
+
+    (hooks / "merge_guard.py").unlink()
+    CliState(root=tmp_path, hooks=str(hooks)).discover()
+    assert not any(h.name == "warn_unloaded_hooks" for h in _state.hooks)
+
+
+def test_every_pre_tool_use_names_the_unloaded_hook_without_approving_the_call(tmp_path: Path) -> None:
+    from captain_hook.app import LoadError
+    from captain_hook.dispatch import dispatch
+    from captain_hook.loader import register_load_error_warnings
+    from captain_hook.types import Event
+    from tests.helpers import make_pre_tool_event
+
+    register_load_error_warnings([LoadError("hooks.merge_guard", MISSING_READER)])
+
+    for _ in range(2):
+        output = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path / "session")
+        assert output is not None
+        specific = output["hookSpecificOutput"]
+        assert specific["additionalContext"] == (
+            "captain-hook: hooks.merge_guard did not load (ImportError: cannot import name 'project_request_body' "
+            "from 'cc_transcript.parser'), so its hooks are not running."
+        )
+        assert "permissionDecision" not in specific
+
+
+def test_a_permission_request_shows_the_unloaded_hook_to_the_user_and_decides_nothing(tmp_path: Path) -> None:
+    from captain_hook.app import LoadError
+    from captain_hook.dispatch import dispatch
+    from captain_hook.events import PermissionRequestEvent
+    from captain_hook.loader import register_load_error_warnings
+    from captain_hook.types import Event
+    from tests.helpers import make_ctx
+
+    register_load_error_warnings([LoadError("hooks.merge_guard", MISSING_READER)])
+    evt = PermissionRequestEvent(_raw={"tool_name": "Bash", "tool_input": {"command": "ls"}}, ctx=make_ctx())
+
+    output = dispatch(Event.PermissionRequest, evt, session_dir=tmp_path / "session")
+
+    assert output is not None
+    assert set(output) == {"systemMessage"}
+    assert "hooks.merge_guard did not load" in output["systemMessage"]
+
+
+def test_another_hooks_block_still_carries_the_unloaded_hook(tmp_path: Path) -> None:
+    from captain_hook.app import LoadError, on
+    from captain_hook.dispatch import dispatch
+    from captain_hook.events import PreToolUseEvent
+    from captain_hook.loader import register_load_error_warnings
+    from captain_hook.types import Action, Event, HookResult
+    from tests.helpers import make_pre_tool_event
+
+    @on(Event.PreToolUse)
+    def refuse(evt: PreToolUseEvent) -> HookResult:
+        return HookResult(action=Action.block, message="refused")
+
+    register_load_error_warnings([LoadError("hooks.merge_guard", MISSING_READER)])
+
+    output = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path / "session")
+
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "hooks.merge_guard did not load" in output["hookSpecificOutput"]["permissionDecisionReason"]

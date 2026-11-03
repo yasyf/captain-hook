@@ -34,6 +34,7 @@ from captain_hook.loader import (
     discover_pack,
     is_skip_marked,
     register_fault_announcements,
+    register_load_error_warnings,
     register_pr_announcements,
     register_resource_provisioning,
     stamp_identity,
@@ -139,6 +140,8 @@ class CliState:
         # The PR announcer's gating all lives in collect_announcements, so it registers unconditionally.
         register_pr_announcements()
         register_fault_announcements()
+        if _state.load_errors:
+            register_load_error_warnings(tuple(_state.load_errors))
         stamp_identity(before, root=Path(__file__).parent)
         return packs
 
