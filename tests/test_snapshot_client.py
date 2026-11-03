@@ -879,12 +879,9 @@ def test_admission_queueing_stops_at_the_first_request_deadline(monkeypatch, cli
     client = SnapshotClient(exchange, **client_options)
     client.bind_tool_registry({})
 
-    try:
-        result = client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
-    except EvidenceIncomplete as exc:
-        assert exc.status == "deadline"
-    else:
-        assert result["status"] == "retained_limit"
+    result = client.call("acquire", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
+
+    assert (result["status"], result["reason"]) == ("retained_limit", "busy")
     assert 0.5 <= clock.now < 0.6
     assert len(requests) > 5
     assert len({request["deadline_unix_ms"] for request in requests}) == 1
@@ -962,24 +959,13 @@ def test_call_returns_the_usage_of_every_reply_it_retried():
     assert usage.keys() == empty_usage().keys()
 
 
-@pytest.mark.parametrize(
-    ("refusals", "usage"),
-    [
-        pytest.param(0, {}, id="no-reply-before-the-deadline"),
-        pytest.param(
-            1,
-            {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096, "requests_failed": 1},
-            id="refused-reply-then-deadline",
-        ),
-    ],
-)
-def test_a_deadline_while_queueing_raises_with_the_usage_of_refused_replies(monkeypatch, refusals, usage):
+def queueing_client(monkeypatch, *, advance):
     from captain_hook.snapshots import client as snapshot_client
 
     clock = SimpleNamespace(now=0.0)
 
     def sleep(seconds):
-        clock.now += 1.0
+        clock.now += advance
 
     monkeypatch.setattr(
         snapshot_client,
@@ -987,24 +973,49 @@ def test_a_deadline_while_queueing_raises_with_the_usage_of_refused_replies(monk
         SimpleNamespace(monotonic=lambda: clock.now, time=lambda: 1_700_000_000 + clock.now, sleep=sleep),
     )
     requests = []
-    busy_usage = {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096}
 
     def exchange(wrapper):
         request = wrapper["request"]
         requests.append(request)
+        busy_usage = {"source_bytes_read": 7, "prepared_cache_bytes_read": 4096}
         return {"schema": HOST_SCHEMA, "response": failure(request["id"], "retained_limit", "busy", busy_usage)}
 
     client = SnapshotClient(exchange, foreground_seconds=0.5)
     client.bind_tool_registry({})
-    if not refusals:
-        client.foreground_deadline_unix_ms = 1_700_000_000_000
+    return client, requests
+
+
+def test_a_deadline_before_any_reply_raises_deadline_with_no_usage(monkeypatch):
+    client, requests = queueing_client(monkeypatch, advance=1.0)
+    client.foreground_deadline_unix_ms = 1_700_000_000_000
 
     with pytest.raises(EvidenceIncomplete) as raised:
         client.call("warm_root", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
 
     assert raised.value.status == "deadline"
+    assert requests == []
+    assert not any(raised.value.usage.values())
+
+
+@pytest.mark.parametrize(
+    ("advance", "refusals"),
+    [
+        pytest.param(1.0, 1, id="one-refusal-then-a-sleep-past-the-deadline"),
+        pytest.param(0.2, 3, id="three-refusals-then-a-sleep-past-the-deadline"),
+    ],
+)
+def test_a_deadline_while_queueing_returns_the_refusal_it_queued_behind(monkeypatch, advance, refusals):
+    client, requests = queueing_client(monkeypatch, advance=advance)
+
+    result = client.call("warm_root", path="/tmp/root.jsonl", classifier={"id": "native", "version": "1"})
+
+    assert (result["status"], result["reason"]) == ("retained_limit", "busy")
     assert len(requests) == refusals
-    assert {name: count for name, count in raised.value.usage.items() if count} == usage
+    assert {name: count for name, count in result["usage"].items() if count} == {
+        "source_bytes_read": 7 * refusals,
+        "prepared_cache_bytes_read": 4096 * refusals,
+        "requests_failed": refusals,
+    }
 
 
 @pytest.mark.parametrize(
