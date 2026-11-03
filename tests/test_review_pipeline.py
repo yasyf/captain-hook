@@ -9,6 +9,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -1350,6 +1351,7 @@ class TestBrain:
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"][SPAWNED_ENV] == "1"
         assert kwargs["env"]["CLAUDE_CODE_PLUGIN_CACHE_DIR"] == str(brain_plugin_root())
+        assert Path(kwargs["env"]["UV_CONSTRAINT"]).read_text() == f"capt-hook=={version('capt-hook')}\n"
         assert brain_plugin_root().parts[-2:] == ("captain-hook", "headless-plugins")
         assert REVIEWER_MARKER in kwargs["input"].decode()
         assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
