@@ -617,7 +617,24 @@ def run_tests(json_output: bool = False) -> None:
         sys.exit(1)
 
 
+def print_version(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    from importlib.metadata import version
+
+    click.echo(f"capt-hook {version('capt-hook')} (cc-transcript {version('cc-transcript')})")
+    ctx.exit()
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option(
+    "--version",
+    is_flag=True,
+    expose_value=False,
+    is_eager=True,
+    callback=print_version,
+    help="Show the capt-hook and cc-transcript versions and exit.",
+)
 @click.option(
     "--hooks",
     default=None,

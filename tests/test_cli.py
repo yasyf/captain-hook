@@ -184,6 +184,15 @@ class TestHooksSubcommand:
         assert all(len(row) == 6 for row in rows)
 
 
+class TestVersion:
+    def test_version_names_capt_hook_and_cc_transcript(self) -> None:
+        from importlib.metadata import version
+
+        result = run_cli("--version")
+        assert result.returncode == 0
+        assert result.stdout == f"capt-hook {version('capt-hook')} (cc-transcript {version('cc-transcript')})\n"
+
+
 class TestErrorHandling:
     def test_cli_005_unknown_subcommand(self) -> None:
         result = run_cli("nonexistent")
