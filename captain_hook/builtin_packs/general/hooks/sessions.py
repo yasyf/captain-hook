@@ -1603,10 +1603,10 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         ): Block(),
         guarded(command="launchctl kickstart -k system/com.example.host"): Block(),
         guarded(command="launchctl kickstart -k gui/501/com.long-running.d1.dashboard"): Block(
-            pattern="`lr dashboard restart` restarts it"
+            pattern="Run `lr dashboard restart` instead"
         ),
         guarded(command="launchctl kickstart -k gui/$(id -u)/com.long-running.d1.dashboard"): Block(
-            pattern="`lr dashboard restart` restarts it"
+            pattern="Run `lr dashboard restart` instead"
         ),
         guarded(command="launchctl $verb gui/501"): Block(pattern="at run time"),
         guarded(command="launchctl -q bootout gui/501/com.example.orca-serve"): Block(
