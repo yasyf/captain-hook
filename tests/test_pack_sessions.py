@@ -746,7 +746,9 @@ class TestDriveLeftovers:
             "d2": {"sessions": ["r9"], "ledger": "829f980d0bb4bdc308a2d0cc217dc9bb6ef0cddd"},
         }
         for drive, entry in entries.items():
-            (drives / f"{drive}.json").write_text(json.dumps({"drive": drive, **entry, "state_dir": f"/s/{drive}"}))
+            (drives / f"{drive}.json").write_text(
+                json.dumps({"drive": drive, **entry, "state_dir": f"/s/{drive}", "checkout": f"/c/{drive}"})
+            )
         return drives
 
     @pytest.mark.parametrize(
@@ -899,6 +901,239 @@ class TestKillRulingPrograms:
         rulings["--serve"] = json.loads(inline_ruling("Owner: end --serve.", tags=KILL_RULING_TAGS))
         rulings["buildDashboard"] = json.loads(inline_ruling("Owner: end buildDashboard.tsx.", tags=KILL_RULING_TAGS))
         assert "no agent ancestor to vouch for it" in (decide("kill 52005", tmp_path) or "")
+
+
+TAP_LANE = {"CLAUDE_LONG_RUNNING_DRIVE": "d1", "CLAUDE_LONG_RUNNING_LANE": "meta-desk-3"}
+RECORDER = 52010
+OTHER_RECORDER = 52011
+TAP_ROW_ID = "c8be9e022c290984977fc7c6fdd6b0ee5eabf12c"
+TAP_LABELS = ("board-answer", "from:owner", "board-session:b1", "board-card:card-rec", "board-block:rec-choice")
+TAP_WORDS = f"Board question: May I restart your recorder?\nCard said: meta-desk restarts pid {RECORDER}."
+TAPPED = f"picked “Yes, restart it now”\n{TAP_WORDS}"
+TAP_TABLE = table(
+    *DRIVE_LEFTOVERS.rows.values(),
+    row(RECORDER, 1, "python3 board_watch.py start --session b1", started="2026-09-30T07:05:00"),
+    row(OTHER_RECORDER, 1, "python3 board_watch.py start --session b2", started="2026-09-30T07:06:00"),
+)
+
+
+def tap_time(minutes_ago: float = 10) -> datetime:
+    return (datetime.now(UTC) - timedelta(minutes=minutes_ago)).replace(microsecond=0)
+
+
+def tap_row(
+    body: str = TAPPED,
+    *,
+    ident: str = TAP_ROW_ID,
+    created: datetime | None = None,
+    updated: datetime | None = None,
+    labels: Sequence[str] = TAP_LABELS,
+) -> dict[str, Any]:
+    made = created or tap_time(10) + timedelta(seconds=1)
+    return {
+        "id": ident,
+        "title": "May I restart your recorder?",
+        "body": body,
+        "tags": list(labels),
+        "created_at": made.isoformat(),
+        "updated_at": (updated or made).isoformat(),
+    }
+
+
+def board_log(*at: datetime, origin: str = "human", block: str = "rec-choice") -> str:
+    answers = [
+        {
+            "type": "choice.selected",
+            "origin": origin,
+            "at": moment.isoformat(),
+            "payload": {"blockId": block, "optionIds": ["rec-1"]},
+        }
+        for moment in at
+    ]
+    return json.dumps({"answers": answers, "doc": {"blocks": []}, "onBoard": False})
+
+
+def tap_stubs(
+    found: Sequence[dict[str, Any]], rows: Sequence[dict[str, Any]] | None = None, *, board: str | None = None
+) -> dict[str, str | tuple[int, str]]:
+    return {
+        "ccn -R /c/d1 answer search": "[]",
+        **{f"ccn -R /c/d1 answer search {term}": json.dumps(found) for term in (str(RECORDER), "board_watch.py")},
+        "ccn -R /c/d1 answer list": json.dumps(found if rows is None else rows),
+        "cc-present outcomes --block card-rec --session b1": board_log(tap_time(10)) if board is None else board,
+    }
+
+
+class TestCardTapLift:
+    @pytest.fixture(autouse=True)
+    def registry(self, home: Path, fake_table: dict[str, ProcessTable | None]) -> None:
+        fake_table["table"] = TAP_TABLE
+        drives = home / ".claude" / "long-running" / "drives"
+        drives.mkdir(parents=True)
+        entry = {"drive": "d1", "sessions": ["r0"], "ledger": "b29c27a", "checkout": "/c/d1", "state_dir": "/s/d1"}
+        (drives / "d1.json").write_text(json.dumps(entry))
+
+    def kill(
+        self,
+        tmp_path: Path,
+        stubs: dict[str, str | tuple[int, str]],
+        pid: int = RECORDER,
+        *,
+        lane: str | None = "meta-desk-3",
+        **fields: Any,
+    ) -> str | None:
+        env = {**TAP_LANE, "CLAUDE_LONG_RUNNING_LANE": lane} if lane else {"CLAUDE_LONG_RUNNING_DRIVE": "d1"}
+        with stubbed_commands(stubs):
+            return decide_input(bash(f"kill {pid}", **fields), tmp_path, env=env)
+
+    def test_his_tap_on_a_card_naming_the_pid_lifts_the_kill_with_no_chat_line(
+        self, general_pack: None, tmp_path: Path
+    ) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row()])) is None
+        assert minted("sessions.kill.tap") == [("card-tap", [f"tap:{TAP_ROW_ID[:7]}"])]
+
+    def test_a_card_naming_the_script_lifts_it_too(self, general_pack: None, tmp_path: Path) -> None:
+        row_naming_script = tap_row("picked “Yes”\nCard said: meta-desk restarts board_watch.py.")
+        assert self.kill(tmp_path, tap_stubs([row_naming_script])) is None
+
+    def test_a_forged_row_with_no_tap_on_the_board_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        message = self.kill(tmp_path, tap_stubs([tap_row()], board=board_log()))
+        assert message is not None
+        assert "no agent ancestor to vouch for it" in message
+        assert f"name `pid {RECORDER}`" in message
+        assert minted("sessions.kill.tap") == []
+
+    def test_an_agent_written_event_on_the_board_is_not_his_tap(self, general_pack: None, tmp_path: Path) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row()], board=board_log(tap_time(10), origin="agent"))) is not None
+
+    def test_a_row_written_after_the_real_one_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        real = tap_row("picked “Yes, restart it now”\nCard said: meta-desk restarts the recorder.", ident="a" * 40)
+        forged = tap_row(created=tap_time(9))
+        assert self.kill(tmp_path, tap_stubs([forged], [forged, real])) is not None
+
+    def test_a_row_written_before_his_tap_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row(created=tap_time(20))])) is not None
+
+    def test_an_edited_row_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row(updated=tap_time(5))])) is not None
+
+    def test_a_row_written_long_after_his_tap_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row(created=tap_time(4))])) is not None
+
+    def test_a_row_not_labelled_his_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        unlabelled = tap_row(labels=[label for label in TAP_LABELS if label != "from:owner"])
+        assert self.kill(tmp_path, tap_stubs([unlabelled])) is not None
+
+    def test_his_newest_answer_decides(self, general_pack: None, tmp_path: Path) -> None:
+        stale = tap_stubs([tap_row()], board=board_log(tap_time(10), tap_time(2)))
+        assert self.kill(tmp_path, stale) is not None
+
+    def test_a_tap_over_an_hour_old_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        old = tap_row(created=tap_time(61) + timedelta(seconds=1))
+        assert self.kill(tmp_path, tap_stubs([old], board=board_log(tap_time(61)))) is not None
+
+    @pytest.mark.parametrize(
+        "said",
+        [
+            "picked “No, keep the old route”",
+            "picked “Leave it running”",
+            "picked “Yes, but not yet”",
+            "picked “Yes” wrote “actually wait”",
+            "rejected",
+            "wrote “restart it”",
+            "noted “why?”",
+        ],
+    )
+    def test_an_answer_that_is_no_go_lifts_nothing(self, general_pack: None, tmp_path: Path, said: str) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row(f"{said}\n{TAP_WORDS}")])) is not None
+
+    @pytest.mark.parametrize("said", ["picked “Restart it now”", "picked “OK”", "approved “May I restart it?”"])
+    def test_an_answer_that_reads_as_a_go_lifts_it(self, general_pack: None, tmp_path: Path, said: str) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row(f"{said}\n{TAP_WORDS}")])) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param("picked “Yes”\nCard said: meta-desk restarts the recorder.", id="no_process"),
+            pytest.param(f"picked “Yes”\nCard said: meta-desk read #{RECORDER}.", id="a_number_that_is_no_pid"),
+            pytest.param("picked “Yes”\nCard said: meta-desk restarts its python3.", id="only_the_interpreter"),
+            pytest.param("picked “Yes”\nCard said: meta-desk restarts board_watch.py.bak.", id="a_longer_name"),
+        ],
+    )
+    def test_a_card_that_does_not_name_the_process_lifts_nothing(
+        self, general_pack: None, tmp_path: Path, body: str
+    ) -> None:
+        stubs = tap_stubs([tap_row(body)])
+        stubs["ccn -R /c/d1 answer search python3"] = stubs[f"ccn -R /c/d1 answer search {RECORDER}"]
+        assert self.kill(tmp_path, stubs) is not None
+
+    @pytest.mark.parametrize("lane", ["meta-desk", "meta-desk-3", "meta-desk-9"])
+    def test_the_lane_on_the_card_and_its_successors_may_act(
+        self, general_pack: None, tmp_path: Path, lane: str
+    ) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row()]), lane=lane) is None
+
+    @pytest.mark.parametrize("lane", ["release-2", "desk", "meta-desk-runner"])
+    def test_another_lane_may_not_use_his_tap(self, general_pack: None, tmp_path: Path, lane: str) -> None:
+        assert self.kill(tmp_path, tap_stubs([tap_row()]), lane=lane) is not None
+        assert minted("sessions.kill.tap") == []
+
+    def test_a_session_in_no_lane_takes_no_lift(self, general_pack: None, tmp_path: Path) -> None:
+        message = self.kill(tmp_path, tap_stubs([tap_row()]), lane=None)
+        assert message is not None
+        assert "board card" not in message
+
+    def test_a_subagent_of_the_lane_takes_no_lift(self, general_pack: None, tmp_path: Path) -> None:
+        stubs = tap_stubs([tap_row()])
+        assert self.kill(tmp_path, stubs, agent_id="sub-1", root_transcript=INLINE_TRANSCRIPT) is not None
+
+    def test_one_tap_covers_one_process(self, general_pack: None, tmp_path: Path) -> None:
+        stubs = tap_stubs([tap_row("picked “Yes”\nCard said: meta-desk restarts board_watch.py.")])
+        assert self.kill(tmp_path, stubs) is None
+        assert self.kill(tmp_path, stubs, OTHER_RECORDER) is not None
+        assert self.kill(tmp_path, stubs) is None
+        assert [ticket.place["process"].partition("@")[0] for ticket in store.tickets("sessions.kill.tap")] == [
+            str(RECORDER)
+        ]
+
+    def test_a_new_tap_lifts_a_new_kill(self, general_pack: None, tmp_path: Path) -> None:
+        body = "picked “Yes”\nCard said: meta-desk restarts board_watch.py."
+        assert self.kill(tmp_path, tap_stubs([tap_row(body)])) is None
+        again = tap_row(body, ident="b" * 40, created=tap_time(2) + timedelta(seconds=1))
+        stubs = tap_stubs([again], board=board_log(tap_time(10), tap_time(2)))
+        assert self.kill(tmp_path, stubs, OTHER_RECORDER) is None
+
+    def test_a_process_started_after_his_tap_is_not_the_one_he_saw(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], tmp_path: Path
+    ) -> None:
+        started = tap_time(1).astimezone().replace(tzinfo=None).isoformat()
+        recycled = row(RECORDER, 1, "python3 board_watch.py", started=started)
+        fake_table["table"] = table(*DRIVE_LEFTOVERS.rows.values(), recycled)
+        assert self.kill(tmp_path, tap_stubs([tap_row()])) is not None
+
+    @pytest.mark.parametrize(
+        ("pid", "refusal"),
+        [
+            pytest.param(14575, "is an agent session", id="live_claude"),
+            pytest.param(8311, "is an agent session", id="lone_codex"),
+            pytest.param(1743, "the Orca PTY daemon", id="orca_host"),
+            pytest.param(14550, "an ancestor of a protected process", id="agent_ancestor"),
+            pytest.param(15000, "is a terminal host", id="orca_terminal"),
+            pytest.param(52004, "no agent ancestor to vouch for it", id="agent_shim"),
+        ],
+    )
+    def test_what_the_guard_protects_stays_protected_whatever_a_card_says(
+        self, general_pack: None, tmp_path: Path, pid: int, refusal: str
+    ) -> None:
+        body = f"picked “Yes”\nCard said: meta-desk ends pid {pid}."
+        stubs = tap_stubs([tap_row(body)])
+        stubs[f"ccn -R /c/d1 answer search {pid}"] = json.dumps([tap_row(body)])
+        assert refusal in (self.kill(tmp_path, stubs, pid) or "")
+        assert minted("sessions.kill.tap") == []
+
+    def test_a_board_it_cannot_read_lifts_nothing(self, general_pack: None, tmp_path: Path) -> None:
+        stubs = tap_stubs([tap_row()]) | {"cc-present outcomes --block card-rec --session b1": (1, "no such board")}
+        assert self.kill(tmp_path, stubs) is not None
 
 
 OBSERVED_LANE = "aig-no-delete-plan@session-67c0e5da"
