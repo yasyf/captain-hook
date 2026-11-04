@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The search guard no longer blocks a variable that can only name a file.** `rg -n needle "$F"` was
+  read as a recursive search whenever `F` was not a plain literal assigned on the same line, and the
+  `${dir:?}` form the guard's own empty-root message asks for was blocked too. These now pass: a
+  `${F:?}` path (a same-line literal still resolves, so `W=/; rg x "${W:?}"` stays blocked), a value from
+  `$(rg -l ...)`, `$(grep -l ...)` or `$(git ls-files)` piped only through filters, a literal assigned
+  after `cd x &&`, a filename-shaped glob in a `for` head, and a word ending in a file name, as in
+  `"$W/src/app.py"`. An unknown `$F` or `$F/src`, and an unquoted `$F` that may be empty, stay blocked.
 - **A rewrite or a warning no longer approves the call it rides on.** On `PreToolUse`, every
   `evt.rewrite`, `evt.rewrite_command`, `rewrite_command()` primitive and plain `evt.warn` or nudge
   answered `permissionDecision: allow`. Claude Code honors that allow over the permission mode, so a
