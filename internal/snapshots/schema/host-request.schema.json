@@ -2550,6 +2550,60 @@
       "title": "PreparedRegexPredicate",
       "type": "object"
     },
+    "Core_PreparedSourceEditPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_prefixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Prefixes",
+          "type": "array"
+        },
+        "exclude_suffixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Suffixes",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_source_edit",
+          "title": "Kind",
+          "type": "string"
+        },
+        "root": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Root"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "root",
+        "exclude_suffixes",
+        "exclude_prefixes",
+        "subagents"
+      ],
+      "title": "PreparedSourceEditPredicate",
+      "type": "object"
+    },
     "Core_PreparedToolPredicate": {
       "additionalProperties": false,
       "properties": {
@@ -2776,6 +2830,7 @@
               "has_read_glob": "#/$defs/Core_PreparedGlobPredicate",
               "has_skill": "#/$defs/Core_PreparedListPredicate",
               "has_skill_suffix": "#/$defs/Core_PreparedListPredicate",
+              "has_source_edit": "#/$defs/Core_PreparedSourceEditPredicate",
               "has_tool": "#/$defs/Core_PreparedToolPredicate"
             },
             "propertyName": "kind"
@@ -2795,6 +2850,9 @@
             },
             {
               "$ref": "#/$defs/Core_PreparedGlobPredicate"
+            },
+            {
+              "$ref": "#/$defs/Core_PreparedSourceEditPredicate"
             },
             {
               "$ref": "#/$defs/Core_PreparedOverridePredicate"
@@ -2906,6 +2964,7 @@
               "has_read_glob": "#/$defs/Core_ListPredicate",
               "has_skill": "#/$defs/Core_ListPredicate",
               "has_skill_suffix": "#/$defs/Core_ListPredicate",
+              "has_source_edit": "#/$defs/Core_SourceEditPredicate",
               "has_tool": "#/$defs/Core_ToolPredicate",
               "instruction_turns": "#/$defs/Core_Page",
               "interaction_keys": "#/$defs/Core_InteractionKeys",
@@ -2935,6 +2994,9 @@
             },
             {
               "$ref": "#/$defs/Core_ListPredicate"
+            },
+            {
+              "$ref": "#/$defs/Core_SourceEditPredicate"
             },
             {
               "$ref": "#/$defs/Core_OverridePredicate"
@@ -3746,6 +3808,59 @@
         "thinking"
       ],
       "title": "SignalTexts",
+      "type": "object"
+    },
+    "Core_SourceEditPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_prefixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Prefixes",
+          "type": "array"
+        },
+        "exclude_suffixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Suffixes",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_source_edit",
+          "title": "Kind",
+          "type": "string"
+        },
+        "root": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Root"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "root",
+        "exclude_suffixes",
+        "exclude_prefixes",
+        "subagents"
+      ],
+      "title": "SourceEditPredicate",
       "type": "object"
     },
     "Core_SpanEditDefinition": {
