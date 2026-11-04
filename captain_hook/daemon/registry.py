@@ -10,6 +10,7 @@ import threading
 import time
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 BUILD_RETRIES = 3
 MARKER_TTL = 30.0
 PLUGIN_TTL = 30.0
+PACK_FILE_DIGESTS = 8192
 LOAD_ERROR_RETRY_SECONDS = 30.0
 MAX_WALK_ROOTS = 32
 MARKER_WAIT_SECONDS = 1.0
@@ -44,7 +46,7 @@ LINUX_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
-PluginTree = tuple[str, str, tuple[HookEntry, ...]]
+PluginTree = tuple[str, tuple[tuple[str, str], ...]]
 MarkerStamp = tuple[StatEntry | None, StatEntry | None]
 RosterEntry = StatEntry | int | None
 RosterStamp = tuple[tuple[Path, RosterEntry], ...]
@@ -198,6 +200,11 @@ def _renew(
     return entry.languages
 
 
+@lru_cache(maxsize=PACK_FILE_DIGESTS)
+def _pack_file_digest(path: Path, _stamp: HookEntry) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _plugin_trees(root: Path, *, fresh: bool = False) -> tuple[PluginTree, ...] | str:
     try:
         roster = plugins.enabled_plugins(root)
@@ -207,7 +214,8 @@ def _plugin_trees(root: Path, *, fresh: bool = False) -> tuple[PluginTree, ...] 
     for plugin in roster:
         pack_root = plugins.plugin_pack_root(plugin)
         try:
-            trees.append((plugin.id, plugin.root, _hooks_tree(str(pack_root), fresh=fresh)))
+            files = _hooks_tree(str(pack_root), fresh=fresh)
+            trees.append((plugin.id, tuple((file[0], _pack_file_digest(pack_root / file[0], file)) for file in files)))
         except OSError:
             continue
     return tuple(trees)
@@ -262,6 +270,7 @@ class RegistrySnapshot:
     discovery_stderr: str = ""
     cacheable: bool = True
     retry_at: float = math.inf
+    pack_paths: tuple[Path, ...] = ()
 
 
 class Registry:
@@ -294,7 +303,7 @@ class Registry:
     def _hit(self) -> RegistrySnapshot | None:
         if not self._cache or (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is None:
             return None
-        return hit if time.monotonic() < hit.retry_at else None
+        return hit if time.monotonic() < hit.retry_at and all(path.is_dir() for path in hit.pack_paths) else None
 
     def _rebuild(self, requested: float) -> RegistrySnapshot:
         with self._build_lock:
@@ -371,4 +380,5 @@ class Registry:
             discovery_stderr=captured.stderr.getvalue(),
             cacheable=not any(e.source == PLUGIN_ROSTER_SOURCE for e in state.load_errors),
             retry_at=time.monotonic() + LOAD_ERROR_RETRY_SECONDS if state.load_errors else math.inf,
+            pack_paths=tuple(pack.path for pack in resolved),
         )
