@@ -29,7 +29,7 @@ from cc_transcript.models import AttachmentEvent, QueuedCommand, UserEvent
 from cc_transcript.tools import AskUserQuestionResult, parse_tool_result
 
 from captain_hook.tickets.records import Answer, Evidence, Proposal
-from captain_hook.transcripts import LazyTranscript
+from captain_hook.transcripts import LazyTranscript, root_excerpt
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
@@ -457,7 +457,7 @@ class TranscriptSources:
 
     Attributes:
         evt: The event being decided.
-        needles: Text whose root-session mentions are read however far back they sit.
+        needles: Text whose mentions in the session whose prompts are the user's are read however far back they sit.
         window: How many recent messages of each session to read.
         machine: Markers of a prompt a tool wrote on the user's behalf; such a prompt is never their words.
     """
@@ -467,11 +467,15 @@ class TranscriptSources:
     window: int = WINDOW
     machine: tuple[str, ...] = ()
 
-    def sessions(self) -> list[tuple[Session | RemoteSession, bool]]:
-        """The sessions to read from, each with whether its prompts are the user's."""
+    def sessions(self, *, tail_selected: bool = False) -> list[tuple[Session | RemoteSession, bool]]:
+        """The sessions to read from, each with whether its prompts are the user's.
+
+        A hook that selected its own tail keeps that scope, so nothing older is read for it.
+        """
         ctx = self.evt.ctx
         if (root := ctx.root_transcript) is None:
-            return [(ctx.t, True)]
+            path = None if tail_selected or not self.needles else ctx.transcript_path
+            return [*([(root_excerpt(path, self.needles), True)] if path else []), (ctx.t, True)]
         excerpt = ctx.root_excerpt(self.needles) if self.needles else None
         return [*([(excerpt, True)] if excerpt is not None else []), (resolved(root), True), (ctx.t, False)]
 

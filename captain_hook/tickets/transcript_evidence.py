@@ -150,6 +150,35 @@ def source_spec(transcript: Any, stack: ExitStack) -> TranscriptSource | None:
     return branch.pins.spec
 
 
+def selected_views(
+    client: Any, base: RemoteSession, needles: Sequence[str], tail_events: int | None, stack: ExitStack
+) -> list[RemoteSession]:
+    forms = list(
+        dict.fromkeys(
+            form
+            for needle in needles
+            if needle
+            for form in (needle, json.dumps(needle)[1:-1], json.dumps(needle, ensure_ascii=False)[1:-1])
+        )
+    )
+    result = list(
+        client.pages(
+            "acquire_views",
+            handle=base.lease.require(),
+            excerpt={"forms": forms, "around": 2, "count": 20} if needles else None,
+            tail_events=tail_events,
+        )
+    )
+    if len(result) != 1 or result[0].get("kind") != "acquired_views":
+        raise SnapshotProtocolError("ticket source selection returned no views")
+    expected = (["excerpt"] if needles else []) + (["tail"] if tail_events else [])
+    views = result[0]["views"]
+    acquired = [fixed_session(client, view["description"], stack) for view in views]
+    if [view["label"] for view in views] != expected:
+        raise SnapshotProtocolError("ticket source selection returned different views")
+    return acquired
+
+
 @contextmanager
 def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
     with ExitStack() as stack:
@@ -157,7 +186,12 @@ def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
         acting = source_spec(ctx.transcript, stack)
         root = source_spec(ctx.root_transcript, stack) if ctx.root_transcript is not None else None
         if acting is None or acting.tail_events is not None or (ctx.root_transcript is not None and root is None):
-            yield [EvidenceSession(session, user) for session, user in sources.sessions()]
+            yield [
+                EvidenceSession(session, user)
+                for session, user in sources.sessions(
+                    tail_selected=acting is not None and acting.tail_events is not None
+                )
+            ]
             return
         client = CURRENT_CLIENT.get()
         if client is None:
@@ -167,34 +201,19 @@ def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
             base = fixed_session(
                 client, client.acquired(root.path, classifier=NATIVE_CLASSIFIER, tail_bytes=HOOK_TAIL_BYTES), stack
             )
-            forms = list(
-                dict.fromkeys(
-                    form
-                    for needle in sources.needles
-                    if needle
-                    for form in (needle, json.dumps(needle)[1:-1], json.dumps(needle, ensure_ascii=False)[1:-1])
-                )
-            )
             if sources.needles or root.tail_events is not None:
-                result = list(
-                    client.pages(
-                        "acquire_views",
-                        handle=base.lease.require(),
-                        excerpt={"forms": forms, "around": 2, "count": 20} if sources.needles else None,
-                        tail_events=root.tail_events,
-                    )
+                output.extend(
+                    EvidenceSession(classified(session, stack), True)
+                    for session in selected_views(client, base, sources.needles, root.tail_events, stack)
                 )
-                if len(result) != 1 or result[0].get("kind") != "acquired_views":
-                    raise SnapshotProtocolError("ticket source selection returned no views")
-                expected = (["excerpt"] if sources.needles else []) + (["tail"] if root.tail_events else [])
-                views = result[0]["views"]
-                acquired = [fixed_session(client, view["description"], stack) for view in views]
-                if [view["label"] for view in views] != expected:
-                    raise SnapshotProtocolError("ticket source selection returned different views")
-                output.extend(EvidenceSession(classified(session, stack), True) for session in acquired)
             if root.tail_events is None:
                 output.append(EvidenceSession(classified(base, stack), True))
         base = acquired_source(client, acting, stack)
+        if root is None and sources.needles and isinstance(base, RemoteSession):
+            output.extend(
+                EvidenceSession(classified(session, stack), True)
+                for session in selected_views(client, base, sources.needles, None, stack)
+            )
         output.append(
             EvidenceSession(classified(base, stack), root is None)
             if isinstance(base, RemoteSession)

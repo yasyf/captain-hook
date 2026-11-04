@@ -10,8 +10,8 @@ from captain_hook.events import PreToolUseEvent
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, FixedLease
 from captain_hook.testing.helpers import fixture_line, fixture_session
-from captain_hook.testing.snapshots import FixtureOwner
-from captain_hook.tickets.context import Context, TranscriptSources
+from captain_hook.testing.snapshots import FixtureOwner, fixture_transcript
+from captain_hook.tickets.context import WINDOW, Context, TranscriptSources
 from captain_hook.tickets.records import Proposal
 from captain_hook.transcripts import ROOT_EXCERPT_BYTES, lazy_transcript, load_transcript, root_transcript
 
@@ -285,6 +285,81 @@ def test_native_cross_source_winners_cards_and_stable_ties_match_the_original_or
         assert fixture.client.call("stats")["data"]["gauges"]["active_leases"] == 0
     finally:
         root.release()
+        acting.release()
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
+PLACE_LINK = (
+    "post once here when done: https://acme.slack.com/archives/C1/p1793751256981539?thread_ts=1793735687.253259"
+)
+
+
+def queued(text, kind="human"):
+    return {
+        "type": "attachment",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "attachment": {
+            "type": "queued_command",
+            "prompt": text,
+            "commandMode": "prompt",
+            "origin": {"kind": kind},
+            "humanTurn": kind == "human",
+        },
+    }
+
+
+def far_back(*words):
+    return [
+        T.user("start"),
+        *words,
+        *[T.assistant("working") if index % 2 else T.user("status?") for index in range(2 * WINDOW)],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("words", "kept"),
+    [
+        pytest.param([queued(PLACE_LINK)], True, id="queued-by-the-user"),
+        pytest.param([T.user(PLACE_LINK, timestamp="2026-01-01T00:00:01Z")], True, id="prompted-by-the-user"),
+        pytest.param([queued(PLACE_LINK, "task-notification")], False, id="queued-by-a-task"),
+        pytest.param([queued(PLACE_LINK.replace("C1", "C2"))], False, id="another-place"),
+    ],
+)
+def test_own_session_reads_words_naming_the_place_before_the_window(tmp_path, monkeypatch, words, kept):
+    from captain_hook.tickets import context as source_module
+
+    monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
+    path = tmp_path / "acting.jsonl"
+    path.write_text(lines(far_back(*words)))
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    acting = lazy_transcript(path)
+    try:
+        native = TranscriptSources(event(tmp_path, acting), ("C1",)).said()
+        legacy = TranscriptSources(event(tmp_path, fixture_transcript(path)), ("C1",)).said()
+        assert any(item.quote == PLACE_LINK for item in native) is kept
+        assert any(item.quote == PLACE_LINK for item in legacy) is kept
+        assert fixture.client.call("stats")["data"]["gauges"]["active_leases"] == 0
+    finally:
+        acting.release()
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
+def test_own_session_window_still_drops_older_words_naming_no_place(tmp_path, monkeypatch):
+    from captain_hook.tickets import context as source_module
+
+    monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
+    path = tmp_path / "acting.jsonl"
+    path.write_text(lines(far_back(queued("post it somewhere"))))
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    acting = lazy_transcript(path)
+    try:
+        said = TranscriptSources(event(tmp_path, acting), ("C1",)).said()
+        assert all(item.quote != "post it somewhere" for item in said)
+    finally:
         acting.release()
         CURRENT_CLIENT.reset(token)
         fixture.close()
