@@ -70,7 +70,9 @@ def test_release_stages_and_smokes_every_app_asset_before_github_publication() -
     assert "Smoke-test the built wheel" in python_assets
     assert "name: verified-python-assets" in python_assets
     assert "path: verified-python/*" in python_assets
-    assert python_assets.index("Smoke-test the built wheel") < python_assets.index("Record the verified Python asset manifest")
+    assert python_assets.index("Smoke-test the built wheel") < python_assets.index(
+        "Record the verified Python asset manifest"
+    )
 
     assert "needs: build" in linux_host
     assert "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build" in linux_host
@@ -78,7 +80,7 @@ def test_release_stages_and_smokes_every_app_asset_before_github_publication() -
     assert 'tar -C linux-host -czf "captain-hook-$TAG-linux-amd64.tar.gz" capt-hookd' in linux_host
 
     for required in (
-        "needs: [build, python-assets, helper, linux-host]",
+        "needs: [build, python-assets, helper, linux-host, vendored-schemas]",
         "name: verified-python-assets",
         'cmp python-artifacts/captain-pypi-assets.tsv "$manifest"',
         "name: ${{ needs.helper.outputs.artifact_name }}",
@@ -184,7 +186,9 @@ def test_python_publication_waits_for_the_matching_app_smoke(blocked: str) -> No
 
 @pytest.mark.skipif(sys.platform != "linux", reason="The release asset scripts run on Ubuntu")
 @pytest.mark.parametrize("consumer", ["stage-release", "publish-pypi"])
-@pytest.mark.parametrize("tamper", ["unchanged", "changed-wheel", "missing-sdist", "extra-file", "changed-manifest", "missing-manifest"])
+@pytest.mark.parametrize(
+    "tamper", ["unchanged", "changed-wheel", "missing-sdist", "extra-file", "changed-manifest", "missing-manifest"]
+)
 def test_python_manifest_joins_the_actual_publication_scripts(tmp_path: Path, consumer: str, tamper: str) -> None:
     workflow = WORKFLOW.read_text()
     producer = tmp_path / "producer"
@@ -221,9 +225,13 @@ def test_python_manifest_joins_the_actual_publication_scripts(tmp_path: Path, co
             (source / manifest_name).unlink()
 
     script = (
-        workflow_step_script(workflow_job(workflow, consumer), "Assemble the exact complete release").split("mapfile -t helper_assets", 1)[0]
+        workflow_step_script(workflow_job(workflow, consumer), "Assemble the exact complete release").split(
+            "mapfile -t helper_assets", 1
+        )[0]
         if consumer == "stage-release"
-        else workflow_step_script(workflow_job(workflow, consumer), "Match the PyPI upload to the verified Python manifest")
+        else workflow_step_script(
+            workflow_job(workflow, consumer), "Match the PyPI upload to the verified Python manifest"
+        )
     )
     result = subprocess.run(["bash", "-c", script], cwd=work, env=env, capture_output=True, text=True)
     if tamper != "unchanged":
