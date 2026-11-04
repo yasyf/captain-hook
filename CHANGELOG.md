@@ -96,6 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **spaCy reads only the last 20,000 characters of a text.** A very long assistant message could
+  hold a hook on one parse and grow the worker. Signals and echo damping now look at the tail.
 - **The local-build gate reads how busy the CPU is, not the load average.**
   `HOOKS_ADMISSION_LOAD_PER_CORE` now compares against the busy share of the CPU over half a second.
   The load average could read 0.8 per core with three quarters of the CPU idle, which held builds on
