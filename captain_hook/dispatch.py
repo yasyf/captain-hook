@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 import threading
+from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
@@ -49,7 +50,7 @@ from captain_hook.results import (
 from captain_hook.results import (
     settled as settled,
 )
-from captain_hook.session import SessionStore
+from captain_hook.session import SessionSlot, SessionStore
 from captain_hook.snapshots.client import (
     MANDATORY_WORK_SECONDS,
     EvidenceIncomplete,
@@ -76,6 +77,8 @@ HOOK_FANOUT_THREADS = 64
 BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
 AGENT_ID_VARIABLE = "CCI_AGENT_ID"
+FIRE_RESERVATIONS: Counter[tuple[Path | None, str]] = Counter()
+FIRE_RESERVATIONS_GUARD = threading.Lock()
 
 type Settle = Callable[[HookResult | None], None]
 
@@ -238,43 +241,55 @@ def _execute_hook(
     session_dir: Path | None,
     settle: Settle | None,
 ) -> HookResult | None:
-    """Execute a single registered hook under a reserve-then-release ``max_fires`` protocol.
+    """Execute a single registered hook under ``max_fires``, writing the session's count only when it fires.
 
-    Each hook event is a separate ``capt-hook run`` process, so a plain read-check-write of the
-    fire count lets batched parallel tool calls all read the pre-increment count and over-fire a
-    capped hook. Instead, the count is incremented under an exclusive file lock *before* the
-    handler runs (reserve); anything but a delivered truthy result gives the slot back under a
-    second lock (release) — a falsy result, an ``Exception``, or an abnormal ``BaseException``
-    (``SystemExit``/``KeyboardInterrupt``), which releases and then re-propagates so the abort is
-    not silently swallowed. A truthy result reached once nobody waits on it any more (the caller's
-    deadline passed, or dispatch gave up on the event) is not delivered either: :func:`deliver`
-    publishes the caller's *settle* under :func:`captain_hook.util.reqenv.publish`, which unwinds
-    as :class:`captain_hook.util.reqenv.Abandoned` instead once the event closed, and writes the
-    ledger row only once that publication was accepted, so the slot and the row come back or
-    stay together and a closure never splits an accepted verdict from its record. Uncapped
-    hooks (``max_fires is None``) skip the lock entirely.
+    Most capped hooks return nothing on most events, so a count reserved on disk before the handler
+    cost every one of them two file replacements per event. The reservation lives in this process
+    instead, which still keeps concurrent events from running a handler the cap has spent. Another
+    process can still race one, since each ``capt-hook run`` is its own, so the fire itself is
+    claimed under the slot's file lock, and a result that finds the cap spent there is not
+    delivered. A claimed result that delivery then refuses (the caller's deadline passed, or
+    dispatch gave up on the event) gives its claim back, and the ledger row is written only once
+    :func:`deliver`'s publication was accepted, so a closure never splits a verdict from its record.
+    Uncapped hooks (``max_fires is None``) skip all of it.
     """
-    hook_session_dir = (session_dir / entry.state_key / (evt.agent_id or "main")) if session_dir else None
-    if hook_session_dir:
-        hook_session_dir.mkdir(parents=True, exist_ok=True)
-    store = SessionStore(hook_session_dir)
-
-    if entry.spec.max_fires is None:
+    if (cap := entry.spec.max_fires) is None:
         return deliver(entry, evt, measured_call("handler", entry.name, run_handler, entry, evt), settle)
 
-    with store[HookState].mutate() as hook_state:
-        if hook_state.fire_count >= entry.spec.max_fires:
-            return deliver(entry, evt, None, settle)
-        hook_state.fire_count += 1
+    slot = SessionStore(session_dir)[HookState]
+    key = f"{entry.state_key}/{evt.agent_id or 'main'}"
+    reservation = (session_dir, key)
+    fired = slot.get(HookState()).fires.get(key, 0)
+    with FIRE_RESERVATIONS_GUARD:
+        capped = fired + FIRE_RESERVATIONS[reservation] >= cap
+        if not capped:
+            FIRE_RESERVATIONS[reservation] += 1
+    if capped:
+        return deliver(entry, evt, None, settle)
 
-    delivered: HookResult | None = None
+    claimed = False
     try:
-        delivered = deliver(entry, evt, measured_call("handler", entry.name, run_handler, entry, evt), settle)
-        return delivered
+        result = measured_call("handler", entry.name, run_handler, entry, evt)
+        claimed = result is not None and claim_fire(slot, key, cap)
+        return deliver(entry, evt, result if claimed else None, settle)
+    except BaseException:
+        if claimed:
+            with slot.mutate() as state:
+                state.fires[key] -= 1
+        raise
     finally:
-        if delivered is None:
-            with store[HookState].mutate() as hook_state:
-                hook_state.fire_count -= 1
+        with FIRE_RESERVATIONS_GUARD:
+            FIRE_RESERVATIONS[reservation] -= 1
+            if not FIRE_RESERVATIONS[reservation]:
+                del FIRE_RESERVATIONS[reservation]
+
+
+def claim_fire(slot: SessionSlot[HookState], key: str, cap: int) -> bool:
+    with slot.mutate() as state:
+        if state.fires.get(key, 0) >= cap:
+            return False
+        state.fires[key] = state.fires.get(key, 0) + 1
+        return True
 
 
 def deliver(

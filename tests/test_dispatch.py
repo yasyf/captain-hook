@@ -481,18 +481,6 @@ class TestExecuteHook:
         with pytest.raises(KeyboardInterrupt):
             execute_hook(entry, make_pre_tool_event(), tmp_path)
 
-    def test_per_hook_session_subdirectory(self, tmp_path: Path) -> None:
-        def handler(evt: Any) -> HookResult:
-            return HookResult(action=Action.warn, message="x")
-
-        entry = RegisteredHook(
-            spec=HookSpec(events=Event.PreToolUse),
-            handler=handler,
-            name="my_hook",
-        )
-        execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert (tmp_path / entry.state_key).is_dir()
-
     def test_same_name_different_source_no_shared_counter(self, tmp_path: Path) -> None:
         # Two packs each register an @on handler named "check"; only source_file differs. A
         # bare-name state key would let pack A's single fire suppress pack B's; the source-file

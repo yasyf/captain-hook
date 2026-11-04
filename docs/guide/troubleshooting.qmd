@@ -124,7 +124,7 @@ The pause expires by itself, with no cleanup. Every event returns without dispat
 plugin version the session is pinned to, and a `SessionStart` banner names the expiry and how to
 resume. Guards are off for the whole pause.
 
-The command writes `pause.json` under `$CAPTAIN_HOOK_STATE_DIR` (default `~/.claude/state`).
+The command writes `pause.json` under `$CAPTAIN_HOOK_STATE_DIR` (default `~/.local/state/captain-hook`).
 A malformed file or an expiry more than an hour away leaves hooks running.
 
 Quiet hooks only through `uvx capt-hook pause`; never edit the plugin cache. An edited `bin/hook`
@@ -139,7 +139,7 @@ whether it was a symlink. The warning lists the restored versions.
 
 `SessionStart` checks installed versions and versions still in use by a live process, after replying
 and at most once per ten minutes. A repair appears in the next `SessionStart` warning. Look for the
-`launcher restored:` line in `~/.claude/state/update/update.log`, or
+`launcher restored:` line in `~/.local/state/captain-hook/update/update.log`, or
 `$CAPTAIN_HOOK_STATE_DIR/update/update.log` when you override the state directory.
 
 Run the check and repair by hand:
