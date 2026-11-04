@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -9,8 +11,9 @@ import pytest
 from cc_transcript.ids import SessionId
 
 from captain_hook.app import on
+from captain_hook.builtin_packs.general.hooks._sessions import TimedOut
 from captain_hook.cli import dispatch_event
-from captain_hook.orca import coordinator_transcript
+from captain_hook.orca import READINGS, coordinator_transcript
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT
 from captain_hook.testing.helpers import stubbed_commands
@@ -163,6 +166,63 @@ def test_a_malformed_pane_status_resolves_nothing(tmp_path: Path, status: str) -
     path.parent.mkdir(parents=True)
     path.write_text(status)
     with in_worker(tmp_path / "orca"), stubbed_commands(orca_commands()):
+        assert coordinator_transcript() is None
+
+
+def refresh_settled() -> None:
+    deadline = time.monotonic() + 10
+    while any(reading.refreshing for reading in READINGS.values()):
+        assert time.monotonic() < deadline
+        time.sleep(0.001)
+
+
+def test_a_due_reading_answers_at_once_and_refreshes_off_the_dispatch(
+    tmp_path: Path, user_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / f"{COORDINATOR}.jsonl"
+    transcript.touch()
+    monkeypatch.setattr("captain_hook.orca.DISPATCH_TTL", 0.0)
+    with in_worker(user_data), stubbed_commands(orca_commands()):
+        assert coordinator_transcript() == transcript
+    released = threading.Event()
+
+    def busy_orca(*_: object, **__: object) -> None:
+        assert released.wait(10)
+
+    monkeypatch.setattr("captain_hook.builtin_packs.general.hooks._sessions.orca_json", busy_orca)
+    with in_worker(user_data):
+        assert coordinator_transcript() == transcript
+        released.set()
+        refresh_settled()
+        assert coordinator_transcript() is None
+        refresh_settled()
+
+
+def test_a_refresh_orca_never_answered_keeps_the_last_reading(
+    tmp_path: Path, user_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript = tmp_path / f"{COORDINATOR}.jsonl"
+    transcript.touch()
+    monkeypatch.setattr("captain_hook.orca.DISPATCH_TTL", 0.0)
+    with in_worker(user_data), stubbed_commands(orca_commands()):
+        assert coordinator_transcript() == transcript
+    monkeypatch.setattr(
+        "captain_hook.builtin_packs.general.hooks._sessions.orca_json",
+        lambda *_, **__: TimedOut("`orca` timed out after 2s", 2.0),
+    )
+    with in_worker(user_data):
+        assert coordinator_transcript() == transcript
+        refresh_settled()
+        assert coordinator_transcript() == transcript
+        refresh_settled()
+
+
+def test_a_first_reading_orca_never_answered_resolves_nothing(user_data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "captain_hook.builtin_packs.general.hooks._sessions.orca_json",
+        lambda *_, **__: TimedOut("`orca` timed out after 2s", 2.0),
+    )
+    with in_worker(user_data):
         assert coordinator_transcript() is None
 
 
