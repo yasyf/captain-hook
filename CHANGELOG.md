@@ -89,6 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The local-build gate reads how busy the CPU is, not the load average.**
+  `HOOKS_ADMISSION_LOAD_PER_CORE` now compares against the busy share of the CPU over half a second.
+  The load average could read 0.8 per core with three quarters of the CPU idle, which held builds on
+  a machine with room for them.
 - **Hooks read Orca's records over its local socket.** `orchestration check`, `worker-show`,
   `run-show`, `worker-list` and `terminal show` no longer spawn Orca's Electron CLI. A runtime whose
   protocol doesn't match, or a paired one, still goes through the CLI.
