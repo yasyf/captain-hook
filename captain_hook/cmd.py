@@ -494,7 +494,7 @@ def anchored(candidate: str) -> bool:
 
 
 def git_location(call: Call, session_cwd: Path | None) -> tuple[Path | None, Path | None]:
-    cwd, git_dir = call.cwd or session_cwd, None
+    cwd, git_dir = call.cwd or (session_cwd if call.cmd.cwd is None else None), None
     options = iter(call.leading_options)
     for token in options:
         if token == "-C":
