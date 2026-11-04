@@ -301,7 +301,8 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False, session_start:
     """Parses the SessionStart/SessionEnd hook payload and detaches the reviewer child.
 
     Every path returns normally so the wired hook always exits 0: a set
-    ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a headless
+    ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a false
+    ``HOOKS_REVIEW_ENABLED``, a headless
     ``claude -p`` / SDK session (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*``
     family; an interactive quit is ``cli``), malformed stdin, a missing
     transcript, and a failed spawn all fall through silently, each leaving a
@@ -334,6 +335,9 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False, session_start:
 
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("review-run skip: CAPT_HOOK_SPAWNED set")
+        return
+    if not ReviewAdmission().enabled:
+        breadcrumb("review-run skip: HOOKS_REVIEW_ENABLED is off")
         return
     # headless `claude -p` / SDK run — not an interactive session
     if reqenv.is_headless():
@@ -404,6 +408,9 @@ def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
 
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("sweep skip: CAPT_HOOK_SPAWNED set")
+        return
+    if not ReviewAdmission().enabled:
+        breadcrumb("sweep skip: HOOKS_REVIEW_ENABLED is off")
         return
     if reqenv.is_headless():
         breadcrumb("sweep skip: sdk entrypoint")

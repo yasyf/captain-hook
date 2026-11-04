@@ -19,7 +19,8 @@ def resolve_review_db_path() -> Path:
 class ReviewAdmission(BaseSettings):
     """What the hook guards read before they admit a reviewer child, from ``HOOKS_REVIEW_*``.
 
-    ``db_path`` locates the pending-pass locks. ``sweep_interval_minutes`` spaces the passes a
+    ``enabled`` turns the reviewer off everywhere, ahead of the enrollment that auto-watches a new
+    repo. ``db_path`` locates the pending-pass locks. ``sweep_interval_minutes`` spaces the passes a
     ``Stop`` or ``SessionStart`` queues over one transcript directory. The guards read these without
     validating the full :class:`ReviewSettings`, so a malformed reviewer knob still reaches the
     detached child, which records the failure.
@@ -27,6 +28,7 @@ class ReviewAdmission(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")
 
+    enabled: bool = True
     db_path: Path = Field(default_factory=resolve_review_db_path)
     sweep_interval_minutes: int = 30
 
