@@ -114,6 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A plugin update only reloads hooks when its hooks changed.** The registry fingerprint now reads
+  each plugin pack's file contents instead of its install path and timestamps, so a version bump that
+  leaves the pack alone no longer makes every session's next hook reload. Until the next reload, hooks
+  keep running from the old version's directory, including anything they call beside it, such as its
+  `bin/` tools. A snapshot reloads as soon as that directory is pruned.
 - **Workers stay warm through longer idle stretches.** The host now retires an idle worker after
   30 minutes instead of 10, and one over the memory limit at 512 MiB instead of 320 MiB, so a session
   that pauses for a long wait keeps its worker. This holds about 6 more workers on a busy machine. The

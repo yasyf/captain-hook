@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -710,6 +711,56 @@ def test_plugin_pack_hook_edit_reaches_the_served_snapshot_within_the_ttl(
     assert reg.get() is snap
     monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
     assert any(h.spec.message == "pp-edited" for h in reg.get().state.hooks)
+
+
+def test_plugin_bump_with_the_same_hooks_keeps_the_snapshot(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_plugin_pack(tmp_path / "v1")
+    (tmp_path / "bare-v1").mkdir()
+    plant_roster([("acme/pp", tmp_path / "v1"), ("acme/bare", tmp_path / "bare-v1")])
+    reg = Registry(project)
+    snap = reg.get()
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
+
+    make_plugin_pack(tmp_path / "v2")
+    (tmp_path / "bare-v2").mkdir()
+    plant_roster([("acme/pp", tmp_path / "v2"), ("acme/bare", tmp_path / "bare-v2")])
+
+    assert reg.get() is snap
+
+
+def test_plugin_bump_that_changes_a_hook_rebuilds(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_plugin_pack(tmp_path / "v1")
+    plant_roster([("acme/pp", tmp_path / "v1")])
+    reg = Registry(project)
+    reg.get()
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
+
+    make_plugin_pack(tmp_path / "v2").write_text(PLUGIN_HOOK.replace("message='pp'", "message='pp-v2'"))
+    plant_roster([("acme/pp", tmp_path / "v2")])
+
+    assert any(h.spec.message == "pp-v2" for h in reg.get().state.hooks)
+
+
+def test_snapshot_rebuilds_once_its_plugin_version_is_pruned(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_plugin_pack(tmp_path / "v1")
+    plant_roster([("acme/pp", tmp_path / "v1")])
+    reg = Registry(project)
+    snap = reg.get()
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
+
+    make_plugin_pack(tmp_path / "v2")
+    plant_roster([("acme/pp", tmp_path / "v2")])
+    shutil.rmtree(tmp_path / "v1")
+
+    rebuilt = reg.get()
+    assert rebuilt is not snap
+    assert all(path.is_dir() for path in rebuilt.pack_paths)
 
 
 def test_local_hook_edit_reaches_the_next_snapshot(project: CliState, tmp_path: Path) -> None:
