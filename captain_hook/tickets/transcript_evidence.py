@@ -186,12 +186,7 @@ def sessions(sources: TranscriptSources) -> Iterator[list[EvidenceSession]]:
         acting = source_spec(ctx.transcript, stack)
         root = source_spec(ctx.root_transcript, stack) if ctx.root_transcript is not None else None
         if acting is None or acting.tail_events is not None or (ctx.root_transcript is not None and root is None):
-            yield [
-                EvidenceSession(session, user)
-                for session, user in sources.sessions(
-                    tail_selected=acting is not None and acting.tail_events is not None
-                )
-            ]
+            yield [EvidenceSession(session, user) for session, user in sources.sessions()]
             return
         client = CURRENT_CLIENT.get()
         if client is None:
