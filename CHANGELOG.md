@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A finished refusal stands when the second asking cannot finish.** `Decide` asks the LLM again after one
+  refusal; when that second asking timed out, the ticket check reported no verdict and a Slack write went ahead
+  unchecked, even though the judge had refused it. A judge that finishes no asking at all is still undecided.
 - **A dispatch writes its state once, however many hooks ran.** Every `mutate()`, `set()` and `delete()` a
   synchronous dispatch makes is now staged in memory, read back by its other hooks, and committed before the
   reply, at most one write per state file. A commit merges with whatever another dispatch committed meanwhile,
