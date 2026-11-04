@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
@@ -24,7 +25,7 @@ from captain_hook.file import File
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from cc_transcript.ids import ToolDigest
     from cc_transcript.render import Budget
@@ -81,15 +82,19 @@ class BackgroundTask:
     Since Claude Code v2.1.145 a stopping session reports the work still running so a
     hook can tell "the session is done" from "the session is paused waiting for
     background work to wake it back up". Each task carries the common fields below
-    plus type-specific extras — a ``shell`` task's ``command``, a ``subagent``'s
-    ``agent_type``, an ``MCP task``'s ``server`` and ``tool`` — preserved in ``raw``.
+    plus type-specific extras — a ``subagent``'s ``agent_type``, an ``MCP task``'s
+    ``server`` and ``tool`` — preserved in ``raw``.
 
     Attributes:
         id: The task's stable identifier.
         type: The task kind, one of ``shell``, ``subagent``, ``monitor``,
             ``workflow``, ``teammate``, ``cloud session``, or ``MCP task``.
+            Claude Code reports a ``Monitor`` tool task as ``shell``;
+            [`background_tasks`][captain_hook.events.BaseHookEvent.background_tasks]
+            reports it as ``monitor``.
         status: The task's reported lifecycle status.
         description: A human-readable summary of the task.
+        command: The shell command a ``shell`` or ``Monitor`` task runs, ``None`` for other kinds.
         raw: The full task mapping, including the type-specific fields.
     """
 
@@ -97,15 +102,19 @@ class BackgroundTask:
     type: str
     status: str
     description: str
+    command: str | None
     raw: Mapping[str, Any]
 
     @classmethod
-    def from_raw(cls, raw: Mapping[str, Any]) -> BackgroundTask:
+    def from_raw(cls, raw: Mapping[str, Any], *, monitor_ids: frozenset[str] = frozenset()) -> BackgroundTask:
+        task_id = str(raw.get("id", ""))
+        kind = str(raw.get("type", ""))
         return cls(
-            id=str(raw.get("id", "")),
-            type=str(raw.get("type", "")),
+            id=task_id,
+            type="monitor" if kind == "shell" and task_id in monitor_ids else kind,
             status=str(raw.get("status", "")),
             description=str(raw.get("description", "")),
+            command=None if (command := raw.get("command")) is None else str(command),
             raw=raw,
         )
 
@@ -229,14 +238,34 @@ class BaseHookEvent:
         return self._raw.get("stop_hook_active", False)
 
     @property
+    def has_background_work(self) -> bool:
+        """Whether the payload reports any background task or session cron, without reading the transcript."""
+        return bool(self._raw.get("background_tasks") or self._raw.get("session_crons"))
+
+    @cached_property
     def background_tasks(self) -> tuple[BackgroundTask, ...]:
         """The background tasks keeping this session alive, ``()`` when the payload omits them.
 
         Populated only on ``Stop`` and ``SubagentStop`` events from Claude Code
         v2.1.145+; a non-empty tuple means the session is paused waiting for
-        background work to wake it, not done.
+        background work to wake it, not done. Claude Code serializes a ``Monitor``
+        tool task as ``shell``, so a ``shell`` task whose id a transcript ``Monitor``
+        call launched is reported as ``monitor``.
         """
-        return tuple(BackgroundTask.from_raw(t) for t in self._raw.get("background_tasks") or ())
+        raw = self._raw.get("background_tasks") or ()
+        monitor_ids = self.monitor_task_ids() if any(t.get("type") == "shell" for t in raw) else frozenset()
+        return tuple(BackgroundTask.from_raw(t, monitor_ids=monitor_ids) for t in raw)
+
+    def monitor_task_ids(self) -> frozenset[str]:
+        if not (transcript := self.ctx.transcript):
+            return frozenset()
+        return frozenset(
+            str(task_id)
+            for use in transcript.tool_calls.named("Monitor").items
+            if use.result is not None
+            and isinstance(result := use.result.tool_use_result, Mapping)
+            and (task_id := result.get("taskId"))
+        )
 
     @property
     def session_crons(self) -> tuple[SessionCron, ...]:

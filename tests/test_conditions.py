@@ -1652,6 +1652,71 @@ class TestWaitingCondition:
     def test_stop_payload_layer(self, raw: dict[str, Any], raw_messages: list[dict[str, Any]], expected: bool) -> None:
         assert check_condition(Waiting(), waiting_stop_evt(raw, raw_messages)) is expected
 
+    def test_monitor_task_serialized_as_shell_reads_as_monitor(self) -> None:
+        payload = {
+            "hook_event_name": "Stop",
+            "stop_hook_active": False,
+            "background_tasks": [
+                {
+                    "id": "bnwjp2hjq",
+                    "type": "shell",
+                    "status": "running",
+                    "description": "capture monitor",
+                    "command": "sleep 40; echo tick",
+                },
+                {
+                    "id": "b97pmydzm",
+                    "type": "shell",
+                    "status": "running",
+                    "description": "capture shell",
+                    "command": "sleep 40",
+                },
+            ],
+            "session_crons": [],
+        }
+        monitor = T.tool(
+            "Monitor",
+            id="toolu_01CgnnREjEwhsfnfrFEKQC4h",
+            command="sleep 40; echo tick",
+            description="capture monitor",
+            timeout_ms=60000,
+        )
+        shell = T.tool(
+            "Bash",
+            id="toolu_012JXip5XPW48p86Fxc6bSP8",
+            command="sleep 40",
+            description="capture shell",
+            run_in_background=True,
+        )
+        evt = waiting_stop_evt(
+            payload,
+            [
+                T.assistant(monitor),
+                T.user(
+                    T.result(
+                        "Monitor started (task bnwjp2hjq, expires in 1m unless the source ends first).", of=monitor
+                    ),
+                    toolUseResult={"taskId": "bnwjp2hjq", "timeoutMs": 60000, "persistent": False},
+                ),
+                T.assistant(shell),
+                T.user(
+                    T.result("Command running in background with ID: b97pmydzm.", of=shell),
+                    toolUseResult={
+                        "stdout": "",
+                        "stderr": "",
+                        "interrupted": False,
+                        "isImage": False,
+                        "noOutputExpected": False,
+                        "backgroundTaskId": "b97pmydzm",
+                    },
+                ),
+            ],
+        )
+        assert [(task.id, task.type, task.command) for task in evt.background_tasks] == [
+            ("bnwjp2hjq", "monitor", "sleep 40; echo tick"),
+            ("b97pmydzm", "shell", "sleep 40"),
+        ]
+
     def test_stop_payload_composes_with_probe_over_captured_transcript(
         self, monkeypatch: pytest.MonkeyPatch, snapshot_owner: FixtureOwner
     ) -> None:

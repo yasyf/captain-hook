@@ -81,7 +81,7 @@ def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
 def is_waiting(evt: BaseHookEvent) -> bool:
     from captain_hook import cli
 
-    if evt.background_tasks or evt.session_crons:
+    if evt.has_background_work:
         return True
     if not (transcript := evt.ctx.t) or transcript.path is None:
         return False
