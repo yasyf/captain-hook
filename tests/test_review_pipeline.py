@@ -1383,6 +1383,7 @@ class TestBrain:
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"][SPAWNED_ENV] == "1"
         assert kwargs["env"]["CLAUDE_CODE_PLUGIN_CACHE_DIR"] == str(brain_plugin_root())
+        assert kwargs["env"]["DISABLE_AUTOUPDATER"] == "1"
         assert Path(kwargs["env"]["UV_CONSTRAINT"]).read_text() == f"capt-hook=={version('capt-hook')}\n"
         assert brain_plugin_root().parts[-2:] == ("captain-hook", "headless-plugins")
         assert REVIEWER_MARKER in kwargs["input"].decode()
