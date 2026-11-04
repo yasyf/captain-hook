@@ -134,6 +134,7 @@ class Target:
     value: str | None
     raw: str
     cwd: Path | None
+    source: str | None = field(default=None, compare=False)
 
     @property
     def verified(self) -> bool:
@@ -422,8 +423,8 @@ class Call:
                 if self.cwd is not None or all(map(anchored, pieces)):
                     return tuple(Target(piece, piece, self.cwd) for piece in pieces)
                 return (Target(None, word.raw, self.cwd),)
-            case _:
-                return (Target(None, word.raw, self.cwd),)
+            case Unresolved(source):
+                return (Target(None, word.raw, self.cwd, source),)
 
     @property
     def flags(self) -> tuple[str, ...]:
