@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dispatch writes its state once, however many hooks ran.** Every `mutate()`, `set()` and `delete()` a
+  synchronous dispatch makes is now staged in memory, read back by its other hooks, and committed before the
+  reply, at most one write per state file. A commit merges with whatever another dispatch committed meanwhile,
+  so neither loses an update, and a state lock still busy after 2 s drops the write with a warning instead of
+  holding the reply. A dispatch in another process that overlaps a capped hook's fire can fire it once more.
+- **A locked decision store no longer costs a mandatory guard its deadline.** A one-shot evaluation, which is every
+  event on a remote actor, wrote its heartbeat and ledger rows inline, and each open waited up to 4 s on
+  `decisions.db` before any hook ran. All of them now go through the same background writer as the resident
+  worker, so a locked store loses a row, never time. An actor also retries an unfinished guard once, as the
+  host path always has, and a guard that still cannot finish fails the way its own `on_incomplete` says:
+  a block if it declares one, otherwise the existing skip note.
 - **The search guard's file-variable exemptions no longer let a directory or an empty value through.**
   A `${F:?}` or `$W/app.py` path now has to be quoted, because word splitting can leave `/` or nothing.
   A value counts as a file listing only when `rg`, `grep` or `git ls-files` itself produced it, piped through

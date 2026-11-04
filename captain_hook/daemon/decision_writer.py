@@ -6,10 +6,12 @@ dispatch heartbeat through one queue to a dedicated writer thread that runs one 
 ``asyncio.run(self._arun())`` owning all :class:`~cc_transcript.decisions.DecisionLog` and
 :class:`~cc_transcript.heartbeats.HeartbeatLog` handles — opened once, awaited per queue item.
 :func:`captain_hook.decisions.record_decision` and :func:`captain_hook.heartbeat.record_heartbeat`
-reach it through their ``_WRITER`` seams; cold, both are ``None`` and each bridges its own
-``asyncio.run`` unchanged. The db path is resolved at submit time inside the request scope (the
-writer thread has no bound request), so each item carries its own target ledger. A full queue drops
-the row with a warning rather than blocking dispatch.
+reach it through their ``_WRITER`` seams; every front door that answers an event installs it, so a
+locked ledger costs a write, never the event's deadline. Without it both bridge their own
+``asyncio.run``. The db path is resolved at submit time inside the request scope (the writer thread
+has no bound request), so each item carries its own target ledger. A full queue drops the row with a
+warning rather than blocking dispatch, and a ledger still locked at :data:`DRAIN_SECONDS` loses what
+is left.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ if TYPE_CHECKING:
     from cc_transcript.heartbeats import HeartbeatLog
 
 MAX_LEDGER_LOGS = 64
+DRAIN_SECONDS = 5.0
 
 
 class Beat(NamedTuple):
@@ -66,7 +69,7 @@ class DecisionWriter:
         except queue.Full:
             logger.bind(session_id=session_id).warning("heartbeat queue full; dropping a beat")
 
-    def drain(self, timeout: float | None = None) -> None:
+    def drain(self, timeout: float = DRAIN_SECONDS) -> None:
         self._queue.put(Stop())
         self._thread.join(timeout)
 
@@ -123,7 +126,7 @@ def install() -> DecisionWriter:
     return writer
 
 
-def uninstall(writer: DecisionWriter, timeout: float | None = None) -> None:
+def uninstall(writer: DecisionWriter, timeout: float = DRAIN_SECONDS) -> None:
     decisions._WRITER = None
     heartbeat._WRITER = None
     writer.drain(timeout)

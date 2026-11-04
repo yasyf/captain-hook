@@ -50,7 +50,7 @@ from captain_hook.results import (
 from captain_hook.results import (
     settled as settled,
 )
-from captain_hook.session import SessionSlot, SessionStore
+from captain_hook.session import SessionSlot, SessionStore, batched_state
 from captain_hook.snapshots.client import (
     MANDATORY_WORK_SECONDS,
     EvidenceIncomplete,
@@ -245,10 +245,11 @@ def _execute_hook(
 
     Most capped hooks return nothing on most events, so a count reserved on disk before the handler
     cost every one of them two file replacements per event. The reservation lives in this process
-    instead, which still keeps concurrent events from running a handler the cap has spent. Another
-    process can still race one, since each ``capt-hook run`` is its own, so the fire itself is
-    claimed under the slot's file lock, and a result that finds the cap spent there is not
-    delivered. A claimed result that delivery then refuses (the caller's deadline passed, or
+    instead, which still keeps concurrent events from running a handler the cap has spent. The fire
+    itself is claimed through the slot, and a result that finds the cap spent there is not delivered.
+    Under :func:`dispatch` that claim is staged and commits with the event's other state, so a
+    dispatch in another process overlapping this one can fire once more before it sees the claim.
+    A claimed result that delivery then refuses (the caller's deadline passed, or
     dispatch gave up on the event) gives its claim back, and the ledger row is written only once
     :func:`deliver`'s publication was accepted, so a closure never splits a verdict from its record.
     Uncapped hooks (``max_fires is None``) skip all of it.
@@ -780,8 +781,12 @@ def dispatch(
     claim on the deny's reason. ``advisory=False`` stops after them, so a caller already inside the
     deadline margin still completes the guard while skipping the hooks the margin exists for; a
     fail-closed hook (``on_incomplete``) that matches then blocks, since it never got to judge.
+
+    Every slot write the hooks make is staged and committed once before this returns
+    (:func:`captain_hook.session.batched_state`), so the file writes do not grow with the hooks.
     """
-    return dispatch_hooks(event, evt, session_dir, advisory=advisory)
+    with batched_state():
+        return dispatch_hooks(event, evt, session_dir, advisory=advisory)
 
 
 def denies(envelope: Envelope | None) -> bool:

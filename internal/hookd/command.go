@@ -175,6 +175,9 @@ func runActor(request wireproto.EventRequest, judge string, timeout time.Duratio
 		return 1
 	}
 	response, err := evaluateActor(request, judge, timeout)
+	if request.Mandatory && (err != nil || incompleteKind(response) != "") {
+		response, err = evaluateActor(request, judge, timeout)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		if request.Mandatory {

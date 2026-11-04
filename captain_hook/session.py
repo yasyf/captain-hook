@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import ClassVar, Generic, TypeVar, overload
+from typing import Any, ClassVar, Generic, TypeVar, overload
 
 from cc_transcript.ids import SessionId
-from filelock import FileLock
+from filelock import FileLock, Timeout
 from loguru import logger
 from pydantic import BaseModel
 
@@ -20,6 +24,8 @@ from captain_hook.util.fs import atomic_write
 M = TypeVar("M", bound=BaseModel)
 
 STALE_AGE_SECONDS = 30 * 24 * 60 * 60
+COMMIT_LOCK_SECONDS = 2.0
+ABSENT = object()
 
 
 def state_root() -> Path:
@@ -75,6 +81,95 @@ def cleanup_stale(exclude: SessionId | None = None) -> None:
             shutil.rmtree(sd, ignore_errors=True)
 
 
+def merge_json(base: Any, ours: Any, theirs: Any) -> Any:
+    """Three-way merge of two writers' JSON: dicts by key, lists by what each side added or removed, else ours."""
+    if ours == base or ours == theirs:
+        return theirs
+    if theirs == base:
+        return ours
+    if isinstance(ours, dict) and isinstance(theirs, dict):
+        was = base if isinstance(base, dict) else {}
+        merged = {
+            key: merge_json(was.get(key, ABSENT), ours.get(key, ABSENT), theirs.get(key, ABSENT))
+            for key in ours | theirs
+        }
+        return {key: value for key, value in merged.items() if value is not ABSENT}
+    if isinstance(ours, list) and isinstance(theirs, list):
+        was = base if isinstance(base, list) else []
+        kept = [item for item in theirs if item in ours or item not in was]
+        return kept + [item for item in ours if item not in was and item not in theirs]
+    return ours
+
+
+@dataclass
+class Staged:
+    """One slot's pending write in a :class:`StateBatch`: the file's text when last read, and the text to leave there."""
+
+    owner: SessionSlot[Any]
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    base: str | None = None
+    text: str | None = None
+    dirty: bool = False
+    overwrite: bool = False
+
+
+class StateBatch:
+    """One dispatch's state writes, staged in memory and committed together when the dispatch ends.
+
+    However many hooks ran, the dispatch replaces each file it changed once, and every hook of the
+    dispatch reads what the others staged. A concurrent dispatch sees them at the commit, which merges
+    with whatever that dispatch committed first.
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._staged: dict[Path, Staged] = {}
+        self._open = True
+
+    def entry(self, slot: SessionSlot[Any], path: Path) -> Staged | None:
+        with self._guard:
+            return self._staged.setdefault(path, Staged(owner=slot)) if self._open else None
+
+    def dirty(self, path: Path) -> Staged | None:
+        with self._guard:
+            staged = self._staged.get(path) if self._open else None
+            return staged if staged is not None and staged.dirty else None
+
+    def stage(self, staged: Staged, text: str | None, *, overwrite: bool = False) -> bool:
+        with self._guard:
+            if not self._open:
+                return False
+            staged.text, staged.dirty = text, True
+            staged.overwrite |= overwrite
+            return True
+
+    def commit(self) -> None:
+        with self._guard:
+            self._open = False
+            pending = [staged for staged in self._staged.values() if staged.dirty]
+        deadline = time.monotonic() + COMMIT_LOCK_SECONDS
+        for staged in pending:
+            staged.owner.commit(staged, max(0.0, deadline - time.monotonic()))
+
+
+STATE_BATCH: ContextVar[StateBatch | None] = ContextVar("captain_hook_state_batch", default=None)
+
+
+@contextmanager
+def batched_state() -> Iterator[None]:
+    """Stage every slot write made in this context, hook threads included, and commit them all on exit."""
+    if STATE_BATCH.get() is not None:
+        yield
+        return
+    batch = StateBatch()
+    token = STATE_BATCH.set(batch)
+    try:
+        yield
+    finally:
+        STATE_BATCH.reset(token)
+        batch.commit()
+
+
 class SessionSlot(Generic[M]):  # noqa: UP046
     """A typed slot for reading/writing a single Pydantic model in a session directory."""
 
@@ -98,12 +193,17 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         return self._load(default)[0]
 
     def set(self, obj: M) -> None:
-        if self._path:
+        if self._path and not self._stage_overwrite(self._path, obj.model_dump_json()):
             self._persist(self._path, obj.model_dump_json(), None)
 
     def delete(self) -> None:
-        if self._path:
+        if self._path and not self._stage_overwrite(self._path, None):
             self._path.unlink(missing_ok=True)
+
+    def _stage_overwrite(self, path: Path, text: str | None) -> bool:
+        if (batch := STATE_BATCH.get()) is None or (staged := batch.entry(self, path)) is None:
+            return False
+        return batch.stage(staged, text, overwrite=True)
 
     @contextmanager
     def mutate(self, *, timeout: float = -1) -> Iterator[M]:
@@ -116,9 +216,27 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         model that comes back unchanged is not rewritten.
         ``timeout`` is the lock-acquire budget in seconds (``-1`` waits indefinitely); pass
         ``timeout=0`` for a non-blocking acquire that raises ``filelock.Timeout`` on contention.
+        Inside :func:`batched_state` the lock serializes this dispatch's hooks alone, and the write
+        waits for the batch's commit, which merges with any other process's commit in between.
         """
         if self._path is None:
             yield self.get(self._model())
+            return
+        if (batch := STATE_BATCH.get()) is not None and (staged := batch.entry(self, self._path)) is not None:
+            if not staged.lock.acquire(timeout=timeout):
+                raise Timeout(str(self._path))
+            try:
+                obj, stored = self._load(self._model())
+                if not staged.dirty:
+                    staged.base = stored
+                yield obj
+                text = obj.model_dump_json()
+                if text == stored:
+                    note_write("same")
+                elif not batch.stage(staged, text):
+                    self.commit(replace(staged, text=text), COMMIT_LOCK_SECONDS)
+            finally:
+                staged.lock.release()
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lock = self._path.with_name(self._path.name + ".lock")
@@ -127,11 +245,46 @@ class SessionSlot(Generic[M]):  # noqa: UP046
             yield obj
             self._persist(self._path, obj.model_dump_json(), stored)
 
+    def commit(self, staged: Staged, timeout: float) -> None:
+        """Leave *staged*'s text in the slot's file under its lock, merged with any write since it was read."""
+        path = self._path
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with FileLock(str(path.with_name(path.name + ".lock")), timeout=timeout):
+                current = path.read_text() if path.exists() else None
+                if (text := self._reconciled(staged, current)) is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    self._persist(path, text, current)
+        except OSError:
+            logger.bind(path=str(path)).opt(exception=True).warning("failed to commit session state")
+
+    def _reconciled(self, staged: Staged, current: str | None) -> str | None:
+        if staged.overwrite or staged.text is None or current == staged.base:
+            return staged.text
+        try:
+            merged = merge_json(
+                json.loads(staged.base) if staged.base else {},
+                json.loads(staged.text),
+                json.loads(current) if current else {},
+            )
+            return self._model.model_validate(merged).model_dump_json()
+        except ValueError:
+            return staged.text
+
+    def _stored(self, path: Path) -> str | None:
+        if (batch := STATE_BATCH.get()) is not None and (staged := batch.dirty(path)) is not None:
+            return staged.text
+        return path.read_text() if path.exists() else None
+
     def _load[D](self, default: D) -> tuple[M | D, str | None]:
-        if not self._path or not self._path.exists():
+        if not self._path:
             return default, None
         try:
-            text = self._path.read_text()
+            if (text := self._stored(self._path)) is None:
+                return default, None
             return self._model.model_validate_json(text), text
         except Exception:
             logger.bind(model=self._model.__name__, path=str(self._path)).opt(exception=True).warning(

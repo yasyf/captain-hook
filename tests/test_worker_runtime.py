@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -13,12 +15,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cc_transcript.decisions import DecisionLog
 
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO, bound_buffers
 from captain_hook.dispatch import completion_key
 from captain_hook.snapshots.client import EvidenceIncomplete, GraphEvidenceExpired
-from captain_hook.types import Event, HookSpec, RegisteredHook
+from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest
 from captain_hook.worker.runtime import ProductRuntime
@@ -972,3 +975,127 @@ def test_evaluate_answers_a_host_request_with_the_guard_completion_a_worker_repo
     assert response["guard"] == "completed", response
     envelope = json.loads(response["stdout"].splitlines()[-1]) if response["stdout"].strip() else {}
     assert envelope.get("hookSpecificOutput", {}).get("permissionDecision") == decision, response
+
+
+async def close_opened(db: Path) -> None:
+    await (await DecisionLog.open(db)).close()
+
+
+def test_a_mandatory_guard_decides_while_the_decision_store_is_locked(tmp_path: Path) -> None:
+    """The heartbeat and the ledger row wait on the writer's thread, never on the guard's budget.
+
+    The budget is shorter than the store's 2 s busy wait, so an inline ledger open runs the guard past
+    its deadline, which is how capt-hook 12.119.7 spent every dispatch on a Sprite under disk load.
+    """
+    db = tmp_path / "decisions.db"
+    asyncio.run(close_opened(db))
+    holder = sqlite3.connect(db, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+
+    def deny(_evt: object) -> HookResult:
+        return HookResult(action=Action.block, message="denied by the guard")
+
+    state = app.State()
+    state.hooks.append(
+        RegisteredHook(
+            spec=HookSpec(events=Event.PreToolUse, mandatory=True),
+            handler=deny,
+            name="guard_sessions",
+            source_file="/hooks/guard_sessions.py",
+            pack_name="general",
+        )
+    )
+    payload = {"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "pkill -x sleep"}}
+    locked = replace(
+        request(payload_raw=json.dumps(payload), mandatory=True),
+        root=str(tmp_path),
+        cwd=str(tmp_path),
+        env={"CAPT_HOOK_DECISIONS_DB": str(db)},
+        deadline_unix_ms=int((time.time() + 1.9) * 1000),
+    )
+    runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(state))
+    try:
+        response, _ = runtime.dispatch(locked)
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+        runtime.close()
+
+    assert response.guard == "completed", response
+    assert json.loads(response.stdout.splitlines()[-1])["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("door", ["worker.evaluate()", 'worker.evaluate_actor("codex")'], ids=["evaluate", "actor"])
+def test_every_cold_door_answers_the_guard_while_the_decision_store_never_opens(tmp_path: Path, door: str) -> None:
+    """Both one-shot doors reach the writer: an inline open would hold the guard past its deadline here."""
+    script = f"""
+import time
+from cc_transcript.decisions import DecisionLog
+from cc_transcript.heartbeats import HeartbeatLog
+
+async def never_opens(*_):
+    time.sleep(600)
+
+DecisionLog.open = never_opens
+HeartbeatLog.open = never_opens
+import captain_hook.worker.__main__ as worker
+{door}
+"""
+    payload = {
+        "session_id": "s1",
+        "cwd": str(tmp_path),
+        "tool_name": "Bash",
+        "tool_input": {"command": "pkill -x sleep"},
+    }
+    event = {
+        "schema": 1,
+        "event": "PreToolUse",
+        "root": str(tmp_path),
+        "cwd": str(tmp_path),
+        "env": {},
+        "payload_raw": json.dumps(payload),
+        "client_pid": os.getpid(),
+        "client_ppid": os.getppid(),
+        "deadline_unix_ms": int((time.time() + 90) * 1000),
+        "mandatory": True,
+    }
+    live = {key: value for key, value in os.environ.items() if key != "CAPT_HOOK_TEST_NO_LIVE"}
+    evaluated = subprocess.run(
+        [sys.executable, "-c", script],
+        input=json.dumps(event).encode(),
+        capture_output=True,
+        cwd=tmp_path,
+        env={**live, "HOME": str(tmp_path / "home"), "OPENAI_API_KEY": "sk-test"},
+        timeout=150,
+    )
+
+    assert evaluated.returncode == 0, evaluated.stderr.decode()
+    response = json.loads(evaluated.stdout)
+    assert response["guard"] == "completed", response
+    assert json.loads(response["stdout"].splitlines()[-1])["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_an_unfinished_guard_fails_in_the_direction_its_own_rule_names() -> None:
+    state = app.State()
+    state.hooks.append(
+        RegisteredHook(
+            spec=HookSpec(events=Event.PreToolUse, mandatory=True, on_incomplete="Run it by hand."),
+            name="closed_guard",
+            source_file="/hooks/closed_guard.py",
+            pack_name="general",
+        )
+    )
+
+    def lost_at_the_cutoff(*_: object, **__: object) -> tuple[None, object]:
+        raise ValueError("deadline passed")
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(state), dispatcher=lost_at_the_cutoff, install_writer=False
+    )
+    response, _ = runtime.dispatch(request(mandatory=True))
+
+    assert response.guard == ""
+    specific = json.loads(response.stdout.splitlines()[-1])["hookSpecificOutput"]
+    assert specific["permissionDecision"] == "deny"
+    assert "closed_guard could not judge this call" in specific["permissionDecisionReason"]
+    assert "Run it by hand." in specific["permissionDecisionReason"]
