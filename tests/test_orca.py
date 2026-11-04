@@ -92,6 +92,29 @@ def test_a_live_worker_resolves_its_coordinators_transcript(tmp_path: Path, user
         assert coordinator_transcript() == tmp_path / f"{COORDINATOR}.jsonl"
 
 
+def test_a_live_worker_resolves_through_orcas_full_records_not_its_concise_output(
+    tmp_path: Path, user_data: Path
+) -> None:
+    (tmp_path / f"{COORDINATOR}.jsonl").touch()
+    concise = {
+        f"orca orchestration check --terminal {HANDLE} --peek --json": json.dumps(
+            {"ok": True, "result": {"messages": []}}
+        ),
+        f"orca orchestration worker-show --dispatch {DISPATCH} --json": json.dumps(
+            {"ok": True, "result": {"dispatchId": DISPATCH, "runId": RUN, "state": "ready"}}
+        ),
+        f"orca orchestration run-show --id {RUN} --json": json.dumps(
+            {"ok": True, "result": {"runId": RUN, "objective": "a drive"}}
+        ),
+    }
+    full = {
+        (f"{command} --full" if "orchestration" in command else command): shown
+        for command, shown in orca_commands().items()
+    }
+    with in_worker(user_data), stubbed_commands(concise | full):
+        assert coordinator_transcript() == tmp_path / f"{COORDINATOR}.jsonl"
+
+
 def test_a_coordinator_whose_transcript_is_gone_resolves_nothing(user_data: Path) -> None:
     with in_worker(user_data), stubbed_commands(orca_commands()):
         assert coordinator_transcript() is None

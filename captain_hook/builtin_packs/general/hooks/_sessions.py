@@ -1074,7 +1074,8 @@ class Scan:
 
 
 def orca_json(argv: tuple[str, ...], *path: str, unset: tuple[str, ...] = ()) -> Any:
-    if isinstance(shown := probe(argv, unset=unset), Unreadable):
+    record = (*argv, "--full") if argv[1] == "orchestration" else argv
+    if isinstance(shown := probe(record, unset=unset), Unreadable):
         return shown
     try:
         return reduce(lambda node, key: node[key], path, json.loads(shown))
