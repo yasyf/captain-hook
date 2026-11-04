@@ -45,6 +45,8 @@ if TYPE_CHECKING:
     from captain_hook.signals.nlp import NlpSignal
 
 LLM_RETRY_FLOOR_SECONDS = 5.0
+DEFAULT_LLM_SECONDS = 180
+NUDGE_LLM_SECONDS = 15
 VERDICT_STATE_CHARS = 64_000
 MAX_SCORE_LEVELS = 10
 MAX_LABEL_OPTIONS = 255
@@ -212,6 +214,7 @@ def llm_evaluate[M: BaseModel](
     evidence: bool = True,
     backend: TJudge = "jev",
     escalate: Callable[[M], bool] | None = None,
+    llm_seconds: int = DEFAULT_LLM_SECONDS,
 ) -> M | str | None:
     """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
 
@@ -299,6 +302,7 @@ def llm_evaluate[M: BaseModel](
                     agent=agent,
                     evidence=evidence,
                     response_model=response_model,
+                    timeout=llm_seconds,
                 )
             except ValidationError as e:
                 if attempt >= retries or not retry_affordable():
@@ -455,6 +459,7 @@ def llm_primitive[M: BaseModel](
     on_incomplete: str | None = None,
     backend: TJudge = "jev",
     escalate: Callable[[M], bool] | None = None,
+    llm_seconds: int = DEFAULT_LLM_SECONDS,
 ) -> None:
     prompt = str(prompt)
     sig = resolve_signals(signals)
@@ -484,6 +489,7 @@ def llm_primitive[M: BaseModel](
                 diff=diff,
                 backend=backend,
                 escalate=staged,
+                llm_seconds=llm_seconds,
             )
         except EvidenceIncomplete:
             raise
@@ -791,6 +797,7 @@ def llm_nudge(
         diff=diff,
         backend=backend,
         escalate=escalate,
+        llm_seconds=DEFAULT_LLM_SECONDS if async_ else NUDGE_LLM_SECONDS,
     )
 
 
