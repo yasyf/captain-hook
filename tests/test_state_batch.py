@@ -95,6 +95,48 @@ def test_the_commit_merges_with_what_another_process_committed_meanwhile(tmp_pat
     assert merged.names == ["base", "theirs", "ours"]
 
 
+def test_a_staged_read_sees_what_another_dispatch_committed_after_it_staged(tmp_path: Path) -> None:
+    slot = SessionSlot(tmp_path, Ledger)
+
+    def other_dispatch() -> None:
+        with batched_state(), SessionSlot(tmp_path, Ledger).mutate() as ledger:
+            ledger.seen["theirs"] = 1
+
+    with batched_state():
+        with slot.mutate() as ledger:
+            ledger.seen["ours"] = 1
+        thread = threading.Thread(target=other_dispatch)
+        thread.start()
+        thread.join()
+        assert slot.get(Ledger()).seen == {"ours": 1, "theirs": 1}
+        with slot.mutate() as ledger:
+            assert ledger.seen == {"ours": 1, "theirs": 1}
+            del ledger.seen["theirs"]
+    assert slot.get(Ledger()).seen == {"ours": 1}
+
+
+def test_a_claim_reaches_another_dispatch_before_this_one_commits(tmp_path: Path) -> None:
+    slot = SessionSlot(tmp_path, Ledger)
+    seen_by_the_other: list[dict[str, int]] = []
+
+    def other_dispatch() -> None:
+        with batched_state(), SessionSlot(tmp_path, Ledger).mutate() as ledger:
+            seen_by_the_other.append(dict(ledger.seen))
+
+    with batched_state():
+        with slot.mutate() as ledger:
+            ledger.count = 7
+        with slot.mutate(claim=True) as ledger:
+            ledger.seen["claimed"] = 1
+        thread = threading.Thread(target=other_dispatch)
+        thread.start()
+        thread.join()
+
+    assert seen_by_the_other == [{"claimed": 1}]
+    merged = slot.get(Ledger())
+    assert (merged.count, merged.seen) == (7, {"claimed": 1})
+
+
 def test_staged_set_and_delete_replace_whatever_is_on_disk_at_the_commit(tmp_path: Path) -> None:
     slot = SessionSlot(tmp_path, Ledger)
     slot.set(Ledger(count=1))

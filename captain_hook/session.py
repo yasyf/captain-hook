@@ -116,9 +116,10 @@ class Staged:
 class StateBatch:
     """One dispatch's state writes, staged in memory and committed together when the dispatch ends.
 
-    However many hooks ran, the dispatch replaces each file it changed once, and every hook of the
-    dispatch reads what the others staged. A concurrent dispatch sees them at the commit, which merges
-    with whatever that dispatch committed first.
+    However many hooks ran, the dispatch replaces each file it changed once. Every read in the
+    dispatch sees what its hooks staged merged over what is on disk now, so another dispatch's commit
+    stays visible. That dispatch sees these writes only at the commit, so a write it must see sooner
+    is a ``mutate(claim=True)``.
     """
 
     def __init__(self) -> None:
@@ -206,7 +207,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         return batch.stage(staged, text, overwrite=True)
 
     @contextmanager
-    def mutate(self, *, timeout: float = -1) -> Iterator[M]:
+    def mutate(self, *, timeout: float = -1, claim: bool = False) -> Iterator[M]:
         """Yield the loaded model under an exclusive file lock; persist it on clean exit.
 
         The lock is held for the whole ``with`` block, so concurrent writers — separate
@@ -218,14 +219,24 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         ``timeout=0`` for a non-blocking acquire that raises ``filelock.Timeout`` on contention.
         Inside :func:`batched_state` the lock serializes this dispatch's hooks alone, and the write
         waits for the batch's commit, which merges with any other process's commit in between.
+        ``claim=True`` takes the file lock and writes at once even there, for a decision only one
+        dispatch may reach: a claim another dispatch cannot see yet is a claim both of them win.
         """
         if self._path is None:
             yield self.get(self._model())
             return
-        if (batch := STATE_BATCH.get()) is not None and (staged := batch.entry(self, self._path)) is not None:
+        if (
+            not claim
+            and (batch := STATE_BATCH.get()) is not None
+            and (staged := batch.entry(self, self._path)) is not None
+        ):
             if not staged.lock.acquire(timeout=timeout):
                 raise Timeout(str(self._path))
             try:
+                if staged.dirty:
+                    current = self._read(self._path)
+                    batch.stage(staged, self._reconciled(staged, current))
+                    staged.base = current
                 obj, stored = self._load(self._model())
                 if not staged.dirty:
                     staged.base = stored
@@ -253,7 +264,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with FileLock(str(path.with_name(path.name + ".lock")), timeout=timeout):
-                current = path.read_text() if path.exists() else None
+                current = self._read(path)
                 if (text := self._reconciled(staged, current)) is None:
                     path.unlink(missing_ok=True)
                 else:
@@ -274,10 +285,14 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         except ValueError:
             return staged.text
 
+    @staticmethod
+    def _read(path: Path) -> str | None:
+        return path.read_text() if path.exists() else None
+
     def _stored(self, path: Path) -> str | None:
         if (batch := STATE_BATCH.get()) is not None and (staged := batch.dirty(path)) is not None:
-            return staged.text
-        return path.read_text() if path.exists() else None
+            return self._reconciled(staged, self._read(path))
+        return self._read(path)
 
     def _load[D](self, default: D) -> tuple[M | D, str | None]:
         if not self._path:

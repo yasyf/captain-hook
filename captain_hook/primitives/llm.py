@@ -421,7 +421,7 @@ def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> list[
     if not sig:
         return None
     texts = transcript_texts(evt, sig.window, sig.origin, sig.thinking)
-    with evt.ctx.s[PrimitiveState].mutate() as ps:
+    with evt.ctx.s[PrimitiveState].mutate(claim=True) as ps:
         return ps.match_signals(sig, ps.unechoed_candidates(texts), hook)
 
 

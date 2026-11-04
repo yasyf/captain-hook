@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reply, at most one write per state file. A commit merges with whatever another dispatch committed meanwhile,
   so neither loses an update, and a state lock still busy after 2 s drops the write with a warning instead of
   holding the reply. A dispatch in another process that overlaps a capped hook's fire can fire it once more.
+  A signal's consumption stays an immediate write through the new `mutate(claim=True)`, so two dispatches
+  scoring one signal still deliver it once.
 - **A locked decision store no longer costs a mandatory guard its deadline.** A one-shot evaluation, which is every
   event on a remote actor, wrote its heartbeat and ledger rows inline, and each open waited up to 4 s on
   `decisions.db` before any hook ran. All of them now go through the same background writer as the resident
