@@ -5,8 +5,6 @@ import shutil
 from functools import cache
 from pathlib import Path
 
-from loguru import logger
-
 from captain_hook.util import reqenv
 
 MOVED_STATE = ("hooks", "review", "faults", "update")
@@ -41,6 +39,8 @@ def adopted_state_dir(target: Path) -> Path:
             try:
                 shutil.move(legacy / name, target / name)
             except OSError:
+                from loguru import logger
+
                 logger.opt(exception=True).warning(f"could not move {legacy / name} to {target}")
     return target
 
