@@ -229,7 +229,7 @@ def test_delegated_source_edit_avoids_later_native_fact_pages(tmp_path, monkeypa
             assert 0 < metrics["cold_parses"] < len(ids), metrics
             assert 0 < metrics["source_bytes_read"] < member_bytes, metrics
             assert metrics["query_pages"] == 1, metrics
-            assert len(cursor_releases(operations)) == 1
+            assert cursor_releases(operations) == []
             assert not any(request["operation"].startswith("warm_") for request in operations)
         finally:
             transcript.release()
