@@ -249,6 +249,16 @@ class TestLlmNudgeWarns:
         assert result is not None
         assert "additionalContext" in result["hookSpecificOutput"]
 
+    def test_a_foreground_nudge_gives_its_model_call_a_short_budget(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NUDGE_LLM_SECONDS, NudgeVerdict
+
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=False, reasoning="clean"))
+
+        register_llm_nudge("Check this", message="WARNING", when=lambda evt: True, backend="llm")
+        dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path)
+
+        assert ctx.call_llm.call_args.kwargs["timeout"] == NUDGE_LLM_SECONDS
+
 
 class TestLlmNudgeAllows:
     def test_llm_nudge_allows_on_fire_false(self, tmp_path: Path) -> None:
