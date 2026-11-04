@@ -6,7 +6,7 @@ from functools import partial
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
-from captain_hook import Allow, Block
+from captain_hook import Allow, Block, Warn
 from captain_hook.bindings import Resolved
 from captain_hook.builtin_packs.general.hooks._sessions import (
     ARG_TOKEN_BREAK,
@@ -127,32 +127,70 @@ ORCA_GROUPS = frozenset(
         "agent-context",
         "artifacts",
         "automations",
+        "back",
         "capture",
+        "check",
         "claude-teams",
+        "clear",
+        "click",
+        "clipboard",
         "computer",
         "cookie",
+        "dblclick",
         "diagnostics",
+        "dialog",
+        "download",
+        "drag",
         "emulator",
         "environment",
+        "eval",
+        "exec",
         "file",
+        "fill",
+        "find",
+        "focus",
+        "forward",
+        "get",
+        "goto",
         "help",
+        "highlight",
         "host",
+        "hover",
+        "inserttext",
+        "is",
+        "keypress",
         "linear",
+        "mouse",
         "open",
         "orchestration",
+        "plugin",
+        "ports",
         "project",
+        "reference",
+        "reload",
         "repo",
+        "screenshot",
+        "scroll",
+        "scrollintoview",
         "search",
+        "select",
         "serve",
+        "set",
         "skills",
+        "snapshot",
         "status",
         "storage",
         "tab",
         "terminal",
+        "type",
+        "uncheck",
+        "upload",
         "vm",
+        "wait",
         "worktree",
     }
 )
+ORCA_TMUX_SHIM = "agent-teams-tmux"
 ORCA_ENDINGS = {
     "terminal": frozenset({"close", "stop"}),
     "worktree": frozenset({"rm", "remove", "delete"}),
@@ -725,7 +763,11 @@ def help_only(call: Call, values: dict[str, tuple[Scalar | None, ...]]) -> bool:
     if "help" not in values or any(word.value is None for word in call.command.words):
         return False
     path = [arg for arg in call.args if arg not in HELP_FLAGS]
-    return len(path) == len(call.args) - 1 and len(path) <= 2 and (not path or path[0] in ORCA_GROUPS)
+    return (
+        len(path) == len(call.args) - 1
+        and len(path) <= 2
+        and (not path or (path[0] != ORCA_TMUX_SHIM and not path[0].startswith("-")))
+    )
 
 
 def lone_target(call: Call, arguments: Arguments, command: tuple[str, str], key: str) -> str | None:
@@ -856,10 +898,10 @@ def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | 
     match orca_command(arguments):
         case (None, _):
             return None
-        case (unknown, _) if unknown not in ORCA_GROUPS:
+        case (group_name, _) if group_name == ORCA_TMUX_SHIM:
             return (
-                f"BLOCKED: `{spelling}` uses an orca command group the guard does not know, so it cannot rule out an "
-                "ending action. Use a group listed by `orca --help`."
+                f"BLOCKED: `{spelling}` calls Orca's tmux shim, whose verbs kill panes and the sessions in them. "
+                f"{ORCA_READ}"
             )
         case (str() as group_name, str() as verb_name) if verb_name in ORCA_ENDINGS.get(group_name, ()):
             return orca_ending(spelling, group_name, verb_name, arguments)
@@ -870,6 +912,14 @@ def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | 
             )
         case _:
             return None
+
+
+def unknown_orca_group(call: Call) -> bool:
+    if call.name != "orca":
+        return False
+    arguments = ORCA.bind(call)
+    group, _ = orca_command(arguments)
+    return group is not None and group not in ORCA_GROUPS and not help_only(call, arguments.values)
 
 
 def orca_vm_run_flag(call: Call) -> str | None:
@@ -1142,7 +1192,11 @@ def orca_vm_run_flag(call: Call) -> str | None:
         ),
         guarded(command="orca --bogus terminal close"): Block(),
         guarded(command="orca --bogus status"): Block(pattern="hides its orca group or verb behind `--bogus`"),
-        guarded(command="orca nuke everything"): Block(pattern="does not know"),
+        guarded(command="orca nuke everything"): Warn(pattern="does not know"),
+        guarded(command="orca plugin list"): Allow(),
+        guarded(command="orca plugin --help"): Allow(),
+        guarded(command="orca nuke --help"): Allow(),
+        guarded(command="orca --bogus nuke --help"): Block(pattern="hides its orca group"),
         guarded(
             command=(
                 "for d in ctx_c9c192f997b0 ctx_84420bceb40d; do orca orchestration worker-show --dispatch $d --json "
@@ -1205,7 +1259,14 @@ def orca_vm_run_flag(call: Call) -> str | None:
 )
 def orca_ends_session(evt: ToolRewriteEvent) -> HookResult | None:
     scan = Scan.of(evt)
-    return block_first(evt, (orca_ending_verdict(call, scan, evt) for call in scan.literal_calls))
+    if (blocked := block_first(evt, (orca_ending_verdict(call, scan, evt) for call in scan.literal_calls))) is not None:
+        return blocked
+    if (unknown := next(filter(unknown_orca_group, scan.literal_calls), None)) is None:
+        return None
+    return evt.warn(
+        f"`{spell(unknown)}` uses an orca command group the guard does not know, so it cannot rule out an ending "
+        f"action. {ORCA_READ}"
+    )
 
 
 def interrupts_own_lane(call: Call, scan: Scan, evt: ToolRewriteEvent, arguments: Arguments) -> bool:
