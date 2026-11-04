@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from cc_transcript.tools import tool_name_matches
 
-from captain_hook.bindings import Ref, dequote, segments, skip_group
+from captain_hook.bindings import Ref, segments, skip_group
 from captain_hook.cmd import Cmd, Target, Targets, git_location
 from captain_hook.command_schema_core import (
     Arguments,
@@ -148,13 +148,7 @@ STDIN_REDIRECTS = frozenset({"<", "<<<"})
 GIT_GREP_GROUPS = frozenset({"(", ")"})
 
 
-SHORT_MAGIC = frozenset({"/", "!", "^"})
-
-
-GIT_LOCATION_OPTIONS = frozenset({"--git-dir", "--work-tree"})
-
-
-GIT_LOCATION_VARIABLES = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
+GIT_GREP_BEYOND_THE_REPO = frozenset({"--no-index", "--recurse-submodules"})
 
 
 GREP = CommandSchema(
@@ -994,71 +988,6 @@ def rg_searches_broadly(arguments: Arguments, *, pack_roots: Callable[[], tuple[
     )
 
 
-def pathspec_magic(value: str) -> tuple[frozenset[str], str]:
-    if value.startswith(":("):
-        close = value.find(")")
-        return (
-            (frozenset({"unparsed"}), value)
-            if close < 0
-            else (frozenset(part.split(":", 1)[0] for part in value[2:close].split(",")), value[close + 1 :])
-        )
-    rest = value[1:]
-    short = ""
-    while rest[:1] in SHORT_MAGIC:
-        short, rest = short + rest[0], rest[1:]
-    return (
-        frozenset({*(("top",) if "/" in short else ()), *(("exclude",) if {"!", "^"} & set(short) else ())}),
-        rest.removeprefix(":"),
-    )
-
-
-def top_broad(target: Target) -> bool:
-    return (
-        target.value is None or os.path.isabs(os.path.expanduser(target.value)) or not narrows(target.value.strip("/"))
-    )
-
-
-def pathspec_broad(
-    target: Target,
-    *,
-    relocated: bool,
-    known_roots: tuple[Path, ...] | None = None,
-    pack_roots: Callable[[], tuple[Path, ...]],
-) -> bool | None:
-    if target.value is None:
-        return broad(target, known_roots=known_roots, pack_roots=pack_roots)
-    magic = target.value.startswith(":")
-    kinds, pattern = pathspec_magic(target.value) if magic else (frozenset(), target.value)
-    if "exclude" in kinds:
-        return None
-    if "top" in kinds:
-        return top_broad(Target(pattern or ".", pattern or ".", target.cwd))
-    spec = Target(os.path.normpath(pattern), pattern if magic else target.raw, target.cwd)
-    return top_broad(spec) if relocated else broad(spec, known_roots=known_roots, pack_roots=pack_roots)
-
-
-def host_calls(call: Call) -> Iterator[Call]:
-    while (host := call.occurrence.host) is not None:
-        call = next(candidate for candidate in call.cmd.calls() if candidate.occurrence.index == host.index)
-        yield call
-
-
-def assigned_names(call: Call) -> set[str]:
-    wrapped = call.source.words[: len(call.source.words) - len(call.command.words)]
-    return {name for name, _ in call.source.env} | {dequote(word.raw).partition("=")[0] for word in wrapped}
-
-
-def git_relocated(call: Call) -> bool:
-    scope, _ = call.cmd.scope_for(call, call.command.words[0])
-    environment = (
-        assigned_names(call) | {name for host in host_calls(call) for name in assigned_names(host)} | scope.exported
-    )
-    return not (
-        GIT_LOCATION_OPTIONS.isdisjoint(option.partition("=")[0] for option in call.leading_options)
-        and GIT_LOCATION_VARIABLES.isdisjoint(environment)
-    )
-
-
 def git_cwd(call: Call) -> Path | None:
     leading = call.command.words[: 1 + len(call.leading_options)]
     return (
@@ -1090,11 +1019,10 @@ def git_grep_operands(arguments: Arguments) -> tuple[list[Word], list[Word] | No
 
 
 def git_grep_searches_broadly(arguments: Arguments, *, pack_roots: Callable[[], tuple[Path, ...]]) -> bool:
-    if not arguments.operands_complete:
-        return True
-    if (operands := git_grep_operands(arguments)) is None:
+    call = arguments.call
+    if GIT_GREP_BEYOND_THE_REPO.isdisjoint(call.args) or (operands := git_grep_operands(arguments)) is None:
         return False
-    call, cwd, relocated = (arguments.call, git_cwd(arguments.call), git_relocated(arguments.call))
+    cwd = git_cwd(call)
     head, tail = operands
     targets = [
         Target(target.value, target.raw, cwd)
@@ -1103,13 +1031,8 @@ def git_grep_searches_broadly(arguments: Arguments, *, pack_roots: Callable[[], 
     ]
     pathspecs = [target for target in targets if names_path(target)] if tail is None else targets
     known = known_search_roots(call.cmd.cwd, pack_roots=pack_roots)
-    verdicts = [
-        verdict
-        for target in pathspecs
-        if (verdict := pathspec_broad(target, relocated=relocated, known_roots=known, pack_roots=pack_roots))
-        is not None
-    ]
-    return any(verdicts or (relocated or broad(Target(".", ".", cwd), known_roots=known, pack_roots=pack_roots),))
+    roots = pathspecs or (Target(".", ".", cwd),)
+    return any(broad(root, known_roots=known, pack_roots=pack_roots) for root in roots)
 
 
 def bounded(includes: tuple[Scalar | None, ...]) -> bool:

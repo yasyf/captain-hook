@@ -18,12 +18,6 @@ from captain_hook.search_policy import (
     GIT_GREP_GROUPS as GIT_GREP_GROUPS,
 )
 from captain_hook.search_policy import (
-    GIT_LOCATION_OPTIONS as GIT_LOCATION_OPTIONS,
-)
-from captain_hook.search_policy import (
-    GIT_LOCATION_VARIABLES as GIT_LOCATION_VARIABLES,
-)
-from captain_hook.search_policy import (
     GREP as GREP,
 )
 from captain_hook.search_policy import (
@@ -55,9 +49,6 @@ from captain_hook.search_policy import (
 )
 from captain_hook.search_policy import (
     RG_OUTPUT_ROLES as RG_OUTPUT_ROLES,
-)
-from captain_hook.search_policy import (
-    SHORT_MAGIC as SHORT_MAGIC,
 )
 from captain_hook.search_policy import (
     STDIN_REDIRECTS as STDIN_REDIRECTS,
@@ -93,9 +84,6 @@ from captain_hook.search_policy import (
     Targets as Targets,
 )
 from captain_hook.search_policy import (
-    assigned_names as assigned_names,
-)
-from captain_hook.search_policy import (
     at_home as at_home,
 )
 from captain_hook.search_policy import (
@@ -106,9 +94,6 @@ from captain_hook.search_policy import (
 )
 from captain_hook.search_policy import (
     common_git_dir as common_git_dir,
-)
-from captain_hook.search_policy import (
-    dequote as dequote,
 )
 from captain_hook.search_policy import (
     encloses_home_or_pool as encloses_home_or_pool,
@@ -132,9 +117,6 @@ from captain_hook.search_policy import (
     git_location as git_location,
 )
 from captain_hook.search_policy import (
-    git_relocated as git_relocated,
-)
-from captain_hook.search_policy import (
     glob_prefix as glob_prefix,
 )
 from captain_hook.search_policy import (
@@ -142,9 +124,6 @@ from captain_hook.search_policy import (
 )
 from captain_hook.search_policy import (
     grep_searches_broadly as grep_searches_broadly,
-)
-from captain_hook.search_policy import (
-    host_calls as host_calls,
 )
 from captain_hook.search_policy import (
     informational as informational,
@@ -174,9 +153,6 @@ from captain_hook.search_policy import (
     narrows as narrows,
 )
 from captain_hook.search_policy import (
-    pathspec_magic as pathspec_magic,
-)
-from captain_hook.search_policy import (
     pool_anchors as pool_anchors,
 )
 from captain_hook.search_policy import (
@@ -198,9 +174,6 @@ from captain_hook.search_policy import (
     spans_checkouts as spans_checkouts,
 )
 from captain_hook.search_policy import (
-    top_broad as top_broad,
-)
-from captain_hook.search_policy import (
     ugrep_bounded as ugrep_bounded,
 )
 from captain_hook.search_policy import (
@@ -213,7 +186,6 @@ if TYPE_CHECKING:
 broad = partial(search_policy.broad, pack_roots=registered_pack_roots)
 git_grep_searches_broadly = partial(search_policy.git_grep_searches_broadly, pack_roots=registered_pack_roots)
 known_search_roots = partial(search_policy.known_search_roots, pack_roots=registered_pack_roots)
-pathspec_broad = partial(search_policy.pathspec_broad, pack_roots=registered_pack_roots)
 rg_searches_broadly = partial(search_policy.rg_searches_broadly, pack_roots=registered_pack_roots)
 searches_broadly = partial(search_policy.searches_broadly, pack_roots=registered_pack_roots)
 ugrep_searches_broadly = partial(search_policy.ugrep_searches_broadly, pack_roots=registered_pack_roots)
@@ -359,39 +331,11 @@ hook(
         Input(command="ugrep --max-depth=3 needle /"): Block(),
         Input(command="ugrep -r --match /"): Block(),
         Input(command="printf needle | rg needle </dev/null"): Block(),
-        Input(command="git grep needle"): Block(),
-        Input(command="git -C / grep needle"): Block(),
-        Input(command="git -C ~ grep -n needle"): Block(),
-        Input(command="git -C ~/.claude/worktrees/captain-hook grep needle"): Block(),
-        Input(command='git -C "$WORKTREE" grep needle'): Block(),
-        Input(command="git -c core.quotepath=off -C ~ grep -c needle"): Block(),
-        Input(command="sh -c 'cd ~ && git grep needle'"): Block(),
-        Input(command="git grep -n -e needle -- .", cwd="/Users/alice"): Block(),
-        Input(command="git grep needle -- ':!vendor'", cwd="/Users/alice"): Block(),
-        Input(command="git grep needle HEAD -- .", cwd="/Users/alice"): Block(),
-        Input(command="git grep needle HEAD", cwd="/Users/alice"): Block(),
-        Input(command="git grep --bogus-flag needle -- src", cwd="/Users/alice"): Block(),
-        Input(command="git grep needle -- :/"): Block(),
-        Input(command="git grep -- needle", cwd="/Users/alice"): Block(),
-        Input(command="SPEC=':/'; git grep needle -- \"$SPEC\""): Block(),
-        Input(command="git grep needle -- ':(top,glob)**/**'"): Block(),
-        Input(command="git --namespace -Cinternal grep needle", cwd="/Users/alice"): Block(),
-        Input(command="git --git-dir=/srv/demo/.git grep --cached needle", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="git --git-dir /srv/demo/.git grep needle -- .", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="GIT_DIR=/srv/demo/.git git grep --cached needle", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="env GIT_DIR=/srv/demo/.git git grep needle", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="export GIT_DIR=/srv/demo/.git; git grep needle", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="git --work-tree=/srv/demo grep needle", cwd="/srv/demo/internal/focused"): Block(),
-        Input(
-            command="git --git-dir=/srv/demo/.git grep --cached needle -- internal/..",
-            cwd="/srv/demo/internal/focused",
-        ): Block(),
-        Input(command="git grep needle -- src/..", cwd="/Users/alice"): Block(),
-        Input(command="env 'GIT_DIR=/srv/demo/.git' git grep needle", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="GIT_DIR=/srv/demo/.git sh -c 'git grep needle'", cwd="/srv/demo/internal/focused"): Block(),
-        Input(command="git grep -nC3 needle", cwd="/Users/alice"): Block(),
-        Input(command="git grep -nC 3 needle -- .", cwd="/Users/alice"): Block(),
-        Input(command="git grep -nOvim needle -- src", cwd="/Users/alice"): Block(),
+        Input(command="git grep --no-index needle", cwd="/Users/alice"): Block(),
+        Input(command="git -C ~ grep --no-index needle"): Block(),
+        Input(command="sh -c 'cd ~ && git grep --no-index needle'"): Block(),
+        Input(command="git grep --no-index needle -- .", cwd="/Users/alice"): Block(),
+        Input(command="git grep --recurse-submodules needle", cwd="/Users/alice"): Block(),
         Input(command="grep -n needle explicit.log", cwd="/repo"): Allow(),
         Input(command="grep -rn needle -", cwd="/repo"): Allow(),
         Input(command="rg needle config.toml tests/test_specific.py", cwd="/repo"): Allow(),
@@ -417,20 +361,12 @@ hook(
         Input(command="grep -rn -- '~' -", cwd="/repo"): Allow(),
         Input(command="grep -rn -- '~' src", cwd="/repo"): Block(),
         Input(command="ugrep needle /"): Allow(),
-        Input(command="git grep needle -- src", cwd="/Users/alice"): Allow(),
-        Input(command="git grep -c needle -- src", cwd="/Users/alice"): Allow(),
-        Input(command="git -C /srv/project/internal grep needle"): Allow(),
-        Input(command="git -C /srv/demo/internal/focused grep needle"): Allow(),
-        Input(
-            command="git --git-dir=/srv/demo/.git grep --cached needle -- internal/focused",
-            cwd="/srv/demo/internal/focused",
-        ): Allow(),
-        Input(command="git grep -nC3 needle -- src", cwd="/Users/alice"): Allow(),
-        Input(command="git grep needle -- src/../lib", cwd="/Users/alice"): Allow(),
-        Input(command="git grep -nC 3 needle -- src", cwd="/Users/alice"): Allow(),
-        Input(command="git grep needle -- '*.py'"): Allow(),
-        Input(command="git grep -e needle -- ':(glob)**/*.py'"): Allow(),
-        Input(command="git grep needle -- :/internal"): Allow(),
+        Input(command="git grep needle"): Allow(),
+        Input(command="git grep -n needle -- ."): Allow(),
+        Input(command="git grep -l needle -- '*'"): Allow(),
+        Input(command="git grep needle HEAD", cwd="/Users/alice"): Allow(),
+        Input(command="git -C /srv/project grep needle"): Allow(),
+        Input(command="git grep --no-index needle -- '*.py'", cwd="/Users/alice"): Allow(),
         Input(command="git grep --help"): Allow(),
         Input(command="git --help grep"): Allow(),
         Input(command="git grep"): Allow(),
