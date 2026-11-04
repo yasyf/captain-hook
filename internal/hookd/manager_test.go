@@ -500,8 +500,8 @@ func readyMember(t *testing.T, manager *workerManager, key workerKey, load int) 
 
 func saturatedMember(t *testing.T, manager *workerManager, key workerKey) *workerEntry {
 	t.Helper()
-	entry := readyMember(t, manager, key, 1)
-	entry.service = 2 * poolSpillWait
+	entry := readyMember(t, manager, key, poolSpillLoad)
+	entry.service = poolSpillWait
 	return entry
 }
 
@@ -557,7 +557,7 @@ func TestAcquireTakesTheShortestQueueWhenEveryMemberIsSaturated(t *testing.T) {
 	manager := mustWorkerManager(t)
 	manager.poolSize = 2
 	longer := saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0})
-	longer.load = 3
+	longer.load = 2 * poolSpillLoad
 	shorter := saturatedMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1})
 
 	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"})
@@ -566,6 +566,18 @@ func TestAcquireTakesTheShortestQueueWhenEveryMemberIsSaturated(t *testing.T) {
 	}
 	if entry != shorter {
 		t.Fatalf("acquire took shard %d, want the shorter queue on shard %d", entry.key.shard, shorter.key.shard)
+	}
+}
+
+func TestALongDispatchAloneNeverSaturatesAMember(t *testing.T) {
+	t.Parallel()
+	member := &workerEntry{load: poolSpillLoad - 1, service: time.Minute}
+	if member.saturated() {
+		t.Fatalf("%d calls in flight read as saturated at %s", member.load, member.queueWait())
+	}
+	member.load = poolSpillLoad
+	if !member.saturated() {
+		t.Fatalf("%d calls in flight read as unsaturated at %s", member.load, member.queueWait())
 	}
 }
 
@@ -676,8 +688,8 @@ func TestBusyPoolGrowsOneMemberAtATime(t *testing.T) {
 	}
 
 	manager.mu.Lock()
-	second.load = 1
-	second.service = 2 * poolSpillWait
+	second.load = poolSpillLoad
+	second.service = poolSpillWait
 	manager.mu.Unlock()
 	if _, _, err := manager.acquire(t.Context(), key); err != nil {
 		t.Fatal(err)

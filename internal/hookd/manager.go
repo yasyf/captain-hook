@@ -33,6 +33,7 @@ const (
 
 	serviceSmoothing = 4
 
+	poolSpillLoad      = 3
 	poolSpillWait      = time.Second
 	memberServiceFloor = 100 * time.Millisecond
 
@@ -119,7 +120,7 @@ func (e *workerEntry) queueWait() time.Duration {
 }
 
 func (e *workerEntry) saturated() bool {
-	return e.queueWait() > poolSpillWait
+	return e.load >= poolSpillLoad && e.queueWait() > poolSpillWait
 }
 
 func (e *workerEntry) routesBefore(other *workerEntry) bool {
