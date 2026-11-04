@@ -1027,3 +1027,40 @@ def test_a_roster_that_would_not_enumerate_is_served_but_never_cached(
     recovered = reg.get()
     assert len(calls) == 2, "the second request served a cached failure instead of retrying"
     assert recovered.cacheable
+
+
+def test_a_load_error_clears_once_the_missing_import_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lib = tmp_path / "late-lib"
+    monkeypatch.syspath_prepend(str(lib))
+    monkeypatch.setattr(registry, "LOAD_ERROR_RETRY_SECONDS", 0.0)
+    reg = Registry(make_project(tmp_path / "proj", hook_body=f"import late_release_helper\n{HOOK}"))
+
+    failed = reg.get()
+    assert [error.exc.name for error in failed.state.load_errors] == ["late_release_helper"]
+
+    lib.mkdir()
+    (lib / "late_release_helper.py").write_text("")
+    recovered = reg.get()
+
+    assert recovered is not failed, "the errored snapshot was served past its retry time"
+    assert recovered.state.load_errors == []
+    assert any(h.spec.message == "m" for h in recovered.state.hooks)
+
+
+def test_a_permanently_broken_hook_discovers_once_per_retry_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reg = Registry(make_project(tmp_path / "proj", hook_body="raise RuntimeError('broken')\n"))
+    discoveries: list[int] = []
+    real = reg._discover_once
+    monkeypatch.setattr(
+        reg,
+        "_discover_once",
+        lambda fingerprint, languages: (discoveries.append(1), real(fingerprint, languages))[1],
+    )
+
+    snapshots = [reg.get() for _ in range(5)]
+
+    assert len(discoveries) == 1, "a broken hook rediscovered inside its retry window"
+    assert all(snapshot is snapshots[0] for snapshot in snapshots)
+    assert snapshots[0].state.load_errors
