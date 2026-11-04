@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The search guard's file-variable exemptions no longer let a directory or an empty value through.**
+  A `${F:?}` or `$W/app.py` path now has to be quoted, because word splitting can leave `/` or nothing.
+  A value counts as a file listing only when `rg`, `grep` or `git ls-files` itself produced it, piped through
+  filters that keep whole lines, so `$(pwd -L)`, `| grep -o /`, `| head -c 1` and `git ls-files --format=/`
+  stay blocked. `"${F:-}"` now resolves like `"$F"`, and `grep -r` accepts a value a file listing produced.
 - **The search guard no longer blocks a variable that can only name a file.** `rg -n needle "$F"` was
   read as a recursive search whenever `F` was not a plain literal assigned on the same line, and the
   `${dir:?}` form the guard's own empty-root message asks for was blocked too. These now pass: a

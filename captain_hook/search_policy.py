@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from cc_transcript.tools import tool_name_matches
 
-from captain_hook.bindings import dequote, skip_group
+from captain_hook.bindings import Ref, dequote, segments, skip_group
 from captain_hook.cmd import Cmd, Target, Targets, git_location
 from captain_hook.command_schema_core import (
     Arguments,
@@ -37,8 +37,17 @@ if TYPE_CHECKING:
 
 POOLS = (".claude/worktrees",)
 GUARDED_ROOT = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:\?")
-WHOLE_REFERENCE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
-PATH_FILTERS = frozenset({"grep", "head", "rg", "shuf", "sort", "tail", "uniq"})
+WHOLE_REFERENCE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*(?::-)?\})")
+LINE_COUNT = re.compile(r"-\d+|-n\d*|\+?\d+|--lines=\+?\d+")
+LINE_MATCH = re.compile(r"-[EFivwx]+")
+WHOLE_LINE_FILTERS = {
+    "grep": LINE_MATCH,
+    "head": LINE_COUNT,
+    "rg": LINE_MATCH,
+    "sort": re.compile(r"-[fnruV]+"),
+    "tail": LINE_COUNT,
+    "uniq": re.compile(r"-[diu]+"),
+}
 
 
 HOME_POOL_LEVELS = dict.fromkeys(POOLS, 1)
@@ -702,7 +711,14 @@ class CommandPattern:
     skip_if: tuple[Callable[[Arguments], bool], ...] = ()
 
 
-GIT_LS_FILES = CommandSchema("git", subcommand=("ls-files",), operands=(Operand("operands", count="*"),))
+GIT_LS_FILES = CommandSchema(
+    "git",
+    subcommand=("ls-files",),
+    operands=(Operand("operands", count="*"),),
+    options=(
+        Option("selection", ("-c", "--cached", "-m", "--modified", "-o", "--others", "--exclude-standard"), bool),
+    ),
+)
 
 
 def lists_matching_files(arguments: Arguments) -> bool:
@@ -712,7 +728,7 @@ def lists_matching_files(arguments: Arguments) -> bool:
 PATH_LISTERS = (
     CommandPattern(RG, only_if=(lists_matching_files,)),
     CommandPattern(GREP, only_if=(lists_matching_files,)),
-    CommandPattern(GIT_LS_FILES),
+    CommandPattern(GIT_LS_FILES, only_if=(lambda arguments: arguments.complete,)),
 )
 
 
@@ -727,10 +743,24 @@ def lists_paths(source: str | None) -> bool:
     if (cmd := Cmd.parse(text[2:-1])) is None or not (calls := cmd.calls()):
         return False
     head, *rest = calls
-    return all(call.name in PATH_FILTERS for call in rest) and any(
-        pattern.schema.invokes(head) and all(predicate(pattern.schema.bind(head)) for predicate in pattern.only_if)
+    return all(map(passes_whole_lines, rest)) and any(
+        head.name == pattern.schema.program
+        and pattern.schema.invokes(head)
+        and all(predicate(pattern.schema.bind(head)) for predicate in pattern.only_if)
         for pattern in PATH_LISTERS
     )
+
+
+def passes_whole_lines(call: Call) -> bool:
+    allowed = WHOLE_LINE_FILTERS.get(call.name)
+    if (
+        allowed is None
+        or call.occurrence.prev_op != "|"
+        or any(redirect.op in STDIN_REDIRECTS for redirect in call.redirects)
+    ):
+        return False
+    others = [word for word in call.command.words[1:] if word.value is None or not allowed.fullmatch(word.value)]
+    return len(others) <= int(allowed is LINE_MATCH) and not any((word.value or "").startswith("-") for word in others)
 
 
 def file_shaped(raw: str) -> bool:
@@ -738,11 +768,27 @@ def file_shaped(raw: str) -> bool:
     return bool(slash) and not any(character in name for character in "$`)}") and narrows(PurePath(name).suffix)
 
 
+def expansions_quoted(raw: str) -> bool:
+    parts = segments(raw)
+    return (
+        raw.startswith('"') and raw.endswith('"') and raw.count('"') == 2
+        if parts is None
+        else all(part.quoted for part in parts if isinstance(part, Ref))
+    )
+
+
+def names_only_files(target: Target) -> bool:
+    return target.value is None and (
+        (expansions_quoted(target.raw) and file_shaped(target.raw))
+        or (WHOLE_REFERENCE.fullmatch(target.raw.strip('"')) is not None and lists_paths(target.source))
+    )
+
+
 def expansion_targets(target: Target) -> tuple[Target, ...]:
     if target.value is not None:
         return (target,)
     raw = target.raw.strip('"')
-    if GUARDED_ROOT.match(raw) or file_shaped(target.raw) or lists_paths(target.source):
+    if (GUARDED_ROOT.match(raw) and expansions_quoted(target.raw)) or names_only_files(target):
         return ()
     source = target.source or ""
     pieces = tuple(Target(piece, piece, target.cwd) for piece in source.split())
@@ -919,6 +965,7 @@ def grep_searches_broadly(arguments: Arguments) -> bool:
         or any(
             target.value != "-" and (target.has_glob or not ((path := target.path) is not None and path.is_file()))
             for target in roots or (Target(".", ".", arguments.cwd),)
+            if not names_only_files(target)
         )
     )
 
@@ -1241,8 +1288,8 @@ MCP_GREP_MESSAGE = (
 SEARCH_MESSAGE = (
     "A recursive `grep` over a directory reads every file under it; bound `grep` by f"
     "ilename and scope other searches below broad roots. Name files, write a variable"
-    " path as `${file:?}`, use `--include='*.py'`, `-g '*.py'`, or `-- '*.py'`, or ru"
-    "n `ccx code grep` with scoped paths."
+    " path as `\"${file:?}\"`, use `--include='*.py'`, `-g '*.py'`, or `-- '*.py'`, or"
+    " run `ccx code grep` with scoped paths."
 )
 FILES_MESSAGE = (
     "`rg --files` over `~`, a worktree pool, or any directory above them is blocked e"
@@ -1262,8 +1309,8 @@ PROTECTED_ROOT_MESSAGE = (
 )
 EMPTY_ROOT_MESSAGE = (
     "A search whose only path is an unquoted expansion such as `$dir` or `$(...)` wal"
-    "ks the working directory when that expansion is empty. Write the path as `${dir:"
-    "?}` so an empty value stops the command, or pass a literal path."
+    'ks the working directory when that expansion is empty. Write the path as `"${dir'
+    ':?}"` so an empty value stops the command, or pass a literal path.'
 )
 
 
