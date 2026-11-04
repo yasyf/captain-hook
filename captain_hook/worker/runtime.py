@@ -17,7 +17,14 @@ from captain_hook.cli import EVENT_NAMES, dispatch_event
 from captain_hook.daemon import decision_writer
 from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
-from captain_hook.dispatch import attributed, denies, envelope_text, format_output, mandatory_completions
+from captain_hook.dispatch import (
+    attributed,
+    closed_verdict,
+    denies,
+    envelope_text,
+    format_output,
+    mandatory_completions,
+)
 from captain_hook.dispatch_metrics import collect_dispatch, measured_call, note_session
 from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT, EvidenceIncomplete, fails_open
@@ -162,10 +169,10 @@ class ProductRuntime:
                 warmups.extend(reqenv.warmups())
             return self._response(buffers, guard=guard), background
 
-    def close(self) -> None:
+    def close(self, timeout: float = decision_writer.DRAIN_SECONDS) -> None:
         if self._writer is None:
             return
-        decision_writer.uninstall(self._writer)
+        decision_writer.uninstall(self._writer, timeout)
         self._writer = None
 
     def _dispatch(
@@ -274,6 +281,9 @@ def mandatory_skip(event: Event, output: Envelope | None, unfinished: Sequence[R
     )
     if denies(output):
         return with_warning(event, output, message)
+    for hook in unfinished:
+        if (closed := closed_verdict(hook, "unfinished", cause)) is not None:
+            return with_warning(event, format_output(event, closed), message)
     return fail_open_envelope(event, message)
 
 

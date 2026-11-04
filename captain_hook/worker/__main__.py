@@ -6,10 +6,12 @@ import json
 import os
 import resource
 import sys
+import time
 
 from captain_hook.worker.service import WorkerService, handshake
 
 TRANSCRIPT_PARSE_THREADS = 4
+EVALUATE_EXIT_SECONDS = 1.0
 
 
 def bound_transcript_parse_pool() -> None:
@@ -110,20 +112,22 @@ def evaluate() -> None:
     reply = os.fdopen(os.dup(sys.stdout.fileno()), "w")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     from captain_hook.daemon.context import install_context_io
+    from captain_hook.daemon.decision_writer import DRAIN_SECONDS
     from captain_hook.snapshots.client import client_scope
     from captain_hook.worker.runtime import ProductRuntime
 
     bound_transcript_parse_pool()
     skip_bundled_cli_version_probe()
     install_context_io()
-    runtime = ProductRuntime(install_writer=False)
+    runtime = ProductRuntime()
     try:
         with client_scope():
             response, _ = runtime.dispatch(request)
+        with reply:
+            json.dump(response.message(), reply)
     finally:
-        runtime.close()
-    with reply:
-        json.dump(response.message(), reply)
+        left = request.deadline_unix_ms / 1000 - time.time() - EVALUATE_EXIT_SECONDS
+        runtime.close(min(DRAIN_SECONDS, max(0.0, left)) if request.deadline_unix_ms else DRAIN_SECONDS)
 
 
 def evaluate_actor(provider: str) -> None:
@@ -154,7 +158,7 @@ def evaluate_actor(provider: str) -> None:
     bound_transcript_parse_pool()
     skip_bundled_cli_version_probe()
     install_context_io()
-    runtime = ProductRuntime(install_writer=False)
+    runtime = ProductRuntime()
     try:
         with client_scope(defer_cleanup=True, event=request.id) as client:
             token = BACKGROUND_SNAPSHOT_CLIENT.set(client)

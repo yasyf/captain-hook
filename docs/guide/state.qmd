@@ -102,6 +102,8 @@ with ReviewState.mutate(evt) as state:
 
 Keep the block short — the lock is held until it exits — and never nest `mutate()` on the same slot within one process: the inner acquisition deadlocks on the outer lock.
 
+A synchronous dispatch writes once, not once per hook. Inside it, `mutate`, `save` and `reset` are staged in memory, the event's other hooks read them, and they commit together before the reply, merged with anything another dispatch committed meanwhile. Pass `slot.mutate(claim=True)` when only one dispatch may reach a decision: it writes at once, so the next dispatch sees it. A `DurableState` follows the same rule. Hooks registered with `async_=True` write as they go.
+
 ## Register models with `@session_state`
 
 `@session_state` registers a plain model for collective introspection without adding the workflow methods. Use it when you want several models to surface together, for example to list their on-disk paths in a subagent's setup context.

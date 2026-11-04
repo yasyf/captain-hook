@@ -96,7 +96,7 @@ def nudge(
             matches = matching_texts(sig, candidates, consumed=evt.ctx.s.load(PrimitiveState).consumed.get(name, ()))
             if not matches:
                 return None
-            with evt.ctx.s[PrimitiveState].mutate() as ps:
+            with evt.ctx.s[PrimitiveState].mutate(claim=True) as ps:
                 if not (triggering := ps.consume_matches(sig, matches, name)):
                     return None
                 mark_fired(ps, evt)

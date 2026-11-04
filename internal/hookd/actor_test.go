@@ -206,6 +206,46 @@ func TestRunForwardsAnActorsSettledVerdictUnchanged(t *testing.T) {
 	}
 }
 
+func TestRunRetriesAnUnfinishedMandatoryActorEvaluationOnce(t *testing.T) {
+	t.Setenv(actorJudgeEnv, "codex")
+	scriptClient(t, &scriptedClient{err: errors.New("the host must not be asked")}, nil)
+	scriptLocal(t, &localEvaluation{err: errors.New("the transport fallback must not run")})
+	timedOut := errors.New("captain: the actor's evaluator did not answer within the 30s event budget")
+	incomplete := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"}
+	completed := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Guard: wireproto.GuardCompleted}
+	type attempt struct {
+		response wireproto.EventResponse
+		err      error
+	}
+	for name, tc := range map[string]struct {
+		payload  string
+		attempts []attempt
+		calls    int
+		stdout   string
+	}{
+		"timed out, then decided":        {destructivePayload, []attempt{{err: timedOut}, {response: completed}}, 2, ""},
+		"incomplete, then decided":       {destructivePayload, []attempt{{response: incomplete}, {response: completed}}, 2, ""},
+		"decided the first time":         {destructivePayload, []attempt{{response: completed}}, 1, ""},
+		"failed twice is the skip":       {destructivePayload, []attempt{{err: timedOut}, {err: timedOut}}, 2, wireproto.SkipEnvelope("PreToolUse", "worker-error") + "\n"},
+		"an advisory call never retries": {benignPayload, []attempt{{err: timedOut}}, 1, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scriptActor(t, &actorEvaluation{})
+			t.Setenv("OPENAI_API_KEY", actorSentinel)
+			calls := 0
+			evaluateActor = func(wireproto.EventRequest, string, time.Duration) (wireproto.EventResponse, error) {
+				next := tc.attempts[calls]
+				calls++
+				return next.response, next.err
+			}
+			_, stdout, _ := runEvent(t, "PreToolUse", tc.payload)
+			if calls != tc.calls || stdout != tc.stdout {
+				t.Fatalf("calls=%d stdout=%q, want %d %q", calls, stdout, tc.calls, tc.stdout)
+			}
+		})
+	}
+}
+
 func TestRunKeepsTheResidentRouteWithoutAnActorJudge(t *testing.T) {
 	client := scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "resident\n"}}
 	scriptClient(t, &client, nil)

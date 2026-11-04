@@ -421,16 +421,21 @@ def run_event(state: CliState, event_name: str) -> None:
     setup_logging(session_id)
 
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
+    from captain_hook.daemon import decision_writer
     from captain_hook.snapshots.client import client_scope
 
     tools = pack_tool_specs(state.discover())
-    with client_scope() as client:
-        client.bind_tool_registry(tools)
-        output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
-        output = attributed(event, raw, output)
-        if output:
-            print(envelope_text(output), flush=True)
-        background()
+    writer = decision_writer.install()
+    try:
+        with client_scope() as client:
+            client.bind_tool_registry(tools)
+            output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
+            output = attributed(event, raw, output)
+            if output:
+                print(envelope_text(output), flush=True)
+            background()
+    finally:
+        decision_writer.uninstall(writer)
 
 
 def init_project(root: Path, *, review: bool = True) -> None:
