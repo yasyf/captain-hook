@@ -426,6 +426,7 @@ a lane's `TaskStop`, and a `kill`, and lift each through these ticket kinds:
 | `sessions.kill` | `program`, `process` | once, 2 minutes | `ruling`, an answer tagged `scope:durable` and `sessions-guard` naming the program |
 | `sessions.kill-session` | `program`, `process` | once, 2 minutes | `ruling`, the judge reads answers tagged `scope:durable` and `sessions-guard` naming the program, and allows a codex session hosting no other session only when the words list its pid or set an age floor it clears |
 | `sessions.kill.owner` | `pid` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the pid |
+| `sessions.kill.tap` | `target`, `process` | once, 2 minutes | `card-tap`, the user's go tap within the hour on a board card whose words, stamped on the tap, name the pid or program and the acting lane |
 
 A ruling covers its target while it stands. Every check reads it again, so each new
 call on that target mints its own once ticket, and the ticket's two minutes cover
@@ -467,6 +468,17 @@ session's `TaskStop` is never guarded.
 `sessions.kill` names the process as `<pid>@<start time>`, so a ticket never covers
 a recycled pid. The program is the script for a `python`, `node`, `bun`, `deno`,
 `ruby`, or `perl` process, such as `desk-runner.py`, and the executable otherwise.
+
+`sessions.kill.tap` lifts one kill for a long-running lane's spawning root when the user
+tapped yes on a cc-present board card within the hour. It reads the board's own log, where
+only a human interaction carries `origin: human` and the daemon stamps each answer with what
+the card said at that moment, so a later edit to the card changes nothing. A `board-answer`
+cc-notes row only locates the tap; its words count for nothing, so a row an agent wrote lifts
+nothing. The card's words must name `pid <pid>` or the program, and the acting lane or a
+lane it succeeds, and the pick must read as a go. A tap covers one process, in any session,
+and that process must have started before the tap. An interpreter name such as `python3`
+never counts as the program, and an agent session or anything the guard protects stays
+blocked whatever a card says.
 
 A lifted terminal close or `launchctl` command must run once. It comes first at top
 level, at the start of the Bash payload, with only pipe successors. Loops, `&&` or `;`

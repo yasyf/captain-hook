@@ -43,6 +43,9 @@ from captain_hook.tickets import (
     UserRuled,
     store,
 )
+from captain_hook.tickets.conditions import GO, HOLD
+from captain_hook.tickets.context import names
+from captain_hook.tickets.decide import Undecided
 from captain_hook.util import proc, reqenv
 from captain_hook.util.paths import resolve_claude_config_dir
 from captain_hook.util.payload import command_texts
@@ -170,6 +173,8 @@ SPELLING_LIMIT = 60
 SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
 DRIVE_VAR = "CLAUDE_LONG_RUNNING_DRIVE"
 DRIVE_ENV = re.compile(rf"(?<!\S){DRIVE_VAR}=(\S*)")
+LANE_VAR = "CLAUDE_LONG_RUNNING_LANE"
+LANE_SUCCESSOR = re.compile(r"-\d+$")
 LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
@@ -218,6 +223,14 @@ OWNER_NAMED_RULES = (
     "that only describe the target permit nothing. One owner instruction permits one such action."
 )
 OWNER_NAMED_TTL = timedelta(hours=1)
+TAP_WINDOW = OWNER_NAMED_TTL - RETRY_WINDOW
+TAP_READ_SECONDS = 5.0
+ANSWER_ROW = "board-answer"
+ENDS_IT = re.compile(r"\W*(?:restart|kill|end|stop|terminate|quit)\b", re.IGNORECASE)
+TAP_HOW = (
+    "The owner's yes on a board card lifts this for one kill within the hour of the tap, when the card's words "
+    "name `pid {pid}` or the script's file name, and your lane; ask on a card like that, never for a chat line."
+)
 KILL_SESSION_RULES = (
     "The pending action signals a codex agent session that hosts no other session. The payload is its process "
     "record: pid, command, start time, and age in hours now. Allow only when a ruling's words name its program and "
@@ -494,7 +507,7 @@ def session_record(row: ProcessRow) -> dict[str, str | int]:
         "pid": row.pid,
         "command": clip(row.command, 120),
         "started": row.started.isoformat(),
-        "age_hours": int((datetime.now() - row.started).total_seconds() // 3600),
+        "age_hours": int((utc_now() - row.started).total_seconds() // 3600),
     }
 
 
@@ -703,6 +716,7 @@ class DriveEntry(BaseModel):
     drive: str
     ledger: str
     sessions: list[str]
+    checkout: str
 
 
 def drive_entries() -> list[DriveEntry]:
@@ -722,6 +736,7 @@ class Drive:
     name: str
     names: frozenset[str]
     sessions: frozenset[str]
+    checkout: str
 
     @classmethod
     def of(cls, session: str | None) -> Drive | None:
@@ -735,6 +750,7 @@ class Drive:
             own.drive,
             frozenset(entry.drive for entry in runs),
             frozenset(member for entry in runs for member in entry.sessions),
+            own.checkout,
         )
 
     def started(self, environment: str) -> bool:
@@ -1348,6 +1364,88 @@ class SpawnedHere(CustomTicketCondition):
         ]
 
 
+def tap_rows(checkout: str, term: str) -> list[dict[str, Any]]:
+    argv = ("ccn", "-R", checkout, "answer", "search", term, "--limit", "0", "--json")
+    if isinstance(shown := probe(argv, TAP_READ_SECONDS), Unreadable):
+        raise Undecided(shown.reason)
+    return json.loads(shown or "[]")
+
+
+def row_label(row: dict[str, Any], prefix: str) -> str | None:
+    return next((tag.removeprefix(prefix) for tag in row["tags"] if tag.startswith(prefix)), None)
+
+
+def newest_tap(session: str, card: str, block: str) -> dict[str, Any] | None:
+    """The owner's newest answer on *block* in the board's own log, which no agent write reaches."""
+    shown = probe(("cc-present", "outcomes", "--block", card, "--session", session), TAP_READ_SECONDS)
+    if isinstance(shown, Unreadable):
+        logger.bind(board=session, card=card, reason=shown.reason).warning("a row's board could not be read")
+        return None
+    answers = json.loads(shown).get("answers", ())
+    return next((a for a in answers if a["origin"] == "human" and a["payload"].get("blockId") == block), None)
+
+
+def says_go(answer: dict[str, Any]) -> bool:
+    payload = answer["payload"]
+    if HOLD.search(payload.get("other") or payload.get("note") or ""):
+        return False
+    if answer["type"] == "decision.created":
+        return payload.get("verdict") == "approved"
+    picked = payload.get("picked", ())
+    return (
+        answer["type"] == "choice.selected"
+        and bool(picked)
+        and all(not HOLD.search(label) and (GO.match(label) or ENDS_IT.match(label)) for label in picked)
+    )
+
+
+def names_lane(text: str, lane: str) -> bool:
+    """Whether *text* names *lane* or one it succeeds: ``meta-desk-3`` takes ``meta-desk``, never ``meta-desk-9``."""
+    stem = LANE_SUCCESSOR.sub("", lane)
+    own = int(lane[len(stem) + 1 :] or 0)
+    named = re.findall(rf"(?<![\w.-]){re.escape(stem)}(?:-(\d+))?(?![\w-]|\.\w)", text)
+    return any(int(number or 0) <= own for number in named)
+
+
+@dataclass(frozen=True, slots=True)
+class CardTapped(CustomTicketCondition):
+    """The owner's go tap on a board card whose words, stamped on the tap by the board, name the target and lane.
+
+    An answer row only locates the tap: what counts is the board's log, which records the owner's hand and what the
+    card said at that moment, so neither a row nor a card an agent writes lifts anything. One tap covers one process.
+    """
+
+    def evidence(self, ctx: Context) -> list[Evidence] | None:
+        target = ctx.place["target"]
+        for row in tap_rows(ctx.action.payload["checkout"], target.rpartition(" ")[2]):
+            if (tap := self.tap(row, ctx)) is not None and store.claim(tap[0], ctx.place["process"]):
+                return [tap[1]]
+        return None
+
+    def tap(self, row: dict[str, Any], ctx: Context) -> tuple[str, Evidence] | None:
+        """The claim key and evidence of the owner's tap *row* points at, when it covers this action."""
+        payload = ctx.action.payload
+        session, card, block = (row_label(row, f"board-{label}:") for label in ("session", "card", "block"))
+        if not session or not card or not block or ANSWER_ROW not in row["tags"]:
+            return None
+        if (answer := newest_tap(session, card, block)) is None:
+            return None
+        at = datetime.fromisoformat(answer["at"])
+        if store.now() - at > TAP_WINDOW:
+            return None
+        if datetime.fromisoformat(payload["started"]) > at.astimezone(UTC).replace(tzinfo=None):
+            return None
+        words = answer["payload"].get("shown", "")
+        if not names(words, ctx.place["target"]) or not names_lane(words, payload["lane"]) or not says_go(answer):
+            return None
+        detail = f"the board logs the owner's answer on {card}; the card said: {clip(words, 200)}"
+        quote = ", ".join(answer["payload"].get("picked") or (answer["payload"].get("verdict", ""),))
+        return (
+            f"{session}/{block}@{at.isoformat()}",
+            Evidence(id=f"tap:{session[:8]}:{block}", source="board", quote=quote, said_at=at, detail=detail),
+        )
+
+
 def child_of(payload: dict[str, Any], tool: str) -> tuple[str, str] | None:
     """The teammate or background shell a finished spawn, ``Bash``, or ``Monitor`` call reports starting."""
     if tool in SPAWN_TOOLS:
@@ -1443,6 +1541,15 @@ def owner_named(kind: str, key: str, target: str) -> Tickets:
 TERMINAL_CLOSE_NAMED = owner_named("sessions.close", "terminal", "terminal")
 LAUNCHD_STOP_NAMED = owner_named("sessions.launchctl", "service", "service")
 KILL_NAMED = owner_named("sessions.kill", "pid", "pid")
+KILL_TAPPED = Tickets(
+    "sessions.kill.tap",
+    ("target", "process"),
+    Reach.ONCE,
+    rules=(Rule("card-tap", CardTapped()),),
+    deny="Ask on a board card whose words name the pid or script and your lane; the owner's yes lifts one kill.",
+    ttl=RETRY_WINDOW,
+    hook="sessions.kill.tap",
+)
 OWNER_NAMED = {
     TERMINAL_CLOSE.kind: TERMINAL_CLOSE_NAMED,
     LAUNCHD_STOP.kind: LAUNCHD_STOP_NAMED,
@@ -1497,6 +1604,23 @@ def lift(
     return owner_lift(evt, tickets, action, ungranted) if owner else ungranted
 
 
+def tap_lift(evt: BaseHookEvent, row: ProcessRow, ungranted: Ungranted) -> Ungranted | None:
+    """``None`` when the owner tapped yes on a card naming *row* and this lane, for the spawning root only, once."""
+    lane = reqenv.getenv(LANE_VAR)
+    if not lane or hosts_agent(row) or not spawning_root(evt) or (drive := Drive.of(evt.session_id)) is None:
+        return ungranted
+    started = row.started.isoformat()
+    for target in (f"pid {row.pid}", *(name for name in programs(row) if not runs_scripts(name))):
+        action = Proposal(
+            place={"target": target, "process": f"{row.pid}@{started}"},
+            payload={"lane": lane, "checkout": drive.checkout, "started": started},
+            summary=f"kill {row.pid} ({target})",
+        )
+        if isinstance(KILL_TAPPED.check(evt, action), Allow):
+            return None
+    return Ungranted(f"{ungranted.message} {TAP_HOW.format(pid=row.pid)}", ungranted.detail)
+
+
 def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | None:
     refusals: list[Ungranted] = []
     tickets, payload = (KILL_SESSION, session_record(row)) if is_agent(row) else (KILL_PROCESS, {})
@@ -1509,12 +1633,15 @@ def kill_lift(evt: BaseHookEvent, row: ProcessRow, message: str) -> Ungranted | 
         if (ungranted := lift(evt, tickets, action, message, owner=False)) is None:
             return None
         refusals.append(ungranted)
+    ungranted = refusals[0] if refusals else Ungranted(message)
+    if (untapped := tap_lift(evt, row, ungranted)) is None:
+        return None
     named = Proposal(
         place={"pid": str(row.pid)},
         payload={"process": f"{row.pid}@{row.started.isoformat()}", "command": row.command},
         summary=f"kill {row.pid}",
     )
-    return owner_lift(evt, tickets, named, refusals[0] if refusals else Ungranted(message))
+    return owner_lift(evt, tickets, named, untapped)
 
 
 def block_first(evt: ToolRewriteEvent, messages: Iterable[str | Ungranted | None]) -> HookResult | None:

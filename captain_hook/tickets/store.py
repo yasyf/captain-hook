@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS orca_terminals (
     at TEXT NOT NULL,
     PRIMARY KEY (handle, tree)
 );
+CREATE TABLE IF NOT EXISTS claims (
+    key TEXT PRIMARY KEY,
+    holder TEXT NOT NULL,
+    at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS tickets_by_kind ON tickets (kind, tree);
 """
 USE_COLUMNS = "id, ticket_id, at, state, session, agent, call, fingerprint, summary"
@@ -247,6 +252,13 @@ def revoke(ticket_id: str) -> Ticket:
     revoked = load(ticket_id).model_copy(update={"revoked": now()})
     save(revoked)
     return revoked
+
+
+def claim(key: str, holder: str) -> bool:
+    """Whether *holder* holds *key*: the first to ask takes it for good, across every session, and keeps it."""
+    with connect() as db, immediate(db):
+        db.execute("INSERT OR IGNORE INTO claims (key, holder, at) VALUES (?, ?, ?)", (key, holder, now().isoformat()))
+        return db.execute("SELECT holder FROM claims WHERE key = ?", (key,)).fetchone()[0] == holder
 
 
 def record_terminal(handle: str, tree: str) -> bool:
