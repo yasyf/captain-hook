@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from itertools import chain, repeat
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -704,6 +705,14 @@ class TestDecide:
         object.__setattr__(once, "evt", event(tmp_path, verdict=refused))
         assert found(Decide("permit", second_opinion=False), once) is None
         assert cast(MagicMock, once.evt.ctx.call_llm).call_count == 1
+
+    def test_a_finished_refusal_stands_when_the_second_asking_cannot_finish(self, tmp_path: Path) -> None:
+        refused = Verdict(allow=False, reason="no", refusal="The user never asked.")
+        evt = event(tmp_path)
+        evt.ctx.call_llm = MagicMock(side_effect=chain([refused], repeat(TimeoutError("slow"))))  # type: ignore[method-assign]
+        ctx = Context.fake("test.write", PLACE, said=["post it"], tree=TREE)
+        object.__setattr__(ctx, "evt", evt)
+        assert found(Decide("permit"), ctx) is None
 
     def test_a_judge_with_nothing_to_read_asks_nothing(self, tmp_path: Path) -> None:
         ctx = Context.fake("test.write", PLACE, tree=TREE)

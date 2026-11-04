@@ -144,7 +144,8 @@ def decision_log() -> Logger:
 
     client = CURRENT_CLIENT.get()
     return logger.bind(
-        capt_build=decision_build(), worker_pid=os.getpid(),
+        capt_build=decision_build(),
+        worker_pid=os.getpid(),
         request_prefix=client.request_prefix if client is not None else None,
     )
 
@@ -156,9 +157,7 @@ def decision_stage(kind: str, stage: str) -> Iterator[None]:
         yield
     finally:
         elapsed_ms = round((perf_counter() - started) * 1000, 3)
-        decision_log().bind(kind=kind, stage=stage, elapsed_ms=elapsed_ms).info(
-            "ticket decision stage"
-        )
+        decision_log().bind(kind=kind, stage=stage, elapsed_ms=elapsed_ms).info("ticket decision stage")
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,8 +167,8 @@ class Decide(CustomTicketCondition):
     TypeSafe Jev judges first, citing the one evidence item that permits exactly this action; sure of it,
     the action goes ahead on that citation. Any other answer, a refusal, or a Jev failure asks the LLM,
     which cites and may still allow; one LLM refusal is asked again on the evidence alone, and the action
-    is refused only when both askings refuse. With ``llm`` off, Jev alone judges, and an unsettled answer
-    refuses.
+    is refused when the second asking also refuses or cannot finish, since a finished refusal is a verdict.
+    With ``llm`` off, Jev alone judges, and an unsettled answer refuses.
     A judge that gives no verdict in time raises :class:`Undecided`, which the declaration reports as a
     rule that found nothing.
 
@@ -185,7 +184,7 @@ class Decide(CustomTicketCondition):
         tool_results: Whether the transcript windows carry tool output.
         llm: Whether an action Jev does not settle goes to the LLM; off, it is refused.
         second_opinion: Whether one LLM refusal is asked again, on the evidence alone; the action is refused
-            only when both askings refuse.
+            when the second asking also refuses or cannot finish.
     """
 
     rules: str
@@ -239,7 +238,7 @@ class Decide(CustomTicketCondition):
                     verdict = self.ask(ctx, prompt, transcript=False, root_transcript=False)
                 if isinstance(verdict, Verdict) and not verdict.allow and self.second_opinion:
                     logger.bind(reason=verdict.reason).info("the judge refused once; asking a second time")
-                    verdict = self.ask(ctx, prompt, transcript=False, root_transcript=False)
+                    verdict = self.asked_again(ctx, prompt, verdict)
         except EvidenceIncomplete:
             raise
         except Exception as exc:
@@ -248,6 +247,14 @@ class Decide(CustomTicketCondition):
         if not isinstance(verdict, Verdict):
             raise Undecided(f"{type(verdict).__name__} instead of a verdict")
         return verdict
+
+    def asked_again(self, ctx: Context, prompt: Prompt, refused: Verdict) -> Verdict:
+        try:
+            again = self.ask(ctx, prompt, transcript=False, root_transcript=False)
+        except Exception as exc:
+            logger.bind(cause=type(exc).__name__).info("the second asking did not finish; the refusal stands")
+            return refused
+        return again if isinstance(again, Verdict) else refused
 
     def framed(self, ctx: Context, items: Sequence[Evidence], shown: int) -> Prompt:
         return (
