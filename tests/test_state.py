@@ -311,7 +311,7 @@ class TestFireCounting:
         for entry in entries:
             assert execute_hook(entry, mock_edit_event(), tmp_path) is not None
 
-        assert sorted(path.name for path in tmp_path.iterdir()) == ["hook_state.json", "hook_state.json.lock"]
+        assert [path.name for path in tmp_path.iterdir() if path.suffix != ".lock"] == ["hook_state.json"]
         assert SessionStore(tmp_path)[HookState].get(HookState()).fires == {
             f"{entry.state_key}/main": 1 for entry in entries
         }
@@ -329,16 +329,6 @@ class TestFireCounting:
         )
 
         assert execute_hook(entry, mock_edit_event(), tmp_path) is None
-
-    def test_setting_a_slot_to_what_it_holds_writes_nothing(self, tmp_path: Path) -> None:
-        slot = SessionStore(tmp_path)[HookState]
-        slot.set(HookState(fires={"hook/main": 1}))
-        assert slot.path is not None
-        written = slot.path.stat().st_ino
-
-        slot.set(HookState(fires={"hook/main": 1}))
-
-        assert slot.path.stat().st_ino == written
 
     def test_record_fire_increments_last_fired_at(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)

@@ -99,7 +99,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
 
     def set(self, obj: M) -> None:
         if self._path:
-            self._persist(self._path, obj.model_dump_json(), self._stored(self._path))
+            self._persist(self._path, obj.model_dump_json(), None)
 
     def delete(self) -> None:
         if self._path:
@@ -138,13 +138,6 @@ class SessionSlot(Generic[M]):  # noqa: UP046
                 "failed to read session state",
             )
             return default, None
-
-    @staticmethod
-    def _stored(path: Path) -> str | None:
-        try:
-            return path.read_text()
-        except (OSError, UnicodeDecodeError):
-            return None
 
     def _persist(self, path: Path, text: str, stored: str | None) -> None:
         if text == stored:
