@@ -1525,6 +1525,60 @@
       "title": "PreparedRegexPredicate",
       "type": "object"
     },
+    "PreparedSourceEditPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_prefixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Prefixes",
+          "type": "array"
+        },
+        "exclude_suffixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Suffixes",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_source_edit",
+          "title": "Kind",
+          "type": "string"
+        },
+        "root": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Root"
+        },
+        "subagents": {
+          "const": true,
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "root",
+        "exclude_suffixes",
+        "exclude_prefixes",
+        "subagents"
+      ],
+      "title": "PreparedSourceEditPredicate",
+      "type": "object"
+    },
     "PreparedToolPredicate": {
       "additionalProperties": false,
       "properties": {
@@ -1751,6 +1805,7 @@
               "has_read_glob": "#/$defs/PreparedGlobPredicate",
               "has_skill": "#/$defs/PreparedListPredicate",
               "has_skill_suffix": "#/$defs/PreparedListPredicate",
+              "has_source_edit": "#/$defs/PreparedSourceEditPredicate",
               "has_tool": "#/$defs/PreparedToolPredicate"
             },
             "propertyName": "kind"
@@ -1770,6 +1825,9 @@
             },
             {
               "$ref": "#/$defs/PreparedGlobPredicate"
+            },
+            {
+              "$ref": "#/$defs/PreparedSourceEditPredicate"
             },
             {
               "$ref": "#/$defs/PreparedOverridePredicate"
@@ -1881,6 +1939,7 @@
               "has_read_glob": "#/$defs/ListPredicate",
               "has_skill": "#/$defs/ListPredicate",
               "has_skill_suffix": "#/$defs/ListPredicate",
+              "has_source_edit": "#/$defs/SourceEditPredicate",
               "has_tool": "#/$defs/ToolPredicate",
               "instruction_turns": "#/$defs/Page",
               "interaction_keys": "#/$defs/InteractionKeys",
@@ -1910,6 +1969,9 @@
             },
             {
               "$ref": "#/$defs/ListPredicate"
+            },
+            {
+              "$ref": "#/$defs/SourceEditPredicate"
             },
             {
               "$ref": "#/$defs/OverridePredicate"
@@ -2392,6 +2454,59 @@
         "thinking"
       ],
       "title": "SignalTexts",
+      "type": "object"
+    },
+    "SourceEditPredicate": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_prefixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Prefixes",
+          "type": "array"
+        },
+        "exclude_suffixes": {
+          "items": {
+            "maxLength": 1048576,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Exclude Suffixes",
+          "type": "array"
+        },
+        "kind": {
+          "const": "has_source_edit",
+          "title": "Kind",
+          "type": "string"
+        },
+        "root": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Root"
+        },
+        "subagents": {
+          "title": "Subagents",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "root",
+        "exclude_suffixes",
+        "exclude_prefixes",
+        "subagents"
+      ],
+      "title": "SourceEditPredicate",
       "type": "object"
     },
     "Stats": {
