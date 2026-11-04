@@ -467,14 +467,14 @@ class TranscriptSources:
     window: int = WINDOW
     machine: tuple[str, ...] = ()
 
-    def sessions(self, *, tail_selected: bool = False) -> list[tuple[Session | RemoteSession, bool]]:
+    def sessions(self) -> list[tuple[Session | RemoteSession, bool]]:
         """The sessions to read from, each with whether its prompts are the user's.
 
-        A hook that selected its own tail keeps that scope, so nothing older is read for it.
+        A lazy transcript reaching here selected its own tail or brought its own loader, and keeps that scope.
         """
         ctx = self.evt.ctx
         if (root := ctx.root_transcript) is None:
-            path = None if tail_selected or not self.needles else ctx.transcript_path
+            path = None if isinstance(ctx.transcript, LazyTranscript) or not self.needles else ctx.transcript_path
             return [*([(root_excerpt(path, self.needles), True)] if path else []), (ctx.t, True)]
         excerpt = ctx.root_excerpt(self.needles) if self.needles else None
         return [*([(excerpt, True)] if excerpt is not None else []), (resolved(root), True), (ctx.t, False)]
