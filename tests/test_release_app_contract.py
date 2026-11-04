@@ -288,6 +288,7 @@ def test_formula_publication_uses_verified_release_outputs() -> None:
         "awk 'NR == 1 { print $1 }' \"$ASSET_FILENAME.sha256\"",
         'shasum -a 256 "$ASSET_FILENAME"',
         "Guard formula registry name and version",
+        'echo "superseded=true" >> "$GITHUB_OUTPUT"',
         "Require the bundled signed application formula",
         "__ASSET_URL__=${{ needs.helper.outputs.asset_url }}",
         "__SHA_APP__=${{ needs.helper.outputs.sha256 }}",
@@ -296,6 +297,7 @@ def test_formula_publication_uses_verified_release_outputs() -> None:
     ):
         assert required in formula_job
 
+    assert formula_job.count("steps.guard.outputs.superseded != 'true'") == 3
     assert formula_job.count("homebrew-tap/.github/actions/publish@") == 1
     assert "homebrew-tap/.github/actions/publish@v" not in formula_job
     assert "shasum -a 256 -c" not in formula_job

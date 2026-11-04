@@ -572,6 +572,7 @@ jobs:
           [ "$(shasum -a 256 "$ASSET_FILENAME" | awk '{print $1}')" = "$ASSET_SHA256" ]
 
       - name: Guard formula registry name and version
+        id: guard
         env:
           GH_TOKEN: ${{ github.token }}
           FORMULA_TOKEN: captain-hook
@@ -605,8 +606,9 @@ jobs:
               || { echo "::error::could not parse the registered formula version"; exit 1; }
             first="$(printf '%s\n%s\n' "$current" "$version" | sort -V | sed -n '1p')"
             if [ "$first" = "$version" ] && [ "$current" != "$version" ]; then
-              echo "::error::release version $version is older than registered formula version $current"
-              exit 1
+              echo "::notice::release version $version is older than registered formula version $current; the newer release owns the formula"
+              echo "superseded=true" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
           fi
 
@@ -618,6 +620,7 @@ jobs:
           fi
 
       - name: Require the bundled signed application formula
+        if: ${{ steps.guard.outputs.superseded != 'true' }}
         run: |
           set -euo pipefail
           template=.github/formula/captain-hook.rb.tmpl
@@ -639,6 +642,7 @@ jobs:
           fi
 
       - name: Render the formula from the verified release output
+        if: ${{ steps.guard.outputs.superseded != 'true' }}
         uses: yasyf/homebrew-tap/.github/actions/render-formula@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9
         with:
           template: .github/formula/captain-hook.rb.tmpl
@@ -648,6 +652,7 @@ jobs:
             __SHA_APP__=${{ needs.helper.outputs.sha256 }}
 
       - name: Publish the verified bundled-application formula
+        if: ${{ steps.guard.outputs.superseded != 'true' }}
         uses: yasyf/homebrew-tap/.github/actions/publish@9525763796fce4d1042cf3393d9479f791908eaa
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
