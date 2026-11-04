@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Hooks read Orca's records over its local socket.** `orchestration check`, `worker-show`,
+  `run-show`, `worker-list` and `terminal show` no longer spawn Orca's Electron CLI. A runtime whose
+  protocol doesn't match, or a paired one, still goes through the CLI.
 - **State lives in `~/.local/state/captain-hook` by default, not `~/.claude/state`.** Every write
   under `~/.claude` wakes each running Claude session's file watcher, and hook state made up most of
   those writes. `XDG_STATE_HOME` moves the default and `CAPTAIN_HOOK_STATE_DIR` still overrides it.

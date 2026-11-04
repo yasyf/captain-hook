@@ -62,7 +62,8 @@ def run_coordinator(handle: str, user_data: Path) -> Path | None:
 def refresh(key: tuple[str, Path], last: Path | None) -> None:
     path = last
     try:
-        path = read_coordinator(*key, unanswered=last)
+        with reqenv.use_request(reqenv.RequestOverrides({"ORCA_USER_DATA_PATH": str(key[1])}, str(key[1]), 0, "")):
+            path = read_coordinator(*key, unanswered=last)
     finally:
         remember(key, path)
 
