@@ -24,6 +24,18 @@ jobs:
           shard-count: "8"
           shard-index: ${{ matrix.shard }}
 
+  vendored-schemas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+          cache-dependency-glob: uv.lock
+      - run: |
+          uv run --locked python -m captain_hook.snapshots.schema captain_hook/snapshots/schemas --check
+          uv run --locked python -m captain_hook.snapshots.schema internal/snapshots/schema --check
+
   build:
     uses: yasyf/homebrew-tap/.github/workflows/release-pypi-build.yml@41f8de6765b3b833ef333b0b98f5683f0e46685b
     secrets: inherit
@@ -190,7 +202,7 @@ jobs:
           if-no-files-found: error
 
   stage-release:
-    needs: [build, python-assets, helper, linux-host]
+    needs: [build, python-assets, helper, linux-host, vendored-schemas]
     runs-on: ubuntu-latest
     permissions:
       contents: write
