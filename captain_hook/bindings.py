@@ -258,7 +258,7 @@ def segments(raw: str) -> list[Literal | Ref] | None:
             elif (
                 raw.startswith("${", index)
                 and (name := NAME.match(raw, index + 2)) is not None
-                and raw.startswith(":?", name.end())
+                and raw.startswith((":?", ":-}"), name.end())
             ):
                 parts.append(Ref(name.group(), quoted))
                 index = skip_group(raw, index + 1, "{", "}")
