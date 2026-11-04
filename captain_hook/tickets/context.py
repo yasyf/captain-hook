@@ -494,13 +494,14 @@ class TranscriptSources:
 
         items: dict[str, Evidence] = {}
         with sessions(self) as sources:
+            contiguous = next((source for source in reversed(sources) if source.prompts_are_user), None)
             for source in sources:
                 prompts_are_user = source.prompts_are_user
                 turns = instruction_turns(source, self.window)
                 offered = {
                     turn.prompt: before.assistant_tail
                     for before, turn in pairwise(turns)
-                    if prompts_are_user and before.assistant_tail and turn.prompt
+                    if source is contiguous and before.assistant_tail and turn.prompt
                 }
                 for turn in turns:
                     said: list[tuple[str, datetime | None, str, str]] = []
