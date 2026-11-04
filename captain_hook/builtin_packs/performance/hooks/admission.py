@@ -57,7 +57,7 @@ def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
     if not host.saturated or all(routes_off_host(call) for call in builds):
         return None
     return evt.block(
-        f"Host load is {host.load / host.cores:.2f} per core, at or above the {host.limit:g} limit; "
+        f"The host's CPU is {host.load / host.cores:.0%} busy, at or above the {host.limit:.0%} limit; "
         "this is a load gate, not a ban on local builds. "
-        "Rerun the same command once load drops; CI still grades tests."
+        "Rerun the same command once it drops; CI still grades tests."
     )

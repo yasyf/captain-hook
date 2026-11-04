@@ -592,9 +592,10 @@ With this configuration, `find ~/src -name AGENTS.md`, `rg needle ~/src/worktree
 
 ### Warn on local builds on a saturated host {#defer-local-builds-on-a-saturated-host}
 
-The host counts as saturated when its 1-minute load average is at or above `HOOKS_ADMISSION_LOAD_PER_CORE`
-times its core count. The default is `1`, so a 32-core host is saturated at a load of 32. The worker reads
-the key from each hook run's environment.
+The host counts as saturated when the share of its CPU that is busy, sampled over half a second, is at or
+above `HOOKS_ADMISSION_LOAD_PER_CORE`. The default is `1`, so only a fully busy host is saturated, and `0.5`
+saturates at half. The load average isn't used, because it counts threads blocked on I/O and takes a minute
+to decay. The worker reads the key from each hook run's environment.
 
 While the host is saturated, the `performance` pack warns once per agent on a Bash call that starts any
 of these on the local machine:
