@@ -72,7 +72,7 @@ PRIMITIVE_DESCRIPTIONS = {
         '`PreToolUse` + `Tool("Bash")`; refuses a matching command naming its `cc-sudo run -- <command>` form and '
         "passes that form, so the owner's Touch ID tap covers one literal command; `refusal` where no `cc-sudo` "
         "exists. The general pack holds every tap while the owner is away from the Mac and queues a card through "
-        "`HOOKS_TAP_CARD_COMMAND`"
+        "`HOOKS_TAP_CARD_COMMAND`, unless `cc-sudo doctor` says `sudo cc-sudo install` is owed"
     ),
     "warn_command": "warns, never blocks",
     "rewrite_command": (
