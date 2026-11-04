@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`HOOKS_REVIEW_ENABLED=false` turns the session reviewer off everywhere.** The `SessionStart`,
+  `SessionEnd` and `Stop` guards skip before enrollment, so a repo the reviewer hasn't seen stays
+  off too, where `review disable` covers only the repo it runs in.
 - **An agent cannot read a secret store.** The general pack blocks `aws ssm get-parameter`,
   `get-parameters`, `get-parameters-by-path`, and `get-parameter-history` with `--with-decryption`
   or `--cli-input-json`/`--cli-input-yaml`, `aws secretsmanager get-secret-value` and

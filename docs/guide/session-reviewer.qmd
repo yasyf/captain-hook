@@ -74,6 +74,13 @@ The reviewer shells out to two CLIs, so both must be authenticated:
 
 The repo also needs a git remote; the reviewer keys candidates to the normalized origin.
 
+## Turn it off
+
+Set `HOOKS_REVIEW_ENABLED=false` in the environment Claude Code gives its hooks, such as the `env`
+block of `~/.claude/settings.json`. No session then starts a scan, judge or brain pass, in any repo,
+including one the reviewer hasn't seen. Candidates stay recorded. To stop watching a single repo
+instead, run `capt-hook review disable` in it.
+
 ## What crosses the bar
 
 A correction does not become a PR the moment you say it. It has to recur, survive an LLM verdict,

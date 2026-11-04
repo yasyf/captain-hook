@@ -328,6 +328,36 @@ class TestExitZeroInvariant:
         assert "SpawnReport" not in log
 
 
+class TestReviewEnabled:
+    @pytest.mark.parametrize("event", ["SessionStart", "SessionEnd", "Stop"])
+    def test_off_skips_native_dispatch_before_enrollment(
+        self,
+        event: str,
+        monkeypatch: pytest.MonkeyPatch,
+        popen_calls: list[tuple[list[str], dict[str, Any]]],
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("HOOKS_REVIEW_ENABLED", "false")
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: pytest.fail(f"enrolled {cwd}"))
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        dispatch_review(event, {"transcript_path": str(transcript), "cwd": str(tmp_path)})
+        assert popen_calls == []
+        assert "skip: HOOKS_REVIEW_ENABLED is off" in review_log_path().read_text()
+
+    @pytest.mark.parametrize("guard", [guard_and_spawn, guard_and_sweep])
+    def test_off_skips_a_stale_plugins_raw_entry(
+        self,
+        guard: Callable[[bytes], None],
+        monkeypatch: pytest.MonkeyPatch,
+        popen_calls: list[tuple[list[str], dict[str, Any]]],
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("HOOKS_REVIEW_ENABLED", "false")
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        guard(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode())
+        assert popen_calls == []
+
+
 class TestGuardAndSpawn:
     def test_spawns_detached_child_with_log_and_marker_env(
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
