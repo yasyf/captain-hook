@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import ctypes
 import hashlib
+import importlib
 import math
 import sys
 import threading
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 BUILD_RETRIES = 3
 MARKER_TTL = 30.0
 PLUGIN_TTL = 30.0
+LOAD_ERROR_RETRY_SECONDS = 30.0
 MAX_WALK_ROOTS = 32
 MARKER_WAIT_SECONDS = 1.0
 RENEWAL_LOCK_SECONDS = 60.0
@@ -259,6 +261,7 @@ class RegistrySnapshot:
     discovery_stdout: str = ""
     discovery_stderr: str = ""
     cacheable: bool = True
+    retry_at: float = math.inf
 
 
 class Registry:
@@ -272,7 +275,7 @@ class Registry:
 
     def get(self, *, stale_after: float | None = None) -> RegistrySnapshot:
         requested = time.monotonic()
-        if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
+        if (hit := self._hit()) is not None:
             self._latest = hit
             self._reconcile_tools(hit)
             return hit
@@ -288,9 +291,14 @@ class Registry:
         self._cache.cache_clear()
         self._latest = None
 
+    def _hit(self) -> RegistrySnapshot | None:
+        if not self._cache or (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is None:
+            return None
+        return hit if time.monotonic() < hit.retry_at else None
+
     def _rebuild(self, requested: float) -> RegistrySnapshot:
         with self._build_lock:
-            if self._cache and (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
+            if (hit := self._hit()) is not None:
                 reqenv.warmed("registry")
                 self._latest = hit
                 self._reconcile_tools(hit)
@@ -349,6 +357,7 @@ class Registry:
         from captain_hook.daemon.context import capture_output
 
         state = app.State(registry_fingerprint=fingerprint.digest)
+        importlib.invalidate_caches()
         # Capture discovery's output on BOTH streams (stderr notices, stdout import-time prints); the
         # server replays it per request so warm mirrors cold's per-invocation print.
         with capture_output() as captured, app.use_state(state):
@@ -361,4 +370,5 @@ class Registry:
             discovery_stdout=captured.stdout.getvalue(),
             discovery_stderr=captured.stderr.getvalue(),
             cacheable=not any(e.source == PLUGIN_ROSTER_SOURCE for e in state.load_errors),
+            retry_at=time.monotonic() + LOAD_ERROR_RETRY_SECONDS if state.load_errors else math.inf,
         )
