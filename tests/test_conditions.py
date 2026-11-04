@@ -1031,7 +1031,9 @@ class TestEditedSourceScoping:
         assert EditedSource().check(evt) is True
         assert EditedSource(exclude_suffixes=(".py",)).check(evt) is False
 
-    def test_root_source_edit_does_not_request_deep_inputs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_root_source_edit_does_not_request_deep_inputs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from cc_transcript.query import Session
 
         transcript = make_transcript(T.assistant(T.tool("Edit", file_path="src/app.py", old_string="", new_string="x")))
@@ -1116,6 +1118,56 @@ class TestEditedSourceScoping:
                 assert after["discovery_entries_examined"] == before["discovery_entries_examined"] == 0
                 assert after["source_opens"] == before["source_opens"]
                 assert after["cold_parses"] == before["cold_parses"]
+            finally:
+                transcript.release()
+        finally:
+            fixture.close()
+
+    @pytest.mark.parametrize(
+        ("edited", "expected"),
+        [
+            pytest.param("src/app.py", True, id="source"),
+            pytest.param("docs/guide.py", False, id="under-an-excluded-directory"),
+            pytest.param("README.md", False, id="excluded-suffix"),
+            pytest.param("tests/test_app.py", False, id="test-file"),
+        ],
+    )
+    def test_a_remote_session_answers_without_paging_predicate_inputs(
+        self,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+        edited: str,
+        expected: bool,
+    ) -> None:
+        from captain_hook.snapshots.client import GraphSources
+        from tests.test_snapshot_fixture_owner import write_messages
+
+        root = tmp_path_factory.mktemp("repo")
+        monkeypatch.setenv("TMPDIR", str(root))
+        path = root / "root.jsonl"
+        write_messages(
+            path,
+            raw_text("user", "edit"),
+            raw_assistant(raw_tool_use("Edit", {"file_path": edited, "old_string": "a", "new_string": "b"})),
+        )
+        fixture = FixtureOwner()
+        fixture.client.bind_tool_registry({})
+        kinds = []
+        exchange = fixture.client._exchange
+
+        def record(wrapper):
+            if isinstance(query := wrapper["request"].get("query"), dict):
+                kinds.append(query["kind"])
+            return exchange(wrapper)
+
+        fixture.client._exchange = record
+        try:
+            transcript = fixture.load(path).with_registered_sources(GraphSources(thread_ids=(), roots=(root,)))
+            try:
+                evt = make_event(StopEvent, ctx=build_ctx(transcript=transcript, project_root=root))
+
+                assert EditedSource().check(evt) is expected
+                assert set(kinds) == {"has_source_edit"}
             finally:
                 transcript.release()
         finally:

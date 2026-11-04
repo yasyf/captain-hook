@@ -67,6 +67,7 @@ NON_SOURCE_SUFFIXES = (
     ".cfg",
     ".lock",
 )
+NON_SOURCE_DIRS = ("docs", ".claude", ".github")
 TRANSCRIPT_SELECTORS = canonical_json(())
 TURN_SELECTORS = canonical_json(({"kind": "current_turn"},))
 
@@ -372,27 +373,28 @@ class EditedSource(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         root = evt.ctx.repo_root
+        transcript = evt.ctx.t
+        if isinstance(transcript, RemoteSession):
+            return any(
+                transcript.has_source_edit(
+                    root,
+                    exclude_suffixes=self.exclude_suffixes,
+                    exclude_prefixes=NON_SOURCE_DIRS,
+                    subagents=subagents,
+                )
+                for subagents in (False, True)
+            )
 
         def has_source_edit(window: PredicateInputs) -> bool:
             return any(
                 not f.is_test
                 and f.suffix not in self.exclude_suffixes
-                and not f.under("docs", ".claude", ".github")
+                and not f.under(*NON_SOURCE_DIRS)
                 and is_project_path(f.path, root)
                 for f in window.files("Edit|Write")
             )
 
-        transcript = evt.ctx.t
-        root_inputs = (
-            transcript.query({"kind": "predicate_inputs", "order": "forward"})
-            if isinstance(transcript, RemoteSession)
-            else (transcript.predicate_inputs,)
-        )
-        if any(has_source_edit(window) for window in root_inputs):
-            return True
-        if isinstance(transcript, RemoteSession):
-            return transcript.any_deep_input(has_source_edit)
-        return any(has_source_edit(window) for window in transcript.deep_inputs())
+        return has_source_edit(transcript.predicate_inputs) or any(map(has_source_edit, transcript.deep_inputs()))
 
 
 class Redirects(CustomCommandLineCondition):
