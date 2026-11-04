@@ -246,11 +246,12 @@ def test_git_dir_resolves_against_the_dash_C_cwd_not_as_another_hop(
     assert dispatch_command(f"git --git-dir={git_repo / '.git'} push", separate, tmp_path) is None
 
 
-def test_unresolvable_cd_falls_back_to_the_session_cwd(
+def test_unresolvable_cd_never_reads_the_session_repository(
     isolate_modules: None, gt_repo: Path, git_repo: Path, tmp_path: Path
 ) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
-    assert warn_context(dispatch_command("cd $OTHER && git push", gt_repo, tmp_path))
+    assert warn_context(dispatch_command("git push", gt_repo, tmp_path))
+    assert dispatch_command("cd $OTHER && git push", gt_repo, tmp_path) is None
     assert dispatch_command("cd $OTHER && git push", git_repo, tmp_path) is None
 
 

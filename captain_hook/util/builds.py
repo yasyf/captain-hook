@@ -84,7 +84,7 @@ def is_local_build(call: Call) -> bool:
 
 def routes_off_host(call: Call) -> bool:
     probe = shlex.split(reqenv.getenv(ROUTE_PROBE, ""))
-    if not probe or call.wrappers or "/" in call.command.executable:
+    if not probe or call.wrappers or "/" in call.command.executable or (call.cmd.cwd and not call.cwd):
         return False
     env = reqenv.env_map() | dict(call.source.env)
     if shutil.which(probe[0], path=env.get("PATH")) is None:

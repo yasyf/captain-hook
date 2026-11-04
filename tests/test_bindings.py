@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from captain_hook.bindings import Resolved, Scope, Unresolved, droppable
-from captain_hook.cmd import Target
+from captain_hook.cmd import Cmd, Target, git_location
+from captain_hook.util.builds import ROUTE_PROBE, routes_off_host
 from tests.test_cmd import evt_for
 
 
@@ -43,6 +44,10 @@ class TestKnownBindings:
             ("X=pkill; X=echo >/dev/null true; $X", "$X", ("pkill",)),
             ("X=echo; R=echo; $R X; $X", "$X", ("echo",)),
             ("X=echo; S=~/.claude/scratch; $S/run.sh X; $X", "$X", ("echo",)),
+            (". /env.sh; A=/x; $A", "$A", ("/x",)),
+            ("source /env.sh\nA=/x\n$A", "$A", ("/x",)),
+            ("eval 'A=1'; A=/x; $A", "$A", ("/x",)),
+            (". /a.sh; A=/x; . /b.sh; A=/y; $A", "$A", ("/y",)),
         ],
     )
     def test_resolves_literal_unconditional_assignments(
@@ -73,6 +78,12 @@ class TestUnknownBindings:
             ("X=echo; declare -n Y=X; Y=pkill; $X", "$X"),
             ("X=0; declare -i X; X=1+2; $X", "$X"),
             ("X=echo; eval 'X=pkill'; $X; source /dev/null", "$X"),
+            ("A=/x; . /env.sh; $A", "$A"),
+            (". /a.sh; A=/x; . /b.sh; $A", "$A"),
+            (". /env.sh; A=$B; $A", "$A"),
+            (". /env.sh && A=/x; $A", "$A"),
+            ("if c; then . /env.sh; A=/x; fi; $A", "$A"),
+            ("f() { . /env.sh; }; A=/x; f; $A", "$A"),
             ("eval 'p=ls'; $p", "$p"),
             ("case $x in a) p=1;; esac; $p", "$p"),
             ("(p=ls); $p", "$p"),
@@ -125,8 +136,8 @@ class TestUnknownBindings:
         assert resolve("B=$(realpath ../bin/biome); $B", "$B") == Unresolved("$(realpath ../bin/biome)")
 
     def test_an_unreadable_binder_keeps_its_earliest_offset(self) -> None:
-        scope = Scope("X=echo; eval 'X=pkill'; $X claude; source /dev/null")
-        assert scope.unreadable_from == len("X=echo; eval 'X=pkill'")
+        scope = Scope("X=echo; select y in a; $X claude; coproc cat")
+        assert scope.unreadable_from == len("X=echo; select y in a")
 
 
 class TestLimits:
@@ -220,6 +231,30 @@ class TestCallResolution:
     def test_variable_cd_threads_the_cwd(self) -> None:
         evt = evt_for("R=/tmp; cd $R && rm -rf x")
         assert str(evt.cmd.calls("rm")[0].cwd) == str(Path("/tmp").resolve())
+
+    def test_assignment_after_a_sourced_file_threads_the_cwd(self) -> None:
+        evt = evt_for(". /env.sh; R=/tmp; cd $R; rm -rf x", cwd="/")
+        assert str(evt.cmd.calls("rm")[0].cwd) == str(Path("/tmp").resolve())
+
+    def test_cd_to_a_name_the_sourced_file_sets_loses_the_cwd(self) -> None:
+        evt = evt_for(". /env.sh; cd $R; rm -rf x", cwd="/")
+        assert evt.cmd.calls("rm")[0].cwd is None
+
+    def test_git_location_never_reads_an_unknown_directory_as_the_session(self) -> None:
+        evt = evt_for(". /env.sh; cd $R; git status", cwd="/")
+        assert git_location(evt.cmd.calls("git")[0], Path("/")) == (None, None)
+
+    def test_git_location_of_a_detached_command_reads_the_session(self) -> None:
+        cmd = Cmd.parse("git status")
+        assert cmd is not None
+        assert git_location(cmd.calls("git")[0], Path("/session")) == (Path("/session"), None)
+
+    def test_route_probe_never_runs_in_an_unknown_directory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(ROUTE_PROBE, "true")
+        known = evt_for("cargo build", cwd="/")
+        unknown = evt_for(". /env.sh; cd $R; cargo build", cwd="/")
+        assert routes_off_host(known.cmd.calls("cargo")[0])
+        assert not routes_off_host(unknown.cmd.calls("cargo")[0])
 
     def test_nested_variable_cd_does_not_recurse(self) -> None:
         evt = evt_for("export X=/tmp; sh -c 'cd \"$X\"; rm -rf child'")

@@ -53,7 +53,8 @@ CONDITION_OPENERS = frozenset({"if", "while", "until", "elif"})
 PREFIXES = frozenset({"!", "time", "builtin", "command"})
 DECLARERS = frozenset({"local", "declare", "typeset", "readonly", "let"})
 READERS = frozenset({"read", "mapfile", "readarray", "getopts"})
-UNREADABLE_BINDERS = frozenset({"eval", "source", ".", "case", "select", "coproc"})
+SOURCERS = frozenset({"eval", "source", "."})
+UNREADABLE_BINDERS = SOURCERS | frozenset({"case", "select", "coproc"})
 MUTATORS = READERS | DECLARERS | UNREADABLE_BINDERS | frozenset({"unset", "export", "printf"})
 UNREADABLE_IN_SUBSTITUTION = ("#", "<<", "case")
 SHELL_OWNED = frozenset({"PWD", "OLDPWD", "RANDOM", "SECONDS", "LINENO", "REPLY", "IFS", "BASH_COMMAND", "PIPESTATUS"})
@@ -374,7 +375,8 @@ class Scope:
     Walks the text once, recording every assignment, ``export``, ``for`` head, and reader as
     an event at its offset. A binding is :class:`Known` only when every assignment to the
     name was a literal in an unconditional top-level statement; anything conditional, built
-    at run time, read from input, or owned by the shell leaves it :class:`Unknown`.
+    at run time, read from input, or owned by the shell leaves it :class:`Unknown`. A sourced
+    file or ``eval`` can set any name, so only what the text assigns after it stays readable.
     ``parent`` holds the bindings in force when a nested payload began. A word written inside
     a function body never resolves, since the body runs later than it reads.
     """
@@ -384,6 +386,7 @@ class Scope:
     exported: set[str] = field(default_factory=set)
     events: list[Event] = field(default_factory=list, init=False)
     functions: list[tuple[int, int]] = field(default_factory=list, init=False)
+    sourced: list[int] = field(default_factory=list, init=False)
     unreadable_from: int | None = field(default=None, init=False)
     mentioned: frozenset[str] = field(default=frozenset(), init=False)
     mutated: frozenset[str] = field(default=frozenset(), init=False)
@@ -399,7 +402,7 @@ class Scope:
     def unreadable(cls, text: str) -> Scope:
         scope = cls.__new__(cls)
         scope.text, scope.parent, scope.exported = text, {}, set()
-        scope.events, scope.functions, scope.unreadable_from = [], [], 0
+        scope.events, scope.functions, scope.sourced, scope.unreadable_from = [], [], [], 0
         scope.mentioned, scope.mutated = frozenset(), frozenset()
         return scope
 
@@ -422,11 +425,17 @@ class Scope:
         unreadable = self.unreadable_from is not None and offset > self.unreadable_from
         if unreadable or name in SHELL_OWNED or name in self.mutated:
             return Unknown(None)
-        binding = self.parent.get(name)
+        sourced = max((end for end in self.sourced if end < offset), default=None)
+        binding = None if sourced is not None else self.parent.get(name)
         for event in self.events:
-            if event.offset < offset and event.name == name and (event.until is None or offset < event.until):
+            if (
+                (sourced is None or event.offset >= sourced)
+                and event.offset < offset
+                and event.name == name
+                and (event.until is None or offset < event.until)
+            ):
                 binding = event.binding if binding is None else joined(binding, event.binding)
-        if binding is None and name in self.mentioned:
+        if binding is None and (sourced is not None or name in self.mentioned):
             return Unknown(None)
         return binding
 
@@ -612,6 +621,8 @@ class Walk:
             self.flush(sure=False)
         elif head == "for":
             self.bind_loop(rest)
+        elif head in SOURCERS and not any(kind == "function" for kind, _, _ in self.stack):
+            self.scope.sourced.append(words[-1].end)
         elif head in UNREADABLE_BINDERS:
             self.scope.mark_unreadable(words[-1].end)
         elif head == "function":
