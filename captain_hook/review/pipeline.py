@@ -519,7 +519,8 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     re-spawning the reviewer. The brain loads its one plugin through ``--plugin-dir``,
     so ``CLAUDE_CODE_PLUGIN_CACHE_DIR`` points it at a private plugin root, and its
     startup neither sweeps the shared plugin cache for orphans nor re-clones every
-    known marketplace. ``UV_CONSTRAINT`` pins the brain's ``uvx --isolated capt-hook`` to this
+    known marketplace, and ``DISABLE_AUTOUPDATER`` keeps the auto-update pass off that root.
+    ``UV_CONSTRAINT`` pins the brain's ``uvx --isolated capt-hook`` to this
     build: the transcript owner answers only its exact build, and PyPI usually runs ahead of the
     host, so an unpinned ``review evidence`` could verify nothing.
 
@@ -544,6 +545,7 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
                 | {
                     SPAWNED_ENV: "1",
                     PLUGIN_ROOT_ENV: str(brain_plugin_root()),
+                    "DISABLE_AUTOUPDATER": "1",
                     "UV_CONSTRAINT": str(brain_constraints()),
                 },
                 stdout=log,
