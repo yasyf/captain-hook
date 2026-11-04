@@ -42,11 +42,11 @@ const (
 	// per-invocation scratch checkouts, short-lived worktrees — mints keys that
 	// are never revisited, and without a TTL their interpreters are held until
 	// the daemon restarts.
-	workerIdleTTL = 10 * time.Minute
+	workerIdleTTL = 30 * time.Minute
 
 	spareIdleTTL = 2 * time.Minute
 
-	workerMemoryCeiling = 320 << 20
+	workerMemoryCeiling = 512 << 20
 	bloatedIdleTTL      = time.Minute
 
 	workerSweepInterval = time.Minute
@@ -437,6 +437,7 @@ func (m *workerManager) startMemberLocked(key workerKey, shard int, deadline tim
 		ready: make(chan struct{}), startup: bound, key: key, inflight: 1, ephemeral: ephemeral, lastUsed: m.now(),
 	}
 	m.entries[key.member()] = entry
+	fmt.Fprintf(m.logWriter, "captain: %s start worker %s\n", m.now().Format(time.RFC3339), key.member())
 	m.wg.Add(1)
 	go m.startEntry(entry)
 	return entry, leave
@@ -525,6 +526,7 @@ func (m *workerManager) evictIdleLocked() *workerEntry {
 	if victim == nil {
 		return nil
 	}
+	m.logRetireLocked(victim, m.now(), fmt.Sprintf("evicted at the %d worker limit", maxLiveWorkers))
 	delete(m.entries, victim.key.member())
 	return victim
 }
@@ -552,14 +554,11 @@ func (m *workerManager) sweep(now time.Time) []*workerClient {
 		if !entry.idle() {
 			continue
 		}
-		ttl := workerIdleTTL
-		if newest[entry.key.id] != entry {
-			ttl = spareIdleTTL
-		}
-		idle := now.Sub(entry.lastUsed)
-		if rootExists(entry.key.root) && idle < ttl && (idle < bloatedIdleTTL || !m.bloatedLocked(entry)) {
+		reason := m.retireReasonLocked(entry, now.Sub(entry.lastUsed), newest[entry.key.id] == entry)
+		if reason == "" {
 			continue
 		}
+		m.logRetireLocked(entry, now, reason)
 		delete(m.entries, id)
 		if entry.worker != nil {
 			retired = append(retired, entry.worker)
@@ -568,17 +567,27 @@ func (m *workerManager) sweep(now time.Time) []*workerClient {
 	return retired
 }
 
-func (m *workerManager) bloatedLocked(entry *workerEntry) bool {
-	if entry.worker == nil {
-		return false
+func (m *workerManager) retireReasonLocked(entry *workerEntry, idle time.Duration, newest bool) string {
+	switch {
+	case !rootExists(entry.key.root):
+		return "root gone"
+	case newest && idle >= workerIdleTTL:
+		return "idle"
+	case !newest && idle >= spareIdleTTL:
+		return "spare"
+	case idle < bloatedIdleTTL || entry.worker == nil:
+		return ""
 	}
 	bytes, known := m.memory(entry.worker)
 	if !known || bytes <= workerMemoryCeiling {
-		return false
+		return ""
 	}
-	fmt.Fprintf(m.logWriter, "captain: retire idle worker %s at %d MiB, over the %d MiB ceiling\n",
-		entry.key.member(), bytes>>20, workerMemoryCeiling>>20)
-	return true
+	return fmt.Sprintf("over limit at %d MiB", bytes>>20)
+}
+
+func (m *workerManager) logRetireLocked(entry *workerEntry, now time.Time, reason string) {
+	fmt.Fprintf(m.logWriter, "captain: %s retire worker %s: %s, idle %s\n",
+		now.Format(time.RFC3339), entry.key.member(), reason, now.Sub(entry.lastUsed).Round(time.Second))
 }
 
 // adopt takes ownership of a process a worker detached into its own session.
