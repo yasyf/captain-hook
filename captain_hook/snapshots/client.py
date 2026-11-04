@@ -1682,6 +1682,24 @@ class RemoteSession:
     def has_edit_to(self, *globs: str, subagents: bool = True) -> bool:
         return self.query(list_predicate("has_edit_to", globs, subagents=subagents))
 
+    def has_source_edit(
+        self,
+        root: Path | None,
+        *,
+        exclude_suffixes: Sequence[str],
+        exclude_prefixes: Sequence[str],
+        subagents: bool,
+    ) -> bool:
+        return self.query(
+            {
+                "kind": "has_source_edit",
+                "root": None if root is None else str(root),
+                "exclude_suffixes": list(exclude_suffixes),
+                "exclude_prefixes": list(exclude_prefixes),
+                "subagents": subagents,
+            }
+        )
+
     def has_read(self, pattern: str, *, subagents: bool = True) -> bool:
         return self.query(tool_predicate("has_read", pattern, subagents=subagents))
 
