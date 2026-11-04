@@ -347,6 +347,38 @@ def test_own_session_reads_words_naming_the_place_before_the_window(tmp_path, mo
         fixture.close()
 
 
+def test_stitched_mentions_never_pair_an_answer_with_another_question(tmp_path, monkeypatch):
+    from captain_hook.tickets import context as source_module
+
+    monkeypatch.setattr(source_module, "board_state", lambda tree, cwd: {})
+    unrelated = [T.user("status?"), T.assistant("working"), T.user("status?"), T.assistant("working")]
+    path = tmp_path / "acting.jsonl"
+    path.write_text(
+        lines(
+            far_back(
+                T.assistant("May I post to C1?"),
+                *unrelated,
+                T.assistant("Continue investigating locally?"),
+                T.user("Yes", timestamp="2026-01-01T00:00:02Z"),
+                T.assistant("On it."),
+                T.assistant("Reading C1 next."),
+            )
+        )
+    )
+    fixture = FixtureOwner()
+    token = CURRENT_CLIENT.set(fixture.client)
+    acting = lazy_transcript(path)
+    try:
+        native = TranscriptSources(event(tmp_path, acting), ("C1",)).said()
+        legacy = TranscriptSources(event(tmp_path, fixture_transcript(path)), ("C1",)).said()
+        for said in (native, legacy):
+            assert [item.detail for item in said if item.quote == "Yes"] == [""]
+    finally:
+        acting.release()
+        CURRENT_CLIENT.reset(token)
+        fixture.close()
+
+
 def test_own_session_window_still_drops_older_words_naming_no_place(tmp_path, monkeypatch):
     from captain_hook.tickets import context as source_module
 
