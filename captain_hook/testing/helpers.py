@@ -161,6 +161,8 @@ def seeded_session_dir(seen: dict[str, list[str]] | None, state: list[BaseModel]
 def stubbed_commands(commands: dict[str, str | tuple[int, str]] | None) -> Iterator[None]:
     from spawnllm import proc
 
+    from captain_hook import orca_socket
+
     if not commands:
         yield
         return
@@ -192,7 +194,11 @@ def stubbed_commands(commands: dict[str, str | tuple[int, str]] | None) -> Itera
             kwargs["checkpoint"] = None
         return real_cli(args, **kwargs)
 
-    with mock.patch.object(subprocess, "run", run), mock.patch.object(proc, "run_cli", run_cli):
+    with (
+        mock.patch.object(subprocess, "run", run),
+        mock.patch.object(proc, "run_cli", run_cli),
+        mock.patch.object(orca_socket, "call", side_effect=orca_socket.OrcaUnavailable),
+    ):
         yield
 
 

@@ -21,7 +21,7 @@ from cc_transcript.tools import BashCall
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
-from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, workflow_state
+from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, orca_socket, workflow_state
 from captain_hook.bindings import Resolved, Unknown, Unresolved, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
@@ -1074,13 +1074,31 @@ class Scan:
 
 
 def orca_json(argv: tuple[str, ...], *path: str, unset: tuple[str, ...] = ()) -> Any:
+    if isinstance(document := orca_document(argv, unset), Unreadable):
+        return document
+    try:
+        return reduce(lambda node, key: node[key], path, document)
+    except (TypeError, KeyError):
+        return Unreadable(f"`{' '.join(argv[:3])}` printed no {path[-1]}")
+
+
+def orca_document(argv: tuple[str, ...], unset: tuple[str, ...]) -> Any:
+    if (read := orca_socket.read_call(argv)) is not None:
+        if isinstance(timeout := probe_timeout("ask Orca"), Unreadable):
+            return timeout
+        try:
+            return {"result": orca_socket.call(*read, timeout=timeout)}
+        except TimeoutError:
+            return TimedOut(f"`orca` timed out after {timeout:g}s", timeout)
+        except orca_socket.OrcaUnavailable:
+            logger.opt(exception=True).debug("Orca's socket did not answer; asking its CLI")
     record = (*argv, "--full") if argv[1] == "orchestration" else argv
     if isinstance(shown := probe(record, unset=unset), Unreadable):
         return shown
     try:
-        return reduce(lambda node, key: node[key], path, json.loads(shown))
-    except (ValueError, TypeError, KeyError):
-        return Unreadable(f"`{' '.join(argv[:3])}` printed no {path[-1]}")
+        return json.loads(shown)
+    except ValueError:
+        return Unreadable(f"`{' '.join(argv[:3])}` printed no JSON")
 
 
 def created_handle(text: str) -> str | None:
@@ -1138,7 +1156,7 @@ def worker_of(handle: str) -> dict[str, Any] | Unreadable | None:
         if isinstance(page := orca_json(argv, "result", unset=("ORCA_TERMINAL_HANDLE",)), Unreadable):
             return page
         try:
-            if page["scope"]["source"] != "all":
+            if page.get("scope", {}).get("source", "all") != "all":
                 return Unreadable("Orca scoped its worker list to one Run")
             holder = next(
                 (
