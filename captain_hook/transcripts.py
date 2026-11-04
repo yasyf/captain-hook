@@ -362,7 +362,7 @@ def root_excerpt(
     limit: int = 20,
     tail_bytes: int = ROOT_EXCERPT_BYTES,
 ) -> Session:
-    """The earliest and the newest ``limit`` events in the last ``tail_bytes`` of a lane's root session
+    """The earliest and the newest ``limit`` events in the last ``tail_bytes`` of a root session's
     transcript whose line contains any of ``needles``, each with ``around`` events either side. Owner words
     older than that tail reach a grant judge through the store's recorded ``words`` and ``ask`` records.
     The earliest are kept because a quote is first said by whoever it came from and echoed by agents after.
