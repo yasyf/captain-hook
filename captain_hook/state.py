@@ -150,11 +150,14 @@ ECHO_VERBATIM_CAP = 40
 ECHO_VERBATIM_MIN_CHARS = 20
 
 
+NLP_TEXT_CHARS = 20_000
+
+
 @lru_cache(maxsize=128)
 def cached_content_lemmas(text: str) -> frozenset[str]:
     return frozenset(
         tok.lemma_.lower()
-        for tok in RESOURCES.spacy(text, disable=("ner",))
+        for tok in RESOURCES.spacy(text[-NLP_TEXT_CHARS:], disable=("ner",))
         if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
     )
 

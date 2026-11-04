@@ -153,9 +153,9 @@ class NlpSignal:
 
 @weighted_lru_cache(PARSE_CACHE_TOKENS, len)
 def parse(text: str) -> Doc:
-    from captain_hook.state import RESOURCES
+    from captain_hook.state import NLP_TEXT_CHARS, RESOURCES
 
-    return RESOURCES.spacy(text)
+    return RESOURCES.spacy(text[-NLP_TEXT_CHARS:])
 
 
 def ancestors(tok: Token, max_hops: int) -> set[Token]:

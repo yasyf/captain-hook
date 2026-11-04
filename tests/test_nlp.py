@@ -575,3 +575,20 @@ class TestIntegrationWithScoreSignals:
         result = extract_signal_context(patterns, "Normal text. The quota was exceeded. More text.")
         assert len(result) == 1
         assert "quota" in result[0].lower()
+
+
+def test_spacy_reads_only_the_tail_of_a_long_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from captain_hook import state
+    from captain_hook.signals.nlp import parse
+
+    seen: list[str] = []
+    monkeypatch.setattr(state, "RESOURCES", SimpleNamespace(spacy=lambda text, **_: seen.append(text) or []))
+    long_text = "head " + "x" * state.NLP_TEXT_CHARS
+
+    parse(long_text)
+    state.cached_content_lemmas(long_text)
+
+    assert [len(text) for text in seen] == [state.NLP_TEXT_CHARS, state.NLP_TEXT_CHARS]
+    assert not any(text.startswith("head") for text in seen)
