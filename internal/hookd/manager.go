@@ -76,7 +76,7 @@ var errWorkerManagerClosed = errors.New("captain: worker manager is closed")
 var errWorkerAdmissionPaused = errors.New("captain: worker admission is paused for restart")
 
 var workerEnvExact = map[string]struct{}{
-	"XDG_CACHE_HOME": {}, "CAPTAIN_HOOK_STATE_DIR": {}, "CAPTAIN_HOOK_LOG_DIR": {},
+	"XDG_CACHE_HOME": {}, "XDG_STATE_HOME": {}, "CAPTAIN_HOOK_STATE_DIR": {}, "CAPTAIN_HOOK_LOG_DIR": {},
 	"CAPTAIN_HOOK_TASKS_DIR": {}, "CAPT_HOOK_DECISIONS_DB": {},
 }
 
@@ -1014,7 +1014,7 @@ func workerBaseEnvironment(environ []string) []string {
 		if !ok {
 			continue
 		}
-		if name == "PATH" || name == "LANG" || name == "XDG_CACHE_HOME" || name == "CEREBRAS_API_KEY" ||
+		if name == "PATH" || name == "LANG" || name == "XDG_CACHE_HOME" || name == "XDG_STATE_HOME" || name == "CEREBRAS_API_KEY" ||
 			strings.HasPrefix(name, "CAPT_HOOK_") ||
 			strings.HasPrefix(name, "CAPTAIN_HOOK_") || strings.HasPrefix(name, "HOOKS_") ||
 			strings.HasPrefix(name, "CLAUDE_") || strings.HasPrefix(name, "FACTORY_") || strings.HasPrefix(name, "ORCA_") {

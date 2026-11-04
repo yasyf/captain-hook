@@ -20,16 +20,26 @@ type pause struct {
 	Reason string `json:"reason"`
 }
 
+func stateDir() (string, error) {
+	if dir := os.Getenv("CAPTAIN_HOOK_STATE_DIR"); dir != "" {
+		return dir, nil
+	}
+	if home := os.Getenv("XDG_STATE_HOME"); home != "" {
+		return filepath.Join(home, "captain-hook"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "state", "captain-hook"), nil
+}
+
 // activePause reads the pause `capt-hook pause` writes into the state dir.
 // A missing, unreadable, expired, or over-cap pause leaves every hook running.
 func activePause(now time.Time) (pause, bool) {
-	dir := os.Getenv("CAPTAIN_HOOK_STATE_DIR")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return pause{}, false
-		}
-		dir = filepath.Join(home, ".claude", "state")
+	dir, err := stateDir()
+	if err != nil {
+		return pause{}, false
 	}
 	data, err := os.ReadFile(filepath.Join(dir, pauseFile))
 	if err != nil {

@@ -284,11 +284,61 @@ class TestFireCounting:
         )
 
         execute_hook(entry, mock_edit_event(), tmp_path)
-        hook_dir = tmp_path / entry.state_key / "main"
-        store = SessionStore(hook_dir)
-        state = store[HookState].get()
+        state = SessionStore(tmp_path)[HookState].get()
         assert state is not None
-        assert state.fire_count == 1
+        assert state.fires == {f"{entry.state_key}/main": 1}
+
+    def test_a_capped_hook_that_returns_nothing_writes_nothing(self, tmp_path: Path) -> None:
+        entry = RegisteredHook(
+            spec=HookSpec(events=Event.PreToolUse, max_fires=1),
+            handler=lambda _evt: None,
+            name="quiet_hook",
+        )
+
+        assert execute_hook(entry, mock_edit_event(), tmp_path) is None
+        assert list(tmp_path.iterdir()) == []
+
+    def test_capped_hooks_share_one_session_file(self, tmp_path: Path) -> None:
+        entries = [
+            RegisteredHook(
+                spec=HookSpec(events=Event.PreToolUse, max_fires=1),
+                handler=lambda _evt: HookResult(action=Action.warn, message="fired"),
+                name=name,
+            )
+            for name in ("first_hook", "second_hook")
+        ]
+
+        for entry in entries:
+            assert execute_hook(entry, mock_edit_event(), tmp_path) is not None
+
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["hook_state.json", "hook_state.json.lock"]
+        assert SessionStore(tmp_path)[HookState].get(HookState()).fires == {
+            f"{entry.state_key}/main": 1 for entry in entries
+        }
+
+    def test_a_result_finding_the_cap_spent_by_another_process_is_not_delivered(self, tmp_path: Path) -> None:
+        def handler(_evt: object) -> HookResult:
+            with SessionStore(tmp_path)[HookState].mutate() as state:
+                state.fires[f"{entry.state_key}/main"] = 1
+            return HookResult(action=Action.warn, message="fired")
+
+        entry = RegisteredHook(
+            spec=HookSpec(events=Event.PreToolUse, max_fires=1),
+            handler=handler,
+            name="raced_hook",
+        )
+
+        assert execute_hook(entry, mock_edit_event(), tmp_path) is None
+
+    def test_setting_a_slot_to_what_it_holds_writes_nothing(self, tmp_path: Path) -> None:
+        slot = SessionStore(tmp_path)[HookState]
+        slot.set(HookState(fires={"hook/main": 1}))
+        assert slot.path is not None
+        written = slot.path.stat().st_ino
+
+        slot.set(HookState(fires={"hook/main": 1}))
+
+        assert slot.path.stat().st_ino == written
 
     def test_record_fire_increments_last_fired_at(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
@@ -376,7 +426,7 @@ class TestFireCounting:
 
     def test_hook_state_is_base_model(self) -> None:
         assert isinstance(HookState(), BaseModel)
-        assert HookState().fire_count == 0
+        assert HookState().fires == {}
 
     def test_fire_count_only_on_non_none(self, tmp_path: Path) -> None:
         call_count = 0

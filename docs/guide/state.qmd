@@ -126,7 +126,7 @@ The store then reports every registered model:
 
 Registration does not change slot access. `evt.ctx.s[Snapshot].get()` still works the same way. Both `@workflow_state` and `@session_state` register the model, so a workflow model shows up in `tracked_models()` too.
 
-The framework reserves two slots of its own. `HookState` counts how many times a hook fired and backs `max_fires` enforcement — counted per agent context, so a subagent spends its own budget, not the session's. `PrimitiveState` backs the LLM primitives. You read them at most, never write them.
+The framework reserves two slots of its own. `HookState` counts how many times each hook fired and backs `max_fires` enforcement — counted per agent context, so a subagent spends its own budget, not the session's. It is one file for the session, written only when a capped hook fires. `PrimitiveState` backs the LLM primitives. You read them at most, never write them.
 
 ## Persist across sessions with `DurableState`
 
@@ -155,11 +155,11 @@ A growing durable collection needs a cap, or it grows without bound. `Deque[256]
 
 ## Where state lives
 
-Each session gets a directory keyed by its Claude Code session id. A slot serializes its model to JSON at `~/.claude/state/hooks/sessions/<session_id>/<state_key>/<agent_id>/<model_key>.json` — the agent segment is `main` for the top-level session and the agent id for a subagent, which is how per-agent budgets like `max_fires` stay separate. The model key is the snake-case class name, so `ReviewState` becomes `review_state.json`. When a session's transcript is deleted, its state directory is cleaned up on the next run.
+Each session gets a directory keyed by its Claude Code session id. A slot serializes its model to JSON at `~/.local/state/captain-hook/hooks/sessions/<session_id>/<state_key>/<agent_id>/<model_key>.json` — the agent segment is `main` for the top-level session and the agent id for a subagent, which is how per-agent budgets like `max_fires` stay separate. The model key is the snake-case class name, so `ReviewState` becomes `review_state.json`. When a session's transcript is deleted, its state directory is cleaned up on the next run.
 
-Durable state lives outside any session directory, so it outlives them. A `"global"` model writes to `~/.claude/state/hooks/durable/global/<model_key>.json`, and a `"project"` model writes to `~/.claude/state/hooks/durable/projects/<project-key>/<model_key>.json`, where the project key is the repo basename plus a hash of its path. A project-scoped model needs a resolvable repo root; running outside any project directory or git repo, it keeps its data in memory for that call and persists nothing.
+Durable state lives outside any session directory, so it outlives them. A `"global"` model writes to `~/.local/state/captain-hook/hooks/durable/global/<model_key>.json`, and a `"project"` model writes to `~/.local/state/captain-hook/hooks/durable/projects/<project-key>/<model_key>.json`, where the project key is the repo basename plus a hash of its path. A project-scoped model needs a resolvable repo root; running outside any project directory or git repo, it keeps its data in memory for that call and persists nothing.
 
-Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace. The default is `~/.claude/state`. For every tunable setting, see [configuration](packs.qmd#configure-hook-settings).
+Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace; `XDG_STATE_HOME` moves the default. The default is `~/.local/state/captain-hook`. For every tunable setting, see [configuration](packs.qmd#configure-hook-settings).
 
 ## Enforce a multi-step workflow
 

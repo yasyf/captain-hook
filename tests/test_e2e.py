@@ -272,11 +272,11 @@ class TestEventDispatchRoundTrip:
 class TestStateModelSerialization:
     def test_e2e_060_hook_state_round_trip(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        original = HookState(fire_count=5)
+        original = HookState(fires={"hook/main": 5})
         store[HookState].set(original)
         loaded = store[HookState].get()
         assert loaded is not None
-        assert loaded.fire_count == 5
+        assert loaded.fires == {"hook/main": 5}
 
     def test_e2e_061_primitive_state_round_trip(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)

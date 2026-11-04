@@ -81,7 +81,7 @@ def deny_installed_processes(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
     # Isolate the on-disk state dir per test: SessionStore and fire-counts (max_fires)
-    # root under resolve_state_dir(), which defaults to the real ~/.claude/state.
+    # root under resolve_state_dir(), which defaults to the real ~/.local/state/captain-hook.
     # Without this, run_cli subprocesses sharing a stdin session_id share one session
     # dir, so fire-state leaks across tests under random ordering.
     # TestStateRoot monkeypatches CAPTAIN_HOOK_STATE_DIR over this autouse value;

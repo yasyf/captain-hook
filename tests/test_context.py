@@ -917,8 +917,47 @@ class TestStateRoot:
 
     def test_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CAPTAIN_HOOK_STATE_DIR", raising=False)
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
         result = state_root()
-        assert result == Path.home() / ".claude" / "state"
+        assert result == Path.home() / ".local" / "state" / "captain-hook"
+
+    def test_xdg_state_home_moves_the_default(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.delenv("CAPTAIN_HOOK_STATE_DIR", raising=False)
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+        assert state_root() == tmp_path / "captain-hook"
+
+    def test_the_old_default_moves_over_once(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.delenv("CAPTAIN_HOOK_STATE_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+        legacy = tmp_path / ".claude" / "state"
+        (legacy / "hooks" / "sessions").mkdir(parents=True)
+        (legacy / "hooks" / "tickets.db").write_text("tickets")
+        (legacy / "unrelated.json").write_text("{}")
+
+        root = state_root()
+
+        assert (root / "hooks" / "tickets.db").read_text() == "tickets"
+        assert not (legacy / "hooks").exists()
+        assert (legacy / "unrelated.json").exists()
+
+    def test_a_symlink_already_pointing_at_the_new_default_stays(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.delenv("CAPTAIN_HOOK_STATE_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+        moved = tmp_path / "xdg" / "captain-hook" / "hooks"
+        moved.mkdir(parents=True)
+        (moved / "tickets.db").write_text("tickets")
+        (tmp_path / ".claude" / "state").mkdir(parents=True)
+        (tmp_path / ".claude" / "state" / "hooks").symlink_to(moved)
+
+        root = state_root()
+
+        assert not (root / "hooks").is_symlink()
+        assert (root / "hooks" / "tickets.db").read_text() == "tickets"
+        assert (tmp_path / ".claude" / "state" / "hooks").is_symlink()
 
 
 def git_in(path: Path, *args: str) -> None:

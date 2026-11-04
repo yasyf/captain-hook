@@ -87,6 +87,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the queued-push warning describe Graphite's queue, so they fire only when `ccx.queue` in git config,
   else `[vcs] queue` in `.claude/ccx.toml`, is unset or `graphite`, the sources ccx reads.
 
+### Changed
+
+- **State lives in `~/.local/state/captain-hook` by default, not `~/.claude/state`.** Every write
+  under `~/.claude` wakes each running Claude session's file watcher, and hook state made up most of
+  those writes. `XDG_STATE_HOME` moves the default and `CAPTAIN_HOOK_STATE_DIR` still overrides it.
+  `hooks`, `review`, `faults` and `update` move over on first use.
+- **A session keeps one `max_fires` file, written only when a capped hook fires.** Each capped hook
+  used to replace its own `hook_state.json` twice per matching event, even when it returned nothing.
+  Fire counts recorded by an earlier release start over, so a capped hook can fire once more in a
+  session that was already running.
+
 ### Added
 
 - **`HOOKS_REVIEW_ENABLED=false` turns the session reviewer off everywhere.** The `SessionStart`,

@@ -124,9 +124,9 @@ RESOURCES = NlpResources()
 
 
 class HookState(BaseModel):
-    """Per-hook persistent state tracked across events in a session (``fire_count`` for ``max_fires``)."""
+    """How many times each ``max_fires`` hook fired in a session, keyed by state key and agent."""
 
-    fire_count: int = 0
+    fires: dict[str, int] = Field(default_factory=dict)
 
 
 # ECHO_WINDOW: number of subsequent transcript messages after a nudge fires during which we

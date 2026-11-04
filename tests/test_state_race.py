@@ -25,7 +25,7 @@ class TestDispatchFireRace:
     def test_max_fires_not_exceeded_under_thread_race(self, tmp_path: Path) -> None:
         """N threads racing one capped hook must deliver at most ``max_fires`` fires.
 
-        Counts DELIVERED (non-None) results, not the persisted ``fire_count`` — last-write-wins
+        Counts DELIVERED (non-None) results, not the persisted count — last-write-wins
         converges the persisted count so a persisted-count assertion stays green against the bug.
         """
         n = 20
@@ -66,7 +66,7 @@ class TestSessionSlotMutateRace:
         def worker() -> None:
             with store[HookState].mutate() as hs:
                 time.sleep(0.003)
-                hs.fire_count += 1
+                hs.fires["hook/main"] = hs.fires.get("hook/main", 0) + 1
 
         threads = [threading.Thread(target=worker) for _ in range(20)]
         for t in threads:
@@ -74,7 +74,7 @@ class TestSessionSlotMutateRace:
         for t in threads:
             t.join()
 
-        assert store[HookState].get(HookState()).fire_count == 20
+        assert store[HookState].get(HookState()).fires == {"hook/main": 20}
 
     def test_primitive_consumed_mutate_no_lost_update(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)

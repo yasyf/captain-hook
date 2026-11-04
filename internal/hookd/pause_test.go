@@ -30,6 +30,23 @@ func runPaused(t *testing.T, event, pauseJSON string) (int, string, *scriptedCli
 	return code, stdout.String(), client
 }
 
+func TestStateDirDefaultsOutsideClaude(t *testing.T) {
+	t.Setenv("CAPTAIN_HOOK_STATE_DIR", "")
+	t.Setenv("XDG_STATE_HOME", "/xdg")
+	if dir, err := stateDir(); err != nil || dir != "/xdg/captain-hook" {
+		t.Fatalf("stateDir() = %q, %v", dir, err)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "/home/someone")
+	if dir, err := stateDir(); err != nil || dir != "/home/someone/.local/state/captain-hook" {
+		t.Fatalf("stateDir() = %q, %v", dir, err)
+	}
+	t.Setenv("CAPTAIN_HOOK_STATE_DIR", "/state")
+	if dir, err := stateDir(); err != nil || dir != "/state" {
+		t.Fatalf("stateDir() = %q, %v", dir, err)
+	}
+}
+
 func pauseFor(remaining time.Duration, reason string) string {
 	return fmt.Sprintf(`{"until": %d, "reason": %q}`, time.Now().Add(remaining).Unix(), reason)
 }

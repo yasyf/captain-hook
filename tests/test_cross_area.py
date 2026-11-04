@@ -390,22 +390,19 @@ class TestMaxFiresSessionStore:
         assert fire("a1") is None
         assert fire("") is None, "empty agent_id spends the main budget"
 
-        hook_dir = session_dir / _state.hooks[0].state_key
-        for agent_slot in ("main", "a1", "a2"):
-            state_file = hook_dir / agent_slot / "hook_state.json"
-            state = HookState.model_validate_json(state_file.read_text())
-            assert state.fire_count == 1
+        state = HookState.model_validate_json((session_dir / "hook_state.json").read_text())
+        key = _state.hooks[0].state_key
+        assert state.fires == {f"{key}/main": 1, f"{key}/a1": 1, f"{key}/a2": 1}
 
     def test_fire_count_persisted(self, tmp_path: Path) -> None:
         session_dir = tmp_path
         register_hook(Event.PreToolUse, message="counted", block=True, max_fires=5)
         dispatch_pre({"command": "echo hi"}, session_dir=session_dir)
 
-        hook_dir = session_dir / _state.hooks[0].state_key / "main"
-        state_file = hook_dir / "hook_state.json"
+        state_file = session_dir / "hook_state.json"
         assert state_file.exists()
         state = HookState.model_validate_json(state_file.read_text())
-        assert state.fire_count == 1
+        assert state.fires == {f"{_state.hooks[0].state_key}/main": 1}
 
 
 @pytest.mark.usefixtures("isolate_modules")

@@ -419,7 +419,7 @@ class ProjectSettings(HooksSettings):
 #### `state_dir`
 
 Where `@session_state` and `@workflow_state` models persist their JSON. The
-field reads `CAPTAIN_HOOK_STATE_DIR`, falling back to `~/.claude/state`. Set
+field reads `CAPTAIN_HOOK_STATE_DIR`, falling back to `~/.local/state/captain-hook`. Set
 `CAPTAIN_HOOK_STATE_DIR` to relocate state, which helps in CI sandboxes that
 block writes outside the workspace. See [State and sessions](state.qmd) for how
 state directories are laid out.
