@@ -27,10 +27,11 @@ LINE_EXITS = {"denied": 103, "unavailable": 104, "screenLocked": 104}
 ORIGIN = re.compile(r"origin identity: \S*?@?([\w-]+)\.\S*")
 PEER_KEYS = re.compile(r"peer keys: (.*)")
 PEER = re.compile(r"(?:^|, )\S*?@?([\w-]+)\.\S*?=")
+INSTALL_OWED = re.compile(r"^\[FAIL\] .*run 'sudo cc-sudo install'$", re.MULTILINE)
 REASONS = {
     103: "cc-sudo exit 103: the owner denied this exact command, so nothing ran. Do not retry it; ask what the owner wants instead.",
     105: "cc-sudo exit 105: the approval failed verification, so nothing ran. Run `cc-sudo doctor` and report the failing check.",
-    106: "cc-sudo exit 106: the CLI and its root verifier differ in version, so nothing ran. Ask the owner to run `cc-sudo install`.",
+    106: "cc-sudo exit 106: the CLI and its root verifier differ in version, so nothing ran. Ask the owner to run `sudo cc-sudo install`.",
 }
 AWAY_CARD = (
     "The owner is away from this Mac, so no Touch ID prompt fired and a card asks for the tap. "
@@ -40,17 +41,29 @@ AWAY_ASK = (
     "The owner is away from this Mac, so no Touch ID prompt fired. "
     "Ask the owner through your coordinator, then rerun this exact command once the owner is back."
 )
+INSTALL_DUE = (
+    "`sudo cc-sudo install` is owed on this Mac, so this run cannot succeed and no card asks for a tap. "
+    "Tell your coordinator it is owed, then rerun this exact command once the owner has typed it."
+)
 RUN = "cc-sudo run -- launchctl kickstart system/com.example.svc"
 INSTALLED = {"cc-sudo --version": "0.13.0"}
-HERE = {**INSTALLED, "ioreg -n Root": '"IOConsoleLocked" = No', "ioreg -c IOHIDSystem": '"HIDIdleTime" = 5000000000'}
-LOCKED = {**HERE, "ioreg -n Root": '"IOConsoleLocked" = Yes'}
-IDLE = {**HERE, "ioreg -c IOHIDSystem": '"HIDIdleTime" = 8447225166083'}
-CARD = {"HOOKS_TAP_CARD_COMMAND": "tap-card-post --kind ask"}
 DOCTOR = (
     "[ok] self key: 82fc\n"
     "[ok] peer keys: owner@laptop.tailnet.ts.net=459a…, owner@phone.tailnet.ts.net=77ab…\n"
     "[ok] origin identity: owner@studio.tailnet.ts.net (must match synckitd's mesh self name)\n"
 )
+SKEW = f"[FAIL] verifier: version skew: CLI 0.14.0 vs verifier 0.13.0 — run 'sudo cc-sudo install'\n{DOCTOR}"
+NO_VERIFIER = f"[FAIL] verifier: cc-sudo-exec missing — run 'sudo cc-sudo install'\n{DOCTOR}"
+OTHER_FAILURE = f"[FAIL] authkit pin: unpinned\n[info] phones: none ('sudo cc-sudo trust --phone <name>')\n{DOCTOR}"
+HERE = {
+    **INSTALLED,
+    "cc-sudo doctor": DOCTOR,
+    "ioreg -n Root": '"IOConsoleLocked" = No',
+    "ioreg -c IOHIDSystem": '"HIDIdleTime" = 5000000000',
+}
+LOCKED = {**HERE, "ioreg -n Root": '"IOConsoleLocked" = Yes'}
+IDLE = {**HERE, "ioreg -c IOHIDSystem": '"HIDIdleTime" = 8447225166083'}
+CARD = {"HOOKS_TAP_CARD_COMMAND": "tap-card-post --kind ask"}
 UNAVAILABLE = 'Exit code 104\ncc-sudo: unavailable("no live approver on the mesh")'
 
 
@@ -67,6 +80,19 @@ UNAVAILABLE = 'Exit code 104\ncc-sudo: unavailable("no live approver on the mesh
         Input(command=RUN, commands={**LOCKED, "tap-card-post": (1, "refused")}, env=CARD): Block(
             pattern="Ask the owner"
         ),
+        Input(command=RUN, commands={**LOCKED, "cc-sudo doctor": SKEW, "tap-card-post": ""}, env=CARD): Block(
+            pattern="install` is owed.*no card asks"
+        ),
+        Input(command=RUN, commands={**IDLE, "cc-sudo doctor": NO_VERIFIER, "tap-card-post": ""}, env=CARD): Block(
+            pattern="install` is owed.*no card asks"
+        ),
+        Input(command=RUN, commands={**LOCKED, "cc-sudo doctor": OTHER_FAILURE, "tap-card-post": ""}, env=CARD): Block(
+            pattern="and a card asks"
+        ),
+        Input(command=RUN, commands={**LOCKED, "cc-sudo doctor": (1, "broken"), "tap-card-post": ""}, env=CARD): Block(
+            pattern="and a card asks"
+        ),
+        Input(command=RUN, commands={**HERE, "cc-sudo doctor": SKEW}): Allow(),
         Input(command=RUN, commands=LOCKED): Block(pattern="Ask the owner"),
         Input(command=RUN, commands={**HERE, "ioreg -n Root": (1, "failed")}): Block(pattern="Ask the owner"),
         Input(command=RUN, commands={**HERE, "ioreg -n Root": '"IOConsoleUsers" = ()'}): Block(pattern="Ask the owner"),
@@ -83,6 +109,8 @@ def no_tap_while_away(evt: PreToolUseEvent) -> HookResult | None:
     call = next((call for call in evt.cmd.calls() if tapped(call) is not None), None)
     if call is None or not cc_sudo_installed() or at_the_mac():
         return None
+    if INSTALL_OWED.search(probe("cc-sudo", "doctor")):
+        return evt.block(INSTALL_DUE)
     command = " ".join(word.raw for word in call.command.words[3:])
     return evt.block(AWAY_CARD if queue_card(evt, command) else AWAY_ASK)
 
