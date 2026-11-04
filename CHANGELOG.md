@@ -114,6 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Workers stay warm through longer idle stretches.** The host now retires an idle worker after
+  30 minutes instead of 10, and one over the memory limit at 512 MiB instead of 320 MiB, so a session
+  that pauses for a long wait keeps its worker. This holds about 6 more workers on a busy machine. The
+  host log now records each worker start and retirement with its time and reason.
 - **spaCy reads only the last 20,000 characters of a text.** A very long assistant message could
   hold a hook on one parse and grow the worker. Signals and echo damping now look at the tail.
 - **The local-build gate reads how busy the CPU is, not the load average.**

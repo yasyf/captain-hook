@@ -340,6 +340,40 @@ func TestWorkerManagerSweepRetiresAnIdleWorkerOverTheMemoryCeiling(t *testing.T)
 	}
 }
 
+func TestSweepLogsEachRetirementWithItsTimeAndReason(t *testing.T) {
+	now := time.Date(2026, 11, 3, 21, 0, 0, 0, time.UTC)
+	live := t.TempDir()
+	manager := mustWorkerManager(t)
+	var log bytes.Buffer
+	manager.logWriter = &log
+	manager.memory = func(*workerClient) (uint64, bool) { return workerMemoryCeiling + 1<<20, true }
+	seed := func(id string, shard int, root string, lastUsed time.Time) {
+		entry := &workerEntry{
+			ready: make(chan struct{}), key: workerKey{id: id, root: root, shard: shard}, worker: &workerClient{}, lastUsed: lastUsed,
+		}
+		close(entry.ready)
+		manager.entries[entry.key.member()] = entry
+	}
+	seed("gone", 0, filepath.Join(live, "deleted"), now)
+	seed("cold", 0, live, now.Add(-workerIdleTTL))
+	seed("pool", 0, live, now)
+	seed("pool", 1, live, now.Add(-spareIdleTTL))
+	seed("large", 0, live, now.Add(-bloatedIdleTTL))
+
+	manager.sweep(now)
+
+	for _, want := range []string{
+		"captain: 2026-11-03T21:00:00Z retire worker gone/0: root gone, idle 0s\n",
+		"captain: 2026-11-03T21:00:00Z retire worker cold/0: idle, idle 30m0s\n",
+		"captain: 2026-11-03T21:00:00Z retire worker pool/1: spare, idle 2m0s\n",
+		"captain: 2026-11-03T21:00:00Z retire worker large/0: over limit at 513 MiB, idle 1m0s\n",
+	} {
+		if !strings.Contains(log.String(), want) {
+			t.Errorf("sweep log lacks %q:\n%s", want, log.String())
+		}
+	}
+}
+
 // TestEphemeralRootIsScoped keeps the ephemeral test narrow: a scratch root
 // under the system temp directory, and nothing else. Misreading a real project
 // as ephemeral would stop it ever caching an interpreter.
