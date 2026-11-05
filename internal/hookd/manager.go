@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,6 +45,8 @@ const (
 	workerIdleTTL = 30 * time.Minute
 
 	spareIdleTTL = 2 * time.Minute
+
+	supersededGrace = 2 * time.Minute
 
 	workerMemoryCeiling = 512 << 20
 	bloatedIdleTTL      = time.Minute
@@ -93,10 +94,10 @@ type workerEntry struct {
 	// the startup until it lands — so eviction never pulls an interpreter out
 	// from under a call in progress, and the last hold to drop is the one that
 	// retires an entry the cache has let go of.
-	lastUsed   time.Time
-	inflight   int
-	ephemeral  bool
-	superseded bool
+	lastUsed     time.Time
+	inflight     int
+	ephemeral    bool
+	supersededAt time.Time
 
 	background int
 	load       int
@@ -150,7 +151,8 @@ type workerKey struct {
 	root  string
 	env   map[string]string
 	shard int
-	actor bool
+
+	actorEnv map[string]string
 }
 
 func (k workerKey) member() string {
@@ -431,12 +433,16 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 }
 
 func (m *workerManager) supersedeActorsLocked(key workerKey) {
-	if !key.actor {
+	if key.actorEnv == nil {
 		return
 	}
 	for _, entry := range m.entries {
-		if entry.key.actor && entry.key.root == key.root {
-			entry.superseded = entry.key.id != key.id
+		switch {
+		case entry.key.actorEnv == nil || entry.key.root != key.root:
+		case entry.key.id == key.id:
+			entry.supersededAt = time.Time{}
+		case entry.supersededAt.IsZero():
+			entry.supersededAt = m.now()
 		}
 	}
 }
@@ -570,7 +576,8 @@ func (m *workerManager) sweep(now time.Time) []*workerClient {
 	}
 	var retired []*workerClient
 	for id, entry := range m.entries {
-		if !entry.idle() {
+		overdue := entry.started() && !entry.supersededAt.IsZero() && now.Sub(entry.supersededAt) >= supersededGrace
+		if !entry.idle() && !overdue {
 			continue
 		}
 		reason := m.retireReasonLocked(entry, now.Sub(entry.lastUsed), newest[entry.key.id] == entry)
@@ -590,7 +597,7 @@ func (m *workerManager) retireReasonLocked(entry *workerEntry, idle time.Duratio
 	switch {
 	case !rootExists(entry.key.root):
 		return "root gone"
-	case entry.superseded:
+	case !entry.supersededAt.IsZero():
 		return "superseded by a new actor environment"
 	case newest && idle >= workerIdleTTL:
 		return "idle"
@@ -736,7 +743,7 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 	if err != nil {
 		return nil, m.stopChild(child, errors.New("captain: take Python worker channel"), err)
 	}
-	worker, err := handshakeWorker(ctx, conn, Build)
+	worker, err := handshakeActorWorker(ctx, conn, Build, key.actorEnv)
 	if err != nil {
 		_ = conn.Close()
 		return nil, m.stopChild(child, errors.New("captain: handshake Python product worker"), err)
@@ -997,10 +1004,9 @@ func makeActorWorkerKey(request wireproto.EventRequest, actorEnv map[string]stri
 	}
 	if actorEnv != nil {
 		parts = append(parts, actorIdentity(actorIdentitySalt, actorEnv))
-		maps.Copy(env, actorEnv)
 	}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env, actor: actorEnv != nil}, nil
+	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env, actorEnv: actorEnv}, nil
 }
 
 func semanticWorkerEnvironment(env map[string]string) map[string]string {

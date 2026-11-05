@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 import traceback
@@ -61,6 +62,7 @@ def handshake(input_stream: BinaryIO, output_stream: BinaryIO, *, build: str) ->
     hello = decode_hello(first)
     if hello.build != build:
         raise ProtocolError(f"worker build {build!r} does not match host build {hello.build!r}")
+    os.environ.update(hello.actor_env)
     write_message(output_stream, hello_response(build))
     return True
 

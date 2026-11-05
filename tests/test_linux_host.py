@@ -345,6 +345,9 @@ def test_an_actor_keeps_one_worker_that_holds_its_keys(tmp_path: Path) -> None:
         showing = [path for path in host_files if path.is_file() and planted.encode() in path.read_bytes()]
         assert not showing
         assert planted not in json.dumps(host_status(project))
+        environs = [(Path("/proc") / str(pid) / "environ").read_bytes() for pid in worker_pids(project)]
+        assert environs
+        assert not [environ for environ in environs if planted.encode() in environ]
 
 
 def test_a_mismatched_build_is_fenced_from_the_host(project: Path) -> None:

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -112,11 +113,8 @@ func TestConsecutiveActorEventsShareOneWorker(t *testing.T) {
 			t.Fatalf("the actor's key crossed the worker protocol: %s", encoded)
 		}
 	}
-	command := workerCmd(starts[0], "/python")
-	for _, want := range []string{actorJudgeEnv + "=claude", "ANTHROPIC_API_KEY=synthetic-worker-key"} {
-		if !slices.Contains(command.Env, want) {
-			t.Fatalf("worker environment lacks %q", want)
-		}
+	if command := strings.Join(workerCmd(starts[0], "/python").Env, "\n"); strings.Contains(command, "synthetic-worker-key") {
+		t.Fatal("the actor's key is in the worker's exec environment, which /proc keeps for its life")
 	}
 	rotated, err := makeActorWorkerKey(request, map[string]string{actorJudgeEnv: "claude", "ANTHROPIC_API_KEY": "rotated"})
 	if err != nil {
@@ -138,17 +136,23 @@ func TestAnActorWorkerRetiresWhenIdleOrSuperseded(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1<<32, 0)
 	root := t.TempDir()
-	current := workerKey{id: "current", root: root, actor: true}
+	env := map[string]string{actorJudgeEnv: "claude"}
+	current := workerKey{id: "current", root: root, actorEnv: env}
+	rotated := workerKey{id: "rotated", root: root, actorEnv: env}
 	for name, tc := range map[string]struct {
 		key    workerKey
 		idle   time.Duration
+		load   int
+		after  time.Duration
 		retire bool
 	}{
-		"just used":                    {current, 0, false},
-		"idle past the worker TTL":     {current, workerIdleTTL, true},
-		"another root's actor":         {workerKey{id: "elsewhere", root: t.TempDir(), actor: true}, 0, false},
-		"a keyless client on the root": {workerKey{id: "keyless", root: root}, 0, false},
-		"superseded by a rotated key":  {workerKey{id: "rotated", root: root, actor: true}, 0, true},
+		"just used":                    {current, 0, 0, 0, false},
+		"idle past the worker TTL":     {current, workerIdleTTL, 0, 0, true},
+		"another root's actor":         {workerKey{id: "elsewhere", root: t.TempDir(), actorEnv: env}, 0, 0, 0, false},
+		"a keyless client on the root": {workerKey{id: "keyless", root: root}, 0, 0, 0, false},
+		"superseded by a rotated key":  {rotated, 0, 0, 0, true},
+		"superseded and still busy":    {rotated, 0, 1, supersededGrace - time.Second, false},
+		"superseded and busy too long": {rotated, 0, 1, supersededGrace, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -158,7 +162,7 @@ func TestAnActorWorkerRetiresWhenIdleOrSuperseded(t *testing.T) {
 				worker, _ := silentWorker(t)
 				return worker, nil
 			}
-			entry := readyMember(t, manager, tc.key, 0)
+			entry := readyMember(t, manager, tc.key, tc.load)
 			if tc.key.id != current.id {
 				acquired, _, err := manager.acquire(t.Context(), current)
 				if err != nil {
@@ -170,7 +174,7 @@ func TestAnActorWorkerRetiresWhenIdleOrSuperseded(t *testing.T) {
 			manager.mu.Lock()
 			entry.lastUsed = now.Add(-tc.idle)
 			manager.mu.Unlock()
-			retired := manager.sweep(now)
+			retired := manager.sweep(now.Add(tc.after))
 			if got := slices.Contains(retired, entry.worker); got != tc.retire {
 				t.Fatalf("retired = %v, want %v", got, tc.retire)
 			}
@@ -231,6 +235,33 @@ func TestAnActorEnvironmentStaysOutOfHostOutput(t *testing.T) {
 
 	if joined := log.String() + strings.Join(output, "\n"); strings.Contains(joined, planted) {
 		t.Fatalf("the host showed an actor's key: %s", joined)
+	}
+}
+
+func TestAnActorWorkerGetsItsEnvironmentOnItsHandshakeAlone(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{actorJudgeEnv: "claude", "ANTHROPIC_API_KEY": "synthetic-worker-key"}
+	for name, want := range map[string]map[string]string{"an actor": env, "a keyless client": nil} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			clientConn, serverConn := net.Pipe()
+			t.Cleanup(func() { _ = serverConn.Close(); _ = clientConn.Close() })
+			hello := make(chan wireproto.Frame, 1)
+			go func() {
+				frame, err := wireproto.DecodeFrame(serverConn)
+				if err != nil {
+					return
+				}
+				hello <- frame
+				_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: "12.9.1"})
+			}()
+			if _, err := handshakeActorWorker(t.Context(), clientConn, "12.9.1", want); err != nil {
+				t.Fatal(err)
+			}
+			if got := (<-hello).ActorEnv; !maps.Equal(got, want) {
+				t.Fatalf("hello carried %v, want %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+			}
+		})
 	}
 }
 

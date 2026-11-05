@@ -141,6 +141,8 @@ type Frame struct {
 	SnapshotContext json.RawMessage `json:"snapshot_context,omitempty"`
 	SnapshotConfig  json.RawMessage `json:"snapshot_config,omitempty"`
 	ParentID        uint64          `json:"parent_id,omitempty"`
+
+	ActorEnv map[string]string `json:"actor_env,omitempty"`
 }
 
 // Validate refuses a request the worker cannot dispatch exactly.
