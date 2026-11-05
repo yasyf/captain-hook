@@ -87,7 +87,7 @@ def record_actor(event: PostToolUseEvent) -> None:
             {
                 "provider": actor.ACTOR.provider,
                 "own_key": os.environ.get("ANTHROPIC_API_KEY"),
-                "child_has_key": "not-a-key" in child,
+                "child_has_key": "ANTHROPIC_API_KEY" in child,
                 "inherited": os.environ.get("ACTOR_INHERITED"),
             }
         )
@@ -301,7 +301,8 @@ def test_an_actor_keeps_one_worker_that_holds_its_keys(tmp_path: Path) -> None:
         hooks.mkdir(parents=True)
         (hooks / "actor_worker.py").write_text(textwrap.dedent(ACTOR_WORKER_HOOKS))
         session = uuid.uuid4().hex
-        actor = {"CAPT_HOOK_ACTOR_JUDGE": "claude", "ANTHROPIC_API_KEY": "not-a-key", "ACTOR_INHERITED": "kept"}
+        planted = f"planted-actor-key-{uuid.uuid4().hex}"
+        actor = {"CAPT_HOOK_ACTOR_JUDGE": "claude", "ANTHROPIC_API_KEY": planted, "ACTOR_INHERITED": "kept"}
 
         calls = [
             dispatch(project, "PreToolUse", session, env=actor, tool_name="Bash", tool_input={"command": "ls"})
@@ -331,6 +332,15 @@ def test_an_actor_keeps_one_worker_that_holds_its_keys(tmp_path: Path) -> None:
             "child_has_key": False,
             "inherited": "kept",
         }
+        host_files = [
+            *resolve_log_dir().parent.rglob("*"),
+            *(Path.home() / ".daemonkit" / "a").glob("*captain-hook*/*"),
+        ]
+        assert any(path.name == "capt-hookd.log" for path in host_files)
+        assert any(path.name == "daemon.records" for path in host_files)
+        showing = [path for path in host_files if path.is_file() and planted.encode() in path.read_bytes()]
+        assert not showing
+        assert planted not in json.dumps(host_status(project))
 
 
 def test_a_mismatched_build_is_fenced_from_the_host(project: Path) -> None:

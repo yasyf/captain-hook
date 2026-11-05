@@ -138,6 +138,10 @@ func (c *flakyClient) Event(_ context.Context, _ wireproto.EventRequest) (wirepr
 	return c.response, nil
 }
 
+func (c *flakyClient) ActorEvent(context.Context, wireproto.EventRequest, map[string]string) (wireproto.EventResponse, error) {
+	return wireproto.EventResponse{}, errors.New("flakyClient serves no actor")
+}
+
 func (c *flakyClient) Close() error { return nil }
 
 func TestRunRetriesATimedOutGuardOnceThenSkips(t *testing.T) {

@@ -3,8 +3,13 @@ package hookd
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -22,8 +27,9 @@ type actorEventRequest struct {
 }
 
 var (
-	actorShellEnv = []string{"_", "PWD", "OLDPWD", "SHLVL"}
-	actorKeys     = map[string][]string{
+	actorShellEnv     = []string{"_", "PWD", "OLDPWD", "SHLVL"}
+	actorIdentitySalt = rand.Text()
+	actorKeys         = map[string][]string{
 		"codex":  {"OPENAI_API_KEY", "CODEX_API_KEY"},
 		"claude": {"ANTHROPIC_API_KEY"},
 	}
@@ -59,6 +65,14 @@ func actorEnvironment(environ []string) map[string]string {
 		}
 	}
 	return result
+}
+
+func actorIdentity(salt string, env map[string]string) string {
+	mac := hmac.New(sha256.New, []byte(salt))
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		fmt.Fprintf(mac, "%q=%q\n", name, env[name])
+	}
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func dispatchResidentActor(request wireproto.EventRequest, timeout time.Duration) (wireproto.EventResponse, error) {

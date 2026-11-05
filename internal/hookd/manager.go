@@ -93,9 +93,10 @@ type workerEntry struct {
 	// the startup until it lands — so eviction never pulls an interpreter out
 	// from under a call in progress, and the last hold to drop is the one that
 	// retires an entry the cache has let go of.
-	lastUsed  time.Time
-	inflight  int
-	ephemeral bool
+	lastUsed   time.Time
+	inflight   int
+	ephemeral  bool
+	superseded bool
 
 	background int
 	load       int
@@ -149,6 +150,7 @@ type workerKey struct {
 	root  string
 	env   map[string]string
 	shard int
+	actor bool
 }
 
 func (k workerKey) member() string {
@@ -360,6 +362,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		m.mu.Unlock()
 		return nil, admission{}, errWorkerAdmissionPaused
 	}
+	m.supersedeActorsLocked(key)
 	var evicted *workerClient
 	deadline, _ := ctx.Deadline()
 	var leave func()
@@ -425,6 +428,17 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 		m.release(entry)
 	}
 	return m.admitted(entry, adm)
+}
+
+func (m *workerManager) supersedeActorsLocked(key workerKey) {
+	if !key.actor {
+		return
+	}
+	for _, entry := range m.entries {
+		if entry.key.actor && entry.key.root == key.root {
+			entry.superseded = entry.key.id != key.id
+		}
+	}
 }
 
 func (m *workerManager) admitted(entry *workerEntry, adm admission) (*workerEntry, admission, error) {
@@ -576,6 +590,8 @@ func (m *workerManager) retireReasonLocked(entry *workerEntry, idle time.Duratio
 	switch {
 	case !rootExists(entry.key.root):
 		return "root gone"
+	case entry.superseded:
+		return "superseded by a new actor environment"
 	case newest && idle >= workerIdleTTL:
 		return "idle"
 	case !newest && idle >= spareIdleTTL:
@@ -970,7 +986,6 @@ func makeActorWorkerKey(request wireproto.EventRequest, actorEnv map[string]stri
 		root = resolved
 	}
 	env := semanticWorkerEnvironment(request.Env)
-	maps.Copy(env, actorEnv)
 	keys := make([]string, 0, len(env))
 	for name := range env {
 		keys = append(keys, name)
@@ -980,8 +995,12 @@ func makeActorWorkerKey(request wireproto.EventRequest, actorEnv map[string]stri
 	for _, name := range keys {
 		parts = append(parts, name+"="+env[name])
 	}
+	if actorEnv != nil {
+		parts = append(parts, actorIdentity(actorIdentitySalt, actorEnv))
+		maps.Copy(env, actorEnv)
+	}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env}, nil
+	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env, actor: actorEnv != nil}, nil
 }
 
 func semanticWorkerEnvironment(env map[string]string) map[string]string {

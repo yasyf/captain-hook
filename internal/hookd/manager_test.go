@@ -134,6 +134,124 @@ func TestConsecutiveActorEventsShareOneWorker(t *testing.T) {
 	}
 }
 
+func TestAnActorWorkerRetiresWhenIdleOrSuperseded(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1<<32, 0)
+	root := t.TempDir()
+	current := workerKey{id: "current", root: root, actor: true}
+	for name, tc := range map[string]struct {
+		key    workerKey
+		idle   time.Duration
+		retire bool
+	}{
+		"just used":                    {current, 0, false},
+		"idle past the worker TTL":     {current, workerIdleTTL, true},
+		"another root's actor":         {workerKey{id: "elsewhere", root: t.TempDir(), actor: true}, 0, false},
+		"a keyless client on the root": {workerKey{id: "keyless", root: root}, 0, false},
+		"superseded by a rotated key":  {workerKey{id: "rotated", root: root, actor: true}, 0, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			manager := mustWorkerManager(t)
+			manager.now = func() time.Time { return now }
+			manager.start = func(context.Context, workerKey) (*workerClient, error) {
+				worker, _ := silentWorker(t)
+				return worker, nil
+			}
+			entry := readyMember(t, manager, tc.key, 0)
+			if tc.key.id != current.id {
+				acquired, _, err := manager.acquire(t.Context(), current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager.settleLoad(acquired)
+				manager.release(acquired)
+			}
+			manager.mu.Lock()
+			entry.lastUsed = now.Add(-tc.idle)
+			manager.mu.Unlock()
+			retired := manager.sweep(now)
+			if got := slices.Contains(retired, entry.worker); got != tc.retire {
+				t.Fatalf("retired = %v, want %v", got, tc.retire)
+			}
+		})
+	}
+}
+
+func TestAnActorEnvironmentStaysOutOfHostOutput(t *testing.T) {
+	t.Parallel()
+	const planted = "planted-actor-key-5d1f"
+	var log bytes.Buffer
+	manager := newWorkerManager(daemonkit.Ctx{}, &log)
+	manager.memory = func(*workerClient) (uint64, bool) { return 0, false }
+	product := &hostProduct{manager: manager, hub: newNotificationHub(), monitor: testResourceMonitor(t, manager)}
+	env := map[string]string{actorJudgeEnv: "claude", "ANTHROPIC_API_KEY": planted}
+	request := testEventRequest("PostToolUse")
+	request.Root = t.TempDir()
+	manager.start = func(context.Context, workerKey) (*workerClient, error) { return nil, errors.New("spawn refused") }
+
+	var output []string
+	handle := func(op string, body []byte, pid int) {
+		reply, err := product.Handle(t.Context(), daemonkit.Request{Op: op, Body: body, Caller: daemonkit.Caller{PID: pid}})
+		output = append(output, string(reply.Body), fmt.Sprint(err))
+	}
+	body, err := json.Marshal(actorEventRequest{Request: request, Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle(opActorEvent, body, request.ClientPID)
+	handle(opActorEvent, body, request.ClientPID+1)
+	handle(opActorEvent, []byte(`{"request":{},"env":{"ANTHROPIC_API_KEY":"`+planted+`"},"stray":"`+planted+`"}`), request.ClientPID)
+	handle(opActorEvent, []byte(`{"request":{},"env":{"ANTHROPIC_API_KEY":`+planted+`}}`), request.ClientPID)
+	invalid := request
+	invalid.Schema = 0
+	malformed, err := json.Marshal(actorEventRequest{Request: invalid, Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle(opActorEvent, malformed, request.ClientPID)
+
+	worker, serverConn := silentWorker(t)
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(serverConn)
+			if err != nil {
+				return
+			}
+			_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+				Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID,
+				Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+			})
+		}
+	}()
+	manager.start = func(context.Context, workerKey) (*workerClient, error) { return worker, nil }
+	handle(opActorEvent, body, request.ClientPID)
+	handle(opStatus, nil, 0)
+	manager.sweep(time.Now().Add(2 * workerIdleTTL))
+
+	if joined := log.String() + strings.Join(output, "\n"); strings.Contains(joined, planted) {
+		t.Fatalf("the host showed an actor's key: %s", joined)
+	}
+}
+
+func TestAnActorIdentityShowsNothingWithoutTheHostsSalt(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{"ANTHROPIC_API_KEY": "synthetic-key"}
+	first := actorIdentity("salt-a", env)
+	if first == actorIdentity("salt-b", env) {
+		t.Fatal("an actor's identity is computable from its keys alone")
+	}
+	if first != actorIdentity("salt-a", map[string]string{"ANTHROPIC_API_KEY": "synthetic-key"}) {
+		t.Fatal("an actor's identity moved between calls")
+	}
+	if first == actorIdentity("salt-a", map[string]string{"ANTHROPIC_API_KEY": "rotated"}) {
+		t.Fatal("a rotated key kept its identity")
+	}
+	if actorIdentity("salt-a", map[string]string{"A": `1" "B"="2`}) == actorIdentity("salt-a", map[string]string{"A": "1", "B": "2"}) {
+		t.Fatal("two environments share an identity")
+	}
+}
+
 func TestDispatchCarriesTheCallerDeadlineToTheWorker(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)
