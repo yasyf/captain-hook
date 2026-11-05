@@ -13,6 +13,7 @@ from captain_hook import (
     FilePath,
     FromSubagent,
     Input,
+    LambdaCondition,
     Not,
     Or,
     Phrase,
@@ -28,9 +29,11 @@ from captain_hook import (
     llm_nudge,
     set_tool_input,
 )
+from captain_hook.builtin_packs.general.hooks._sessions import LANE_VAR
 from captain_hook.contexts import WORKFLOW_SCRIPT_CAP
 from captain_hook.langs import LANG_GLOBS
 from captain_hook.signals.nlp import nlp_scan
+from captain_hook.util import reqenv
 
 DELIVERABLE_NUDGE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="fire"))
 REVIEW_ROUTING_PATTERN = (
@@ -113,6 +116,10 @@ def browser_calls(
 ) -> list[dict[str, object]]:
     """A same-turn run of ``n`` browser tool_use lines (Bash by default) for the delegation-nudge inline tests."""
     return [T.assistant(T.tool(tool, **{field: value})) for _ in range(n)]
+
+
+def drives_as_a_lane(evt: BaseHookEvent) -> bool:
+    return bool(reqenv.getenv(LANE_VAR))
 
 
 def turn_browser_call_count(evt: BaseHookEvent) -> int:
@@ -380,7 +387,7 @@ llm_nudge(
         Tool("Bash|Skill"),
         Or(ToolInput("command", BROWSER_DRIVER.pattern), ToolInput("skill", BROWSER_DRIVER.pattern)),
     ],
-    skip_if=[FromSubagent()],
+    skip_if=[FromSubagent(), LambdaCondition(drives_as_a_lane)],
     when=lambda evt: turn_browser_call_count(evt) >= SUSTAINED_BROWSER_CALLS,
     max_fires=1,
     agent=False,
@@ -399,6 +406,10 @@ llm_nudge(
             transcript=browser_calls(3) + browser_calls(2, tool="Skill", field="skill", value="agent-browser"),
         ): Warn(pattern="model='opus'"),
         Input(command="agent-browser click '#submit'", agent_id="tm1", transcript=browser_calls(5)): Allow(),
+        Input(command="agent-browser click '#submit'", env={LANE_VAR: "user-test-1"}, transcript=browser_calls(5)): Allow(),
+        Input(
+            command="agent-browser click '#submit'", env={"CLAUDE_LONG_RUNNING_DRIVE": "rebuild"}, transcript=browser_calls(5)
+        ): Warn(pattern="model='opus'"),
         Input(command="agent-browser screenshot out.png"): Allow(),
         Input(command="agent-browser click '#submit'", transcript=browser_calls(5), llm={"fire": False}): Allow(),
         Input(command="ls -la", transcript=browser_calls(5)): Allow(),
