@@ -174,7 +174,10 @@ func runActor(request wireproto.EventRequest, judge string, timeout time.Duratio
 		}
 		return 1
 	}
-	response, err := evaluateActor(request, judge, timeout)
+	response, err := dispatchResidentActor(request, timeout)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		response, err = evaluateActor(request, judge, timeout)
+	}
 	if request.Mandatory && (err != nil || incompleteKind(response) != "") {
 		response, err = evaluateActor(request, judge, timeout)
 	}
@@ -210,6 +213,7 @@ func answer(request wireproto.EventRequest, response wireproto.EventResponse, st
 // eventClient is the host session runCommand dispatches through.
 type eventClient interface {
 	Event(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error)
+	ActorEvent(ctx context.Context, request wireproto.EventRequest, env map[string]string) (wireproto.EventResponse, error)
 	Close() error
 }
 
@@ -443,16 +447,17 @@ func requestEnvironment(environ []string) map[string]string {
 	result := make(map[string]string)
 	for _, item := range environ {
 		name, value, ok := strings.Cut(item, "=")
-		if !ok {
-			continue
-		}
-		if name == "XDG_CACHE_HOME" || name == "XDG_STATE_HOME" || name == "CEREBRAS_API_KEY" || strings.HasPrefix(name, "CAPT_HOOK_") ||
-			strings.HasPrefix(name, "CAPTAIN_HOOK_") || strings.HasPrefix(name, "HOOKS_") ||
-			strings.HasPrefix(name, "CLAUDE_") || strings.HasPrefix(name, "FACTORY_") || strings.HasPrefix(name, "ORCA_") {
+		if ok && requestScoped(name) {
 			result[name] = value
 		}
 	}
 	return result
+}
+
+func requestScoped(name string) bool {
+	return name == "XDG_CACHE_HOME" || name == "XDG_STATE_HOME" || name == "CEREBRAS_API_KEY" || strings.HasPrefix(name, "CAPT_HOOK_") ||
+		strings.HasPrefix(name, "CAPTAIN_HOOK_") || strings.HasPrefix(name, "HOOKS_") ||
+		strings.HasPrefix(name, "CLAUDE_") || strings.HasPrefix(name, "FACTORY_") || strings.HasPrefix(name, "ORCA_")
 }
 
 func durationFromEnvironment(name string, fallback time.Duration) time.Duration {

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import textwrap
 import time
@@ -69,6 +70,31 @@ def read_evidence(event: PostToolUseEvent) -> None:
     marker.write_text("read")
 """
 ACTOR_BURST = 30
+ACTOR_WORKER_HOOKS = """
+import json
+import os
+import subprocess
+from pathlib import Path
+
+from captain_hook import Event, PostToolUseEvent, actor, on
+
+
+@on(Event.PostToolUse)
+def record_actor(event: PostToolUseEvent) -> None:
+    child = subprocess.run(["env"], capture_output=True, text=True, check=True).stdout
+    Path(event.tool_response).write_text(
+        json.dumps(
+            {
+                "provider": actor.ACTOR.provider,
+                "own_key": os.environ.get("ANTHROPIC_API_KEY"),
+                "child_has_key": "not-a-key" in child,
+                "inherited": os.environ.get("ACTOR_INHERITED"),
+            }
+        )
+    )
+"""
+ACTOR_CALLS = 5
+REQUEST_ID = re.compile(r"dispatch \| .*'request_id': (\d+)")
 
 
 def make_project(root: Path) -> Path:
@@ -266,6 +292,45 @@ def test_a_burst_of_actor_dispatches_all_read_their_evidence(tmp_path: Path) -> 
     assert [(result.returncode, result.stderr[-512:]) for result in results] == [(0, "")] * ACTOR_BURST
     assert [marker.read_text() for marker in markers] == ["read"] * ACTOR_BURST
     assert "admission queue exhausted" not in (resolve_log_dir() / f"{session}.log").read_text()
+
+
+def test_an_actor_keeps_one_worker_that_holds_its_keys(tmp_path: Path) -> None:
+    with TemporaryDirectory(prefix="captain-hook-actor-", dir=Path.home()) as directory:
+        project = Path(directory)
+        hooks = project / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "actor_worker.py").write_text(textwrap.dedent(ACTOR_WORKER_HOOKS))
+        session = uuid.uuid4().hex
+        actor = {"CAPT_HOOK_ACTOR_JUDGE": "claude", "ANTHROPIC_API_KEY": "not-a-key", "ACTOR_INHERITED": "kept"}
+
+        calls = [
+            dispatch(project, "PreToolUse", session, env=actor, tool_name="Bash", tool_input={"command": "ls"})
+            for _ in range(ACTOR_CALLS)
+        ]
+
+        assert [(call.returncode, call.stderr[-512:]) for call in calls] == [(0, "")] * ACTOR_CALLS
+        log = (resolve_log_dir() / f"{session}.log").read_text()
+        assert [int(found) for found in REQUEST_ID.findall(log)] == list(range(1, ACTOR_CALLS + 1))
+        assert len(worker_pids(project)) == 1
+
+        marker = tmp_path / "actor-worker"
+        posted = dispatch(
+            project,
+            "PostToolUse",
+            session,
+            env=actor,
+            tool_name="Bash",
+            tool_input={"command": "ls"},
+            tool_response=str(marker),
+        )
+
+        assert (posted.returncode, posted.stderr[-512:]) == (0, "")
+        assert json.loads(marker.read_text()) == {
+            "provider": "claude",
+            "own_key": None,
+            "child_has_key": False,
+            "inherited": "kept",
+        }
 
 
 def test_a_mismatched_build_is_fenced_from_the_host(project: Path) -> None:

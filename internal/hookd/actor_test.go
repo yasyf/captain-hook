@@ -1,10 +1,13 @@
 package hookd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,9 +45,61 @@ func scriptActor(t *testing.T, evaluation *actorEvaluation) {
 	t.Cleanup(func() { evaluateActor = previous })
 }
 
-func TestRunEvaluatesAnActorEventWithoutTheHost(t *testing.T) {
+func TestRunTakesAnActorEventToTheHostWithItsEnvironment(t *testing.T) {
 	t.Setenv(actorJudgeEnv, "codex")
-	client := scriptedClient{err: errors.New("the host must not be asked")}
+	deny := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"BLOCKED"}}` + "\n"
+	client := scriptedClient{response: wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: deny, Guard: wireproto.GuardCompleted}}
+	scriptClient(t, &client, nil)
+	evaluation := actorEvaluation{err: errors.New("the one-shot evaluator must not run")}
+	scriptActor(t, &evaluation)
+	t.Setenv("OPENAI_API_KEY", actorSentinel)
+	t.Setenv("GH_TOKEN", "inherited")
+	t.Setenv("PWD", "/moves/per/call")
+	code, stdout, stderr := runEvent(t, "PreToolUse", destructivePayload)
+	if code != 0 || stdout != deny || stderr != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want the host's blocking verdict", code, stdout, stderr)
+	}
+	if len(evaluation.judges) != 0 || len(client.actorEnvs) != 1 {
+		t.Fatalf("one-shot=%d host=%d, want the host alone", len(evaluation.judges), len(client.actorEnvs))
+	}
+	env := client.actorEnvs[0]
+	if env[actorJudgeEnv] != "codex" || env["OPENAI_API_KEY"] != actorSentinel || env["GH_TOKEN"] != "inherited" {
+		t.Fatalf("actor environment lacks what its worker needs: %v", slices.Sorted(maps.Keys(env)))
+	}
+	if _, moved := env["PWD"]; moved {
+		t.Fatal("a per-call shell variable would start a new worker on every call")
+	}
+}
+
+func TestRunGradesAnActorEventTheHostTimedOut(t *testing.T) {
+	t.Setenv(actorJudgeEnv, "codex")
+	scriptClient(t, &scriptedClient{err: context.DeadlineExceeded}, nil)
+	scriptLocal(t, &localEvaluation{err: errors.New("the transport fallback must not run")})
+	t.Setenv("OPENAI_API_KEY", actorSentinel)
+	completed := wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Guard: wireproto.GuardCompleted}
+	for name, tc := range map[string]struct {
+		payload string
+		code    int
+		calls   int
+	}{
+		"an advisory call fails visibly": {benignPayload, 1, 0},
+		"a guard is evaluated once more": {destructivePayload, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			evaluation := actorEvaluation{response: completed}
+			scriptActor(t, &evaluation)
+			t.Setenv("OPENAI_API_KEY", actorSentinel)
+			code, _, _ := runEvent(t, "PreToolUse", tc.payload)
+			if code != tc.code || len(evaluation.judges) != tc.calls {
+				t.Fatalf("exit=%d one-shot=%d, want %d %d", code, len(evaluation.judges), tc.code, tc.calls)
+			}
+		})
+	}
+}
+
+func TestRunEvaluatesAnActorEventTheHostRefused(t *testing.T) {
+	t.Setenv(actorJudgeEnv, "codex")
+	client := scriptedClient{err: errors.New("the host refused")}
 	scriptClient(t, &client, nil)
 	local := localEvaluation{err: errors.New("the transport fallback must not run")}
 	scriptLocal(t, &local)

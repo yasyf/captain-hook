@@ -12,6 +12,7 @@ from captain_hook.worker.service import WorkerService, handshake
 
 TRANSCRIPT_PARSE_THREADS = 4
 EVALUATE_EXIT_SECONDS = 1.0
+ACTOR_JUDGE_ENV = "CAPT_HOOK_ACTOR_JUDGE"
 
 
 def bound_transcript_parse_pool() -> None:
@@ -72,6 +73,10 @@ def main() -> None:
     if not handshake(sys.stdin.buffer, protocol_output, build=build):
         protocol_output.close()
         return
+    if judge := os.environ.get(ACTOR_JUDGE_ENV):
+        from captain_hook import actor
+
+        actor.capture(judge)
     from captain_hook.daemon.context import ContextIO
     from captain_hook.daemon.logsink import configure_daemon_logging
 
@@ -131,7 +136,7 @@ def evaluate() -> None:
 
 
 def evaluate_actor(provider: str) -> None:
-    """Answer one event for a remote API-key actor, then finish its background hooks before exiting.
+    """Answer one event for a remote API-key actor whose host did not take it, then finish its background hooks before exiting.
 
     The actor's API keys move from this process's environment into the judge it calls, so no
     hook command or git child inherits them, and the reply is the same ``EventResponse`` a host

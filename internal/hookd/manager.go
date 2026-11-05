@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -242,10 +243,14 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 }
 
 func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
+	return m.dispatchActor(ctx, request, nil)
+}
+
+func (m *workerManager) dispatchActor(ctx context.Context, request wireproto.EventRequest, actorEnv map[string]string) (wireproto.EventResponse, error) {
 	if err := request.Validate(); err != nil {
 		return wireproto.EventResponse{}, err
 	}
-	key, err := makeWorkerKey(request)
+	key, err := makeActorWorkerKey(request, actorEnv)
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
@@ -953,6 +958,10 @@ func (m *workerManager) Close(ctx context.Context) (bool, error) {
 }
 
 func makeWorkerKey(request wireproto.EventRequest) (workerKey, error) {
+	return makeActorWorkerKey(request, nil)
+}
+
+func makeActorWorkerKey(request wireproto.EventRequest, actorEnv map[string]string) (workerKey, error) {
 	root, err := filepath.Abs(request.Root)
 	if err != nil {
 		return workerKey{}, fmt.Errorf("captain: resolve root: %w", err)
@@ -961,6 +970,7 @@ func makeWorkerKey(request wireproto.EventRequest) (workerKey, error) {
 		root = resolved
 	}
 	env := semanticWorkerEnvironment(request.Env)
+	maps.Copy(env, actorEnv)
 	keys := make([]string, 0, len(env))
 	for name := range env {
 		keys = append(keys, name)

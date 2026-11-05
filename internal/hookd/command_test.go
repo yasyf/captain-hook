@@ -23,9 +23,15 @@ const (
 )
 
 type scriptedClient struct {
-	response wireproto.EventResponse
-	err      error
-	requests []wireproto.EventRequest
+	response  wireproto.EventResponse
+	err       error
+	requests  []wireproto.EventRequest
+	actorEnvs []map[string]string
+}
+
+func (c *scriptedClient) ActorEvent(_ context.Context, _ wireproto.EventRequest, env map[string]string) (wireproto.EventResponse, error) {
+	c.actorEnvs = append(c.actorEnvs, env)
+	return c.response, c.err
 }
 
 func (c *scriptedClient) Event(_ context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {

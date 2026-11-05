@@ -20,6 +20,7 @@ const (
 	opTranscript      = "transcript"
 	opEventTranscript = "captain.event.transcript.v1"
 	opEvent           = "captain.event.v1"
+	opActorEvent      = "captain.event.actor.v1"
 	opStatus          = "captain.status.v1"
 	opRestartWorkers  = "captain.restart-workers.v1"
 	opRuntimeHealth   = "captain.host.v1.runtime.health"

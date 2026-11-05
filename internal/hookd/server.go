@@ -78,6 +78,16 @@ type hostProduct struct {
 	monitor   *resourceMonitor
 }
 
+func admitClientEvent(event wireproto.EventRequest, caller daemonkit.Caller) error {
+	if event.ClientPID != caller.PID {
+		return errors.New("captain: event client pid does not match socket peer")
+	}
+	if event.Event == resourceEvent {
+		return fmt.Errorf("captain: %s is a host event and cannot be submitted by a client", resourceEvent)
+	}
+	return nil
+}
+
 func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemonkit.Reply, error) {
 	switch req.Op {
 	case opTranscript, opEventTranscript:
@@ -87,14 +97,24 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 		if err := decodeStrict(req.Body, &event); err != nil {
 			return daemonkit.Reply{}, fmt.Errorf("captain: decode event request: %w", err)
 		}
-		if event.ClientPID != req.Caller.PID {
-			return daemonkit.Reply{}, errors.New("captain: event client pid does not match socket peer")
-		}
-		if event.Event == resourceEvent {
-			return daemonkit.Reply{}, fmt.Errorf("captain: %s is a host event and cannot be submitted by a client", resourceEvent)
+		if err := admitClientEvent(event, req.Caller); err != nil {
+			return daemonkit.Reply{}, err
 		}
 		p.monitor.observe(event, req.Caller.PID)
 		response, err := p.manager.dispatch(ctx, event)
+		if err != nil {
+			return daemonkit.Reply{}, err
+		}
+		return encodeReply(response.Reply())
+	case opActorEvent:
+		var actor actorEventRequest
+		if err := decodeStrict(req.Body, &actor); err != nil {
+			return daemonkit.Reply{}, fmt.Errorf("captain: decode actor event request: %w", err)
+		}
+		if err := admitClientEvent(actor.Request, req.Caller); err != nil {
+			return daemonkit.Reply{}, err
+		}
+		response, err := p.manager.dispatchActor(ctx, actor.Request, actor.Env)
 		if err != nil {
 			return daemonkit.Reply{}, err
 		}

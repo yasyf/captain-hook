@@ -3,6 +3,7 @@ package hookd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +63,75 @@ func scriptedWorker(t *testing.T, manager *workerManager, serve func(conn net.Co
 	worker, serverConn := silentWorker(t)
 	go serve(serverConn)
 	manager.start = func(context.Context, workerKey) (*workerClient, error) { return worker, nil }
+}
+
+func TestConsecutiveActorEventsShareOneWorker(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	frames := make(chan wireproto.Frame, 3)
+	worker, serverConn := silentWorker(t)
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(serverConn)
+			if err != nil {
+				return
+			}
+			frames <- frame
+			_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+				Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID,
+				Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+			})
+		}
+	}()
+	var starts []workerKey
+	manager.start = func(_ context.Context, key workerKey) (*workerClient, error) {
+		starts = append(starts, key)
+		return worker, nil
+	}
+	request := testEventRequest("PostToolUse")
+	request.Root = t.TempDir()
+	env := map[string]string{actorJudgeEnv: "claude", "ANTHROPIC_API_KEY": "synthetic-worker-key"}
+	for range 3 {
+		if _, err := manager.dispatchActor(t.Context(), request, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(starts) != 1 {
+		t.Fatalf("worker starts = %d, want one for every call", len(starts))
+	}
+	for want := uint64(1); want <= 3; want++ {
+		frame := <-frames
+		if frame.ID != want {
+			t.Fatalf("request id = %d, want %d", frame.ID, want)
+		}
+		encoded, err := json.Marshal(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "synthetic-worker-key") {
+			t.Fatalf("the actor's key crossed the worker protocol: %s", encoded)
+		}
+	}
+	command := workerCmd(starts[0], "/python")
+	for _, want := range []string{actorJudgeEnv + "=claude", "ANTHROPIC_API_KEY=synthetic-worker-key"} {
+		if !slices.Contains(command.Env, want) {
+			t.Fatalf("worker environment lacks %q", want)
+		}
+	}
+	rotated, err := makeActorWorkerKey(request, map[string]string{actorJudgeEnv: "claude", "ANTHROPIC_API_KEY": "rotated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.id == starts[0].id {
+		t.Fatal("a rotated key reused the worker holding the old one")
+	}
+	resident, err := makeWorkerKey(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resident.id == starts[0].id {
+		t.Fatal("an actor shares a worker with a client that holds no key")
+	}
 }
 
 func TestDispatchCarriesTheCallerDeadlineToTheWorker(t *testing.T) {
