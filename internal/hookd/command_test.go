@@ -188,6 +188,10 @@ func (c *stalledClient) Event(ctx context.Context, _ wireproto.EventRequest) (wi
 	return wireproto.EventResponse{}, ctx.Err()
 }
 
+func (c *stalledClient) ActorEvent(context.Context, wireproto.EventRequest, map[string]string) (wireproto.EventResponse, error) {
+	return wireproto.EventResponse{}, errors.New("stalledClient serves no actor")
+}
+
 func (c *stalledClient) Close() error { return nil }
 
 func TestRunGivesUpOnAStalledPromptWellInsideClaudeCodesHookTimeout(t *testing.T) {
