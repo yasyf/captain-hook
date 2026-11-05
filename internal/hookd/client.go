@@ -79,6 +79,22 @@ func (c *Client) Event(ctx context.Context, request wireproto.EventRequest) (wir
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
+	return decodeEventResponse(result)
+}
+
+func (c *Client) ActorEvent(ctx context.Context, request wireproto.EventRequest, env map[string]string) (wireproto.EventResponse, error) {
+	payload, err := wireproto.Marshal(actorEventRequest{Request: request, Env: env})
+	if err != nil {
+		return wireproto.EventResponse{}, err
+	}
+	result, err := c.call(ctx, opActorEvent, payload)
+	if err != nil {
+		return wireproto.EventResponse{}, err
+	}
+	return decodeEventResponse(result)
+}
+
+func decodeEventResponse(result []byte) (wireproto.EventResponse, error) {
 	var response wireproto.EventResponse
 	if err := decodeStrict(result, &response); err != nil {
 		return wireproto.EventResponse{}, fmt.Errorf("captain: decode event response: %w", err)

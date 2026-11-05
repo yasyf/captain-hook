@@ -19,6 +19,7 @@ from captain_hook.worker.protocol import (
     EVENT_REQUEST_OPTIONAL_KEYS,
     GUARD_COMPLETED,
     HELLO_KEYS,
+    HELLO_OPTIONAL_KEYS,
     MAX_EVENT_ENVELOPE,
     MAX_EVENT_INPUT,
     MAX_FRAME,
@@ -86,6 +87,7 @@ def python_descriptor() -> dict[str, object]:
         "fields": {
             "worker_frame": sorted(
                 HELLO_KEYS
+                | HELLO_OPTIONAL_KEYS
                 | SNAPSHOT_FRAME_FIELDS
                 | EVENT_FRAME_KEYS
                 | set(result_response(1, EventResponse()))

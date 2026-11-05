@@ -174,6 +174,19 @@ def test_handshake_answers_hello_and_graceful_eof() -> None:
     assert not handshake(io.BytesIO(b""), io.BytesIO(), build="12.9.1")
 
 
+def test_handshake_takes_the_actor_environment_and_a_bad_one_stays_out_of_the_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTOR_ARRIVES", "unset")
+    message = hello() | {"actor_env": {"ACTOR_ARRIVES": "here"}}
+    assert handshake(io.BytesIO(frame(message)), io.BytesIO(), build="12.9.1")
+    assert os.environ["ACTOR_ARRIVES"] == "here"
+
+    with pytest.raises(ProtocolError) as refused:
+        handshake(io.BytesIO(frame(hello() | {"actor_env": {"KEY": "planted", "N": 1}})), io.BytesIO(), build="12.9.1")
+    assert "planted" not in str(refused.value)
+
+
 def test_service_nested_result_and_graceful_eof() -> None:
     output_stream = io.BytesIO()
 

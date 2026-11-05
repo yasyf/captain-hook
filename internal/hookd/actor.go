@@ -3,8 +3,13 @@ package hookd
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -16,8 +21,15 @@ import (
 
 const actorJudgeEnv = "CAPT_HOOK_ACTOR_JUDGE"
 
+type actorEventRequest struct {
+	Request wireproto.EventRequest `json:"request"`
+	Env     map[string]string      `json:"env"`
+}
+
 var (
-	actorKeys = map[string][]string{
+	actorShellEnv     = []string{"_", "PWD", "OLDPWD", "SHLVL"}
+	actorIdentitySalt = rand.Text()
+	actorKeys         = map[string][]string{
 		"codex":  {"OPENAI_API_KEY", "CODEX_API_KEY"},
 		"claude": {"ANTHROPIC_API_KEY"},
 	}
@@ -42,6 +54,36 @@ func actorBudget(event string, timeout time.Duration) time.Duration {
 		return min(timeout, native-2*actorReapGrace)
 	}
 	return timeout
+}
+
+func actorEnvironment(environ []string) map[string]string {
+	result := make(map[string]string)
+	for _, item := range environ {
+		name, value, ok := strings.Cut(item, "=")
+		if ok && (name == actorJudgeEnv || !requestScoped(name) && !slices.Contains(actorShellEnv, name)) {
+			result[name] = value
+		}
+	}
+	return result
+}
+
+func actorIdentity(salt string, env map[string]string) string {
+	mac := hmac.New(sha256.New, []byte(salt))
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		fmt.Fprintf(mac, "%q=%q\n", name, env[name])
+	}
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func dispatchResidentActor(request wireproto.EventRequest, timeout time.Duration) (wireproto.EventResponse, error) {
+	client, err := openEventClient()
+	if err != nil {
+		return wireproto.EventResponse{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), actorBudget(request.Event, timeout))
+	defer cancel()
+	return client.ActorEvent(ctx, request, actorEnvironment(os.Environ()))
 }
 
 var evaluateActor = func(request wireproto.EventRequest, judge string, timeout time.Duration) (wireproto.EventResponse, error) {

@@ -140,9 +140,13 @@ func (w *workerClient) notifySettled(n int) {
 }
 
 func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerClient, error) {
+	return handshakeActorWorker(ctx, conn, build, nil)
+}
+
+func handshakeActorWorker(ctx context.Context, conn net.Conn, build string, actorEnv map[string]string) (*workerClient, error) {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if err := wireproto.EncodeFrame(conn, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: build}); err != nil {
+	if err := wireproto.EncodeFrame(conn, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: build, ActorEnv: actorEnv}); err != nil {
 		return nil, err
 	}
 	response, err := wireproto.DecodeFrame(conn)

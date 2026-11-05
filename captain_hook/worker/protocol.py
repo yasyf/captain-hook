@@ -34,6 +34,7 @@ OP_ABANDON = "abandon"
 SNAPSHOT_FRAME_FIELDS = frozenset({"snapshot", "snapshot_context", "snapshot_config", "parent_id"})
 
 HELLO_KEYS = frozenset({"protocol", "op", "build"})
+HELLO_OPTIONAL_KEYS = frozenset({"actor_env"})
 EVENT_FRAME_KEYS = frozenset({"protocol", "op", "id", "request"})
 ABANDON_FRAME_KEYS = frozenset({"protocol", "op", "id"})
 EVENT_REQUEST_KEYS = frozenset(
@@ -61,6 +62,7 @@ class ProtocolError(Exception):
 @dataclass(frozen=True, slots=True)
 class Hello:
     build: str
+    actor_env: dict[str, str] = field(default_factory=dict[str, str], repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,16 +142,19 @@ def write_message(stream: BinaryIO, message: dict[str, object], *, max_frame: in
 
 
 def decode_hello(message: dict[str, Any]) -> Hello:
+    actor_env = message.get("actor_env", {})
     if (
-        set(message) != HELLO_KEYS
+        not HELLO_KEYS <= set(message) <= HELLO_KEYS | HELLO_OPTIONAL_KEYS
         or type(message["protocol"]) is not int
         or message["protocol"] != PROTOCOL
         or message["op"] != OP_HELLO
         or type(message["build"]) is not str
         or message["build"] == ""
+        or type(actor_env) is not dict
+        or not all(type(key) is str and type(value) is str for key, value in actor_env.items())
     ):
-        raise ProtocolError(f"invalid hello shape: {message!r}")
-    return Hello(build=message["build"])
+        raise ProtocolError(f"invalid hello shape: {sorted(message)!r}")
+    return Hello(build=message["build"], actor_env=actor_env)
 
 
 def decode_event(message: dict[str, Any]) -> EventRequest:

@@ -23,9 +23,15 @@ const (
 )
 
 type scriptedClient struct {
-	response wireproto.EventResponse
-	err      error
-	requests []wireproto.EventRequest
+	response  wireproto.EventResponse
+	err       error
+	requests  []wireproto.EventRequest
+	actorEnvs []map[string]string
+}
+
+func (c *scriptedClient) ActorEvent(_ context.Context, _ wireproto.EventRequest, env map[string]string) (wireproto.EventResponse, error) {
+	c.actorEnvs = append(c.actorEnvs, env)
+	return c.response, c.err
 }
 
 func (c *scriptedClient) Event(_ context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
@@ -132,6 +138,10 @@ func (c *flakyClient) Event(_ context.Context, _ wireproto.EventRequest) (wirepr
 	return c.response, nil
 }
 
+func (c *flakyClient) ActorEvent(context.Context, wireproto.EventRequest, map[string]string) (wireproto.EventResponse, error) {
+	return wireproto.EventResponse{}, errors.New("flakyClient serves no actor")
+}
+
 func (c *flakyClient) Close() error { return nil }
 
 func TestRunRetriesATimedOutGuardOnceThenSkips(t *testing.T) {
@@ -176,6 +186,10 @@ func (c *stalledClient) Event(ctx context.Context, _ wireproto.EventRequest) (wi
 	c.budget = time.Until(deadline)
 	<-ctx.Done()
 	return wireproto.EventResponse{}, ctx.Err()
+}
+
+func (c *stalledClient) ActorEvent(context.Context, wireproto.EventRequest, map[string]string) (wireproto.EventResponse, error) {
+	return wireproto.EventResponse{}, errors.New("stalledClient serves no actor")
 }
 
 func (c *stalledClient) Close() error { return nil }
