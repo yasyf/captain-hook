@@ -207,10 +207,7 @@ ORCA_PAYLOADS = {
 }
 HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
-ORCA_STOP_FIX = (
-    "End a done lane with `lr gc --done <ctx>`, which stops its worker and reclaims its terminal and worktree."
-    " A literal worker-stop passes only from the session coordinating the dispatch's Run."
-)
+ORCA_STOP_FIX = "End a done lane with `lr gc --done <ctx>`; only its Run's coordinator may worker-stop it."
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
 CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
 KEY_ALIASES = {

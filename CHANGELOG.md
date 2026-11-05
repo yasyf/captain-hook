@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A refused worker-stop names the verb that ends a done lane.** The refusal said only the root coordinating
   a Run stops a done lane, so a root that launched the lane through a desk, and so coordinates no Run of it, read
   itself refused against its own rule. It now leads with `lr gc --done <ctx>`, the drive's verb for ending a done
-  lane, and says a literal worker-stop passes only from the session coordinating the dispatch's Run.
+  lane, and says only the Run's coordinator may send a literal worker-stop.
 - **A finished refusal stands when the second asking cannot finish.** `Decide` asks the LLM again after one
   refusal; when that second asking timed out, the ticket check reported no verdict and a Slack write went ahead
   unchecked, even though the judge had refused it. A judge that finishes no asking at all is still undecided.
