@@ -208,7 +208,8 @@ ORCA_PAYLOADS = {
 HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
 ORCA_STOP_FIX = (
-    "Only the root coordinating its Run stops a done lane: one literal worker-stop, or `orca-reclaim.py --done <ctx>`."
+    "End a done lane with `lr gc --done <ctx>`, which stops its worker and reclaims its terminal and worktree."
+    " A literal worker-stop passes only from the session coordinating the dispatch's Run."
 )
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
 CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
@@ -1130,7 +1131,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
             command=f"orca orchestration worker-stop --dispatch {STOPPED}",
             commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
             env={"ORCA_TERMINAL_HANDLE": "term_lane"},
-        ): Block(pattern="Only the root coordinating its Run"),
+        ): Block(pattern="End a done lane with `lr gc --done <ctx>`"),
         settling(
             command=f"orca orchestration worker-stop --dispatch {STOPPED}",
             commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED)},
@@ -1139,7 +1140,7 @@ def orca_vm_run_flag(call: Call) -> str | None:
         settling(
             command=f"orca orchestration worker-stop --dispatch {STOPPED}",
             commands={**SETTLED_COMMANDS, **inline_dispatch(STOPPED, "run_other")},
-        ): Block(pattern="worker-stop ends the worker"),
+        ): Block(pattern="End a done lane with `lr gc --done <ctx>`"),
         settling(command=f"orca orchestration worker-stop --dispatch {STOPPED}", commands=SETTLED_COMMANDS): Block(
             pattern="worker-stop ends the worker"
         ),
