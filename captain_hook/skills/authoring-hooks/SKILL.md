@@ -265,6 +265,8 @@ In order of preference:
 | The rule is real but blocking is disproportionate | **Demote `block=True` → `Warn`** (or `block_command` → `warn_command`) |
 | The rule no longer holds at all | **Remove the registration** (and say so in the PR body) |
 
+An amendment that changes a shared helper's result reaches every hook importing it. Run `ccx code symbol --callers` on the helper first. If another hook relies on the old result, leave the helper alone and add one that only the amended hook calls.
+
 ### 3. Write the regression test — MANDATORY
 
 Every fix ships a regression test reproducing the misfire inside the hook's
