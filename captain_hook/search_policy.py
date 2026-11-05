@@ -794,6 +794,12 @@ def settled(roots: Iterable[Target]) -> Iterator[Target]:
     return (known for target in roots for known in expansion_targets(target))
 
 
+def names_file(target: Target, path: Path | None) -> bool:
+    return path is not None and (
+        path.is_file() or (not target.has_glob and not path.is_dir() and narrows(path.suffix))
+    )
+
+
 def names_files(target: Target) -> bool:
     match target.value:
         case str(value) if target.has_glob:
@@ -863,7 +869,7 @@ def pool_member(target: Target, lexical: Path, root: Path) -> bool:
 
 
 def spans_checkouts(target: Target) -> bool:
-    if (path := target.path) is not None and path.is_file():
+    if names_file(target, target.path):
         return False
     if (lexical := written(target)) is None:
         return True
@@ -881,7 +887,7 @@ def broad(
     path = target.path
     return (
         not names_files(target)
-        and (not (path is not None and path.is_file()))
+        and not names_file(target, path)
         and (
             BROAD_ROOTS(target)
             or at_home(target)
@@ -957,7 +963,7 @@ def grep_searches_broadly(arguments: Arguments) -> bool:
     return recursive(arguments) and (
         not (roots := named_roots(arguments)).complete
         or any(
-            target.value != "-" and (target.has_glob or not ((path := target.path) is not None and path.is_file()))
+            target.value != "-" and (target.has_glob or not names_file(target, target.path))
             for target in roots or (Target(".", ".", arguments.cwd),)
             if not names_only_files(target)
         )
@@ -1131,7 +1137,7 @@ def du_roots_vanish(arguments: Arguments) -> bool:
 
 
 def protected(target: Target) -> bool:
-    if target.value is None or names_files(target) or (root := written(target)) is None or root.is_file():
+    if target.value is None or names_files(target) or (root := written(target)) is None or names_file(target, root):
         return False
     anchor = Target(str(root), str(root), None)
     return (PROTECTED_ROOTS(anchor) or locally_protected(root)) and not (
