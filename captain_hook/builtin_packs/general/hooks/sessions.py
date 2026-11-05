@@ -196,6 +196,7 @@ ORCA_ENDINGS = {
     "worktree": frozenset({"rm", "remove", "delete"}),
     "orchestration": frozenset({"worker-stop", "worker-release", "coordinator-stop", "run-stop"}),
 }
+ORCA_INERT_GROUPS = ORCA_GROUPS - {*ORCA_ENDINGS, "vm"}
 ORCA_PAYLOADS = {
     "hotkey": "key",
     "press-key": "key",
@@ -885,6 +886,8 @@ def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | 
         return orca_ending(spelling, *found, arguments)
     group = values.get("group", ())
     verb = values.get("verb", ())
+    if group and group[0] in ORCA_INERT_GROUPS:
+        return None
     if None in group or None in verb:
         return (
             f"BLOCKED: `{spelling}` names its orca group or verb at run time, so it may close a terminal, remove a "
@@ -1192,6 +1195,13 @@ def orca_vm_run_flag(call: Call) -> str | None:
         ),
         guarded(command="orca --bogus terminal close"): Block(),
         guarded(command="orca --bogus status"): Block(pattern="hides its orca group or verb behind `--bogus`"),
+        guarded(command="orca eval --page http://localhost:3000 --expression 'document.title'"): Allow(),
+        guarded(command="orca exec --page 2 --script ./probe.js --json"): Allow(),
+        guarded(command='orca eval "$EXPR"'): Allow(),
+        guarded(command="orca terminal --bogus close"): Block(pattern="closes the current terminal"),
+        guarded(command="orca terminal --bogus x"): Block(pattern="hides its orca group or verb behind `--bogus`"),
+        guarded(command="orca vm --bogus x"): Block(pattern="hides its orca group or verb behind `--bogus`"),
+        guarded(command="orca eval --page 1 terminal close"): Block(pattern="closes the current terminal"),
         guarded(command="orca nuke everything"): Warn(pattern="does not know"),
         guarded(command="orca plugin list"): Allow(),
         guarded(command="orca plugin --help"): Allow(),
