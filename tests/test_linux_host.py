@@ -158,6 +158,11 @@ def worker_pids(root: Path) -> set[int]:
     return {worker["pid"] for worker in host_status(root)["workers"] if worker["root"] == str(root)}
 
 
+def worker_log(root: Path) -> str:
+    digest = hashlib.sha256(str(root.resolve()).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return "".join(path.read_text() for path in resolve_log_dir().glob(f"daemon-*-{digest}-*.log"))
+
+
 def reuse_log_tail(path: Path) -> str:
     try:
         with path.open("rb") as stream:
@@ -291,7 +296,7 @@ def test_a_burst_of_actor_dispatches_all_read_their_evidence(tmp_path: Path) -> 
 
     assert [(result.returncode, result.stderr[-512:]) for result in results] == [(0, "")] * ACTOR_BURST
     assert [marker.read_text() for marker in markers] == ["read"] * ACTOR_BURST
-    assert "admission queue exhausted" not in (resolve_log_dir() / f"{session}.log").read_text()
+    assert "admission queue exhausted" not in worker_log(project)
 
 
 def test_an_actor_keeps_one_worker_that_holds_its_keys(tmp_path: Path) -> None:
@@ -310,8 +315,7 @@ def test_an_actor_keeps_one_worker_that_holds_its_keys(tmp_path: Path) -> None:
         ]
 
         assert [(call.returncode, call.stderr[-512:]) for call in calls] == [(0, "")] * ACTOR_CALLS
-        log = (resolve_log_dir() / f"{session}.log").read_text()
-        assert [int(found) for found in REQUEST_ID.findall(log)] == list(range(1, ACTOR_CALLS + 1))
+        assert [int(found) for found in REQUEST_ID.findall(worker_log(project))] == list(range(1, ACTOR_CALLS + 1))
         assert len(worker_pids(project)) == 1
 
         marker = tmp_path / "actor-worker"

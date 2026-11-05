@@ -89,7 +89,7 @@ func TestConsecutiveActorEventsShareOneWorker(t *testing.T) {
 		return worker, nil
 	}
 	request := testEventRequest("PostToolUse")
-	request.Root = t.TempDir()
+	request.Root = "/live"
 	env := map[string]string{actorJudgeEnv: "claude", "ANTHROPIC_API_KEY": "synthetic-worker-key"}
 	for range 3 {
 		if _, err := manager.dispatchActor(t.Context(), request, env); err != nil {
