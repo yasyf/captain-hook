@@ -194,7 +194,7 @@ SEARCH_RULE, FILES_RULE, FIND_RULE, EMPTY_ROOT_RULE, PROTECTED_ROOT_RULE = searc
     pack_roots=registered_pack_roots
 )
 LAYOUT = {
-    "HOOKS_LAYOUT_PROTECTED_ROOTS": '["~/.local/share/jobs", "~/src"]',
+    "HOOKS_LAYOUT_PROTECTED_ROOTS": '["~/.local/share/jobs", "~/src", "~/.modcache"]',
     "HOOKS_LAYOUT_SEARCHABLE_UNITS": '["~/.local/share/jobs/*/payload"]',
     "HOOKS_LAYOUT_CHECKOUT_COLLECTIONS": '["~/src"]',
     "HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/lanes": 1}',
@@ -670,6 +670,11 @@ hook(
         Input(command="rg needle ~/.cache/tool/*/job.json"): Allow(),
         Input(command="rg -n needle ~/.cache/ci/shard-1.log ~/.cache/ci/shard-2.log ~/.cache/ci/shrad-3.log"): Allow(),
         Input(command="rg -n Dial ~/.cache/go-mod/github.com/acme/rpc@v1.7.10/client.go"): Allow(),
+        Input(command="rg -n Dial ~/.cache/go-mod/github.com/acme/rpc@v1.7.10"): Allow(),
+        Input(command="rg -n Dial ~/.modcache/github.com/!acme/rpc@v0.0.0-20240101-abcdef", env=LAYOUT): Allow(),
+        Input(command="rg -n Dial ~/.modcache", env=LAYOUT): Block(pattern="walks gigabytes"),
+        Input(command="rg -n Dial ~/.modcache/github.com/acme", env=LAYOUT): Block(),
+        Input(command="rg -n Dial ~/.cache/go-mod"): Block(),
         Input(command="grep -rn needle ~/.cache/ci/shard-1.log"): Allow(),
         Input(command="rg -n needle ~/.cache/ci ~/.cache/ci/shard-1.log"): Block(pattern="known depth"),
         Input(command="rg -n needle ~/.cache/ci.d/*"): Block(),
