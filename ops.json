@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"session":"72c2336c-375c-42d0-af9f-356b617fc964","ops":[{"kind":"verify_note","witness":[{"anchor":{"kind":"path","value":"captain_hook/snapshots/client.py"},"oid":"168c3e1156da377c920b36cc3dfb9560df740173"}],"verified_commit":"5ac602fcbdbf1dbd8f2619b8c02bafde8b1c94f0"}]}
+{"v":1,"lamport":3,"session":"72c2336c-375c-42d0-af9f-356b617fc964","ops":[{"kind":"add_superseded_by","id":"391c23c71616ded2db97edf6ebe219fdadbdce12"}]}
