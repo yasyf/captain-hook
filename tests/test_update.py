@@ -30,6 +30,7 @@ def homebrew_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def alias_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(updater, "physical", lambda candidate: candidate)
+    monkeypatch.setattr(updater, "cli_path", lambda: None)
 
 
 @pytest.fixture
@@ -150,6 +151,38 @@ def test_run_update_upgrades_when_host_is_older(
     assert notes == [
         {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 2.0.0."}
     ]
+
+
+def test_run_update_pins_a_uv_tool_cli_to_the_host_it_settled_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, notes: list[dict[str, object]]
+) -> None:
+    (env := tmp_path / "tools" / "capt-hook" / "bin").mkdir(parents=True)
+    (env.parent / updater.UV_RECEIPT).write_text("[tool]\n")
+    cli = env / "capt-hook"
+    monkeypatch.setattr(updater, "cli_path", lambda: cli)
+    stub_release(monkeypatch, "v2.0.0")
+    calls = record_brew(monkeypatch, 0)
+    stub_converging(monkeypatch, "1.0.0", "2.0.0", on="upgrade")
+    brewing = updater.subprocess.run
+
+    def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        if argv[1:] != ["--version"]:
+            return brewing(argv, **kwargs)
+        calls.append(argv)
+        pinned = ["uv", "tool", "install", "--refresh-package", "capt-hook", "capt-hook==2.0.0"] in calls
+        return SimpleNamespace(returncode=0, stdout=f"capt-hook {'2.0.0' if pinned else '1.0.0'}\n", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    updater.run_update()
+
+    assert calls == [
+        UPGRADE,
+        ["uv", "tool", "install", "--refresh-package", "capt-hook", "capt-hook==2.0.0"],
+        [str(cli), "--version"],
+    ]
+    assert "update ok: 1.0.0 -> 2.0.0; the capt-hook CLI reads 2.0.0" in updater.update_log_path().read_text()
+    assert [note["kind"] for note in notes] == ["update_installed"]
 
 
 def test_run_update_settles_without_package_install_once_the_host_reaches_the_release(

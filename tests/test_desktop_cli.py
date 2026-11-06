@@ -8,13 +8,16 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
 
 from captain_hook.cli import cli
 from captain_hook.desktop import FORMULA, client
+from captain_hook.desktop import cli as helper_cli
 from captain_hook.desktop.client import Lane, NotifyOutcome
 from captain_hook.update import updater
 
@@ -25,12 +28,47 @@ PREFIX = ["brew", "--prefix", FORMULA]
 PACKAGE_INSTALL = [f"{CELLAR}/{updater.CELLAR_HOST}", "package-install"]
 VERSION = [f"{CELLAR}/{updater.CELLAR_HOST}", "version"]
 RELEASE = "v12.22.4"
+PIN = ["uv", "tool", "install", "--refresh-package", "capt-hook", "capt-hook==12.22.4"]
 
 
 @pytest.fixture(autouse=True)
 def latest_release(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(updater, "github_get_json", lambda url: {"tag_name": RELEASE})
     monkeypatch.setattr(updater, "physical", lambda candidate: candidate)
+    monkeypatch.setattr(updater, "cli_path", lambda: None)
+
+
+def stub_cli(monkeypatch: pytest.MonkeyPatch, root: Path, *, uv_tool: bool) -> Path:
+    (env := root / "tools" / "capt-hook" / "bin").mkdir(parents=True)
+    if uv_tool:
+        (env.parent / updater.UV_RECEIPT).write_text('[tool]\nrequirements = [{ name = "capt-hook" }]\n')
+    monkeypatch.setattr(updater, "cli_path", lambda: env / "capt-hook")
+    return env / "capt-hook"
+
+
+def record_uv(
+    monkeypatch: pytest.MonkeyPatch, calls: list[list[str]], *, reads: str, takes: bool = True
+) -> list[dict[str, str]]:
+    cli = {"version": reads}
+    envs: list[dict[str, str]] = []
+    brewing = subprocess.run
+
+    def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        if argv[0] == "uv":
+            calls.append(argv)
+            envs.append(kwargs["env"])
+            if takes:
+                cli["version"] = argv[-1].removeprefix("capt-hook==")
+            return SimpleNamespace(returncode=0 if takes else 2, stdout="", stderr="uv error")
+        if argv[1:] == ["--version"]:
+            calls.append(argv)
+            return SimpleNamespace(
+                returncode=0, stdout=f"capt-hook {cli['version']} (cc-transcript 14.0.0)\n", stderr=""
+            )
+        return brewing(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return envs
 
 
 def invoke(*args: str):  # noqa: ANN201 - click Result
@@ -179,11 +217,68 @@ def test_install_narrates_the_deploy_and_surfaces_why_package_install_failed(mon
     assert str(updater.update_log_path()) in result.stderr
 
 
+def test_install_pins_a_uv_tool_cli_to_the_helper_version_it_landed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cli = stub_cli(monkeypatch, tmp_path, uv_tool=True)
+    calls = record_brew(monkeypatch, cellar="12.22.4", host=stub_host(monkeypatch, "12.21.6"))
+    envs = record_uv(monkeypatch, calls, reads="12.21.6")
+    result = invoke("install")
+    assert result.exit_code == 0, result.output
+    assert calls[-2:] == [PIN, [str(cli), "--version"]]
+    [env] = envs
+    assert env["UV_TOOL_DIR"] == str(cli.parent.parent.parent)
+    assert "Captain Hook 12.22.4 installed; the capt-hook CLI reads 12.22.4." in result.output
+
+
+def test_install_fails_when_the_uv_tool_cli_does_not_reach_the_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_cli(monkeypatch, tmp_path, uv_tool=True)
+    calls = record_brew(monkeypatch, cellar="12.22.4", host=stub_host(monkeypatch, "12.21.6"))
+    record_uv(monkeypatch, calls, reads="12.21.6", takes=False)
+    result = invoke("install")
+    assert result.exit_code != 0
+    assert "Captain Hook 12.22.4 installed, but the capt-hook CLI reads 12.21.6" in result.output
+    assert "uv tool install capt-hook==12.22.4 exit 2" in result.stderr
+    assert "System Settings" not in result.output
+
+
+def test_install_reports_a_cli_uv_does_not_manage_without_changing_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cli = stub_cli(monkeypatch, tmp_path, uv_tool=False)
+    calls = record_brew(monkeypatch, cellar="12.22.4", host=stub_host(monkeypatch, "12.21.6"))
+    record_uv(monkeypatch, calls, reads="12.21.6")
+    result = invoke("install")
+    assert result.exit_code == 0, result.output
+    assert calls == [INSTALL, PREFIX, VERSION, PACKAGE_INSTALL]
+    assert f"the capt-hook CLI at {cli} is not a uv tool, so it is left as is" in result.output
+
+
 def test_status_pings_and_prints_version(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "send", lambda _: {"ok": True, "version": "1.0.0"})
+    monkeypatch.setattr(helper_cli, "version", lambda _: "1.0.0")
     result = invoke("status")
     assert result.exit_code == 0, result.output
-    assert "helper v1.0.0 ok=True" in result.output
+    assert "helper v1.0.0 ok=True cli v1.0.0" in result.output
+
+
+@pytest.mark.parametrize(
+    ("helper", "cli", "fix"),
+    [
+        ("12.22.4", "12.21.6", "uv tool install capt-hook==12.22.4"),
+        ("12.21.6", "12.22.4", "capt-hook helper install"),
+    ],
+)
+def test_status_fails_on_a_cli_that_runs_another_version_than_the_helper(
+    monkeypatch: pytest.MonkeyPatch, helper: str, cli: str, fix: str
+) -> None:
+    monkeypatch.setattr(client, "send", lambda _: {"ok": True, "version": helper})
+    monkeypatch.setattr(helper_cli, "version", lambda _: cli)
+    result = invoke("status")
+    assert result.exit_code != 0
+    assert f"the capt-hook CLI v{cli} does not match the helper v{helper}; run `{fix}`" in result.output
 
 
 def test_status_reports_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:

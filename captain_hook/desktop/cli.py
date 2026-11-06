@@ -1,25 +1,30 @@
 """The ``capt-hook helper`` command group — install, ping, and test the desktop helper.
 
 These are the user-facing surface for ``Captain Hook.app``: ``install`` converges the formula-owned
-signed deployment onto the latest release, ``status`` pings the running helper, and ``notify`` fires a
-test banner through :mod:`captain_hook.desktop.client`. Every side effect (brew or the signed bridge)
+signed deployment onto the latest release and re-pins a uv-tool ``capt-hook`` CLI to the version it
+landed, ``status`` pings the running helper and checks this CLI runs its version, and ``notify`` fires a
+test banner through :mod:`captain_hook.desktop.client`. Every side effect (brew, uv, or the signed bridge)
 runs only when the command is invoked, never at import.
 """
 
 from __future__ import annotations
 
 import subprocess
+from importlib.metadata import version
 
 import click
 
 from captain_hook.desktop import FORMULA, client
 from captain_hook.update.updater import (
+    CLI,
     brew,
     converge,
+    follow_cli,
     host_at_least,
     installed_version,
     latest_release_tag,
     update_log_path,
+    version_tuple,
 )
 
 
@@ -36,7 +41,7 @@ def cellar_version() -> str:
 
 @helper.command()
 def install() -> None:
-    """Install or upgrade the signed helper deployment to the latest release via Homebrew."""
+    """Install or upgrade the signed helper to the latest release via Homebrew, and pin a uv-tool CLI to it."""
     target = latest_release_tag()
     click.echo(f"Installing {FORMULA} with Homebrew...", err=True)
     if not brew(["install", "--formula", FORMULA], stream=True):
@@ -54,8 +59,12 @@ def install() -> None:
             "The Cellar copy is not the deployment; nothing is installed until the host answers. "
             f"The failing step's output is printed above; {update_log_path()} records each step's exit."
         )
+    if not (cli := follow_cli(host, stream=True)).ok:
+        raise click.ClickException(
+            f"Captain Hook {host} installed, but {cli.report}. {update_log_path()} records the uv step's exit."
+        )
     click.echo(
-        f"Captain Hook {host} installed. Grant notification permission under "
+        f"Captain Hook {host} installed; {cli.report}. Grant notification permission under "
         "System Settings > Notifications > Captain Hook, then add the review widget via "
         "Edit Widgets in Notification Center."
     )
@@ -63,12 +72,17 @@ def install() -> None:
 
 @helper.command()
 def status() -> None:
-    """Ping the running helper and print its reported version."""
+    """Ping the running helper, print its version, and fail when this CLI runs a different one."""
     try:
         reply = client.send("ping")
     except (OSError, ValueError) as exc:
         raise click.ClickException(f"helper not reachable: {exc}") from exc
-    click.echo(f"helper v{reply.get('version')} ok={reply.get('ok')}")
+    host, cli = str(reply.get("version")), version(CLI)
+    click.echo(f"helper v{host} ok={reply.get('ok')} cli v{cli}")
+    if host == cli:
+        return
+    fix = f"{CLI} helper install" if version_tuple(host) < version_tuple(cli) else f"uv tool install {CLI}=={host}"
+    raise click.ClickException(f"the {CLI} CLI v{cli} does not match the helper v{host}; run `{fix}`")
 
 
 @helper.command()
