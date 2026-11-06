@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Codex lane may stop a process its own session started.** The sessions guard refused a Codex lane's `kill`
+  of its own `ccx vcs pr watch`, because Codex records no per-task creation identity for what it spawns. A process
+  whose nearest agent ancestor in the current process table is the calling hook's own `codex` session, one that
+  hosts a single session rather than an `app-server`, now passes. Another session's child, a Claude caller's
+  reach into a Codex child, and anything under a shared app-server stay refused as before.
 - **A refused worker-stop names the verb that ends a done lane.** The refusal said only the root coordinating
   a Run stops a done lane, so a root that launched the lane through a desk, and so coordinates no Run of it, read
   itself refused against its own rule. It now leads with `lr gc --done <ctx>`, the drive's verb for ending a done

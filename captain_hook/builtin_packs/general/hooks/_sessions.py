@@ -498,6 +498,10 @@ def one_shot(row: ProcessRow) -> bool:
     return row.argv0 == "codex" and "exec" in tokens and "--ephemeral" in tokens
 
 
+def single_codex_session(row: ProcessRow) -> bool:
+    return row.argv0 == "codex" and "app-server" not in row.command.split()
+
+
 def lone_codex_session(row: ProcessRow, table: ProcessTable) -> bool:
     return row.argv0 == "codex" and not any(process_class(below) for below in table.descendants(row.pid))
 
@@ -884,6 +888,8 @@ def pid_verdict(
         return None
     agent = ownership.table.nearest(row.ppid, is_agent)
     if facts.spawned_here(row) and agent in (None, ownership.owner):
+        return None
+    if agent is not None and agent == ownership.owner and single_codex_session(agent):
         return None
     if agent is None and scratch_orphan(row):
         logger.bind(pid=pid, command=row.command, started=row.started).warning(
