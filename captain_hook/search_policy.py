@@ -112,17 +112,21 @@ PROTECTED_ROOTS = PathMatches(
 
 
 SCOPED_UNITS = PathMatches(
-    tuple(
-        f"{home}{suffix}"
-        for home in HOMES
-        for suffix in (
-            "/.claude/plugins/cache/*/*/*",
-            "/.claude/plugins/cache/*/*/*/**",
-            "/.claude/plugins/marketplaces/*",
-            "/.claude/plugins/marketplaces/*/**",
-            "/.claude/projects/*/memory",
-            "/.claude/projects/*/memory/**",
-        )
+    (
+        *(
+            f"{home}{suffix}"
+            for home in HOMES
+            for suffix in (
+                "/.claude/plugins/cache/*/*/*",
+                "/.claude/plugins/cache/*/*/*/**",
+                "/.claude/plugins/marketplaces/*",
+                "/.claude/plugins/marketplaces/*/**",
+                "/.claude/projects/*/memory",
+                "/.claude/projects/*/memory/**",
+            )
+        ),
+        "**/*@v[0-9]*",
+        "**/*@v[0-9]*/**",
     )
 )
 
@@ -795,9 +799,7 @@ def settled(roots: Iterable[Target]) -> Iterator[Target]:
 
 
 def names_file(target: Target, path: Path | None) -> bool:
-    return path is not None and (
-        path.is_file() or (not target.has_glob and not path.is_dir() and narrows(path.suffix))
-    )
+    return path is not None and (path.is_file() or (not target.has_glob and not path.is_dir() and narrows(path.suffix)))
 
 
 def names_files(target: Target) -> bool:

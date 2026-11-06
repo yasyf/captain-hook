@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A search of one Go module version directory passes the protected-root guard.** The guard refused `rg` or
+  `find` over a single module version directory such as `<modcache>/github.com/acme/rpc@v1.7.10` under `~/.cache`
+  or a `HOOKS_LAYOUT_PROTECTED_ROOTS` root, then named a version directory as the fix. A directory whose name
+  carries a `@v<digit>` version is now a bounded unit, as a plugin cache version directory already was. The module cache
+  root and a directory holding several modules stay refused.
 - **A Codex lane may stop a process its own session started.** The sessions guard refused a Codex lane's `kill`
   of its own `ccx vcs pr watch`, because Codex records no per-task creation identity for what it spawns. A process
   whose nearest agent ancestor in the current process table is the calling hook's own `codex` session, one that
