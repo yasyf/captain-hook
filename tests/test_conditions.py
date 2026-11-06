@@ -1339,6 +1339,26 @@ class TestRanCommandCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(RanCommand("codex", "exec"), evt) is False
 
+    def test_a_call_whose_output_is_over_the_record_bound_is_kept_clipped(
+        self, tmp_path: Path, snapshot_owner: FixtureOwner
+    ) -> None:
+        output = 'prod "log" line\n' * (2 * 1024 * 1024 // 16)
+        path = tmp_path / "session.jsonl"
+        lines = [
+            raw_text("user", "read the prod logs"),
+            raw_assistant(raw_tool_use("Bash", {"command": "cat prod.log"}, "big")),
+            raw_tool_result("big", output, {"stdout": output}),
+        ]
+        path.write_text("".join(json.dumps(fixture_line(index, line)) + "\n" for index, line in enumerate(lines)))
+        transcript = snapshot_owner.load(path)
+        assert len(transcript.events) == 3
+        (use,) = transcript.tool_calls.named("Bash").items
+        assert use.call.command == "cat prod.log"
+        assert len(use.result.content.encode()) < 1024 * 1024
+        assert use.result.content.endswith(f"<clipped from {len(output)} bytes>")
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=build_ctx(transcript=transcript))
+        assert check_condition(RanCommand("cat", "prod.log"), evt) is True
+
 
 class TestInPlanModeCondition:
     @pytest.mark.parametrize(
