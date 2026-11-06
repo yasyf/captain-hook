@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`capt-hook helper install` brings the `capt-hook` CLI to the helper's version.** It upgraded the signed
+  helper and left a CLI installed as a uv tool pinned to its old release, so `capt-hook --version` trailed the
+  helper after every install. The install, and the self-updater once a host settles, now reinstall a uv-tool CLI
+  pinned to the version the helper reports and print both versions they read back. A CLI uv does not manage is
+  reported and left as it is. `capt-hook helper status` now fails when the CLI and the helper run different
+  versions and names the command that fixes it.
 - **A search of one Go module version directory passes the protected-root guard.** The guard refused `rg` or
   `find` over a single module version directory such as `<modcache>/github.com/acme/rpc@v1.7.10` under `~/.cache`
   or a `HOOKS_LAYOUT_PROTECTED_ROOTS` root, then named a version directory as the fix. A directory whose name

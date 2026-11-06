@@ -6,9 +6,10 @@ the dispatch only guards, throttles via the shared :func:`_claim_stamp`, and det
 ``capt-hook update run``. The detached child (:func:`run_update`) compares the latest
 ``yasyf/captain-hook`` release against the installed signed host and, when the host is older,
 runs ``brew upgrade --formula`` and then :func:`converge` — escalating to an exact formula
-reinstall/install to repair a broken Cellar — then posts a success or failure banner. Every
-failure is a notification or a breadcrumb; nothing here raises into the dispatch or sets an
-exit code.
+reinstall/install to repair a broken Cellar — then posts a success or failure banner. A host
+that settles takes the ``capt-hook`` CLI with it: :func:`follow_cli` re-pins a CLI that uv
+manages to the host's version and reports any other CLI as it found it. Every failure is a
+notification or a breadcrumb; nothing here raises into the dispatch or sets an exit code.
 
 Every brew lane forces brew's own auto-update, whatever ``HOMEBREW_NO_AUTO_UPDATE`` or the
 auto-update interval says. Brew skips refreshing the ``yasyf/tap`` clone when its own repository
@@ -33,8 +34,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -54,6 +57,14 @@ PENDING_RECORD = "pending"
 MAX_ESCALATIONS = 3
 BREW_TIMEOUT = 1800.0
 CELLAR_HOST = "libexec/Captain Hook.app/Contents/Helpers/capt-hookd"
+CLI = "capt-hook"
+UV_RECEIPT = "uv-receipt.toml"
+
+
+@dataclass(frozen=True, slots=True)
+class CliFollow:
+    ok: bool
+    report: str
 
 
 def update_dir() -> Path:
@@ -219,6 +230,53 @@ def converge(target: str, *, stream: bool = False) -> str | None:
     return None
 
 
+def cli_path() -> Path | None:
+    return Path(found).resolve() if (found := shutil.which(CLI)) else None
+
+
+def cli_version(cli: Path) -> str | None:
+    try:
+        reported = subprocess.run(
+            [str(cli), "--version"], capture_output=True, text=True, timeout=BREW_TIMEOUT, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        breadcrumb(f"{CLI} --version errored: {exc}")
+        return None
+    match reported.returncode, reported.stdout.split():
+        case 0, [_, version, *_]:
+            return version
+        case _:
+            breadcrumb(exit_reason(f"{CLI} --version", reported))
+            return None
+
+
+def follow_cli(target: str, *, stream: bool = False) -> CliFollow:
+    if (cli := cli_path()) is None:
+        return CliFollow(ok=True, report=f"PATH has no {CLI} CLI to follow it")
+    if not ((env := cli.parent.parent) / UV_RECEIPT).is_file():
+        return CliFollow(ok=True, report=f"the {CLI} CLI at {cli} is not a uv tool, so it is left as is")
+    pin = f"{CLI}=={target}"
+    if stream:
+        print(f"Pinning the {CLI} uv tool to {target}...", file=sys.stderr)
+    try:
+        pinned = subprocess.run(
+            ["uv", "tool", "install", "--refresh-package", CLI, pin],
+            capture_output=not stream,
+            text=True,
+            timeout=BREW_TIMEOUT,
+            check=False,
+            env=os.environ | {"UV_TOOL_DIR": str(env.parent)},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        breadcrumb(f"uv tool install {pin} errored: {exc}", echo=stream)
+    else:
+        if pinned.returncode != 0:
+            breadcrumb(exit_reason(f"uv tool install {pin}", pinned), echo=stream)
+    if (reads := cli_version(cli)) == target:
+        return CliFollow(ok=True, report=f"the {CLI} CLI reads {reads}")
+    return CliFollow(ok=False, report=f"the {CLI} CLI reads {reads or 'no version'} after `uv tool install {pin}`")
+
+
 def pending() -> str | None:
     """The release a check-only run deferred to the next session allowed to act on it."""
     try:
@@ -260,7 +318,7 @@ def record_escalation(target: str, spent: int) -> None:
 
 
 def settled(previous: str, host: str) -> None:
-    breadcrumb(f"update ok: {previous} -> {host}")
+    breadcrumb(f"update ok: {previous} -> {host}; {follow_cli(host).report}")
     notify(kind="update_installed", title="Captain Hook updated", body=f"Upgraded the signed host to {host}.")
 
 
