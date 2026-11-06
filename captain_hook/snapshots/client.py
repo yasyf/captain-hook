@@ -794,7 +794,12 @@ class SnapshotClient:
 
 class Lease:
     def __init__(
-        self, client: SnapshotClient, description: Mapping[str, Any], *, tail_bytes: int | None = None
+        self,
+        client: SnapshotClient,
+        description: Mapping[str, Any],
+        *,
+        tail_bytes: int | None = None,
+        scalar_results: dict[ScalarKey, Any] | None = None,
     ) -> None:
         self.client = client
         client._leases.add(self)
@@ -809,7 +814,7 @@ class Lease:
         self.guard = threading.Lock()
         self.subagent_guard = threading.Lock()
         self.subagent_views: dict[str, RemoteSubagentIndex] = {}
-        self.scalar_results: dict[ScalarKey, Any] = {}
+        self.scalar_results: dict[ScalarKey, Any] = {} if scalar_results is None else scalar_results
 
     def renewable_by(self, client: SnapshotClient) -> bool:
         return (deadline := client.foreground_deadline_unix_ms) is None or self.expires_unix_ms < deadline
@@ -859,7 +864,6 @@ class Lease:
         self.description = dict(description)
         self.handle = dict(description["handle"])
         self.expires_unix_ms = description["lease_expires_unix_ms"]
-        self.scalar_results.clear()
 
     def release(self) -> None:
         with self.subagent_guard:
@@ -871,7 +875,7 @@ class Lease:
                             cleanup.callback(item.session.release)
             finally:
                 self.subagent_views.clear()
-                self.scalar_results.clear()
+                self.scalar_results = {}
 
     def _release(self) -> None:
         with self.guard:
@@ -1341,7 +1345,9 @@ class RemoteSession:
             data = list(client.pages("retain", handle=self.lease.reclaim(client, handle)))
         if len(data) != 1 or data[0].get("kind") != "acquired":
             raise SnapshotProtocolError("retain completed without one leased description")
-        lease = Lease(client, data[0]["description"], tail_bytes=self.tail_bytes)
+        lease = Lease(
+            client, data[0]["description"], tail_bytes=self.tail_bytes, scalar_results=self.lease.scalar_results
+        )
         try:
             graph = self.graph.retain()
         except BaseException:
@@ -1403,7 +1409,21 @@ class RemoteSession:
         scalar = query["kind"] in SCALAR_QUERY_KINDS or str(query["kind"]).startswith("has_")
         if not scalar:
             return self._query(query, deep=deep)
-        key: ScalarKey = (
+        self.lease.require()
+        key = self._scalar_key(query, deep=deep)
+        if (cached := self.lease.scalar_results.get(key, SCALAR_MISS)) is not SCALAR_MISS:
+            if deep:
+                self.graph.require(self)
+            return cached
+        plan = OBSERVER_PLAN.get() if deep and str(query["kind"]).startswith("has_") else None
+        value = self._scalar(query, deep=deep) if plan is None else self._planned(plan, key, query)
+        with self.lease.guard:
+            if not self.lease.closed and self._scalar_key(query, deep=deep) == key:
+                self.lease.scalar_results[key] = value
+        return value
+
+    def _scalar_key(self, query: Mapping[str, object], *, deep: bool) -> ScalarKey:
+        return (
             self.evidence_ref,
             tuple(sorted(self.classifier.items())),
             self.client,
@@ -1411,21 +1431,6 @@ class RemoteSession:
             canonical_json(self.selectors),
             canonical_json(query),
         )
-        self.lease.require()
-        if (cached := self.lease.scalar_results.get(key, SCALAR_MISS)) is not SCALAR_MISS:
-            if deep:
-                self.graph.require(self)
-            return cached
-        plan = OBSERVER_PLAN.get() if deep and str(query["kind"]).startswith("has_") else None
-        value = (
-            self._scalar(query, deep=deep)
-            if plan is None
-            else self._planned(plan, (self.evidence_ref, *key[1:]), query)
-        )
-        with self.lease.guard:
-            if not self.lease.closed:
-                self.lease.scalar_results[key] = value
-        return value
 
     def _scalar(self, query: Mapping[str, object], *, deep: bool) -> ScalarValue:
         values = self._query(query, deep=deep)

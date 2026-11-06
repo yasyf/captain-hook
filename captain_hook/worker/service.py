@@ -303,6 +303,7 @@ class WorkerService:
         )
         from captain_hook.util import reqenv
 
+        entered = time.monotonic()
         nested: dict[str, Any] | None = request.get("request")
         if cleanup and (parent_id != 0 or not isinstance(nested, dict) or nested.get("operation") != "release"):
             raise SnapshotProtocolError("cleanup transport is reserved for parentless release requests")
@@ -334,6 +335,7 @@ class WorkerService:
             started = time.monotonic()
             self._write(snapshot_request_message(request_id, parent_id, request), max_frame=MAX_SNAPSHOT_FRAME)
             sent = True
+            written_ms = round((time.monotonic() - entered) * 1000, 1)
             while True:
                 if not cleanup:
                     reqenv.checkpoint()
@@ -346,6 +348,7 @@ class WorkerService:
                         frame_id=request_id,
                         foreground_deadline_unix_ms=expires_unix_ms,
                         expires_unix_ms=round(expires * 1000),
+                        written_ms=written_ms,
                         elapsed_ms=round((time.monotonic() - started) * 1000, 1),
                     ).info("snapshot transport deadline elapsed")
                     raise EvidenceIncomplete("deadline", "snapshot transport deadline elapsed")
@@ -353,6 +356,16 @@ class WorkerService:
                     return future.result(timeout=min(left, 0.05))
                 except TimeoutError:
                     continue
+                except EvidenceIncomplete as exc:
+                    logger.bind(
+                        **request_metadata(nested or {}),
+                        status=exc.status,
+                        parent_id=parent_id,
+                        frame_id=request_id,
+                        written_ms=written_ms,
+                        elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+                    ).info("snapshot transport failed")
+                    raise
         finally:
             if not sent:
                 with self._snapshot_guard:

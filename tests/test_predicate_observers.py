@@ -162,7 +162,6 @@ def reacquiring(lease):
 
     def require(client=None):
         lease.handle = lease.handle | {"generation": f"reacquired-{next(generations)}"}
-        lease.scalar_results.clear()
         return lease.handle.copy()
 
     return require
@@ -206,8 +205,8 @@ def test_first_negative_demand_carries_its_siblings_and_answers_them_without_ano
     assert sent(client) == [(READ, [EDIT, SKILL])]
     assert [operation for operation, _ in client.requests].count("prepare_graph") == 1
     assert list(plan.outcomes.values()) == [False, False, False]
-    assert list(editor.lease.scalar_results.values()) == [False]
-    assert list(skilled.lease.scalar_results.values()) == [False]
+    assert editor.lease.scalar_results is skilled.lease.scalar_results is root.lease.scalar_results
+    assert list(root.lease.scalar_results.values()) == [False, False, False]
 
 
 def test_a_changed_primary_fails_unchanged_and_leaves_its_root_positive_sibling_to_ask_itself():
