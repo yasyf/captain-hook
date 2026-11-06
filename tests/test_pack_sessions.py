@@ -145,6 +145,19 @@ TWO_AGENT_TERMINALS = table(
     row(17001, 17000, "-/opt/homebrew/bin/fish -l", started="2026-09-30T06:53:01"),
     row(17002, 17001, "codex --dangerously-bypass-approvals-and-sandbox", started="2026-09-30T06:53:05"),
 )
+CODEX_HOOK = 8320
+CODEX_WATCH = "ccx vcs pr watch Forge-AI/monorepo#51766 --until landed"
+CODEX_DAEMON_HOOK = 28400
+CODEX_LANE = table(
+    *TWO_AGENT_TERMINALS.rows.values(),
+    row(CODEX_HOOK, 8311, "/bin/zsh -c capt-hook run PreToolUse", started="2026-09-30T06:30:00"),
+    row(8330, 8311, f"/bin/zsh -lc '{CODEX_WATCH}'", started="2026-09-30T06:31:00"),
+    row(52209, 8330, CODEX_WATCH, started="2026-09-30T06:31:01"),
+    row(17100, 17002, "sleep 30", started="2026-09-30T06:54:00"),
+    row(28376, 1, "codex app-server --listen unix:// --managed-daemon", started="2026-09-30T06:00:00"),
+    row(CODEX_DAEMON_HOOK, 28376, "/bin/zsh -c capt-hook run PreToolUse", started="2026-09-30T06:40:00"),
+    row(28500, 28376, "sleep 30", started="2026-09-30T06:40:05"),
+)
 OWNER_CLOSE = f"orca terminal close --terminal {INLINE_OWNER_TERMINAL} --json"
 AGENT_CLOSE = "orca terminal close --terminal term_agent --json"
 IDLE_CLOSE = "orca terminal close --terminal term_idle --json"
@@ -360,6 +373,29 @@ class TestUnprovenChildren:
         message = decide("kill 31337", tmp_path)
         assert message is not None
         assert "runs under claude 14462" in message
+
+
+class TestCodexSessionChildren:
+    @pytest.fixture(autouse=True)
+    def codex_lane(self, fake_table: dict[str, ProcessTable | None]) -> None:
+        fake_table["table"] = CODEX_LANE
+
+    def test_a_codex_lane_may_stop_a_child_its_own_session_started(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide("kill 52209", tmp_path, client_ppid=CODEX_HOOK) is None
+        assert decide("kill -TERM 52209", tmp_path, client_ppid=CODEX_HOOK) is None
+
+    @pytest.mark.parametrize(
+        ("command", "client_ppid", "refusal"),
+        [
+            pytest.param("kill 17100", CODEX_HOOK, "runs under codex 17002", id="another_codex_session"),
+            pytest.param("kill 52209", HOOK_SHELL, "runs under codex 8311", id="a_claude_caller"),
+            pytest.param("kill 28500", CODEX_DAEMON_HOOK, "runs under codex 28376", id="a_shared_app_server"),
+        ],
+    )
+    def test_every_other_codex_process_stays_refused(
+        self, general_pack: None, tmp_path: Path, command: str, client_ppid: int, refusal: str
+    ) -> None:
+        assert refusal in (decide(command, tmp_path, client_ppid=client_ppid) or "")
 
 
 class TestSessionStartedChildren:
