@@ -307,8 +307,50 @@ def test_transport_deadline_records_safe_request_context_before_conversion(trans
     ):
         assert field in record.message
     assert 0 <= float(re.search(r"elapsed_ms=([\d.]+)", record.message).group(1)) < 3000
+    assert 0 <= float(re.search(r"written_ms=([\d.]+)", record.message).group(1)) < 3000
     assert private not in logcap.text
     assert [record for record in logcap.records if record.levelno >= 30] == []
+
+
+def test_transport_failure_records_when_the_frame_was_written(transport, logcap):
+    private = "/Users/fixture-user/private/session.jsonl"
+    failed = Future()
+
+    def dispatch(request):
+        value = {
+            "schema": "captain.transcript/1",
+            "request": {
+                "schema": "cc-transcript.snapshot/1",
+                "id": "client-8",
+                "operation": "acquire",
+                "path": private,
+                "deadline_unix_ms": int(time.time() * 1000) + 120_000,
+            },
+        }
+        try:
+            service.snapshot_exchange(request.id, value)
+        except EvidenceIncomplete as exc:
+            failed.set_result(exc)
+        return EventResponse(), None
+
+    service, _, incoming, outgoing, _ = transport(dispatch)
+    write_message(outgoing, event(10))
+    snapshot = read_message(incoming)
+    write_message(outgoing, snapshot_reply(snapshot, error=f"captain: owner refused {private}"))
+    assert read_message(incoming)["op"] == "result"
+
+    assert failed.result(timeout=3).status == "cancelled"
+    [record] = [record for record in logcap.records if record.message.startswith("snapshot transport failed")]
+    for field in (
+        "status='cancelled'",
+        "parent_id=10",
+        f"frame_id={snapshot['id']}",
+        "operation='acquire'",
+        "request_id='client-8'",
+    ):
+        assert field in record.message
+    assert 0 <= float(re.search(r"written_ms=([\d.]+)", record.message).group(1)) < 3000
+    assert private not in logcap.text
 
 
 def test_snapshot_reply_requires_matching_parent():

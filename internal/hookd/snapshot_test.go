@@ -224,6 +224,43 @@ func TestSnapshotAdmissionReservesHookWhileReviewRuns(t *testing.T) {
 	}
 }
 
+func TestSnapshotAdmissionLogsTheWaitOfARequestCancelledBehindAFullSlot(t *testing.T) {
+	frames := make(chan wireproto.Frame, 8)
+	owner, server := fakeSnapshotOwner(t, frames)
+	log := &lockedBuffer{}
+	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: log, now: time.Now, readiness: workerReadinessTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.owner = owner
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	holderDone := make(chan error, 1)
+	go func() {
+		_, err := service.call(ctx, statsRequest, userSnapshotContext("review:1", "review", 501))
+		holderDone <- err
+	}()
+	holder := receiveSnapshot(t, frames)
+	queuedCtx, stop := context.WithCancel(ctx)
+	queuedDone := make(chan error, 1)
+	go func() {
+		_, err := service.call(queuedCtx, json.RawMessage(`{"schema":"captain.transcript/1","tool_registry":[],"request":{"schema":"cc-transcript.snapshot/1","operation":"stats","id":"queued-7"}}`), userSnapshotContext("review:2", "review", 501))
+		queuedDone <- err
+	}()
+	stop()
+	if err := <-queuedDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued review=%v", err)
+	}
+	failSnapshot(t, server, holder.ID)
+	<-holderDone
+	line := log.String()
+	for _, field := range []string{"captain: snapshot_admission_wait time=", " request_id=queued-7 ", " operation=stats ", " admission=review ", " wait_ms=", " admitted=false\n"} {
+		if !strings.Contains(line, field) {
+			t.Fatalf("missing %q in %q", field, line)
+		}
+	}
+}
+
 func TestSnapshotOwnerStartupSharedAndNotBoundToFirstWaiter(t *testing.T) {
 	service, err := newSnapshotService(&workerManager{lifetime: context.Background(), logWriter: io.Discard, now: time.Now, readiness: workerReadinessTimeout})
 	if err != nil {

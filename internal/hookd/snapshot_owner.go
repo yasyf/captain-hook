@@ -17,6 +17,8 @@ import (
 	"github.com/yasyf/daemonkit"
 )
 
+const snapshotAdmissionWaitFloor = 10 * time.Millisecond
+
 type snapshotResult struct {
 	body json.RawMessage
 	err  error
@@ -459,10 +461,15 @@ func (s *snapshotService) admit(ctx context.Context, slots, queue chan struct{},
 		return nil, errors.New("captain: snapshot admission queue exhausted")
 	}
 	defer func() { <-queue }()
+	queued := time.Now()
 	select {
 	case slots <- struct{}{}:
 	case <-ctx.Done():
+		s.logAdmissionWait(request, callContext, time.Since(queued), false)
 		return nil, ctx.Err()
+	}
+	if waited := time.Since(queued); waited >= snapshotAdmissionWaitFloor {
+		s.logAdmissionWait(request, callContext, waited, true)
 	}
 	var once sync.Once
 	settled := func() { once.Do(func() { <-slots }) }
@@ -472,6 +479,17 @@ func (s *snapshotService) admit(ctx context.Context, slots, queue chan struct{},
 		return nil, err
 	}
 	return owner.call(ctx, request, callContext, settled)
+}
+
+func (s *snapshotService) logAdmissionWait(request json.RawMessage, callContext snapshots.CallContext, waited time.Duration, admitted bool) {
+	var wrapper struct {
+		Request struct {
+			ID        string `json:"id"`
+			Operation string `json:"operation"`
+		} `json:"request"`
+	}
+	_ = json.Unmarshal(request, &wrapper)
+	fmt.Fprintf(s.manager.logWriter, "captain: snapshot_admission_wait time=%s request_id=%s operation=%s admission=%s wait_ms=%.1f admitted=%t\n", time.Now().UTC().Format(time.RFC3339Nano), wrapper.Request.ID, wrapper.Request.Operation, callContext.Admission, float64(waited.Microseconds())/1000, admitted)
 }
 
 func minTime(a, b time.Time) time.Time {

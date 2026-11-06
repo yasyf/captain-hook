@@ -1,9 +1,15 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 
 import pytest
 
+from captain_hook.app import hook
+from captain_hook.context import HookContext
+from captain_hook.dispatch import prepare_hook_events
+from captain_hook.events import PreToolUseEvent
+from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import (
     HOST_SCHEMA,
     EvidenceIncomplete,
@@ -11,9 +17,18 @@ from captain_hook.snapshots.client import (
     Lease,
     RemoteSession,
     SnapshotClient,
+    tool_predicate,
 )
-from captain_hook.testing.snapshots import failure
+from captain_hook.testing.snapshots import FixtureOwner, failure
+from captain_hook.transcripts import lazy_transcript, release_transcript
+from captain_hook.types import Event as HookEvent
+from captain_hook.types import UsedTool
+from tests.helpers import raw_assistant, raw_text, raw_tool_use
 from tests.test_snapshot_client import description, response
+
+BASH = tool_predicate("has_tool", "Bash", subagents=False)
+IN_SESSION = UsedTool("Bash", subagents=False, scope="session")
+IN_TURN = UsedTool("Bash", subagents=False)
 
 
 class CountingOwner:
@@ -33,6 +48,8 @@ class CountingOwner:
             )
         if request["operation"] == "release":
             return response(request, {"kind": "released", "released": True})
+        if request["operation"] == "retain":
+            return response(request, {"kind": "acquired", "description": description(f"retained-{request['id']}")})
         self.queries.append(request)
         if self.status != "ok":
             return {"schema": HOST_SCHEMA, "response": failure(request["id"], self.status, "fixture")}
@@ -181,3 +198,70 @@ def test_released_lease_does_not_cache_an_in_flight_scalar_result():
 
     assert session.lease.scalar_results == {}
     assert len(owner.queries) == 1
+
+
+@pytest.fixture
+def ran_bash_a_turn_ago(tmp_path):
+    path = tmp_path / "session.jsonl"
+    lines = [
+        raw_text("user", "list the files"),
+        raw_assistant(raw_tool_use("Bash", {"command": "ls"}, "listed")),
+        raw_text("user", "now continue"),
+        raw_assistant({"type": "text", "text": "ok"}),
+    ]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    return path
+
+
+def dispatch_queries(tmp_path, transcript, conditions):
+    owner = FixtureOwner()
+    exchange = owner.client._exchange
+    queries = []
+
+    def record(wrapper):
+        request = wrapper["request"]
+        if request["operation"] == "query":
+            queries.append((request["view"]["selectors"], request["query"]))
+        return exchange(wrapper)
+
+    owner.client._exchange = record
+    try:
+        for condition in conditions:
+            hook(HookEvent.PreToolUse, "fixture", only_if=[condition])
+        source = lazy_transcript(transcript, loader=owner.load)
+        evt = PreToolUseEvent(_raw={"tool_name": "Bash"}, ctx=HookContext(SessionStore(tmp_path), source, None))
+        matched, forks = prepare_hook_events(evt, async_=False)
+        for fork in forks:
+            release_transcript(fork.ctx.transcript)
+        return len(matched), queries
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("forks", [pytest.param(1, id="one-fork"), pytest.param(50, id="fifty-forks")])
+def test_one_dispatch_asks_the_owner_once_however_many_forks_share_a_predicate(tmp_path, ran_bash_a_turn_ago, forks):
+    matched, queries = dispatch_queries(tmp_path, ran_bash_a_turn_ago, [IN_SESSION] * forks)
+
+    assert matched == forks
+    assert queries == [([], BASH)]
+
+
+def test_forks_on_different_selectors_each_get_their_own_answer(tmp_path, ran_bash_a_turn_ago):
+    matched, queries = dispatch_queries(tmp_path, ran_bash_a_turn_ago, [IN_SESSION, IN_TURN] * 25)
+
+    assert matched == 25
+    assert queries == [([], BASH), ([{"kind": "current_turn"}], BASH)]
+
+
+def test_a_retained_branch_reuses_its_source_answer_and_outlives_a_sibling_release():
+    owner = CountingOwner()
+    session = session_for(owner)
+    first, second = session.retain(), session.retain()
+
+    assert len(first) == 1
+    first.release()
+    assert len(second) == 1
+    assert len(session.current_turn) == 2
+    assert len(owner.queries) == 2
+    assert first.lease.scalar_results == {}
+    assert second.lease.scalar_results is session.lease.scalar_results
