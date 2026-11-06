@@ -6,6 +6,8 @@ from functools import partial
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from captain_hook import Allow, Block, Warn
 from captain_hook.bindings import Resolved
 from captain_hook.builtin_packs.general.hooks._sessions import (
@@ -62,6 +64,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     own_lane,
     owner_lift,
     pid_verdict,
+    probe,
     process_class,
     quit_targets,
     runs_once,
@@ -240,12 +243,54 @@ LAUNCHCTL_ENDINGS = frozenset(
 )
 LAUNCHD_SERVICE_VERBS = frozenset({"bootout", "kickstart", "disable", "stop", "remove", "kill"})
 LAUNCHD_DOMAINS = frozenset({"gui", "user", "pid", "login"})
+DRIVE_DESK = re.compile(r"com\.long-running\.[\w-]+\.[\w-]+")
+DESK_PROGRAM = "lr"
+SESSION_HOST_DESK = "supervisor"
+LAUNCHD_PROGRAM = re.compile(r"^\tprogram = (.+)$", re.MULTILINE)
+LAUNCHD_ARGUMENTS = re.compile(r"^\targuments = \{\n((?:\t\t.*\n)*)\t\}", re.MULTILINE)
+LAUNCHD_JOB_PID = re.compile(r"^\tpid = (\d+)$", re.MULTILINE)
 DRIVE_DASHBOARD_RESTART = "Run `lr dashboard restart` instead, which restarts the drive dashboard and prints its URL."
 APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)\b|keystroke\s+"q"')
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
 PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
 TMUX_ENDINGS = frozenset({"kill-server", "kill-session", "kill-pane", "kill-window"})
 SERVE_RULING = inline_ruling("Owner: restart com.example.orca-serve once.")
+DESK_LR = "/Users/dev/.claude/long-running/current/bin/lr"
+BK_DESK = "com.long-running.durable-agents-rebuild.bk"
+SUPERVISOR_DESK = "com.long-running.durable-agents-rebuild.supervisor"
+GRADE_DESK = "com.long-running.durable-agents-rebuild.grade"
+DESK_TABLE = (
+    f"{INLINE_TABLE}"
+    f"89331     1 89331  501 Thu Jan  1 00:00:00 2026 {DESK_LR} bk serve --config lr.json\n"
+    f"40358     1 40358  501 Thu Jan  1 00:00:00 2026 {DESK_LR} supervisor run --config lr.json\n"
+    f"41000     1 41000  501 Thu Jan  1 00:00:00 2026 {DESK_LR} grade pool --config lr.json\n"
+    "41001 41000 41000  501 Thu Jan  1 00:00:00 2026 claude --dangerously-skip-permissions\n"
+    f"42000     1 42000  501 Thu Jan  1 00:00:00 2026 {DESK_LR} relay run --config lr.json\n"
+    "42001     1 42000  501 Thu Jan  1 00:00:00 2026 codex --dangerously-bypass-approvals-and-sandbox\n"
+)
+RELAY_DESK = "com.long-running.durable-agents-rebuild.relay"
+LAUNCHD_JOB = (
+    "gui/501/{label} = {{\n\tstate = running\n\n\tprogram = {lr}\n\targuments = {{\n\t\t{lr}\n\t\t{verb}\n"
+    "\t\t--config\n\t\tlr.json\n\t}}\n\n\tpid = {pid}\n}}\n"
+)
+DESK_JOBS = {
+    **INLINE_COMMANDS,
+    "ps -A -ww -o": DESK_TABLE,
+    **{
+        f"launchctl print gui/501/{label}": LAUNCHD_JOB.format(label=label, lr=DESK_LR, verb=verb, pid=pid)
+        for label, verb, pid in (
+            (BK_DESK, "bk", 89331),
+            (SUPERVISOR_DESK, "supervisor", 40358),
+            (GRADE_DESK, "grade", 41000),
+            (RELAY_DESK, "relay", 42000),
+        )
+    },
+}
+BK_REMOVAL = (
+    f'P=~/Library/LaunchAgents/{BK_DESK}.plist; mkdir -p ~/removed && cp "$P" ~/removed/ && '
+    f'launchctl bootout gui/501/{BK_DESK}; print "bootout rc=$?"; rm "$P"; '
+    'ps -p 89331 >/dev/null && print "89331 still up" || print "89331 gone"'
+)
 DESK_RULING = "Owner: end this drive's own desk-runner.py for a version restart."
 DESK_COMMANDS = {
     **INLINE_COMMANDS,
@@ -1530,7 +1575,7 @@ def launchd_label(target: str) -> str | None:
             return None
 
 
-def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, str] | None:
+def literal_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, str] | None:
     words = arguments.words.get("targets", ())
     targets = arguments.values.get("targets", ())
     match arguments.values.get("verb", ()):
@@ -1544,14 +1589,50 @@ def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, 
         or not arguments.complete
         or not arguments.operands_complete
         or any(other is call for other in scan.respelled)
-        or not runs_once(call, scan)
         or any(word.value is None or word.expandable for word in words)
         or len(targets) != (2 if verb == "kill" else 1)
         or not isinstance(target := targets[-1], str)
     ):
         return None
+    return verb, target
+
+
+def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, str] | None:
+    if (service := literal_service(call, arguments, scan)) is None or not runs_once(call, scan):
+        return None
+    verb, target = service
     label = target if verb in ("stop", "remove") and "/" not in target else launchd_label(target)
     return None if label is None else (verb, label)
+
+
+def desk_without_session(call: Call, arguments: Arguments, scan: Scan) -> bool:
+    match literal_service(call, arguments, scan):
+        case ("bootout", target) if (label := launchd_label(target)) and DRIVE_DESK.fullmatch(label):
+            pass
+        case _:
+            return False
+    if any(other is not call and other.name == "launchctl" for other in scan.calls):
+        return False
+    if isinstance(shown := probe(("launchctl", "print", target)), Unreadable):
+        return False
+    program, listed = LAUNCHD_PROGRAM.search(shown), LAUNCHD_ARGUMENTS.search(shown)
+    match [line.strip() for line in listed[1].splitlines()] if listed else []:
+        case [_, verb, *_] if program and PurePath(program[1]).name == DESK_PROGRAM and verb != SESSION_HOST_DESK:
+            pass
+        case _:
+            return False
+    if (pid := LAUNCHD_JOB_PID.search(shown)) is not None:
+        job, ownership = int(pid[1]), scan.facts.ownership
+        if (
+            isinstance(ownership, Unreadable)
+            or job not in ownership.table.rows
+            or any(
+                row.pid in ownership.protected for row in ownership.table.rows.values() if job in (row.pid, row.pgid)
+            )
+        ):
+            return False
+    logger.bind(target=target, pid=pid and pid[1]).info("allowing the bootout of a drive desk that hosts no session")
+    return True
 
 
 def drive_dashboard(arguments: Arguments) -> bool:
@@ -1569,6 +1650,8 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         return None
     spelling = spell(call)
     arguments = LAUNCHCTL.bind(call)
+    if desk_without_session(call, arguments, scan):
+        return None
     dashboard = drive_dashboard(arguments)
     if (service := launchd_service(call, arguments, scan)) is not None:
         verb, label = service
@@ -1683,6 +1766,29 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         ),
         guarded(command="launchctl list"): Allow(),
         guarded(command="launchctl print gui/501"): Allow(),
+        guarded(command=BK_REMOVAL, commands=DESK_JOBS): Allow(),
+        guarded(command=f"launchctl bootout gui/501/{BK_DESK}", commands=DESK_JOBS): Allow(),
+        guarded(command=f"launchctl bootout gui/501/{SUPERVISOR_DESK}", commands=DESK_JOBS): Block(
+            pattern="stops, unloads, or restarts launchd service"
+        ),
+        guarded(command=f"launchctl bootout gui/501/{GRADE_DESK}", commands=DESK_JOBS): Block(
+            pattern="stops, unloads, or restarts launchd service"
+        ),
+        guarded(command=f"launchctl bootout gui/501/{RELAY_DESK}", commands=DESK_JOBS): Block(
+            pattern="stops, unloads, or restarts launchd service"
+        ),
+        guarded(
+            command=f"launchctl bootout gui/501/{BK_DESK} && launchctl bootstrap gui/501 ~/sup.plist && "
+            f"launchctl bootout gui/501/{BK_DESK}",
+            commands=DESK_JOBS,
+        ): Block(),
+        guarded(command=f"launchctl kickstart -k gui/501/{BK_DESK}", commands=DESK_JOBS): Block(
+            pattern="stops, unloads, or restarts launchd service"
+        ),
+        guarded(
+            command=f"launchctl bootout gui/501/{BK_DESK}",
+            commands={**INLINE_COMMANDS, f"launchctl print gui/501/{BK_DESK}": (113, "Could not find service")},
+        ): Block(pattern="stops, unloads, or restarts launchd service"),
     }
 )
 def launchctl_stops_service(evt: ToolRewriteEvent) -> HookResult | None:
