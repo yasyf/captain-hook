@@ -43,8 +43,9 @@ from captain_hook.tickets import (
     UserRuled,
     store,
 )
+from captain_hook.tickets import context as ticket_context
 from captain_hook.tickets.conditions import GO, HOLD
-from captain_hook.tickets.context import names
+from captain_hook.tickets.context import TranscriptSources, holds, names, written_at
 from captain_hook.tickets.decide import Undecided
 from captain_hook.util import proc, reqenv
 from captain_hook.util.paths import resolve_claude_config_dir
@@ -206,23 +207,28 @@ SETTLED = frozenset({"completed", "failed"})
 CLASS_RULINGS = ("c9b27c1", "6190a4a")
 SETTLED_CLOSE_RULES = (
     "The owner's standing rulings in the evidence cover a class of Orca terminal closes rather than one named "
-    "terminal: c9b27c1 lets the root close a settled dispatch's idle terminal, as orca-reclaim.py does, and 6190a4a lets it "
-    "close an orphan terminal its own failed launch created. The proposed action's payload is Orca's record for the "
-    "terminal: the dispatch holding it, its Run, and that dispatch's status. The guard has already proven the status "
-    "is completed or failed, the terminal's agent idles at a prompt, and the caller is the root session coordinating "
-    "that Run. Allow only when a ruling's words cover closing "
-    "a terminal with this record, and cite that ruling. Deny when the rulings exclude this record, or limit the class "
-    "to terminals it is not."
+    "terminal: c9b27c1 lets the root close a settled dispatch's idle terminal, as orca-reclaim.py does, and 6190a4a "
+    "lets it close an orphan terminal its own failed launch created. The proposed action's payload is Orca's record "
+    "for the terminal: the dispatch holding it, its Run, and that dispatch's status. The guard has already proven "
+    "the status is completed or failed, the terminal's agent idles at a prompt, and the caller is the root session "
+    "coordinating that Run. Allow only when a ruling's words cover closing a terminal with this record, and cite that "
+    "ruling. Deny when the rulings exclude this record, or limit the class to terminals it is not."
 )
 OWNER_NAMED_RULES = (
     "The pending action ends something that may host a session: it closes an Orca terminal, stops, restarts, or "
     "unloads a launchd service, or signals a process. The scope names the exact terminal handle, service label, or "
     "pid. Allow only when the owner's own words, a prompt, a message they queued, or an AskUserQuestion answer, name "
     "this exact target, by its handle, label, or pid, and ask for it to be closed, stopped, restarted, kicked, or "
-    "killed, or pick an option that does. Words about another target, a general instruction to clean up, and words "
-    "that only describe the target permit nothing. One owner instruction permits one such action."
+    "killed, or pick an option that does. An item whose detail carries a cc-notes ruling recorded after the owner's "
+    "words may instead name the target in plain words: allow it only when those words plainly describe the one target "
+    "the ruling maps them to and ask for this action on it; deny when they fit another target as well, exclude this "
+    "one, or the mapping is a guess. Words about another target, a general instruction to clean up, and words that "
+    "only describe the target permit nothing. One owner instruction permits one such action."
 )
 OWNER_NAMED_TTL = timedelta(hours=1)
+QUOTED = re.compile(r'"([^"]+)"|“([^”]+)”')
+QUOTED_WORDS = 3
+TYPED = frozenset({"prompt", "queued"})
 TAP_WINDOW = OWNER_NAMED_TTL - RETRY_WINDOW
 TAP_READ_SECONDS = 5.0
 ANSWER_ROW = "board-answer"
@@ -1477,6 +1483,46 @@ def record_child(evt: PostToolUseEvent) -> None:
     )
 
 
+def quoted(body: str) -> list[str]:
+    return [quote for pair in QUOTED.findall(body) if len((quote := pair[0] or pair[1]).split()) >= QUOTED_WORDS]
+
+
+@dataclass(frozen=True, slots=True)
+class OrderRecorded(CustomTicketCondition):
+    """The owner's prompts, said within the hour, that a cc-notes answer naming the place quotes verbatim.
+
+    Plain words such as ``restart the orca server`` name no label, so the session they reach records an answer that
+    names the place's value and quotes them, typos kept. Only the owner's own prompts in the session tree count, said
+    before the answer, so an answer quoting words the owner never typed finds nothing.
+    """
+
+    key: str
+
+    def evidence(self, ctx: Context) -> list[Evidence] | None:
+        assert ctx.evt is not None
+        term = ctx.place[self.key]
+        answers = [answer for answer in ticket_context.ccn_answers(ctx.evt, term) if names(answer["body"], term)]
+        quotes = {answer["id"]: quoted(answer["body"]) for answer in answers}
+        if not (needles := tuple(dict.fromkeys(quote for found in quotes.values() for quote in found))):
+            return None
+        since, said = store.now() - OWNER_NAMED_TTL, TranscriptSources(ctx.evt, needles).said()
+        return [
+            item.model_copy(
+                update={
+                    "id": f"order:{answer['id'][:7]}:{item.id.partition(':')[2]}",
+                    "detail": f"cc-notes ruling {answer['id'][:7]}, recorded {store.stamp(written_at(answer))} after "
+                    f"these words, maps them to {term}: {clip(answer['body'], 400)}",
+                }
+            )
+            for answer in answers
+            for item in said
+            if item.source in TYPED
+            and item.said_at is not None
+            and since <= item.said_at <= written_at(answer)
+            and any(holds(item.quote, quote) for quote in quotes[answer["id"]])
+        ] or None
+
+
 def user_named(key: str) -> Decide:
     return Decide(OWNER_NAMED_RULES, over=(UserSaid(Names(key)), UserAnswered(Names(key), approved=False)))
 
@@ -1537,7 +1583,10 @@ def owner_named(kind: str, key: str, target: str) -> Tickets:
         f"{kind}.owner",
         (key,),
         Reach.ONCE,
-        rules=(Rule("user-named", user_named(key)),),
+        rules=(
+            Rule("user-named", user_named(key)),
+            Rule("order-recorded", Decide(OWNER_NAMED_RULES, over=(OrderRecorded(key),))),
+        ),
         deny=f"Ask the owner to name the {target} and say to end it; their answer lifts this block once.",
         ttl=OWNER_NAMED_TTL,
         hook=f"{kind}.owner",
