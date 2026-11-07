@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A search of one unpacked package in a cache passes the protected-root guard.** The guard refused `rg`,
+  `grep -r`, or `find` over one entry such as `<cache>/uv/archive-v0/<id>/<package>` under `~/.cache` or a
+  `HOOKS_LAYOUT_PROTECTED_ROOTS` root, though its message asks for a version directory. A directory two or more
+  levels below such a root is now a bounded unit, with everything below it, when its name is a hex digest of 12
+  or more characters, a mixed-case id of 16 or more, or a dotted version. The root itself, tool directories
+  such as `uv` and `uv/archive-v0`, and worktree pools stay refused.
 - **`capt-hook helper install` brings the `capt-hook` CLI to the helper's version.** It upgraded the signed
   helper and left a CLI installed as a uv tool pinned to its old release, so `capt-hook --version` trailed the
   helper after every install. The install, and the self-updater once a host settles, now reinstall a uv-tool CLI

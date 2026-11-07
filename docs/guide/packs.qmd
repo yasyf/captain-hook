@@ -553,8 +553,10 @@ value that does not match the expected JSON shape, such as a bare string instead
 `ValueError` that names the variable. It is never ignored.
 
 - `HOOKS_LAYOUT_PROTECTED_ROOTS`: JSON list of directories. A recursive search at or under one is blocked,
-  filter or not, except inside a checkout or a lane as defined by the next two keys and except under a
-  searchable unit.
+  filter or not, except inside a checkout or a lane as defined by the next two keys, under a searchable
+  unit, or at or below an artifact directory. An artifact directory sits two or more levels below the root,
+  or below `~/.cache`, and its name is a hex digest of 12 or more characters, a mixed-case id of 16 or more,
+  or a dotted version, such as `<root>/uv/archive-v0/<id>`.
 - `HOOKS_LAYOUT_SEARCHABLE_UNITS`: JSON list of path globs (`*` matches one path segment) under a protected
   root that stay searchable, along with everything below them.
 - `HOOKS_LAYOUT_CHECKOUT_COLLECTIONS`: JSON list of directories whose children are checkouts. A `find` at a
