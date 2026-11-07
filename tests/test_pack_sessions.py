@@ -2038,6 +2038,77 @@ class TestOwnerNamedLifts:
         assert "sessions.launchctl.owner: user-named: nothing found" in envelope["systemMessage"]
 
 
+ORCA_SERVER = 3853
+ORCA_SERVER_TABLE = table(
+    *MAC.rows.values(),
+    row(77636, 1, "bash /Users/yasyf/.local/bin/orca-serve-supervisor --pairing-address 100.113.56.52"),
+    row(
+        3832,
+        77636,
+        "/Applications/Orca.app/Contents/MacOS/Orca "
+        "/Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/cli/index.js serve --pairing-address 1.1.1.1",
+    ),
+    row(
+        ORCA_SERVER,
+        3832,
+        "/Applications/Orca.app/Contents/MacOS/Orca --user-data-dir=/Users/yasyf/Library/Application Support/orca "
+        "--serve --serve-pairing-address 100.1.1.1",
+    ),
+)
+SERVER_ORDER = (
+    "Also restart the orca server (app server, with the launch daemon, not sipervisor or any sessions or agents)"
+)
+
+
+def ordered_turns(words: str) -> list[dict[str, Any]]:
+    said = datetime.now(UTC) - timedelta(minutes=10)
+    return [
+        {
+            "type": "user",
+            "timestamp": (said - timedelta(hours=1)).isoformat(),
+            "message": {"role": "user", "content": "Hi."},
+        },
+        {
+            "type": "assistant",
+            "timestamp": (said - timedelta(minutes=30)).isoformat(),
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Hello."}]},
+        },
+        {"type": "user", "timestamp": said.isoformat(), "message": {"role": "user", "content": words}},
+    ]
+
+
+class TestOrderedServerRestart:
+    @pytest.fixture(autouse=True)
+    def server(
+        self, home: Path, fake_table: dict[str, ProcessTable | None], rulings: dict[str, list[dict[str, Any]]]
+    ) -> None:
+        fake_table["table"] = ORCA_SERVER_TABLE
+        lock = home / "Library" / "Application Support" / "orca" / "SingletonLock"
+        lock.parent.mkdir(parents=True)
+        lock.symlink_to(f"Mac.local-{ORCA_SERVER}")
+        body = f'Terminal: "{SERVER_ORDER}". The Orca app server is pid {ORCA_SERVER}, holding the profile lock.'
+        rulings[str(ORCA_SERVER)] = ruling(body, written=datetime.now(UTC) - timedelta(minutes=5))
+
+    def kill(self, pid: int, words: str) -> Input:
+        return bash(
+            f"kill -TERM {pid}", transcript=ordered_turns(words), llm={"allow": True, "relied_on": [SERVER_ORDER]}
+        )
+
+    def test_his_recorded_order_lifts_the_kill_of_the_lock_holder(self, general_pack: None, tmp_path: Path) -> None:
+        assert decide_input(self.kill(ORCA_SERVER, f"Also merge it. {SERVER_ORDER}"), tmp_path) is None
+        assert [rule for rule, _ in minted("sessions.kill.owner")] == ["order-recorded"]
+
+    def test_a_note_without_his_words_keeps_the_block(self, general_pack: None, tmp_path: Path) -> None:
+        message = decide_input(self.kill(ORCA_SERVER, "Also merge it."), tmp_path)
+        assert message is not None and "name this pid in a cc-notes answer quoting the owner verbatim" in message
+        assert minted("sessions.kill.owner") == []
+
+    def test_any_other_orca_process_keeps_the_block(self, general_pack: None, tmp_path: Path) -> None:
+        message = decide_input(self.kill(3832, SERVER_ORDER), tmp_path)
+        assert message is not None and "Ask the owner to end it." in message
+        assert minted("sessions.kill.owner") == []
+
+
 def finished(inp: Input, response: dict[str, Any], tmp_path: Path) -> None:
     evt = input_to_event(Event.PostToolUse, inp)
     evt._raw["tool_response"] = response

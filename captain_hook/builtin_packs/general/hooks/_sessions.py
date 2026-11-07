@@ -190,6 +190,8 @@ CODEX_PROMPT = "› Ask Codex to do anything"
 DONE_MARKER = re.compile(r"^✻ .* · done ")
 LANE_NAME = re.compile(r"[\w.-]+")
 LAUNCH_RECEIPTS = ".claude/scratch/orca-launch"
+ORCA_PROFILE_LOCK = PurePath("Library", "Application Support", "orca", "SingletonLock")
+ORCA_SERVER_ORDER = "When the owner ordered its restart, name this pid in a cc-notes answer quoting the owner verbatim."
 RECEIPT_SLACK = timedelta(seconds=1)
 RETRY_WINDOW = timedelta(minutes=2)
 BACKGROUNDED = re.compile(r"(?<![&>|])&(?![&>])|\b(?:nohup|setsid|disown)\b")
@@ -837,6 +839,14 @@ def read_ownership() -> Ownership | Unreadable:
     return Unreadable("the process table could not be read") if table is None else Ownership.resolve(table)
 
 
+def orca_server_pid() -> int | None:
+    """The pid holding Orca's profile lock, read when asked: the app server, never a PTY daemon or a session."""
+    if not (lock := Path.home() / ORCA_PROFILE_LOCK).is_symlink():
+        return None
+    held = lock.readlink().name.rpartition("-")[2]
+    return int(held) if held.isdecimal() else None
+
+
 def unresolvable(spelling: str, reason: str, fix: str) -> str:
     return f"BLOCKED: `{spelling}` cannot be verified: {reason}. {fix}"
 
@@ -885,11 +895,17 @@ def pid_verdict(
             f"unrelated process. {fix}"
         )
     if pid in ownership.protected:
+        server = lifted is not None and pid == orca_server_pid()
         message = (
             f"BLOCKED: {describe(row)} is {process_class(row) or 'an ancestor of a protected process'}, which no "
-            "session may signal, stop, reprioritize, or restart. Ask the owner to end it."
+            "session may signal, stop, reprioritize, or restart. "
+            + (ORCA_SERVER_ORDER if server else "Ask the owner to end it.")
         )
-        return message if lifted is None or not lone_codex_session(row, ownership.table) else lifted(row, message)
+        return (
+            lifted(row, message)
+            if lifted is not None and (server or lone_codex_session(row, ownership.table))
+            else message
+        )
     if facts.started_here(row):
         return None
     agent = ownership.table.nearest(row.ppid, is_agent)
