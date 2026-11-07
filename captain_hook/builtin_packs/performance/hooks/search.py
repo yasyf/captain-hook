@@ -675,6 +675,22 @@ hook(
         Input(command="rg -n Dial ~/.modcache", env=LAYOUT): Block(pattern="walks gigabytes"),
         Input(command="rg -n Dial ~/.modcache/github.com/acme", env=LAYOUT): Block(),
         Input(command="rg -n Dial ~/.cache/go-mod"): Block(),
+        Input(command="rg -n needle ~/.modcache/uv/archive-v0/__n-3kJn5tDXSxKP/cc_transcript", env=LAYOUT): Allow(),
+        Input(command="grep -rn --include='*.py' needle ~/.modcache/uv/archive-v0/_bSn6HlNyqwVlfhH", env=LAYOUT): (
+            Allow()
+        ),
+        Input(command="find ~/.cache/uv/archive-v0/_AC4I3z-2znDKdoq -name '*.py'"): Allow(),
+        Input(command="rg -n needle ~/.modcache/tools/capt-hook/12.121.44/captain_hook", env=LAYOUT): Allow(),
+        Input(command="rg -n needle ~/.cache/huggingface/hub/snapshots/0f3c9a1b2d4e5f60718293a4"): Allow(),
+        Input(command="rg -n needle ~/.modcache/uv/archive-v0", env=LAYOUT): Block(pattern="walks gigabytes"),
+        Input(command="rg -n needle ~/.modcache/uv", env=LAYOUT): Block(),
+        Input(command="rg -n needle ~/.modcache/uv/environments-v2", env=LAYOUT): Block(),
+        Input(command="rg -n needle ~/.modcache/0f3c9a1b2d4e5f60718293a4", env=LAYOUT): Block(),
+        Input(
+            command="grep -rn --include='*.py' needle ~/.modcache/pool/0f3c9a1b2d4e5f60718293a4",
+            env={**LAYOUT, "HOOKS_LAYOUT_WORKTREE_POOLS": '{"~/.modcache/pool": 2}'},
+        ): Block(),
+        Input(command="rg -n needle ~/.cache/uv/archive-v0"): Block(),
         Input(command="grep -rn needle ~/.cache/ci/shard-1.log"): Allow(),
         Input(command="rg -n needle ~/.cache/ci ~/.cache/ci/shard-1.log"): Block(pattern="known depth"),
         Input(command="rg -n needle ~/.cache/ci.d/*"): Block(),
