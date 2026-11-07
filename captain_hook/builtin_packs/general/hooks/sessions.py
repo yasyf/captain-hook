@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import PurePath
 from typing import TYPE_CHECKING
@@ -250,11 +250,21 @@ LAUNCHD_PROGRAM = re.compile(r"^\tprogram = (.+)$", re.MULTILINE)
 LAUNCHD_ARGUMENTS = re.compile(r"^\targuments = \{\n((?:\t\t.*\n)*)\t\}", re.MULTILINE)
 LAUNCHD_JOB_PID = re.compile(r"^\tpid = (\d+)$", re.MULTILINE)
 DRIVE_DASHBOARD_RESTART = "Run `lr dashboard restart` instead, which restarts the drive dashboard and prints its URL."
+LAUNCHD_ALONE = "Run it alone on its line, piped at most, for an owner lift to apply."
+LAUNCHD_ORDER = "Inspect it with `launchctl print`, or name it in a cc-notes answer quoting the owner verbatim."
 APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)\b|keystroke\s+"q"')
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
 PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
 TMUX_ENDINGS = frozenset({"kill-server", "kill-session", "kill-pane", "kill-window"})
 SERVE_RULING = inline_ruling("Owner: restart com.example.orca-serve once.")
+ORDER_SAID = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=10)
+ORCA_ORDER = (
+    "Also restart the orca server (app server, with the launch daemon, not sipervisor or any sessions or agents)"
+)
+ORCA_PROMPT = f"It seems things aren’t really merging what’s up with that? {ORCA_ORDER}"
+ORCA_RULING_BODY = 'Terminal 5:02 PM Nov 6: "{order}". The Orca app server is launch agent com.yasyf.orca-serve.'
+ORCA_RULING = inline_ruling(ORCA_RULING_BODY.format(order=ORCA_ORDER), written=ORDER_SAID + timedelta(minutes=2))
+ORCA_ALLOWS = {"allow": True, "relied_on": [ORCA_ORDER]}
 DESK_LR = "/Users/dev/.claude/long-running/current/bin/lr"
 BK_DESK = "com.long-running.durable-agents-rebuild.bk"
 SUPERVISOR_DESK = "com.long-running.durable-agents-rebuild.supervisor"
@@ -328,6 +338,27 @@ ROLLBACK_STOP = (
     "executors idle. Re-read the OWNER OVERRIDE at the end of your brief.' --interrupt 2>&1 | tail -2; "
     "~/.local/bin/cci post --drive release-v3 --lane root --kind hold --to merge-walker-r2,incident-run-backlog-0711 "
     "--text 'OWNER 8:25 AM: NO executor rollback.' 2>&1 | tail -1"
+)
+
+
+def order_transcript(words: str) -> list[dict[str, object]]:
+    started, replied = ORDER_SAID - timedelta(hours=2), ORDER_SAID - timedelta(hours=1)
+    return [
+        {"type": "user", "timestamp": started.isoformat(), "message": {"role": "user", "content": "Ship the release."}},
+        {
+            "type": "assistant",
+            "timestamp": replied.isoformat(),
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Shipped."}]},
+        },
+        {"type": "user", "timestamp": ORDER_SAID.isoformat(), "message": {"role": "user", "content": words}},
+    ]
+
+
+ordered = partial(
+    guarded,
+    transcript=order_transcript(ORCA_PROMPT),
+    commands={**INLINE_COMMANDS, "ccn answer search com.yasyf.orca-serve": ORCA_RULING},
+    llm=ORCA_ALLOWS,
 )
 
 
@@ -1598,7 +1629,7 @@ def literal_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, 
 
 
 def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, str] | None:
-    if (service := literal_service(call, arguments, scan)) is None or not runs_once(call, scan):
+    if (service := literal_service(call, arguments, scan)) is None:
         return None
     verb, target = service
     label = target if verb in ("stop", "remove") and "/" not in target else launchd_label(target)
@@ -1655,17 +1686,14 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
     dashboard = drive_dashboard(arguments)
     if (service := launchd_service(call, arguments, scan)) is not None:
         verb, label = service
-        action = Proposal(place={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
-        message = (
+        blocked = (
             f"BLOCKED: `{spelling}` stops, unloads, or restarts launchd service `{clip(label, 40)}`, which may host "
             "sessions. "
-            + (
-                DRIVE_DASHBOARD_RESTART
-                if dashboard
-                else f"Inspect it with `launchctl print`, or ask the owner to {LATER_SESSION}."
-            )
         )
-        return lift(evt, LAUNCHD_STOP, action, message)
+        if not runs_once(call, scan):
+            return blocked + (DRIVE_DASHBOARD_RESTART if dashboard else LAUNCHD_ALONE)
+        action = Proposal(place={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
+        return lift(evt, LAUNCHD_STOP, action, blocked + (DRIVE_DASHBOARD_RESTART if dashboard else LAUNCHD_ORDER))
     match arguments.values.get("verb", ()):
         case (None,):
             return (
@@ -1713,7 +1741,30 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
                     "restart com.example.orca-serve", written=INLINE_STARTED + timedelta(minutes=5)
                 ),
             },
-        ): Block(pattern="ask the owner to name it in a cc-notes answer for a later session"),
+        ): Block(pattern="name it in a cc-notes answer quoting the owner verbatim"),
+        ordered(command="launchctl kickstart -k gui/501/com.yasyf.orca-serve"): Allow(),
+        ordered(
+            command="launchctl kickstart -k gui/501/com.yasyf.orca-serve",
+            transcript=order_transcript("It seems things aren’t really merging what’s up with that?"),
+        ): Block(pattern="stops, unloads, or restarts launchd service `com.yasyf.orca-serve`"),
+        ordered(
+            command="launchctl kickstart -k gui/501/com.yasyf.orca-serve",
+            commands={
+                **INLINE_COMMANDS,
+                "ccn answer search com.yasyf.orca-serve": inline_ruling(
+                    ORCA_RULING_BODY.format(order=ORCA_ORDER.replace("sipervisor", "supervisor")),
+                    written=ORDER_SAID + timedelta(minutes=2),
+                ),
+            },
+        ): Block(),
+        ordered(
+            command="launchctl kickstart -k gui/501/com.yasyf.orca-serve.helper",
+            commands={**INLINE_COMMANDS, "ccn answer search com.yasyf.orca-serve.helper": ORCA_RULING},
+        ): Block(),
+        ordered(command="launchctl kickstart -k gui/501/com.yasyf.orca-serve", agent_id="lane-1"): Block(),
+        ordered(command='launchctl kickstart -k gui/501/com.yasyf.orca-serve; echo "EXIT=$?"'): Block(
+            pattern="alone on its line, piped at most, for an owner lift"
+        ),
         guarded(
             command="launchctl bootout gui/501/com.example.orca-serve",
             commands={**INLINE_COMMANDS, "ccn answer search com.example.orca-serve": inline_ruling("com.example.orca")},
