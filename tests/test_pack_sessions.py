@@ -1655,6 +1655,33 @@ class TestTerminalClose:
         assert message is not None
         assert "terminal `term_idle` (`orca` is not installed on the hook's PATH)" in message
 
+    def test_an_orca_lookup_outlasting_the_call_blocks_it_and_answers_the_retry(
+        self, general_pack: None, agent_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answered = threading.Event()
+        asked: list[tuple[str, ...]] = []
+        document = _sessions.orca_document
+
+        def slow(argv: tuple[str, ...], unset: tuple[str, ...], ceiling: float = _sessions.PROBE_TIMEOUT) -> Any:
+            asked.append(argv)
+            answered.wait()
+            return document(argv, unset, ceiling)
+
+        monkeypatch.setattr(_sessions, "orca_document", slow)
+        evt = input_to_event(Event.PreToolUse, bash(AGENT_CLOSE))
+        left = SYNC_DEADLINE_MARGIN_SECONDS + _sessions.ORCA_VERDICT_RESERVE + 1.0
+        with stubbed_commands(INLINE_COMMANDS):
+            with reqenv.use_request(overrides()), reqenv.deadline_in(left):
+                first = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
+            answered.set()
+            retry = decide(AGENT_CLOSE, tmp_path)
+        assert first is not None
+        assert "closes terminal `term_agent` (Orca did not answer in " in first
+        assert "Retry the same call" in first
+        assert retry is not None
+        assert "where pid 16002" in retry
+        assert asked.count(("orca", "terminal", "show", "--terminal", "term_agent", "--json")) == 1
+
     def test_an_unreadable_process_table_denies_without_asking_orca(
         self,
         general_pack: None,

@@ -31,6 +31,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     SETTLED_CLOSE,
     TERMINAL_CLOSE,
     Scan,
+    TimedOut,
     Ungranted,
     Unreadable,
     app_host,
@@ -214,6 +215,7 @@ ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave en
 ORCA_STOP_FIX = "End a done lane with `lr gc --done <ctx>`; only its Run's coordinator may worker-stop it."
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
 CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
+ORCA_RETRY = "Retry the same call: the guard keeps waiting on Orca, and the retry reads its answer."
 KEY_ALIASES = {
     "command": "cmd",
     "meta": "cmd",
@@ -885,8 +887,8 @@ def verifiable_close(call: Call, scan: Scan) -> bool:
     return spelled(call, scan) and sum(map(closes_one_terminal, scan.literal_calls)) == 1
 
 
-def terminal_close_denied(spelling: str, handle: str, detail: str) -> str:
-    return f"BLOCKED: `{spelling}` closes terminal `{clip(handle, 48)}`{detail}. {CLOSE_FIX}"
+def terminal_close_denied(spelling: str, handle: str, detail: str, fix: str) -> str:
+    return f"BLOCKED: `{spelling}` closes terminal `{clip(handle, 48)}`{detail}. {fix}"
 
 
 def whole_tab_verdict(spelling: str, handle: str) -> str | None:
@@ -910,7 +912,10 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     if ruled is not None and not isinstance(ruled, Deny):
         return None
     agent = None
+    fix = CLOSE_FIX
     match scan.facts.terminal_tree(handle):
+        case TimedOut(reason):
+            detail, fix = f" ({reason})", ORCA_RETRY
         case Unreadable(reason):
             detail = f" ({reason})"
         case (root, *below):
@@ -920,7 +925,7 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
             detail = f", where {describe(agent)} runs"
         case _:
             detail = " (its process tree could not be read)"
-    denied = terminal_close_denied(spelling, handle, detail)
+    denied = terminal_close_denied(spelling, handle, detail, fix)
     if not isinstance(ruled, Deny):
         return denied
     ungranted = refusal(denied, TERMINAL_CLOSE.hook, ruled)

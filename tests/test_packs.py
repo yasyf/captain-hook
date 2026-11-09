@@ -499,8 +499,8 @@ def test_enabling_steering_pack_registers_hooks() -> None:
     assert "captain_hook._packs.steering.teammates" in sys.modules
 
 
-def test_steering_deferral_nudge_skips_in_plan_mode() -> None:
-    from captain_hook.types import InPlanMode
+def test_steering_deferral_nudge_skips_plan_mode_and_work_handed_on() -> None:
+    from captain_hook.types import InPlanMode, UsedTool
 
     discover_pack("steering", manager.resolve_builtin("steering").path)
     (nudge,) = (
@@ -508,7 +508,10 @@ def test_steering_deferral_nudge_skips_in_plan_mode() -> None:
         for h in app._state.hooks
         if h.spec.events & (Event.Stop | Event.SubagentStop) and InPlanMode() in h.spec.skip_if
     )
-    assert nudge.spec.skip_if == (InPlanMode(),)
+    plan, handoff, communicator = nudge.spec.skip_if
+    assert plan == InPlanMode()
+    assert handoff == UsedTool("mcp__plugin_cc-inbox_cci__post", "mcp__plugin_cc-inbox_cci__close")
+    assert type(communicator).__name__ == "DriveCommunicator"
 
 
 def test_gitignore_lines_survives_an_unstattable_path(monkeypatch: pytest.MonkeyPatch) -> None:
