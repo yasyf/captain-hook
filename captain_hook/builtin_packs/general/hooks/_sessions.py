@@ -23,7 +23,7 @@ from weakref import WeakValueDictionary
 from cc_transcript.activity import ToolUse
 from cc_transcript.tools import BashCall
 from loguru import logger
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, orca_socket, workflow_state
 from captain_hook.bindings import Resolved, Unknown, Unresolved, references
@@ -31,6 +31,7 @@ from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
 from captain_hook.conditions import UserSaid
 from captain_hook.guard_literal import names_guarded
+from captain_hook.session import SessionStore
 from captain_hook.tickets import (
     Allow,
     Context,
@@ -184,7 +185,7 @@ LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
 ORCA_PROBE_TIMEOUT = 60.0
 ORCA_VERDICT_RESERVE = 5.0
-GUARD_RETRY = "Retry the same call: the guard keeps the answers it was still waiting on, so the retry decides."
+GUARD_RETRY = "Retry the same call: the guard keeps the answers it already has for the retry."
 TERMINAL_LOOKUPS: dict[tuple[str | None, str], TerminalLookup] = {}
 TERMINAL_LOOKUPS_GUARD = threading.Lock()
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
@@ -637,6 +638,15 @@ class TerminalLookup:
         return now - self.started >= RETRY_WINDOW.total_seconds()
 
 
+class TerminalPid(BaseModel):
+    pid: int
+    resolved: datetime
+
+
+class TerminalPids(BaseModel):
+    pids: dict[str, TerminalPid] = Field(default_factory=dict[str, TerminalPid])
+
+
 def orca_in_background(argv: tuple[str, ...]) -> futures.Future[Any]:
     answer: futures.Future[Any] = futures.Future()
     unbounded = None if (ov := reqenv.current()) is None else replace(ov, deadline_unix_ms=0)
@@ -665,7 +675,12 @@ def terminal_lookup(session: str | None, handle: str) -> TerminalLookup:
     return lookup
 
 
-def terminal_pid(session: str | None, handle: str) -> int | Unreadable:
+def terminal_pid(store: SessionStore, session: str | None, handle: str) -> int | Unreadable:
+    slot = store[TerminalPids]
+    now = utc_now()
+    known = {key: pid for key, pid in slot.get(TerminalPids()).pids.items() if now - pid.resolved < RETRY_WINDOW}
+    if handle in known:
+        return known[handle].pid
     lookup = terminal_lookup(session, handle)
     left = reqenv.seconds_left()
     budget = ORCA_PROBE_TIMEOUT if left is None else max(0.0, min(ORCA_PROBE_TIMEOUT, left - ORCA_VERDICT_RESERVE))
@@ -686,9 +701,11 @@ def terminal_pid(session: str | None, handle: str) -> int | Unreadable:
             for worktree in sweep["result"]["worktrees"]
             for pane in worktree.get("sessions", ())
         }
-        return pids[pty]
+        pid = pids[pty]
     except (ValueError, TypeError, KeyError):
         return Unreadable("Orca reports no process for the terminal")
+    slot.set(TerminalPids(pids={**known, handle: TerminalPid(pid=pid, resolved=now)}))
+    return pid
 
 
 class SpawnRecord(BaseModel):
@@ -826,8 +843,11 @@ class Drive:
 
 
 class Facts:
-    def __init__(self, session: str | None = None, spawns: Iterable[SpawnRecord] = ()) -> None:
+    def __init__(
+        self, session: str | None = None, spawns: Iterable[SpawnRecord] = (), store: SessionStore | None = None
+    ) -> None:
         self.session = session
+        self.store = SessionStore(None) if store is None else store
         self.spawns = tuple(spawns)
         self._guard = threading.Lock()
         self._ownership: Ownership | Unreadable | None = None
@@ -879,7 +899,7 @@ class Facts:
     def terminal_tree(self, handle: str) -> tuple[ProcessRow, ...] | Unreadable:
         if isinstance(ownership := self.ownership, Unreadable):
             return ownership
-        if isinstance(pid := terminal_pid(self.session, handle), Unreadable):
+        if isinstance(pid := terminal_pid(self.store, self.session, handle), Unreadable):
             return pid
         if (root := ownership.table.rows.get(pid)) is None:
             return Unreadable(f"the terminal's process {pid} is not in the process table")
@@ -1131,7 +1151,7 @@ class Scan:
         with cls.LOCK:
             scan = cls.CACHE.get(id(evt._raw))
             if scan is None or scan.raw is not evt._raw:
-                facts = Facts(evt._raw.get("session_id"), Spawns.load(evt).records.values())
+                facts = Facts(evt._raw.get("session_id"), Spawns.load(evt).records.values(), evt.ctx.session)
                 scan = cls.CACHE[id(evt._raw)] = cls(evt._raw, facts)
             evt._resources[cls, id(evt._raw)] = scan
         with scan.guard:
@@ -1373,15 +1393,20 @@ def settled_worker(handle: str) -> dict[str, Any] | None:
     return worker
 
 
+def may_coordinate(evt: BaseHookEvent) -> bool:
+    return evt.agent_id is None and bool(reqenv.getenv("ORCA_TERMINAL_HANDLE"))
+
+
 def coordinates(evt: BaseHookEvent, run: str | None) -> bool:
-    caller = reqenv.getenv("ORCA_TERMINAL_HANDLE")
-    if evt.agent_id is not None or not caller or not run:
+    if not may_coordinate(evt) or not run:
         return False
     shown = ("orca", "orchestration", "run-show", "--id", run, "--json")
-    return orca_json(shown, "result", "run", "coordinator_handle") == caller
+    return orca_json(shown, "result", "run", "coordinator_handle") == reqenv.getenv("ORCA_TERMINAL_HANDLE")
 
 
 def settled_close(evt: BaseHookEvent, handle: str, tab: bool) -> Proposal | None:
+    if not may_coordinate(evt):
+        return None
     if (worker := settled_worker(handle)) is None or not coordinates(evt, run := worker.get("runId")):
         return None
     dispatch, status = worker["dispatchId"], worker["dispatchStatus"]

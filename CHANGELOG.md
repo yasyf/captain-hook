@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A retried terminal close gets a real answer, not the same retry block again.** On 12.121.55 three closes
+  in a row each blocked with "could not judge this call". The first close used up Orca's answer, so each retry
+  asked Orca again, and a close from a lane or a session outside Orca paged through all 4,642 Orca workers
+  looking for a Run it could never coordinate. A session now keeps the terminal's process for two minutes, and
+  only a root session in an Orca terminal reads the worker list.
 - **A session guard that cannot finish its check blocks the call instead of letting it run unchecked.** In
   12.121.54 a terminal close whose Orca wait ran out went on to the owner-ruling check, which outran the hook's
   deadline, so the close still ran under the "did not complete (no-verdict)" note. The close now blocks as soon
