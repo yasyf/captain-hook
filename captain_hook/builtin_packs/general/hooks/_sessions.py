@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import threading
 import time
 from concurrent import futures
@@ -640,11 +641,12 @@ def orca_in_background(argv: tuple[str, ...]) -> futures.Future[Any]:
     unbounded = None if (ov := reqenv.current()) is None else replace(ov, deadline_unix_ms=0)
 
     def read() -> None:
-        with nullcontext() if unbounded is None else reqenv.use_request(unbounded):
-            try:
+        try:
+            with nullcontext() if unbounded is None else reqenv.use_request(unbounded):
                 answer.set_result(orca_document(argv, (), ORCA_PROBE_TIMEOUT))
-            except Exception as exc:
-                answer.set_exception(exc)
+        finally:
+            if (raised := sys.exception()) is not None:
+                answer.set_exception(raised)
 
     threading.Thread(target=read, name="capt-hook-orca-terminal", daemon=True).start()
     return answer

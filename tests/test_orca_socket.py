@@ -117,7 +117,7 @@ def test_a_slow_runtime_reads_as_timed_out_without_the_cli(
     runtime(lambda _: None)
     monkeypatch.setattr(
         "captain_hook.builtin_packs.general.hooks._sessions.probe_timeout",
-        lambda _reason, ceiling=0.05: ceiling,
+        lambda *_: 0.05,
     )
     orca_socket.ADMITTED[RUNTIME] = True
 
