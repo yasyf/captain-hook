@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Run coordinator's terminal close gets a real answer.** A root session in an Orca terminal still blocked
+  every close as "could not judge this call", because the settled-dispatch check read all 4,642 Orca workers
+  page by page. It now asks Orca for the caller's own Run and lists only that Run's workers, about 2 s in all.
 - **A retried terminal close gets a real answer, not the same retry block again.** On 12.121.55 three closes
   in a row each blocked with "could not judge this call". The first close used up Orca's answer, so each retry
   asked Orca again, and a close from a lane or a session outside Orca paged through all 4,642 Orca workers
