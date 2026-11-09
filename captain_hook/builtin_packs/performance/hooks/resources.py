@@ -108,7 +108,7 @@ def refuse(evt: ResourcePressureEvent, identity: ProcessIdentity, reason: str) -
 
 
 def vet(evt: ResourcePressureEvent, identity: ProcessIdentity) -> Owned | Unreadable:
-    if (why := shared_tree(evt.transcript_path)) is not None:
+    if (why := shared_tree(evt)) is not None:
         return why
     if (table := proc.process_table()) is None:
         return Unreadable("the process table is unreadable.")
