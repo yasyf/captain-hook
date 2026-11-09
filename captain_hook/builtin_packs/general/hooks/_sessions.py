@@ -178,6 +178,7 @@ LANE_VAR = "CLAUDE_LONG_RUNNING_LANE"
 LANE_SUCCESSOR = re.compile(r"-\d+$")
 LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
+ORCA_PROBE_TIMEOUT = 15.0
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 IDLE_WAIT_MS = 1000
 SCREEN_LINES = 40
@@ -619,10 +620,10 @@ def probe(
 
 
 def terminal_pid(handle: str) -> int | Unreadable:
-    shown = probe(("orca", "terminal", "show", "--terminal", handle, "--json"))
+    shown = probe(("orca", "terminal", "show", "--terminal", handle, "--json"), ORCA_PROBE_TIMEOUT)
     if isinstance(shown, Unreadable):
         return shown
-    sweep = probe(("orca", "diagnostics", "memory", "--json"))
+    sweep = probe(("orca", "diagnostics", "memory", "--json"), ORCA_PROBE_TIMEOUT)
     if isinstance(sweep, Unreadable):
         return sweep
     try:
