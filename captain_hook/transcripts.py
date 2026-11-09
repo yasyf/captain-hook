@@ -162,6 +162,14 @@ def tail_transcript(path: str | Path, count: int) -> Session:
     return lift_session(events, path=Path(path))
 
 
+def lanes_dir(transcript_path: str | Path) -> Path:
+    """The directory holding every lane transcript of a session: ``<parent-dir>/<parent-stem>/subagents``.
+
+    It exists once any subagent, workflow agent, or teammate has run inside the session.
+    """
+    return Path(transcript_path).with_suffix("") / "subagents"
+
+
 def lane_transcript_path(transcript_path: str | Path, agent_id: str) -> Path:
     """The lane transcript a subagent or teammate writes beside its parent session transcript.
 
@@ -170,7 +178,7 @@ def lane_transcript_path(transcript_path: str | Path, agent_id: str) -> Path:
     ``transcript_path``, so the lane's own file resolves by convention:
     ``<parent-dir>/<parent-stem>/subagents/agent-<agent_id>.jsonl``.
     """
-    return Path(transcript_path).with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
+    return lanes_dir(transcript_path) / f"agent-{agent_id}.jsonl"
 
 
 class TranscriptLoadError(Exception):

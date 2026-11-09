@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The resource monitor never stops a child in a session that has run subagents.** Subagents, workflow
+  agents, and teammates run inside their session's Claude Code process, so every child they start
+  descends from the same agent pid. The monitor proved ownership from that pid alone, so it warned and could
+  `SIGTERM` one lane's `git fetch` or `lr` while delivering the notice to another lane that never started it.
+  The worker now refuses at every stage, and again right before the signal, once the session's `subagents`
+  transcript directory exists or its event names no transcript. The host then stops tracking the child.
 - **A search of one unpacked package in a cache passes the protected-root guard.** The guard refused `rg`,
   `grep -r`, or `find` over one entry such as `<cache>/uv/archive-v0/<id>/<package>` under `~/.cache` or a
   `HOOKS_LAYOUT_PROTECTED_ROOTS` root, though its message asks for a version directory. A directory two or more

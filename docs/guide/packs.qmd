@@ -45,7 +45,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   the session through its next hook event and a desktop notification, then waits out the grace period.
   It then asks TypeSafe Jev whether the child is disposable. When Jev says yes with at least 0.9
   probability, the monitor sends one targeted `SIGTERM` after it revalidates the pid, parent, process
-  group, start time, command, working directory, and session ownership. Deploys, releases, publishes,
+  group, start time, command, working directory, and session ownership. No child of a session that has run
+  a subagent, workflow agent, or teammate is signaled, since those agents share its process tree. Deploys, releases, publishes,
   database clients and migrators, and anything protected are never signaled, and neither are their
   ancestors. Protected means agent sessions, terminal hosts, PTY daemons, Orca, launchd, and the Captain
   Hook host. Jev cannot override those exclusions. See [Tune the subprocess resource monitor](#tune-the-subprocess-resource-monitor) to
@@ -487,6 +488,10 @@ running instead:
 - A sample that cannot be read empties the window for that metric. Pressure must then be proven again with
   fresh readable samples before the child advances.
 - The command line, or an ancestor's, matches an exclusion, or the child or one of its ancestors is protected.
+- The session has run a subagent, workflow agent, or teammate, or its event names no transcript.
+  Those agents run inside the session's Claude Code process, so the process tree cannot show which agent
+  started the child. The check reads the session's `subagents` transcript directory at every stage and again
+  right before the signal.
 - Jev times out, rejects the request, has no key, declines the question, or rates the child disposable below
   0.9, or the session runs out of judge calls.
 - The event payload is malformed, or the session state on disk is corrupt.
