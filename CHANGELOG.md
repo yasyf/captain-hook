@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered by then, the close is blocked with `Orca did not answer in <N>s` and told to retry. The session's
   retry reads the answer that first lookup gets instead of asking Orca again. The memory sweep now goes over
   Orca's socket as well.
+- **Handing work to another lane through cci ends a turn without the deferral nudge.** The Stop nudge that
+  says "Deliver the requested fix instead of substituting docs" blocked a drive communicator's turn after it
+  filed a defect to root, which is the communicator's whole job. The nudge now skips a turn that posted or
+  closed a cci record, and every turn of a session that holds a long-running drive's communicator role.
 - **The resource monitor never stops a child in a session that has run subagents.** Subagents, workflow
   agents, and teammates run inside their session's Claude Code process, so every child they start
   descends from the same agent pid. The monitor proved ownership from that pid alone, so it warned and could
