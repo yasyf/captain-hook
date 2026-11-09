@@ -29,7 +29,10 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   as the ruling stands, and each close, service-stop, or kill ticket covers an identical retry
   for two minutes. A lifted Bash call must
   run once at top level, first in the payload, with only pipe successors. A session may
-  also close an idle Orca terminal it proves it created itself.
+  also close an idle Orca terminal it proves it created itself. A session guard that cannot finish
+  its check before the hook's deadline blocks the call and says to retry. A terminal close whose
+  Orca lookup is still running blocks with `Orca did not answer in <N>s`, and the retry reads the
+  answer that lookup gets.
   The rewrite sends each assistant reply through Cerebras (`qwen-3.8-27b`) and does nothing until
   `CEREBRAS_API_KEY` is set. With the key set, it hides the reply's streamed chunks and shows the
   rewrite in their place once the last chunk arrives. Code blocks, names, numbers, and commands carry

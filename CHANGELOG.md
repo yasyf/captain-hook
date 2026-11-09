@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session guard that cannot finish its check blocks the call instead of letting it run unchecked.** In
+  12.121.54 a terminal close whose Orca wait ran out went on to the owner-ruling check, which outran the hook's
+  deadline, so the close still ran under the "did not complete (no-verdict)" note. The close now blocks as soon
+  as the Orca wait runs out. Any session guard that misses its deadline or fails now blocks with "Retry the same
+  call", and the retry reads what the first call was still waiting on.
 - **A terminal close the session guard cannot check blocks once with a retry hint, and never runs unchecked.**
   The guard asked Orca for the terminal's process with two calls of up to 15 s each, one after the other, while
   Orca takes 11 to 16 s per call. The second call ran into the hook's deadline, the guard returned no verdict,

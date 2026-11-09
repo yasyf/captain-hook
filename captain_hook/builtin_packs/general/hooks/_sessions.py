@@ -184,6 +184,7 @@ LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
 ORCA_PROBE_TIMEOUT = 60.0
 ORCA_VERDICT_RESERVE = 5.0
+GUARD_RETRY = "Retry the same call: the guard keeps the answers it was still waiting on, so the retry decides."
 TERMINAL_LOOKUPS: dict[tuple[str | None, str], TerminalLookup] = {}
 TERMINAL_LOOKUPS_GUARD = threading.Lock()
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
@@ -1785,4 +1786,5 @@ guard = partial(
     respect_gitignore=False,
     skip_planning_agents=False,
     mandatory=True,
+    on_incomplete=GUARD_RETRY,
 )
