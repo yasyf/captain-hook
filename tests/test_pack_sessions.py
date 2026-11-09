@@ -1532,7 +1532,7 @@ class TestTerminalClose:
         workers: list[dict[str, str]],
     ) -> None:
         monkeypatch.setattr(_sessions, "idle", lambda handle, seen=iter(idles): next(seen))
-        monkeypatch.setattr(_sessions, "worker_of", lambda handle, seen=iter(workers): next(seen))
+        monkeypatch.setattr(_sessions, "worker_of", lambda handle, run=None, seen=iter(workers): next(seen))
         monkeypatch.setattr(orca_tickets, "resolve", lambda handle: (None, None))
         with stubbed_commands(SETTLED):
             envelope = envelope_of(bash(AGENT_CLOSE, llm=CLASS_ALLOW), tmp_path, env=ROOT)
@@ -1704,7 +1704,7 @@ class TestTerminalClose:
     ) -> None:
         failing_run(monkeypatch, "", AssertionError("no subprocess may run"))
         evt = input_to_event(Event.PreToolUse, bash(OWNER_CLOSE))
-        with reqenv.use_request(overrides()), reqenv.deadline_in(SYNC_DEADLINE_MARGIN_SECONDS + 0.3):
+        with reqenv.use_request(overrides()), reqenv.deadline_in(SYNC_DEADLINE_MARGIN_SECONDS + 0.45):
             message = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
         assert message is not None
         assert "the caller deadline is too close to read the process table" in message

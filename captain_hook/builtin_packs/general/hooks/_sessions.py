@@ -404,7 +404,11 @@ def inline_class_rulings(*, written: datetime = INLINE_STARTED - timedelta(days=
 
 def inline_run(coordinator: str) -> dict[str, str]:
     shown = {"ok": True, "result": {"run": {"id": "run_inline", "coordinator_handle": coordinator}}}
-    return {"orca orchestration run-show --id run_inline": json.dumps(shown)}
+    checked = {"ok": True, "result": {"runId": "run_inline", "count": 0, "messages": []}}
+    return {
+        "orca orchestration run-show --id run_inline": json.dumps(shown),
+        f"orca orchestration check --terminal {coordinator} --peek --json": json.dumps(checked),
+    }
 
 
 def inline_dispatch(dispatch: str, run: str = "run_inline") -> dict[str, str]:
@@ -1267,14 +1271,15 @@ def runs_once(call: Call, scan: Scan) -> bool:
     )
 
 
-def worker_of(handle: str) -> dict[str, Any] | Unreadable | None:
+def worker_of(handle: str, *, run: str | None = None) -> dict[str, Any] | Unreadable | None:
     cursor: tuple[str, ...] = ()
+    scope = () if run is None else ("--run", run)
     while True:
-        argv = ("orca", "orchestration", "worker-list", "--limit", str(WORKER_PAGE), *cursor, "--json")
+        argv = ("orca", "orchestration", "worker-list", *scope, "--limit", str(WORKER_PAGE), *cursor, "--json")
         if isinstance(page := orca_json(argv, "result", unset=("ORCA_TERMINAL_HANDLE",)), Unreadable):
             return page
         try:
-            if page.get("scope", {}).get("source", "all") != "all":
+            if run is None and page.get("scope", {}).get("source", "all") != "all":
                 return Unreadable("Orca scoped its worker list to one Run")
             holder = next(
                 (
@@ -1386,28 +1391,31 @@ class CreatedHere(CustomTicketCondition):
         ]
 
 
-def settled_worker(handle: str) -> dict[str, Any] | None:
-    worker = worker_of(handle)
+def settled_worker(handle: str, run: str) -> dict[str, Any] | None:
+    worker = worker_of(handle, run=run)
     if not isinstance(worker, dict) or worker.get("dispatchStatus") not in SETTLED or idle(handle) is not True:
         return None
     return worker
 
 
-def may_coordinate(evt: BaseHookEvent) -> bool:
-    return evt.agent_id is None and bool(reqenv.getenv("ORCA_TERMINAL_HANDLE"))
+def caller_handle(evt: BaseHookEvent) -> str | None:
+    return None if evt.agent_id is not None else reqenv.getenv("ORCA_TERMINAL_HANDLE") or None
 
 
 def coordinates(evt: BaseHookEvent, run: str | None) -> bool:
-    if not may_coordinate(evt) or not run:
+    if (caller := caller_handle(evt)) is None or not run:
         return False
     shown = ("orca", "orchestration", "run-show", "--id", run, "--json")
-    return orca_json(shown, "result", "run", "coordinator_handle") == reqenv.getenv("ORCA_TERMINAL_HANDLE")
+    return orca_json(shown, "result", "run", "coordinator_handle") == caller
 
 
 def settled_close(evt: BaseHookEvent, handle: str, tab: bool) -> Proposal | None:
-    if not may_coordinate(evt):
+    if (caller := caller_handle(evt)) is None:
         return None
-    if (worker := settled_worker(handle)) is None or not coordinates(evt, run := worker.get("runId")):
+    checked = ("orca", "orchestration", "check", "--terminal", caller, "--peek", "--json")
+    if not isinstance(run := orca_json(checked, "result", "runId"), str):
+        return None
+    if (worker := settled_worker(handle, run)) is None or not coordinates(evt, run):
         return None
     dispatch, status = worker["dispatchId"], worker["dispatchStatus"]
     stage = ((worker.get("projection") or {}).get("stage") or {}).get("detail")
@@ -1431,7 +1439,7 @@ def own_lane(evt: BaseHookEvent, handle: str) -> bool:
 
 
 def still_settled(action: Proposal) -> bool:
-    worker = settled_worker(action.payload["terminal"])
+    worker = settled_worker(action.payload["terminal"], action.payload["run"])
     return worker is not None and worker["dispatchId"] == action.payload["dispatch"]
 
 
