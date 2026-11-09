@@ -7,11 +7,14 @@ import re
 import shlex
 import subprocess
 import threading
-from dataclasses import dataclass, field
+import time
+from concurrent import futures
+from contextlib import nullcontext
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial, reduce
 from itertools import product
-from math import prod
+from math import ceil, prod
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, ClassVar
 from weakref import WeakValueDictionary
@@ -178,7 +181,10 @@ LANE_VAR = "CLAUDE_LONG_RUNNING_LANE"
 LANE_SUCCESSOR = re.compile(r"-\d+$")
 LAUNCHD_PID = 1
 PROBE_TIMEOUT = 2.0
-ORCA_PROBE_TIMEOUT = 15.0
+ORCA_PROBE_TIMEOUT = 60.0
+ORCA_VERDICT_RESERVE = 5.0
+TERMINAL_LOOKUPS: dict[tuple[str | None, str], TerminalLookup] = {}
+TERMINAL_LOOKUPS_GUARD = threading.Lock()
 PROBE_FALLBACK_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"))
 IDLE_WAIT_MS = 1000
 SCREEN_LINES = 40
@@ -619,19 +625,63 @@ def probe(
     return done.stdout if done.returncode == 0 else Unreadable(f"`{argv[0]}` failed")
 
 
-def terminal_pid(handle: str) -> int | Unreadable:
-    shown = probe(("orca", "terminal", "show", "--terminal", handle, "--json"), ORCA_PROBE_TIMEOUT)
-    if isinstance(shown, Unreadable):
+@dataclass(frozen=True, slots=True)
+class TerminalLookup:
+    started: float
+    shown: futures.Future[Any]
+    sweep: futures.Future[Any]
+
+    def expired(self, now: float) -> bool:
+        return now - self.started >= RETRY_WINDOW.total_seconds()
+
+
+def orca_in_background(argv: tuple[str, ...]) -> futures.Future[Any]:
+    answer: futures.Future[Any] = futures.Future()
+    unbounded = None if (ov := reqenv.current()) is None else replace(ov, deadline_unix_ms=0)
+
+    def read() -> None:
+        with nullcontext() if unbounded is None else reqenv.use_request(unbounded):
+            try:
+                answer.set_result(orca_document(argv, (), ORCA_PROBE_TIMEOUT))
+            except Exception as exc:
+                answer.set_exception(exc)
+
+    threading.Thread(target=read, name="capt-hook-orca-terminal", daemon=True).start()
+    return answer
+
+
+def terminal_lookup(session: str | None, handle: str) -> TerminalLookup:
+    now = time.monotonic()
+    with TERMINAL_LOOKUPS_GUARD:
+        for key in [key for key, lookup in TERMINAL_LOOKUPS.items() if lookup.expired(now)]:
+            del TERMINAL_LOOKUPS[key]
+        if (lookup := TERMINAL_LOOKUPS.get((session, handle))) is None:
+            shown = orca_in_background(("orca", "terminal", "show", "--terminal", handle, "--json"))
+            sweep = orca_in_background(("orca", "diagnostics", "memory", "--json"))
+            lookup = TERMINAL_LOOKUPS[session, handle] = TerminalLookup(now, shown, sweep)
+    return lookup
+
+
+def terminal_pid(session: str | None, handle: str) -> int | Unreadable:
+    lookup = terminal_lookup(session, handle)
+    left = reqenv.seconds_left()
+    budget = ORCA_PROBE_TIMEOUT if left is None else max(0.0, min(ORCA_PROBE_TIMEOUT, left - ORCA_VERDICT_RESERVE))
+    if futures.wait((lookup.shown, lookup.sweep), timeout=budget).not_done:
+        waited = time.monotonic() - lookup.started
+        return TimedOut(f"Orca did not answer in {ceil(waited)}s", waited)
+    with TERMINAL_LOOKUPS_GUARD:
+        if TERMINAL_LOOKUPS.get((session, handle)) is lookup:
+            del TERMINAL_LOOKUPS[session, handle]
+    if isinstance(shown := lookup.shown.result(), Unreadable):
         return shown
-    sweep = probe(("orca", "diagnostics", "memory", "--json"), ORCA_PROBE_TIMEOUT)
-    if isinstance(sweep, Unreadable):
+    if isinstance(sweep := lookup.sweep.result(), Unreadable):
         return sweep
     try:
-        pty = json.loads(shown)["result"]["terminal"]["ptyId"]
+        pty = shown["result"]["terminal"]["ptyId"]
         pids = {
-            session["sessionId"]: int(session["pid"])
-            for worktree in json.loads(sweep)["result"]["worktrees"]
-            for session in worktree.get("sessions", ())
+            pane["sessionId"]: int(pane["pid"])
+            for worktree in sweep["result"]["worktrees"]
+            for pane in worktree.get("sessions", ())
         }
         return pids[pty]
     except (ValueError, TypeError, KeyError):
@@ -826,7 +876,7 @@ class Facts:
     def terminal_tree(self, handle: str) -> tuple[ProcessRow, ...] | Unreadable:
         if isinstance(ownership := self.ownership, Unreadable):
             return ownership
-        if isinstance(pid := terminal_pid(handle), Unreadable):
+        if isinstance(pid := terminal_pid(self.session, handle), Unreadable):
             return pid
         if (root := ownership.table.rows.get(pid)) is None:
             return Unreadable(f"the terminal's process {pid} is not in the process table")
@@ -1127,9 +1177,9 @@ def orca_json(argv: tuple[str, ...], *path: str, unset: tuple[str, ...] = ()) ->
         return Unreadable(f"`{' '.join(argv[:3])}` printed no {path[-1]}")
 
 
-def orca_document(argv: tuple[str, ...], unset: tuple[str, ...]) -> Any:
+def orca_document(argv: tuple[str, ...], unset: tuple[str, ...], ceiling: float = PROBE_TIMEOUT) -> Any:
     if (read := orca_socket.read_call(argv)) is not None:
-        if isinstance(timeout := probe_timeout("ask Orca"), Unreadable):
+        if isinstance(timeout := probe_timeout("ask Orca", ceiling), Unreadable):
             return timeout
         try:
             return {"result": orca_socket.call(*read, timeout=timeout)}
@@ -1138,7 +1188,7 @@ def orca_document(argv: tuple[str, ...], unset: tuple[str, ...]) -> Any:
         except orca_socket.OrcaUnavailable:
             logger.opt(exception=True).debug("Orca's socket did not answer; asking its CLI")
     record = (*argv, "--full") if argv[1] == "orchestration" else argv
-    if isinstance(shown := probe(record, unset=unset), Unreadable):
+    if isinstance(shown := probe(record, ceiling, unset=unset), Unreadable):
         return shown
     try:
         return json.loads(shown)

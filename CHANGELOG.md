@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A terminal close the session guard cannot check blocks once with a retry hint, and never runs unchecked.**
+  The guard asked Orca for the terminal's process with two calls of up to 15 s each, one after the other, while
+  Orca takes 11 to 16 s per call. The second call ran into the hook's deadline, the guard returned no verdict,
+  and the close ran without its check. Twelve closes on Nov 9 went through that way. The guard now asks both
+  questions at once on threads that outlive the call and waits until 5 s before its deadline. If Orca has not
+  answered by then, the close is blocked with `Orca did not answer in <N>s` and told to retry. The session's
+  retry reads the answer that first lookup gets instead of asking Orca again. The memory sweep now goes over
+  Orca's socket as well.
 - **The resource monitor never stops a child in a session that has run subagents.** Subagents, workflow
   agents, and teammates run inside their session's Claude Code process, so every child they start
   descends from the same agent pid. The monitor proved ownership from that pid alone, so it warned and could

@@ -46,6 +46,8 @@ def read_call(argv: tuple[str, ...]) -> tuple[str, dict[str, Any]] | None:
             return "orchestration.workerList", {"paginate": True, "limit": int(limit)}
         case ("orca", "terminal", "show", "--terminal", terminal, "--json"):
             return "terminal.show", {"terminal": terminal}
+        case ("orca", "diagnostics", "memory", "--json"):
+            return "diagnostics.memory", {}
     return None
 
 
