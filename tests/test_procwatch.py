@@ -79,6 +79,7 @@ def payload(stage: str, child: proc.ProcessRow = OWN_SLEEP, **process: Any) -> d
     return {
         "hook_event_name": "ResourcePressure",
         "session_id": "s1",
+        "transcript_path": "/w/session.jsonl",
         "stage": stage,
         "claude_pid": CLAUDE.pid,
         "claude_start_unix": start_unix(CLAUDE),
@@ -565,6 +566,39 @@ class TestPressureHandler:
         assert result.message is not None and "`sleep` (pid 31337) has run 4 min at 90% CPU" in result.message
         assert [notice.text for notice in state(evt).pending] == [result.message]
         assert format_output(Event.ResourcePressure, result) == {"decision": "proceed"}
+
+    def test_warn_in_a_session_that_ran_subagents_refuses_without_an_ack(
+        self, tmp_path: Path, resources: ModuleType, snapshot: dict[str, ProcessTable | None]
+    ) -> None:
+        (tmp_path / "session" / "subagents").mkdir(parents=True)
+        evt = mock_resource_pressure_event(
+            payload("warn") | {"transcript_path": str(tmp_path / "session.jsonl")}, session_dir=tmp_path
+        )
+        result = self.run(resources, evt)
+        assert result.action is Action.block
+        assert result.message is not None and "has run subagents inside its own process" in result.message
+        assert format_output(Event.ResourcePressure, result) != {"decision": "proceed"}
+
+    def test_a_subagent_started_during_the_judge_blocks_the_signal(
+        self,
+        tmp_path: Path,
+        resources: ModuleType,
+        snapshot: dict[str, ProcessTable | None],
+        signals: list[tuple[ProcessIdentity, int]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        evt = mock_resource_pressure_event(
+            payload("judge") | {"transcript_path": str(tmp_path / "session.jsonl")}, session_dir=tmp_path
+        )
+
+        def decide(*_: Any, **__: Any) -> Decision:
+            (tmp_path / "session" / "subagents").mkdir(parents=True)
+            return answered(True)
+
+        monkeypatch.setattr(evt.ctx, "decide", decide)
+        result = self.run(resources, evt)
+        assert (result.action, signals, state(evt).signals) == (Action.block, [], [])
+        assert "has run subagents inside its own process" in state(evt).pending[-1].text
 
     def test_judge_sends_one_sigterm_after_a_disposable_verdict(
         self,

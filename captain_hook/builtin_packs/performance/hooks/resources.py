@@ -23,7 +23,7 @@ from captain_hook import (
 )
 from captain_hook.procwatch import judge, screen
 from captain_hook.procwatch.identity import ProcessIdentity
-from captain_hook.procwatch.ownership import Owned, prove
+from captain_hook.procwatch.ownership import Owned, prove, shared_tree
 from captain_hook.procwatch.settings import PerformanceSettings
 from captain_hook.procwatch.signal import Outcome, terminate
 from captain_hook.procwatch.state import (
@@ -76,6 +76,7 @@ def pressure_payload(stage: str, pid: int, *, start_unix: int = CHILD_START) -> 
     return {
         "hook_event_name": "ResourcePressure",
         "session_id": "fixture",
+        "transcript_path": "/w/fixture.jsonl",
         "stage": stage,
         "claude_pid": 500,
         "claude_start_unix": CLAUDE_START,
@@ -107,6 +108,8 @@ def refuse(evt: ResourcePressureEvent, identity: ProcessIdentity, reason: str) -
 
 
 def vet(evt: ResourcePressureEvent, identity: ProcessIdentity) -> Owned | Unreadable:
+    if (why := shared_tree(evt.transcript_path)) is not None:
+        return why
     if (table := proc.process_table()) is None:
         return Unreadable("the process table is unreadable.")
     match prove(table, identity, claude_pid=evt.claude_pid, claude_start_unix=evt.claude_start_unix):
@@ -206,6 +209,12 @@ STAGES = {"warn": warn_stage, "judge": judge_stage, "escalate": escalate_stage}
         Input(tool_input=pressure_payload("warn", 801), commands=LIVE, env=NO_LIVE, state=FRESH): Block(
             pattern="nested agent"
         ),
+        Input(
+            tool_input=pressure_payload("warn", 601) | {"transcript_path": ""},
+            commands=LIVE,
+            env=NO_LIVE,
+            state=FRESH,
+        ): Block(pattern="cannot be ruled out"),
         Input(
             tool_input=pressure_payload("warn", 601, start_unix=CHILD_START - 1),
             commands=LIVE,
