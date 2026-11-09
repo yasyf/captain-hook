@@ -9,8 +9,7 @@ from captain_hook.transcripts import lanes_dir
 from captain_hook.util.proc import Ownership, Unreadable, children, is_agent, process_class
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
+    from captain_hook.events import ResourcePressureEvent
     from captain_hook.procwatch.identity import ProcessIdentity
     from captain_hook.util.proc import ProcessRow, ProcessTable
 
@@ -38,8 +37,8 @@ def lineage(table: ProcessTable, row: ProcessRow, anchor: ProcessRow) -> tuple[P
     return next((chain[: depth + 1] for depth, entry in enumerate(chain) if entry.pid == anchor.pid), None)
 
 
-def shared_tree(transcript_path: Path | None) -> Unreadable | None:
-    if transcript_path is None:
+def shared_tree(evt: ResourcePressureEvent) -> Unreadable | None:
+    if (transcript_path := evt.transcript_path) is None:
         return Unreadable("the session names no transcript, so agents sharing its process cannot be ruled out.")
     if lanes_dir(transcript_path).is_dir():
         return Unreadable(
