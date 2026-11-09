@@ -11,6 +11,7 @@ import pytest
 from cc_transcript.ids import SessionId
 
 from captain_hook.app import on
+from captain_hook.builtin_packs.general.hooks import _sessions
 from captain_hook.builtin_packs.general.hooks._sessions import TimedOut
 from captain_hook.cli import dispatch_event
 from captain_hook.orca import READINGS, coordinator_transcript
@@ -18,6 +19,7 @@ from captain_hook.session import ensure_session
 from captain_hook.snapshots.client import CURRENT_CLIENT
 from captain_hook.testing.helpers import stubbed_commands
 from captain_hook.testing.snapshots import FixtureOwner
+from captain_hook.tickets import orca as orca_tickets
 from captain_hook.tickets import tree_of
 from captain_hook.types import Event
 from captain_hook.util import reqenv
@@ -247,6 +249,61 @@ def test_a_first_reading_orca_never_answered_resolves_nothing(user_data: Path, m
     )
     with in_worker(user_data):
         assert coordinator_transcript() is None
+
+
+def asked_orca(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    asked: list[tuple[str, ...]] = []
+    real = _sessions.orca_json
+
+    def recording(argv: tuple[str, ...], *path: str, **kwargs: tuple[str, ...]) -> object:
+        asked.append(argv[1:3])
+        return real(argv, *path, **kwargs)
+
+    monkeypatch.setattr(_sessions, "orca_json", recording)
+    return asked
+
+
+def test_a_lanes_ticket_binding_reads_its_own_dispatch_and_never_lists_every_worker(
+    user_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked = asked_orca(monkeypatch)
+    with in_worker(user_data), stubbed_commands(orca_commands()):
+        assert orca_tickets.resolve(HANDLE) == (RUN, COORDINATOR_HANDLE)
+    assert asked == [
+        ("orchestration", "check"),
+        ("orchestration", "worker-show"),
+        ("orchestration", "run-show"),
+        ("terminal", "show"),
+    ]
+
+
+def test_a_terminal_with_no_dispatch_of_its_own_binds_no_coordinator_after_one_check(
+    user_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked = asked_orca(monkeypatch)
+    with in_worker(user_data), stubbed_commands(orca_commands(dispatch=None)):
+        assert orca_tickets.resolve(HANDLE) == (None, None)
+    assert asked == [("orchestration", "check")]
+
+
+def test_a_due_ticket_binding_answers_from_the_last_reading_while_orca_is_busy(
+    user_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("captain_hook.orca.DISPATCH_TTL", 0.0)
+    with in_worker(user_data), stubbed_commands(orca_commands()):
+        assert orca_tickets.resolve(HANDLE) == (RUN, COORDINATOR_HANDLE)
+    released = threading.Event()
+
+    def busy_orca(*_: object, **__: object) -> None:
+        assert released.wait(10)
+
+    monkeypatch.setattr(_sessions, "orca_json", busy_orca)
+    with in_worker(user_data):
+        assert orca_tickets.resolve(HANDLE) == (RUN, COORDINATOR_HANDLE)
+        released.set()
+        refresh_settled()
+        assert orca_tickets.resolve(HANDLE) == (None, None)
+        refresh_settled()
 
 
 def test_outside_orca_resolves_nothing() -> None:

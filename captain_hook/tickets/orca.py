@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from captain_hook import orca_socket
+from captain_hook.orca import dispatched_run
 from captain_hook.tickets import store
 from captain_hook.tickets.context import tree_of
 from captain_hook.util import reqenv
@@ -35,14 +37,8 @@ def attended() -> bool:
 
 
 def resolve(handle: str) -> tuple[str | None, str | None]:
-    from captain_hook.builtin_packs.general.hooks._sessions import orca_json, worker_of
-
-    worker = worker_of(handle)
-    if not isinstance(worker, dict) or worker.get("dispatchStatus") != "dispatched" or not (run := worker.get("runId")):
-        return None, None
-    shown = ("orca", "orchestration", "run-show", "--id", run, "--json")
-    coordinator = orca_json(shown, "result", "run", "coordinator_handle")
-    return (run, coordinator) if isinstance(coordinator, str) else (None, None)
+    binding = dispatched_run(handle, orca_socket.user_data_path())
+    return (None, None) if binding is None else (binding.run, binding.coordinator)
 
 
 def pin(run: str | None, coordinator: str | None) -> str:
