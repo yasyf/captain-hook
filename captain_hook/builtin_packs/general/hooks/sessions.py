@@ -67,6 +67,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     probe,
     process_class,
     quit_targets,
+    refusal,
     runs_once,
     settled_close,
     shell_scripts,
@@ -76,7 +77,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
 )
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.guard_literal import QUOTING_CHARS
-from captain_hook.tickets import Proposal, Reach, Ticket
+from captain_hook.tickets import Deny, Proposal, Reach, Ticket
 
 if TYPE_CHECKING:
     from cc_transcript.command import Word
@@ -904,6 +905,10 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     tab = "tab" in ORCA.bind(call).values
     if tab and (crowded := whole_tab_verdict(spelling, handle)) is not None:
         return crowded
+    action = Proposal(place={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
+    ruled = TERMINAL_CLOSE.check(evt, action) if runs_once(call, scan) else None
+    if ruled is not None and not isinstance(ruled, Deny):
+        return None
     agent = None
     match scan.facts.terminal_tree(handle):
         case Unreadable(reason):
@@ -916,11 +921,9 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
         case _:
             detail = " (its process tree could not be read)"
     denied = terminal_close_denied(spelling, handle, detail)
-    if not runs_once(call, scan):
+    if not isinstance(ruled, Deny):
         return denied
-    action = Proposal(place={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
-    if (ungranted := lift(evt, TERMINAL_CLOSE, action, denied, owner=False)) is None:
-        return None
+    ungranted = refusal(denied, TERMINAL_CLOSE.hook, ruled)
     if agent is not None and (settled := settled_close(evt, handle, tab)) is not None:
         if (ungranted := lift(evt, SETTLED_CLOSE, settled, SETTLED_CLOSE.deny, owner=False)) is None:
             if still_settled(settled):
@@ -1065,6 +1068,18 @@ def orca_vm_run_flag(call: Call) -> str | None:
             command="orca terminal close --terminal term_agent --json",
             commands={**INLINE_COMMANDS, "ccn answer search term_agent": inline_ruling("close term_agent, term_idle")},
         ): Allow(),
+        guarded(
+            command="orca terminal close --terminal term_agent --json",
+            commands={
+                **INLINE_COMMANDS,
+                "orca terminal show --terminal term_agent --json": (1, "orca timed out"),
+                "ccn answer search term_agent": inline_ruling("close term_agent"),
+            },
+        ): Allow(),
+        guarded(
+            command="orca terminal close --terminal term_agent --json",
+            commands={**INLINE_COMMANDS, "orca terminal show --terminal term_agent --json": (1, "orca timed out")},
+        ): Block(pattern="(`orca` failed)"),
         guarded(command=f"T={INLINE_OWNER_TERMINAL}; orca terminal close --terminal $T"): Block(
             pattern="leave ending them to the owner"
         ),
