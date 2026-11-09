@@ -325,7 +325,9 @@ other hooks reached. Any other output, including an allow, a rewrite, or advisor
 to the bare note, so a skipped guard never carries another hook's allow and Claude Code's own
 permission prompt still applies. The note names the unfinished hooks and cause, says they did not
 check the call, and points to `capt-hook logs`. A block any mandatory hook settled survives a
-sibling's failure and a later advisory hook's failure.
+sibling's failure and a later advisory hook's failure. A mandatory hook registered with
+`on_incomplete`, as every session guard is, blocks the call instead of leaving the note, and its
+block ends with the `on_incomplete` text.
 
 Local evaluation drops background work, including async hooks and reviewer dispatch.
 Transcript evidence still comes through the host's transcript-client, so hooks that need it

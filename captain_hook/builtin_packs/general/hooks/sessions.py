@@ -887,7 +887,7 @@ def verifiable_close(call: Call, scan: Scan) -> bool:
     return spelled(call, scan) and sum(map(closes_one_terminal, scan.literal_calls)) == 1
 
 
-def terminal_close_denied(spelling: str, handle: str, detail: str, fix: str) -> str:
+def terminal_close_denied(spelling: str, handle: str, detail: str, fix: str = CLOSE_FIX) -> str:
     return f"BLOCKED: `{spelling}` closes terminal `{clip(handle, 48)}`{detail}. {fix}"
 
 
@@ -912,10 +912,9 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     if ruled is not None and not isinstance(ruled, Deny):
         return None
     agent = None
-    fix = CLOSE_FIX
     match scan.facts.terminal_tree(handle):
         case TimedOut(reason):
-            detail, fix = f" ({reason})", ORCA_RETRY
+            return terminal_close_denied(spelling, handle, f" ({reason})", ORCA_RETRY)
         case Unreadable(reason):
             detail = f" ({reason})"
         case (root, *below):
@@ -925,7 +924,7 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
             detail = f", where {describe(agent)} runs"
         case _:
             detail = " (its process tree could not be read)"
-    denied = terminal_close_denied(spelling, handle, detail, fix)
+    denied = terminal_close_denied(spelling, handle, detail)
     if not isinstance(ruled, Deny):
         return denied
     ungranted = refusal(denied, TERMINAL_CLOSE.hook, ruled)
