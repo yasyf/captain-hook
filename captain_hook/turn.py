@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from cc_transcript.query import Session
 
 if TYPE_CHECKING:
     from captain_hook.signals.nlp import Clause
+
+INJECTED_BLOCK = re.compile(
+    r"<(task-notification|channel|system-reminder|teammate-message|agent-message|cross-session-message|pasted_content)"
+    r"\b[^>]*>.*?</\1\b[^>]*>",
+    re.DOTALL,
+)
+
+
+def typed_words(prompt: str) -> str:
+    """The words a person typed in *prompt*, with every block the harness or another agent injected cut out.
+
+    A task notification, channel message, system reminder, agent or cross-session message, or pasted
+    content opens or joins a turn's prompt without anyone typing it, so it never directs the agent.
+
+    Example:
+        >>> typed_words("<task-notification><result>I plan the release</result></task-notification>").strip()
+        ''
+    """
+    return INJECTED_BLOCK.sub(" ", prompt)
 
 
 class Turn(Session):
@@ -19,14 +39,15 @@ class Turn(Session):
     __slots__ = ()
 
     def matches(self, *patterns: str | Clause) -> bool:
-        """Whether the turn's opening prompt matches any pattern.
+        """Whether the words a person typed in the turn's opening prompt match any pattern.
 
         A string pattern is a case-insensitive regex; a
         :class:`~captain_hook.Clause` runs the dependency-clause scan.
+        Injected blocks never match: see :func:`typed_words`.
 
         Example:
             >>> evt.ctx.turn.matches(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt")))
         """
         from captain_hook.signals.nlp import scan_text
 
-        return scan_text(self.user_text, patterns)
+        return scan_text(typed_words(self.user_text), patterns)

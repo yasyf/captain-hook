@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from captain_hook import (
@@ -22,6 +21,7 @@ from captain_hook import (
     hook,
 )
 from captain_hook.signals.nlp import dep_related, find_lemma_matches, parse, scan_text, verb_candidates
+from captain_hook.turn import typed_words
 
 ENTER_PLAN_MODE = Clause(
     noun=Phrase("mode", "planning"),
@@ -49,6 +49,16 @@ ORCA_WORKER_BRIEF = (
 )
 
 
+AGENT_DONE_NOTIFICATION = (
+    "<task-notification>\n<task-id>ad6f8b93ba085d1f0</task-id>\n<status>completed</status>\n"
+    '<summary>Agent "Start bug-fix release round 1" is waiting on its own background work</summary>\n'
+    "<note>This agent stopped with background work of its own still running. It may resume on its own when "
+    "that work completes or reports; the result below may be interim.</note>\n"
+    "<result>Still waiting for the PR to merge. When it merges, I plan the api release at dev head.</result>\n"
+    "</task-notification>"
+)
+
+
 def directs_plan_mode(text: str) -> bool:
     return bool(text.strip()) and any(
         not any(c.dep_ == "neg" for c in verb.children)
@@ -59,7 +69,7 @@ def directs_plan_mode(text: str) -> bool:
 
 
 def directs_replanning(prompt: str) -> bool:
-    typed = re.sub(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", " ", prompt, flags=re.DOTALL)
+    typed = typed_words(prompt)
     return directs_plan_mode(typed) or (
         scan_text(typed, STOP_WORK) and scan_text(typed, (r"(?<![\w./-])(?:re-)?plan",))
     )
@@ -315,6 +325,30 @@ hook(
             content="x = 1",
             permission_mode="bypassPermissions",
             transcript=[T.user("Stop all work until we agree on a plan.")],
+        ): Warn(pattern="plan mode"),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            permission_mode="bypassPermissions",
+            transcript=[T.user(AGENT_DONE_NOTIFICATION)],
+        ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[
+                T.user(
+                    '<channel source="plugin:cc-inbox:cci" kind="ask">stop all work and re-plan the lane</channel>\n'
+                    "<system-reminder>Stop work until a plan is approved.</system-reminder>"
+                )
+            ],
+        ): Allow(),
+        Input(
+            tool="Write",
+            file="/x/src/main.py",
+            content="x = 1",
+            transcript=[T.user("stop work and plan this\n\n" + AGENT_DONE_NOTIFICATION)],
         ): Warn(pattern="plan mode"),
     },
 )
