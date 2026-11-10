@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Removing an Orca worktree with no terminals in it is allowed.** The session guard blocked every
+  `orca worktree rm`, even when `orca terminal list --environment <env>` showed no terminals, so nothing
+  could end. A call that runs alone, with one literal `--worktree` and at most one literal `--environment`, now
+  asks Orca for that worktree's terminals and goes ahead when Orca lists none. A worktree that holds a terminal,
+  or one the guard cannot list, still blocks. An owner can allow it through `sessions.worktree-rm` (a cc-notes
+  answer naming the selector) or `sessions.worktree-rm.owner` (the owner's own words), the same two lifts a
+  terminal close has.
 - **A Run coordinator's terminal close gets a real answer.** A root session in an Orca terminal still blocked
   every close as "could not judge this call", because the settled-dispatch check read all 4,642 Orca workers
   page by page. It now asks Orca for the caller's own Run and lists only that Run's workers, about 2 s in all.

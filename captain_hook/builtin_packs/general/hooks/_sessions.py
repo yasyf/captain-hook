@@ -432,6 +432,12 @@ def inline_tab(handle: str, *panes: str) -> dict[str, str]:
     }
 
 
+def inline_listing(selector: str, *handles: str, environment: str | None = None) -> dict[str, str]:
+    scope = f"--environment {environment} " if environment is not None else ""
+    terminals = [{"handle": handle} for handle in handles]
+    return {f"orca terminal list {scope}--worktree {selector} --json": json.dumps({"result": {"terminals": terminals}})}
+
+
 INLINE_IDLE = inline_screen("✻ Worked for 2m · done ", "", "─" * 20, CLAUDE_PROMPT, "─" * 20)
 INLINE_BUSY = inline_screen("✶ Thinking… (esc to interrupt)", "─" * 20, CLAUDE_PROMPT, "─" * 20)
 INLINE_COMMANDS = {
@@ -448,6 +454,7 @@ INLINE_COMMANDS = {
         f"CLAUDE_CODE_SESSION_ID={INLINE_SESSION}\n"
     ),
     "orca terminal show": "{}",
+    "orca terminal list": (1, "selector_not_found"),
     **{
         f"orca terminal show --terminal {handle} --json": json.dumps(
             {"result": {"terminal": {"ptyId": f"pty-{handle}"}}}
@@ -1354,6 +1361,18 @@ def lone_pane(handle: str) -> bool | Unreadable:
     return panes.get("type") == "terminal" and panes.get("handle") == handle
 
 
+def worktree_terminals(selector: str, environment: str | None) -> int | Unreadable:
+    if environment is None and any(map(reqenv.getenv, orca_socket.REMOTE_SELECTORS)):
+        return Unreadable("a paired runtime is selected from the environment")
+    scope = ("--environment", environment) if environment is not None else ()
+    listing = ("orca", "terminal", "list", *scope, "--worktree", selector, "--json")
+    if isinstance(
+        terminals := orca_json(listing, "result", "terminals", unset=orca_socket.REMOTE_SELECTORS), Unreadable
+    ):
+        return terminals
+    return len(terminals)
+
+
 @dataclass(frozen=True, slots=True)
 class CreatedHere(CustomTicketCondition):
     """This session created the terminal, no dispatch names it, and its agent idles at a prompt."""
@@ -1640,6 +1659,15 @@ TERMINAL_CLOSE = Tickets(
     ttl=RETRY_WINDOW,
     hook="sessions",
 )
+WORKTREE_REMOVE = Tickets(
+    "sessions.worktree-rm",
+    ("worktree",),
+    Reach.ONCE,
+    rules=(Rule("ruling", UserRuled("worktree")),),
+    deny="Have the owner name the worktree selector in a cc-notes answer before the removing session starts.",
+    ttl=RETRY_WINDOW,
+    hook="sessions",
+)
 LAUNCHD_STOP = Tickets(
     "sessions.launchctl",
     ("service",),
@@ -1697,6 +1725,7 @@ def owner_named(kind: str, key: str, target: str) -> Tickets:
 
 
 TERMINAL_CLOSE_NAMED = owner_named("sessions.close", "terminal", "terminal")
+WORKTREE_REMOVE_NAMED = owner_named("sessions.worktree-rm", "worktree", "worktree")
 LAUNCHD_STOP_NAMED = owner_named("sessions.launchctl", "service", "service")
 KILL_NAMED = owner_named("sessions.kill", "pid", "pid")
 KILL_TAPPED = Tickets(
@@ -1710,6 +1739,7 @@ KILL_TAPPED = Tickets(
 )
 OWNER_NAMED = {
     TERMINAL_CLOSE.kind: TERMINAL_CLOSE_NAMED,
+    WORKTREE_REMOVE.kind: WORKTREE_REMOVE_NAMED,
     LAUNCHD_STOP.kind: LAUNCHD_STOP_NAMED,
     KILL_PROCESS.kind: KILL_NAMED,
     KILL_SESSION.kind: KILL_NAMED,

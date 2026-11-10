@@ -30,6 +30,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     SESSION_HOST_APPS,
     SETTLED_CLOSE,
     TERMINAL_CLOSE,
+    WORKTREE_REMOVE,
     Scan,
     TimedOut,
     Ungranted,
@@ -49,6 +50,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_class_rulings,
     inline_create,
     inline_dispatch,
+    inline_listing,
     inline_ruling,
     inline_run,
     inline_screen,
@@ -75,6 +77,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     spell,
     still_settled,
     unresolvable,
+    worktree_terminals,
 )
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.guard_literal import QUOTING_CHARS
@@ -215,6 +218,7 @@ ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave en
 ORCA_STOP_FIX = "End a done lane with `lr gc --done <ctx>`; only its Run's coordinator may worker-stop it."
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
 CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
+REMOVE_FIX = f"Remove only a worktree Orca lists no terminals in, or ask the owner to {LATER_SESSION}."
 ORCA_RETRY = "Retry the same call: the guard keeps waiting on Orca, and the retry reads its answer."
 KEY_ALIASES = {
     "command": "cmd",
@@ -875,6 +879,20 @@ def stopped_dispatch(call: Call, arguments: Arguments) -> str | None:
     return lone_target(call, arguments, ("orchestration", "worker-stop"), "dispatch")
 
 
+def removed_worktree(call: Call, arguments: Arguments) -> tuple[str, str | None] | None:
+    match orca_command(arguments):
+        case ("worktree", str() as verb) if verb in ORCA_ENDINGS["worktree"] and "parameter" not in arguments.values:
+            command = ("worktree", verb)
+        case _:
+            return None
+    if (selector := lone_target(call, arguments, command, "worktree")) is None:
+        return None
+    if "environment" not in arguments.values:
+        return selector, None
+    environment = lone_target(call, arguments, command, "environment")
+    return None if environment is None else (selector, environment)
+
+
 def closes_one_terminal(call: Call) -> bool:
     return call.name == "orca" and closed_terminal(call, ORCA.bind(call)) is not None
 
@@ -937,6 +955,28 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     return owner_lift(evt, TERMINAL_CLOSE, action, ungranted)
 
 
+def worktree_remove_denied(spelling: str, selector: str, held: str, fix: str = REMOVE_FIX) -> str:
+    return f"BLOCKED: `{spelling}` removes worktree `{clip(selector, 48)}` and {held}, ending the sessions there. {fix}"
+
+
+def worktree_remove_verdict(call: Call, removal: tuple[str, str | None], evt: ToolRewriteEvent) -> Ungranted | None:
+    selector, environment = removal
+    spelling, fix = clip(call.source.raw, 50), REMOVE_FIX
+    match worktree_terminals(selector, environment):
+        case 0:
+            return None
+        case TimedOut(reason):
+            held, fix = f"every terminal in it, which the guard could not list ({reason})", ORCA_RETRY
+        case Unreadable(reason):
+            held = f"every terminal in it, which the guard could not list ({reason})"
+        case int() as count:
+            held = f"the {count} terminal{'' if count == 1 else 's'} Orca lists in it"
+    action = Proposal(
+        place={"worktree": selector}, payload={"environment": environment}, summary=f"remove worktree {selector}"
+    )
+    return lift(evt, WORKTREE_REMOVE, action, worktree_remove_denied(spelling, selector, held, fix))
+
+
 def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Ungranted | None:
     if call.name != "orca":
         return None
@@ -947,6 +987,8 @@ def orca_ending_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | 
         return None
     if (handle := closed_terminal(call, arguments)) is not None and verifiable_close(call, scan):
         return terminal_close_verdict(call, handle, scan, evt)
+    if (removal := removed_worktree(call, arguments)) is not None and spelled(call, scan) and runs_once(call, scan):
+        return worktree_remove_verdict(call, removal, evt)
     if (
         (dispatch := stopped_dispatch(call, arguments)) is not None
         and spelled(call, scan)
@@ -1278,6 +1320,26 @@ def orca_vm_run_flag(call: Call) -> str | None:
         guarded(command="xargs -n1 orca terminal close --terminal"): Block(),
         guarded(command="orca terminal stop --worktree x"): Block(pattern="stops the active terminal in worktree"),
         guarded(command="orca worktree rm --worktree path:/x"): Block(pattern="removes worktree `path:/x`"),
+        guarded(
+            command="orca worktree rm --environment dagger-spike-dev --worktree id:wt_empty --json",
+            commands={**INLINE_COMMANDS, **inline_listing("id:wt_empty", environment="dagger-spike-dev")},
+        ): Allow(),
+        guarded(
+            command="orca worktree rm --worktree id:wt_busy --json",
+            commands={**INLINE_COMMANDS, **inline_listing("id:wt_busy", "term_agent")},
+        ): Block(pattern="the 1 terminal Orca lists in it"),
+        guarded(
+            command="orca worktree rm --worktree id:wt_busy --json",
+            commands={
+                **INLINE_COMMANDS,
+                **inline_listing("id:wt_busy", "term_agent"),
+                "ccn answer search id:wt_busy": inline_ruling("Owner: remove worktree id:wt_busy."),
+            },
+        ): Allow(),
+        guarded(
+            command="orca worktree rm --pairing-code x --worktree id:wt_empty",
+            commands={**INLINE_COMMANDS, **inline_listing("id:wt_empty")},
+        ): Block(pattern="removes worktree `id:wt_empty` and every terminal in it"),
         guarded(command="orca orchestration worker-stop --dispatch ctx-1"): Block(
             pattern="worker-stop ends the worker or run `ctx-1`"
         ),
