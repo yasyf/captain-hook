@@ -424,9 +424,8 @@ def tree_calls_naming(evt: BaseHookEvent, needle: str, *, since: datetime) -> It
 
     if (main := evt.transcript_path) is None:
         return
-    own = evt.ctx.transcript_path
     for path in (main, *lanes_dir(main).glob("agent-*.jsonl")):
-        if path == own or not path.is_file() or path.stat().st_mtime < since.timestamp():
+        if not path.is_file() or path.stat().st_mtime < since.timestamp():
             continue
         ids = tuple(
             dict.fromkeys(

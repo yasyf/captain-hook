@@ -1383,6 +1383,27 @@ class TestTerminalClose:
         assert minted("sessions.close") == [("ruling", ["ccn:0207568"]), ("ruling", ["ccn:0207568"])]
         assert again is None
 
+    def test_a_close_a_ruling_names_never_waits_on_orca_for_the_process_tree(
+        self,
+        general_pack: None,
+        agent_table: None,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        rulings: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        rulings["term_agent"] = ruling("Owner: close exactly term_agent.")
+        asked: list[tuple[str, ...]] = []
+        document = _sessions.orca_document
+
+        def recorded(argv: tuple[str, ...], unset: tuple[str, ...], ceiling: float = _sessions.PROBE_TIMEOUT) -> Any:
+            asked.append(argv)
+            return document(argv, unset, ceiling)
+
+        monkeypatch.setattr(_sessions, "orca_document", recorded)
+        with stubbed_commands(INLINE_COMMANDS):
+            assert decide(AGENT_CLOSE, tmp_path) is None
+        assert ("orca", "terminal", "show", "--terminal", "term_agent", "--json") not in asked
+
     def test_a_ruling_naming_another_terminal_keeps_the_block(
         self,
         general_pack: None,

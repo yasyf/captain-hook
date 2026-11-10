@@ -931,13 +931,12 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     if tab and (crowded := whole_tab_verdict(spelling, handle)) is not None:
         return crowded
     action = Proposal(place={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
-    tree = scan.facts.terminal_tree(handle)
     once = runs_once(call, scan)
     ruled = TERMINAL_CLOSE.check(evt, action) if once else None
     if ruled is not None and not isinstance(ruled, Deny):
         return None
     agent = None
-    match tree:
+    match scan.facts.terminal_tree(handle):
         case TimedOut(reason):
             return terminal_close_denied(spelling, handle, f" ({reason})", ORCA_RETRY)
         case Unreadable(reason):
