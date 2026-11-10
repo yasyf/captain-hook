@@ -1599,16 +1599,33 @@ class TestTerminalClose:
         ("tree", "allowed"), [("s1", True), ("s2", False)], ids=["this-session", "another-session"]
     )
     def test_a_terminal_another_lane_of_this_session_created_closes_from_any_of_its_agents(
-        self, general_pack: None, agent_table: None, tmp_path: Path, tree: str, allowed: bool
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tree: str,
+        allowed: bool,
     ) -> None:
+        opened = (datetime.now(UTC) - timedelta(minutes=1)).replace(tzinfo=None).isoformat()
+        fake_table["table"] = table(
+            *MAC.rows.values(),
+            row(16000, 1743, f"{INLINE_LOGIN} /opt/homebrew/bin/fish", uid=0, started=opened),
+            row(16001, 16000, "-/opt/homebrew/bin/fish -l", started=opened),
+            row(16002, 16001, "claude --dangerously-skip-permissions --effort xhigh", started=opened),
+        )
         root = tmp_path / "projects" / "s1.jsonl"
         lane = tmp_path / "projects" / tree / "subagents" / "agent-builder.jsonl"
         lane.parent.mkdir(parents=True)
         lane.write_bytes(fixture_file(inline_create("term_agent")).read_bytes())
         evt = input_to_event(Event.PreToolUse, bash(AGENT_CLOSE, agent_id="closer"))
         evt._raw["transcript_path"] = str(root)
-        with stubbed_commands(INLINE_COMMANDS), reqenv.use_request(overrides()):
-            message = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
+        with monkeypatch.context() as zone:
+            zone.setenv("TZ", "America/Los_Angeles")
+            time.tzset()
+            with stubbed_commands(INLINE_COMMANDS), reqenv.use_request(overrides()):
+                message = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
+        time.tzset()
         assert (message is None) is allowed
         details = [item.detail for ticket in store.tickets("sessions.close") for item in ticket.evidence]
         assert [str(lane) in detail for detail in details] == ([True] if allowed else [])
