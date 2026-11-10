@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import ClassVar
 
 from captain_hook import (
@@ -25,7 +24,7 @@ from captain_hook import (
     llm_nudge,
     nudge,
 )
-from captain_hook.util import reqenv
+from captain_hook.util.paths import resolve_long_running_state
 
 THINKING_MISFIRES = (
     "Thinking it through more, the deploy applies the stack at the dev commit, so this addon update is likely just "
@@ -95,12 +94,6 @@ class TypeCheckerContext(CustomCondition):
         return bool((t := evt.ctx.transcript) and self.PATTERN.search(t.assistant_text(n=10)))
 
 
-def long_running_state() -> Path:
-    if explicit := reqenv.getenv("LONG_RUNNING_STATE"):
-        return Path(explicit)
-    return Path(reqenv.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "long-running"
-
-
 class DriveCommunicator(CustomCondition):
     def check(self, evt: BaseHookEvent) -> bool:
         if not (session := evt.session_id):
@@ -108,7 +101,7 @@ class DriveCommunicator(CustomCondition):
         return any(
             session.encode() in (raw := path.read_bytes())
             and json.loads(raw).get("roles", {}).get("communicator", {}).get("session") == session
-            for path in long_running_state().glob("*/drive.json")
+            for path in resolve_long_running_state().glob("*/drive.json")
         )
 
 

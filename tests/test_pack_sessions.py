@@ -167,7 +167,7 @@ SETTLED_WORKER = {"dispatchId": "ctx_settled", "dispatchStatus": "completed", "r
 CLASS_ALLOW = {"allow": True, "relied_on": ["ccn:c9b27c1"]}
 ORCA_GC = "orca-reclaim.py"
 CLOSE_FIX = (
-    "Close only an idle orphan this session created, or ask the owner to name it in a cc-notes answer for a later "
+    "Close only an idle terminal this session created, or ask the owner to name it in a cc-notes answer for a later "
     "session."
 )
 REAL_CCN_ANSWERS = context_module.ccn_answers
@@ -1581,7 +1581,7 @@ class TestTerminalClose:
             ),
         ],
     )
-    def test_a_terminal_that_is_no_idle_orphan_of_this_session_keeps_the_block(
+    def test_a_terminal_that_is_no_idle_terminal_this_session_created_keeps_the_block(
         self,
         general_pack: None,
         agent_table: None,
@@ -1594,6 +1594,24 @@ class TestTerminalClose:
         assert message is not None
         assert "where pid 16002" in message
         assert minted("sessions.close") == []
+
+    @pytest.mark.parametrize(
+        ("tree", "allowed"), [("s1", True), ("s2", False)], ids=["this-session", "another-session"]
+    )
+    def test_a_terminal_another_lane_of_this_session_created_closes_from_any_of_its_agents(
+        self, general_pack: None, agent_table: None, tmp_path: Path, tree: str, allowed: bool
+    ) -> None:
+        root = tmp_path / "projects" / "s1.jsonl"
+        lane = tmp_path / "projects" / tree / "subagents" / "agent-builder.jsonl"
+        lane.parent.mkdir(parents=True)
+        lane.write_bytes(fixture_file(inline_create("term_agent")).read_bytes())
+        evt = input_to_event(Event.PreToolUse, bash(AGENT_CLOSE, agent_id="closer"))
+        evt._raw["transcript_path"] = str(root)
+        with stubbed_commands(INLINE_COMMANDS), reqenv.use_request(overrides()):
+            message = reason(dispatch(Event.PreToolUse, evt, session_dir=tmp_path))
+        assert (message is None) is allowed
+        details = [item.detail for ticket in store.tickets("sessions.close") for item in ticket.evidence]
+        assert [str(lane) in detail for detail in details] == ([True] if allowed else [])
 
     @pytest.mark.parametrize(("offset", "allowed"), [(60, True), (600, False)], ids=["during", "after"])
     def test_an_orca_launch_receipt_written_during_the_call_proves_creation(

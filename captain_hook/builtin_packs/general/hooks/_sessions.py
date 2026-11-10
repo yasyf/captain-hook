@@ -25,7 +25,16 @@ from cc_transcript.tools import BashCall
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 
-from captain_hook import Event, Input, LambdaCondition, WorkflowState, on, orca_socket, workflow_state
+from captain_hook import (
+    Event,
+    FileFixture,
+    Input,
+    LambdaCondition,
+    WorkflowState,
+    on,
+    orca_socket,
+    workflow_state,
+)
 from captain_hook.bindings import Resolved, Unknown, Unresolved, references
 from captain_hook.cmd import Cmd
 from captain_hook.command_schemas import ORCA, OSASCRIPT
@@ -52,8 +61,9 @@ from captain_hook.tickets import context as ticket_context
 from captain_hook.tickets.conditions import GO, HOLD
 from captain_hook.tickets.context import TranscriptSources, holds, names, written_at
 from captain_hook.tickets.decide import Undecided
+from captain_hook.transcripts import tree_calls_naming
 from captain_hook.util import proc, reqenv
-from captain_hook.util.paths import resolve_claude_config_dir
+from captain_hook.util.paths import resolve_claude_config_dir, resolve_long_running_state, resolve_target
 from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
 
@@ -214,6 +224,7 @@ SCRIPT_RUNNERS = frozenset(
     {"yarn", "npm", "npx", "pnpm", "pnpx", "bunx", "tsx", "ts-node", "uv", "uvx", "sh", "bash", "zsh"}
 )
 RUNNER_VERBS = frozenset({"exec", "run", "x", "dlx"})
+SCRIPT_SHELLS = frozenset({"sh", "bash", "zsh"})
 SCRIPT_SUFFIXES = frozenset({".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".rb", ".pl", ".sh"})
 SETTLED = frozenset({"completed", "failed"})
 CLASS_RULINGS = ("c9b27c1", "6190a4a")
@@ -308,6 +319,12 @@ INLINE_SESSION = "c0ffee00-0000-4000-8000-000000000000"
 INLINE_OWNER_TERMINAL = "term_c59a87bf-0000-4000-8000-000000000000"
 INLINE_TRANSCRIPT = [{"type": "user", "message": {"role": "user", "content": "Ship the release."}}]
 INLINE_STARTED = datetime(2026, 1, 1, tzinfo=UTC)
+INLINE_LAUNCHER = FileFixture(
+    home=True,
+    name="launch.sh",
+    content="orca terminal create --worktree active --command claude --json > ~/create.json\ncat ~/create.json\n",
+)
+INLINE_READER = FileFixture(home=True, name="launch.sh", content="cat ~/create.json\n")
 
 
 def inline_ruling(
@@ -360,6 +377,18 @@ def inline_create(
 ) -> list[dict[str, Any]]:
     created = json.dumps({"ok": True, "result": {"terminal": {"handle": handle}}})
     return inline_call("Bash", {"command": command}, created)
+
+
+def inline_launch(handle: str, command: str = "~/launch.sh") -> list[dict[str, Any]]:
+    created = json.dumps({"ok": True, "result": {"terminal": {"handle": handle}}}, indent=2)
+    return inline_call("Bash", {"command": command}, f"swapped to old\n{created}\nclaude pid=16002\nrestored")
+
+
+def inline_drive(handle: str) -> FileFixture:
+    roles = {"coordinator": {"session": INLINE_SESSION, "terminal": handle}}
+    return FileFixture(
+        home=True, name=".local/state/long-running/drive-a/drive.json", content=json.dumps({"roles": roles})
+    )
 
 
 def inline_spawn(task: str, *, tool: str = "Agent", status: str = "teammate_spawned") -> list[dict[str, Any]]:
@@ -864,6 +893,7 @@ class Facts:
         self._guard = threading.Lock()
         self._ownership: Ownership | Unreadable | None = None
         self._environments: dict[ProcessRow, str | None] = {}
+        self._trees: dict[str, tuple[ProcessRow, ...] | Unreadable] = {}
 
     def environment(self, row: ProcessRow) -> str | None:
         if row in self._environments:
@@ -909,6 +939,11 @@ class Facts:
             return self._ownership
 
     def terminal_tree(self, handle: str) -> tuple[ProcessRow, ...] | Unreadable:
+        if handle not in self._trees:
+            self._trees[handle] = self.read_tree(handle)
+        return self._trees[handle]
+
+    def read_tree(self, handle: str) -> tuple[ProcessRow, ...] | Unreadable:
         if isinstance(ownership := self.ownership, Unreadable):
             return ownership
         if isinstance(pid := terminal_pid(self.store, self.session, handle), Unreadable):
@@ -1231,11 +1266,21 @@ def orca_document(argv: tuple[str, ...], unset: tuple[str, ...], ceiling: float 
         return Unreadable(f"`{' '.join(argv[:3])}` printed no JSON")
 
 
-def created_handle(text: str) -> str | None:
-    try:
-        return json.loads(text)["result"]["terminal"]["handle"]
-    except (ValueError, TypeError, KeyError):
-        return None
+def printed_terminals(text: str) -> set[str]:
+    decoder, handles, at = json.JSONDecoder(), set[str](), text.find("{")
+    while at != -1:
+        try:
+            document, at = decoder.raw_decode(text, at)
+        except ValueError:
+            at += 1
+        else:
+            match document:
+                case {"result": {"terminal": {"handle": str() as handle}}}:
+                    handles.add(handle)
+                case _:
+                    pass
+        at = text.find("{", at)
+    return handles
 
 
 def receipt_names(lane: str, handle: str, start: datetime, end: datetime) -> bool:
@@ -1243,7 +1288,7 @@ def receipt_names(lane: str, handle: str, start: datetime, end: datetime) -> boo
         return False
     return any(
         start <= datetime.fromtimestamp(receipt.stat().st_mtime, UTC) <= end
-        and created_handle(receipt.read_text()) == handle
+        and printed_terminals(receipt.read_text()) == {handle}
         for receipt in (Path.home() / LAUNCH_RECEIPTS).glob(f"*/{lane}.terminal.json")
     )
 
@@ -1253,15 +1298,39 @@ def bare_orca(call: Call) -> bool:
     return head is not None and head.value == "orca" and not call.source.env and not call.substituted
 
 
+def creates_terminal(call: Call) -> bool:
+    if not bare_orca(call):
+        return False
+    values = ORCA.bind(call).values
+    return (values.get("group"), values.get("verb")) == (("terminal",), ("create",))
+
+
+def script_text(call: Call) -> str | None:
+    match [word.value for word in call.command.words]:
+        case [str() as shell, str() as script, *_] if PurePath(shell).name in SCRIPT_SHELLS:
+            target = script
+        case [str() as target, *_] if "/" in target:
+            pass
+        case _:
+            return None
+    path = resolve_target(target, None)
+    return path.read_text(errors="replace") if path is not None and path.is_file() else None
+
+
+def script_creates_terminal(call: Call) -> bool:
+    if (text := script_text(call)) is None or (line := safe_parse_command_line(text)) is None:
+        return False
+    return any(map(creates_terminal, Cmd(line, raw=text, cwd=None).calls()))
+
+
 def created_by(use: Any, handle: str, cwd: Path | None) -> BashCall | None:
-    if not isinstance(bash := use.call, BashCall) or use.result is None:
+    if not isinstance(bash := use.call, BashCall) or use.result is None or handle not in use.result.content:
         return None
     line = safe_parse_command_line(bash.command)
     calls = () if line is None else Cmd(line, raw=bash.command, cwd=cwd).calls()
-    if len(calls) == 1 and bare_orca(calls[0]):
-        values = ORCA.bind(calls[0]).values
-        if (values.get("group"), values.get("verb")) == (("terminal",), ("create",)):
-            return bash if created_handle(use.result.content) == handle else None
+    if len(calls) == 1 and printed_terminals(use.result.content) == {handle}:
+        if creates_terminal(calls[0]) or script_creates_terminal(calls[0]):
+            return bash
     start, end = use.ts - RECEIPT_SLACK, (use.result_ts or use.ts) + RECEIPT_SLACK
     launched = f"terminal={handle}" in use.result.content and any(
         receipt_names(call.args[0], handle, start, end) for call in calls if call.name == "orca-launch.sh" and call.args
@@ -1380,20 +1449,19 @@ class CreatedHere(CustomTicketCondition):
 
     def evidence(self, ctx: Context) -> list[Evidence] | None:
         handle = ctx.place["terminal"]
-        if (evt := ctx.evt) is None:
+        if (evt := ctx.evt) is None or drive_terminal(handle):
             return None
         found = next(
             (
-                (use, bash)
-                for turn in evt.ctx.t.turns
-                for use in turn.tool_uses
+                (where, use, bash)
+                for where, use in session_calls(evt, handle)
                 if (bash := created_by(use, handle, evt.cwd)) is not None
             ),
             None,
         )
         if found is None:
             return None
-        use, bash = found
+        where, use, bash = found
         holder = worker_of(handle)
         ready = idle(handle) if holder is None else False
         if holder is not None or ready is not True:
@@ -1406,9 +1474,24 @@ class CreatedHere(CustomTicketCondition):
                 source="created",
                 quote=clip(bash.command, 200),
                 said_at=use.result_ts or use.ts,
-                detail=f"this session created {handle}; no dispatch names it and its agent idles at a prompt",
+                detail=f"this session created {handle}, as {where or 'its own transcript'} records; no dispatch names "
+                "it and its agent idles at a prompt",
             )
         ]
+
+
+def drive_terminal(handle: str) -> bool:
+    return any(
+        handle.encode() in (raw := path.read_bytes())
+        and any(role.get("terminal") == handle for role in json.loads(raw).get("roles", {}).values())
+        for path in resolve_long_running_state().glob("*/drive.json")
+    )
+
+
+def session_calls(evt: BaseHookEvent, handle: str) -> Iterator[tuple[Path | None, ToolUse]]:
+    yield from ((None, use) for turn in evt.ctx.t.turns for use in turn.tool_uses)
+    if not isinstance(tree := Scan.of(evt).facts.terminal_tree(handle), Unreadable):
+        yield from tree_calls_naming(evt, handle, since=tree[0].started)
 
 
 def settled_worker(handle: str, run: str) -> dict[str, Any] | None:
