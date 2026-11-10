@@ -1337,6 +1337,18 @@ def orca_vm_run_flag(call: Call) -> str | None:
             },
         ): Allow(),
         guarded(
+            command="orca worktree rm --worktree id:wt_busy --json",
+            commands={**INLINE_COMMANDS, **inline_listing("id:wt_busy", "term_agent")},
+            transcript=inline_ask("Remove worktree id:wt_busy and its finished Codex lane."),
+            llm=OWNER_KILL,
+        ): Allow(),
+        guarded(
+            command="orca worktree rm --worktree id:wt_busy --json",
+            commands={**INLINE_COMMANDS, **inline_listing("id:wt_busy", "term_agent")},
+            transcript=inline_ask("Remove worktree id:wt_other and its finished Codex lane."),
+            llm=OWNER_KILL,
+        ): Block(pattern="the 1 terminal Orca lists in it"),
+        guarded(
             command="orca worktree rm --pairing-code x --worktree id:wt_empty",
             commands={**INLINE_COMMANDS, **inline_listing("id:wt_empty")},
         ): Block(pattern="removes worktree `id:wt_empty` and every terminal in it"),

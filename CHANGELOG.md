@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The owner can approve one worktree removal by naming its selector.** In 12.121.58 the judge behind
+  `sessions.worktree-rm.owner` read rules that covered only terminal closes, launchd services, and process
+  signals. It could deny an `orca worktree rm` even when the owner named that exact `--worktree` selector. The
+  rules now cover removing an Orca worktree by its selector. A general instruction to clean up still permits
+  nothing.
 - **Removing an Orca worktree with no terminals in it is allowed.** The session guard blocked every
   `orca worktree rm`, even when `orca terminal list --environment <env>` showed no terminals, so nothing
   could end. A call that runs alone, with one literal `--worktree` and at most one literal `--environment`, now
