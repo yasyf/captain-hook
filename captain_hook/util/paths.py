@@ -49,6 +49,12 @@ def resolve_claude_config_dir() -> Path:
     return Path(reqenv.getenv("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+def resolve_long_running_state() -> Path:
+    if explicit := reqenv.getenv("LONG_RUNNING_STATE"):
+        return Path(explicit)
+    return Path(reqenv.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "long-running"
+
+
 def resolve_project_dir() -> str | None:
     return reqenv.getenv("CLAUDE_PROJECT_DIR") or reqenv.getenv("FACTORY_PROJECT_DIR")
 

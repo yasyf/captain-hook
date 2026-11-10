@@ -16,7 +16,9 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     GUARDED_PROGRAMS,
     INLINE_BUSY,
     INLINE_COMMANDS,
+    INLINE_LAUNCHER,
     INLINE_OWNER_TERMINAL,
+    INLINE_READER,
     INLINE_SESSION,
     INLINE_STARTED,
     INLINE_TABLE,
@@ -50,6 +52,8 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     inline_class_rulings,
     inline_create,
     inline_dispatch,
+    inline_drive,
+    inline_launch,
     inline_listing,
     inline_ruling,
     inline_run,
@@ -217,7 +221,8 @@ HELP_FLAGS = frozenset({"--help", "-h"})
 ORCA_READ = "Read sessions with `orca terminal list|show|read|wait` and leave ending them to the owner."
 ORCA_STOP_FIX = "End a done lane with `lr gc --done <ctx>`; only its Run's coordinator may worker-stop it."
 ORCA_CLOSE_SCOPES = frozenset({"all", "worktree"})
-CLOSE_FIX = f"Close only an idle orphan this session created, or ask the owner to {LATER_SESSION}."
+CLOSE_FIX = f"Close only an idle terminal this session created, or ask the owner to {LATER_SESSION}."
+CLOSE_ALONE = "Run the close alone on its line, piped at most, for the guard to check who created the terminal."
 REMOVE_FIX = f"Remove only a worktree Orca lists no terminals in, or ask the owner to {LATER_SESSION}."
 ORCA_RETRY = "Retry the same call: the guard keeps waiting on Orca, and the retry reads its answer."
 KEY_ALIASES = {
@@ -926,11 +931,13 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
     if tab and (crowded := whole_tab_verdict(spelling, handle)) is not None:
         return crowded
     action = Proposal(place={"terminal": handle}, payload={"tab": tab}, summary=f"close terminal {handle}")
-    ruled = TERMINAL_CLOSE.check(evt, action) if runs_once(call, scan) else None
+    tree = scan.facts.terminal_tree(handle)
+    once = runs_once(call, scan)
+    ruled = TERMINAL_CLOSE.check(evt, action) if once else None
     if ruled is not None and not isinstance(ruled, Deny):
         return None
     agent = None
-    match scan.facts.terminal_tree(handle):
+    match tree:
         case TimedOut(reason):
             return terminal_close_denied(spelling, handle, f" ({reason})", ORCA_RETRY)
         case Unreadable(reason):
@@ -942,7 +949,7 @@ def terminal_close_verdict(call: Call, handle: str, scan: Scan, evt: ToolRewrite
             detail = f", where {describe(agent)} runs"
         case _:
             detail = " (its process tree could not be read)"
-    denied = terminal_close_denied(spelling, handle, detail)
+    denied = terminal_close_denied(spelling, handle, detail, CLOSE_FIX if once else CLOSE_ALONE)
     if not isinstance(ruled, Deny):
         return denied
     ungranted = refusal(denied, TERMINAL_CLOSE.hook, ruled)
@@ -1168,6 +1175,41 @@ def orca_vm_run_flag(call: Call) -> str | None:
             transcript=inline_create("term_agent"),
             commands={**INLINE_COMMANDS, "orca orchestration worker-list": inline_workers("term_agent")},
         ): Block(pattern="where pid 16002"),
+        guarded(command=AGENT_CLOSE, file=INLINE_LAUNCHER, transcript=inline_launch("term_agent")): Allow(),
+        guarded(
+            command=AGENT_CLOSE,
+            file=INLINE_LAUNCHER,
+            transcript=inline_launch("term_agent"),
+            commands={**INLINE_COMMANDS, "orca terminal read": INLINE_BUSY},
+        ): Block(pattern="where pid 16002"),
+        guarded(
+            command=AGENT_CLOSE,
+            file=INLINE_LAUNCHER,
+            transcript=inline_launch("term_agent"),
+            commands={**INLINE_COMMANDS, "orca orchestration worker-list": inline_workers("term_agent")},
+        ): Block(pattern="where pid 16002"),
+        guarded(command=AGENT_CLOSE, file=INLINE_READER, transcript=inline_launch("term_agent")): Block(
+            pattern="where pid 16002"
+        ),
+        guarded(command=AGENT_CLOSE, transcript=inline_launch("term_agent")): Block(pattern="where pid 16002"),
+        guarded(
+            command=AGENT_CLOSE, file=INLINE_LAUNCHER, transcript=inline_launch("term_agent", "/bin/zsh ~/launch.sh")
+        ): Allow(),
+        guarded(
+            command=AGENT_CLOSE, file=INLINE_LAUNCHER, transcript=inline_launch("term_agent", "./launch.sh")
+        ): Block(pattern="where pid 16002"),
+        guarded(command=AGENT_CLOSE, file=INLINE_LAUNCHER, transcript=inline_launch("term_other")): Block(
+            pattern="where pid 16002"
+        ),
+        guarded(
+            command=f"{AGENT_CLOSE}; ps -o pid,command -p 16002",
+            file=INLINE_LAUNCHER,
+            transcript=inline_launch("term_agent"),
+        ): Block(pattern="alone on its line"),
+        guarded(command=AGENT_CLOSE, file=inline_drive("term_agent"), transcript=inline_create("term_agent")): Block(
+            pattern="where pid 16002"
+        ),
+        guarded(command=AGENT_CLOSE, file=inline_drive("term_root"), transcript=inline_create("term_agent")): Allow(),
         guarded(
             command="orca terminal close --terminal term_agent --tab --json",
             transcript=inline_create("term_agent"),
