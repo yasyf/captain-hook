@@ -1558,8 +1558,9 @@ class RemoteSession:
 
     def matches(self, *patterns: object) -> bool:
         from captain_hook.signals.nlp import scan_text
+        from captain_hook.turn import typed_words
 
-        return scan_text(self.user_text, patterns)
+        return scan_text(typed_words(self.user_text), patterns)
 
     @property
     def tool_calls(self) -> RemoteToolCalls:
