@@ -1491,7 +1491,7 @@ def drive_terminal(handle: str) -> bool:
 def session_calls(evt: BaseHookEvent, handle: str) -> Iterator[tuple[Path | None, ToolUse]]:
     yield from ((None, use) for turn in evt.ctx.t.turns for use in turn.tool_uses)
     if not isinstance(tree := Scan.of(evt).facts.terminal_tree(handle), Unreadable):
-        yield from tree_calls_naming(evt, handle, since=tree[0].started)
+        yield from tree_calls_naming(evt, handle, since=tree[0].started.replace(tzinfo=UTC))
 
 
 def settled_worker(handle: str, run: str) -> dict[str, Any] | None:
