@@ -412,14 +412,17 @@ A lifted block returns a context note, so its inline expectation is `Warn`.
 
 ## Lift a session guard block {#lift-a-session-guard-block}
 
-The `general` pack's session guards block a terminal close, a launchd service stop,
-a lane's `TaskStop`, and a `kill`, and lift each through these ticket kinds:
+The `general` pack's session guards block a terminal close, a worktree removal that
+Orca does not list as empty, a launchd service stop, a lane's `TaskStop`, and a `kill`,
+and lift each through these ticket kinds:
 
 | Kind | Place | Reach, lifetime | Rules, in order |
 |------|-------|-----------------|-----------------|
 | `sessions.close` | `terminal` | once, 2 minutes | `ruling`, a cc-notes answer naming the handle; `created-here`, this session created the terminal |
 | `sessions.close-settled` | none | place, no expiry | `class-ruling`, the judge reads standing rulings `c9b27c1` and `6190a4a` |
 | `sessions.close.owner` | `terminal` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the handle |
+| `sessions.worktree-rm` | `worktree` | once, 2 minutes | `ruling`, a cc-notes answer naming the worktree selector |
+| `sessions.worktree-rm.owner` | `worktree` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the selector |
 | `sessions.launchctl` | `service` | once, 2 minutes | `ruling`, a cc-notes answer naming the service label |
 | `sessions.launchctl.owner` | `service` | once, 1 hour | `user-named`, the judge reads the user's words and answers naming the label |
 | `sessions.task-stop` | `agent`, `task` | place, 7 days | `spawned-here`, then `ruling`; minted on spawn as `teammate` or `shell` |

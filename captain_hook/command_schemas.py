@@ -354,6 +354,7 @@ ORCA = CommandSchema(
         Option("terminal", ("--terminal",)),
         Option("worktree", ("--worktree",)),
         Option("dispatch", ("--dispatch",)),
+        Option("environment", ("--environment",)),
         Option("text", ("--text",)),
         Option("value", ("--value",)),
         Option("app", ("--app",)),
@@ -362,7 +363,6 @@ ORCA = CommandSchema(
         Option(
             "parameter",
             (
-                "--environment",
                 "--pairing-code",
                 "--command",
                 "--limit",
