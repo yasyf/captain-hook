@@ -28,6 +28,11 @@ repos:
         # (banners, social cards) to just under 1 MiB.
         args: [--maxkb=1024]
       - id: detect-private-key
+  - repo: https://github.com/yasyf/cc-skills
+    rev: 3d9d859212b057a06cb85d9fde44fb6f20056f77
+    hooks:
+      - id: public-names
+      - id: public-pr-body
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.16
