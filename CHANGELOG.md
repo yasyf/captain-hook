@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plugin update reaches running sessions on their next tool call.** Since the registry fingerprint
+  stopped reading each plugin's install path, a version bump that left a pack's files alone kept every
+  hook worker on the old version's directory, so its hooks went on running the old version's `bin/`
+  tools and sibling scripts. Nothing pruned that directory either, because Claude Code keeps every
+  version a live session still marks as in use. On one Mac, 79 of 84 long-running installs in a day
+  reached no running hook worker. The fingerprint now carries the install path of each plugin that ships
+  a `capt-hook/` pack, so the first tool call after an install rebuilds that worker's registry once, in
+  about 200 to 600 ms. A plugin that ships no pack still triggers no reload when it updates.
 - **The load gate names where a refused build can run now.** On a saturated host the `performance` pack
   refused `go vet ./...` and said only to rerun it once the load dropped, so on a host that stayed busy the
   check never ran. The `HOOKS_ADMISSION_ROUTE_PROBE` command can now print, on stdout, a command that runs
