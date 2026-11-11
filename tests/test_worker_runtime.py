@@ -128,9 +128,12 @@ def test_dispatch_writes_a_plain_text_envelope_verbatim() -> None:
     assert response.stdout == "discovered out\nKeep the plan path.\n"
 
 
-LANE_PAYLOAD = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_id": "lane-1"})
+LANE_PAYLOAD = json.dumps({"tool_name": "Bash", "tool_input": {"command": "cci me"}, "agent_id": "lane-1"})
 LANE_EXPORT = {
-    "hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": {"command": "export CCI_AGENT_ID=lane-1\nls"}}
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "updatedInput": {"command": "export CCI_AGENT_ID=lane-1\ncci me"},
+    }
 }
 
 

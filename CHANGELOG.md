@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A subagent's Bash command carries the `CCI_AGENT_ID` export only when it runs `cci` or `drive`.**
+  The export went before every Bash command a subagent ran, so a plain read such as
+  `cd src && for f in ...; do rg ...; done` reached the permission prompt, and the phone alert
+  for it, opening with `export CCI_AGENT_ID=<agent_id>`. In one builder's transcript 185 of its 187
+  Bash calls carried it, though only `cci` reads the variable, and `drive`, which runs `cci`. A
+  command now gets the export only when one of its parsed calls is `cci` or `drive`, nested
+  `sh -c` payloads and command substitutions included, so `echo cci` and `rg -n drive docs/` run as
+  written. A script that runs `cci` without naming it on the command line no longer inherits the id.
 - **A plugin update reaches running sessions on their next tool call.** Since the registry fingerprint
   stopped reading each plugin's install path, a version bump that left a pack's files alone kept every
   hook worker on the old version's directory, so its hooks went on running the old version's `bin/`

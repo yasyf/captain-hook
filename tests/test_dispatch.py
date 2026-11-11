@@ -1203,7 +1203,7 @@ class TestDispatch:
 
 LANE = "atool-capt-hook-agent-id-b8e1585bce214ce2"
 EXPORT = f"export CCI_AGENT_ID={LANE}\n"
-LANE_BASH = {"tool_name": "Bash", "tool_input": {"command": "git status", "description": "status"}, "agent_id": LANE}
+LANE_BASH = {"tool_name": "Bash", "tool_input": {"command": "cci show 7", "description": "status"}, "agent_id": LANE}
 
 
 def rendered(raw: dict[str, Any] = LANE_BASH) -> Any:
@@ -1216,20 +1216,18 @@ class TestAgentAttribution:
         assert rendered() == {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "updatedInput": {"command": EXPORT + "git status", "description": "status"},
+                "updatedInput": {"command": EXPORT + "cci show 7", "description": "status"},
             }
         }
 
     def test_export_prefixes_the_winning_rewrite(self) -> None:
         @on(Event.PreToolUse)
         def rewriter(evt: Any) -> HookResult:
-            return evt.rewrite_command("ccx vcs stack submit", note="rewrote")
+            return evt.rewrite_command("cci show 7 --budget 2000", note="rewrote")
 
-        hso = rendered(LANE_BASH | {"tool_input": {"command": "gt submit", "description": "status"}})[
-            "hookSpecificOutput"
-        ]
+        hso = rendered()["hookSpecificOutput"]
         assert "permissionDecision" not in hso
-        assert hso["updatedInput"] == {"command": EXPORT + "ccx vcs stack submit", "description": "status"}
+        assert hso["updatedInput"] == {"command": EXPORT + "cci show 7 --budget 2000", "description": "status"}
         assert hso["additionalContext"] == "rewrote"
 
     def test_export_keeps_a_warn_without_granting_approval(self) -> None:
@@ -1240,7 +1238,7 @@ class TestAgentAttribution:
         hso = rendered()["hookSpecificOutput"]
         assert "permissionDecision" not in hso
         assert hso["additionalContext"] == "careful"
-        assert hso["updatedInput"]["command"] == EXPORT + "git status"
+        assert hso["updatedInput"]["command"] == EXPORT + "cci show 7"
 
     def test_export_rides_an_allow(self) -> None:
         @on(Event.PreToolUse)
@@ -1249,7 +1247,7 @@ class TestAgentAttribution:
 
         hso = rendered()["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
-        assert hso["updatedInput"]["command"] == EXPORT + "git status"
+        assert hso["updatedInput"]["command"] == EXPORT + "cci show 7"
 
     def test_denied_lane_call_stays_a_deny(self) -> None:
         @on(Event.PreToolUse)
@@ -1261,13 +1259,50 @@ class TestAgentAttribution:
         assert "updatedInput" not in hso
 
     def test_quotes_an_agent_id_the_shell_would_split(self) -> None:
-        raw = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_id": "lane one"}
-        assert rendered(raw)["hookSpecificOutput"]["updatedInput"] == {"command": "export CCI_AGENT_ID='lane one'\nls"}
+        raw = {"tool_name": "Bash", "tool_input": {"command": "cci me"}, "agent_id": "lane one"}
+        assert rendered(raw)["hookSpecificOutput"]["updatedInput"] == {
+            "command": "export CCI_AGENT_ID='lane one'\ncci me"
+        }
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "drive status --json",
+            "cd /repo && cci grep 42 --drive d --budget 20000",
+            "/usr/local/bin/cci show 7",
+            "sh -c 'cci post --kind defect'",
+            "echo $(drive heard --drive d)",
+        ],
+    )
+    def test_exports_to_a_command_that_runs_cci_or_drive(self, command: str) -> None:
+        raw = LANE_BASH | {"tool_input": {"command": command}}
+        assert rendered(raw)["hookSpecificOutput"]["updatedInput"] == {"command": EXPORT + command}
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'cd src && for f in data.rs exec.rs; do rg -n "async fn" "$f"; done',
+            "git status",
+            "echo cci show 7",
+            "rg -n drive docs/",
+        ],
+    )
+    def test_a_command_that_runs_neither_cci_nor_drive_stays_as_written(self, command: str) -> None:
+        assert rendered(LANE_BASH | {"tool_input": {"command": command}}) is None
+
+    def test_a_plain_read_keeps_its_verdict_without_the_export(self) -> None:
+        @on(Event.PreToolUse)
+        def warner(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="careful")
+
+        hso = rendered(LANE_BASH | {"tool_input": {"command": "git status"}})["hookSpecificOutput"]
+        assert hso["additionalContext"] == "careful"
+        assert "updatedInput" not in hso
 
     @pytest.mark.parametrize(
         "raw",
         [
-            pytest.param({"tool_name": "Bash", "tool_input": {"command": "git status"}}, id="main-thread"),
+            pytest.param({"tool_name": "Bash", "tool_input": {"command": "cci show 7"}}, id="main-thread"),
             pytest.param({**LANE_BASH, "agent_id": ""}, id="empty-agent-id"),
             pytest.param({"tool_name": "Read", "tool_input": {"file_path": "/x"}, "agent_id": LANE}, id="non-bash"),
         ],
