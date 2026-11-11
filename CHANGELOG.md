@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The load gate names where a refused build can run now.** On a saturated host the `performance` pack
+  refused `go vet ./...` and said only to rerun it once the load dropped, so on a host that stayed busy the
+  check never ran. The `HOOKS_ADMISSION_ROUTE_PROBE` command can now print, on stdout, a command that runs
+  the call on another host, and the refusal names it: "Run it on another host now instead:
+  `build-router exec --machine mac -- go vet ./...`". The probe now also runs for a call behind
+  a wrapper such as `timeout` or by an absolute path, only to read that command; such a call is still
+  refused. The packs guide now says the gate refuses rather than warns, and documents the probe.
+
 - **The owner can approve one worktree removal by naming its selector.** In 12.121.58 the judge behind
   `sessions.worktree-rm.owner` read rules that covered only terminal closes, launchd services, and process
   signals. It could deny an `orca worktree rm` even when the owner named that exact `--worktree` selector. The

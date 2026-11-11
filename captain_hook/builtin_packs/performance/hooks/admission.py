@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, Block, Event, HookResult, Input, Tool, on
-from captain_hook.util.builds import LOAD_PER_CORE, ROUTE_PROBE, HostLoad, is_local_build, routes_off_host
+from captain_hook.util.builds import LOAD_PER_CORE, ROUTE_PROBE, HostLoad, is_local_build, probe_route
 
 if TYPE_CHECKING:
     from captain_hook import PreToolUseEvent
@@ -13,6 +13,14 @@ HEALTHY = {LOAD_PER_CORE: "1000000"}
 ROUTED = {**SATURATED, ROUTE_PROBE: "true"}
 ONLY_CARGO_ROUTES = {**SATURATED, ROUTE_PROBE: """sh -c '[ "$0" = cargo ]'"""}
 HATCH_KEEPS_IT_HERE = {**SATURATED, ROUTE_PROBE: """sh -c '[ -z "${CARGO_LOCAL:-}" ]'"""}
+NAMES_A_BUILDER = {
+    **SATURATED,
+    ROUTE_PROBE: """sh -c 'echo "remote-builder exec --lane $0 --machine mac -- $0 $*"; exit 1'""",
+}
+ROUTES_AND_NAMES_IT = {
+    **SATURATED,
+    ROUTE_PROBE: """sh -c 'echo "remote-builder exec --lane $0 --machine linux -- $0 $*"'""",
+}
 
 
 @on(
@@ -39,7 +47,7 @@ HATCH_KEEPS_IT_HERE = {**SATURATED, ROUTE_PROBE: """sh -c '[ -z "${CARGO_LOCAL:-
         Input(command="go version && cargo metadata --format-version 1", env=SATURATED): Allow(),
         Input(command="git commit -m 'go build fix'", env=SATURATED): Allow(),
         Input(command="cargo build -p server", env=ROUTED): Allow(),
-        Input(command="cargo check", env={**SATURATED, ROUTE_PROBE: "false"}): Block(pattern="load gate"),
+        Input(command="cargo check", env={**SATURATED, ROUTE_PROBE: "false"}): Block(pattern="Rerun the same command"),
         Input(command="cargo check", env={**SATURATED, ROUTE_PROBE: "no-such-route-probe"}): Block(),
         Input(command="/opt/homebrew/bin/cargo check", env=ROUTED): Block(),
         Input(command="timeout 600 cargo check", env=ROUTED): Block(),
@@ -47,6 +55,16 @@ HATCH_KEEPS_IT_HERE = {**SATURATED, ROUTE_PROBE: """sh -c '[ -z "${CARGO_LOCAL:-
         Input(command="cargo check", env=ONLY_CARGO_ROUTES): Allow(),
         Input(command="CARGO_LOCAL=1 cargo check", env=HATCH_KEEPS_IT_HERE): Block(),
         Input(command="cargo check", env=HATCH_KEEPS_IT_HERE): Allow(),
+        Input(command="go vet ./...", env=NAMES_A_BUILDER): Block(
+            pattern=r"now as below.*\n+```\nremote-builder exec --lane go --machine mac -- go vet \./\.\.\.\n```"
+        ),
+        Input(command="cd /tmp && go vet ./...", env=NAMES_A_BUILDER): Block(
+            pattern=r"```\ncd \S*tmp && remote-builder exec --lane go --machine mac -- go vet"
+        ),
+        Input(command="timeout 900 cargo check -p core", env=ROUTES_AND_NAMES_IT): Block(
+            pattern=r"```\nremote-builder exec --lane cargo --machine linux -- cargo check -p core\n```"
+        ),
+        Input(command="cargo check -p core", env=ROUTES_AND_NAMES_IT): Allow(),
     },
 )
 def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
@@ -54,10 +72,18 @@ def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
     if not builds:
         return None
     host = HostLoad.sample()
-    if not host.saturated or all(routes_off_host(call) for call in builds):
+    if not host.saturated:
         return None
-    return evt.block(
+    routes = [probe_route(call) for call in builds]
+    if all(route.leaves for route in routes):
+        return None
+    gate = (
         f"The host's CPU is {host.load / host.cores:.0%} busy, at or above the {host.limit:.0%} limit; "
-        "this is a load gate, not a ban on local builds. "
-        "Rerun the same command once it drops; CI still grades tests."
+        "this is a load gate, not a ban on local builds."
+    )
+    elsewhere = "\n".join(route.elsewhere for route in routes if not route.leaves and route.elsewhere)
+    if not elsewhere:
+        return evt.block(f"{gate} Rerun the same command once it drops; CI still grades tests.")
+    return evt.block(
+        f"{gate} Run it on another host now as below, or rerun it once the load drops.\n\n```\n{elsewhere}\n```"
     )

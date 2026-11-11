@@ -6,7 +6,7 @@ import pytest
 
 from captain_hook.bindings import Resolved, Scope, Unresolved, droppable
 from captain_hook.cmd import Cmd, Target, git_location
-from captain_hook.util.builds import ROUTE_PROBE, routes_off_host
+from captain_hook.util.builds import ROUTE_PROBE, probe_route
 from tests.test_cmd import evt_for
 
 
@@ -253,8 +253,8 @@ class TestCallResolution:
         monkeypatch.setenv(ROUTE_PROBE, "true")
         known = evt_for("cargo build", cwd="/")
         unknown = evt_for(". /env.sh; cd $R; cargo build", cwd="/")
-        assert routes_off_host(known.cmd.calls("cargo")[0])
-        assert not routes_off_host(unknown.cmd.calls("cargo")[0])
+        assert probe_route(known.cmd.calls("cargo")[0]).leaves
+        assert not probe_route(unknown.cmd.calls("cargo")[0]).leaves
 
     def test_nested_variable_cd_does_not_recurse(self) -> None:
         evt = evt_for("export X=/tmp; sh -c 'cd \"$X\"; rm -rf child'")
