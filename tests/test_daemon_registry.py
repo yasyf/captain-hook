@@ -713,19 +713,36 @@ def test_plugin_pack_hook_edit_reaches_the_served_snapshot_within_the_ttl(
     assert any(h.spec.message == "pp-edited" for h in reg.get().state.hooks)
 
 
-def test_plugin_bump_with_the_same_hooks_keeps_the_snapshot(
+def test_plugin_bump_with_the_same_hooks_serves_the_new_install(
     project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     make_plugin_pack(tmp_path / "v1")
-    (tmp_path / "bare-v1").mkdir()
-    plant_roster([("acme/pp", tmp_path / "v1"), ("acme/bare", tmp_path / "bare-v1")])
+    plant_roster([("acme/pp", tmp_path / "v1")])
     reg = Registry(project)
     snap = reg.get()
     monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
 
     make_plugin_pack(tmp_path / "v2")
+    plant_roster([("acme/pp", tmp_path / "v2")])
+
+    rebuilt = reg.get()
+    assert rebuilt is not snap
+    assert tmp_path / "v2" / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME in rebuilt.pack_paths
+    assert tmp_path / "v1" / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME not in rebuilt.pack_paths
+
+
+def test_bump_of_a_plugin_with_no_pack_keeps_the_snapshot(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_plugin_pack(tmp_path / "pp")
+    (tmp_path / "bare-v1").mkdir()
+    plant_roster([("acme/pp", tmp_path / "pp"), ("acme/bare", tmp_path / "bare-v1")])
+    reg = Registry(project)
+    snap = reg.get()
+    monkeypatch.setattr(registry, "PLUGIN_TTL", 0.0)
+
     (tmp_path / "bare-v2").mkdir()
-    plant_roster([("acme/pp", tmp_path / "v2"), ("acme/bare", tmp_path / "bare-v2")])
+    plant_roster([("acme/pp", tmp_path / "pp"), ("acme/bare", tmp_path / "bare-v2")])
 
     assert reg.get() is snap
 

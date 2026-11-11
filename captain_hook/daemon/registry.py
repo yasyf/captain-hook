@@ -46,7 +46,7 @@ LINUX_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
-PluginTree = tuple[str, tuple[tuple[str, str], ...]]
+PluginTree = tuple[str, str, tuple[tuple[str, str], ...]]
 MarkerStamp = tuple[StatEntry | None, StatEntry | None]
 RosterEntry = StatEntry | int | None
 RosterStamp = tuple[tuple[Path, RosterEntry], ...]
@@ -214,8 +214,9 @@ def _plugin_trees(root: Path, *, fresh: bool = False) -> tuple[PluginTree, ...] 
     for plugin in roster:
         pack_root = plugins.plugin_pack_root(plugin)
         try:
-            files = _hooks_tree(str(pack_root), fresh=fresh)
-            trees.append((plugin.id, tuple((file[0], _pack_file_digest(pack_root / file[0], file)) for file in files)))
+            if files := _hooks_tree(str(pack_root), fresh=fresh):
+                digests = tuple((file[0], _pack_file_digest(pack_root / file[0], file)) for file in files)
+                trees.append((plugin.id, plugin.root, digests))
         except OSError:
             continue
     return tuple(trees)
