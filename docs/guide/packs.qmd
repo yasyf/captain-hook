@@ -630,8 +630,8 @@ A repository whose wrapper on `PATH` forwards builds to another machine can tell
 - Exit 0 means a plain call of that tool leaves this host, so the gate lets it run. A call behind a
   wrapper such as `timeout`, or by an absolute path, skips the `PATH` wrapper, so it is refused anyway.
 - Whatever the probe prints on stdout is a command that runs the call on another host. The refusal names
-  it, after a `cd` to the call's directory when the command line changed directory, so the agent can run
-  the check now rather than wait for the load to drop.
+  it after a `cd` to the directory the call runs in, so the agent can run the check now rather than wait
+  for the load to drop.
 
 ```json
 {
