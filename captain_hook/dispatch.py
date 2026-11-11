@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from captain_hook.app import get_hook_candidates, get_mandatory_hooks, registration_ranks, skips_event
+from captain_hook.cmd import Cmd
 from captain_hook.conditions import matches_conditions, planned_predicates
 from captain_hook.confirm import confirmed
 from captain_hook.dispatch_metrics import measured_call
@@ -77,6 +78,7 @@ HOOK_FANOUT_THREADS = 64
 BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
 AGENT_ID_VARIABLE = "CCI_AGENT_ID"
+AGENT_ID_READERS = frozenset({"cci", "drive"})
 FIRE_RESERVATIONS: Counter[tuple[Path | None, str]] = Counter()
 FIRE_RESERVATIONS_GUARD = threading.Lock()
 
@@ -815,6 +817,9 @@ def attributed(event: Event, raw: dict[str, Any], envelope: Envelope | None) -> 
     rendered = envelope or {}
     specific = rendered.get("hookSpecificOutput", {"hookEventName": event.name})
     tool_input = specific.get("updatedInput") or raw["tool_input"]
+    cmd = Cmd.parse(tool_input["command"])
+    if cmd is None or not any(call.name in AGENT_ID_READERS for call in cmd.calls()):
+        return envelope
     command = f"export {AGENT_ID_VARIABLE}={shlex.quote(agent_id)}\n{tool_input['command']}"
     return rendered | {"hookSpecificOutput": specific | {"updatedInput": tool_input | {"command": command}}}
 
