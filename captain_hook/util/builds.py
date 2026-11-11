@@ -82,19 +82,30 @@ def is_local_build(call: Call) -> bool:
             return False
 
 
-def routes_off_host(call: Call) -> bool:
+@dataclass(frozen=True, slots=True)
+class Route:
+    leaves: bool
+    elsewhere: str = ""
+
+
+def probe_route(call: Call) -> Route:
     probe = shlex.split(reqenv.getenv(ROUTE_PROBE, ""))
-    if not probe or call.wrappers or "/" in call.command.executable or (call.cmd.cwd and not call.cwd):
-        return False
+    if not probe or (call.cmd.cwd and not call.cwd):
+        return Route(leaves=False)
     env = reqenv.env_map() | dict(call.source.env)
     if shutil.which(probe[0], path=env.get("PATH")) is None:
-        return False
+        return Route(leaves=False)
     done = subprocess.run(
         [*probe, call.name, *call.args],
         capture_output=True,
+        text=True,
         cwd=call.cwd or reqenv.cwd(),
         env=env,
         timeout=reqenv.clamp_timeout(ROUTE_PROBE_TIMEOUT),
         check=False,
     )
-    return done.returncode == 0
+    elsewhere = done.stdout.strip()
+    if elsewhere and call.cwd:
+        elsewhere = f"cd {shlex.quote(str(call.cwd))} && {elsewhere}"
+    shimmed = not call.wrappers and "/" not in call.command.executable
+    return Route(leaves=done.returncode == 0 and shimmed, elsewhere=elsewhere)
