@@ -760,6 +760,19 @@ class TestDecide:
         assert found(Decide("permit", over=(UserAnswered(),)), ctx) == [yes]
         assert "unrelated" not in str(cast(MagicMock, evt.ctx.call_llm).call_args)
 
+    def test_a_judge_given_a_frame_asks_the_llm_in_it_instead_of_whether_the_user_permitted_the_action(
+        self, tmp_path: Path
+    ) -> None:
+        said = Evidence(
+            id="rule:cause", source="the rule the check stands for", quote="State a cause through its record."
+        )
+        ctx = Context.fake("test.write", PLACE, said=[said], tree=TREE)
+        evt = event(tmp_path, verdict=Verdict(allow=True, reason="no cause is claimed", relied_on=[said.id]))
+        object.__setattr__(ctx, "evt", evt)
+        frame = "You decide whether each finding of the hook's checks holds against the action by the rule it names."
+        assert found(Decide("permit", frame=frame), ctx) == [said]
+        assert cast(MagicMock, evt.ctx.call_llm).call_args.args[0].system_text.startswith(frame)
+
 
 def entry(tickets: Tickets) -> RegisteredHook:
     return RegisteredHook(
