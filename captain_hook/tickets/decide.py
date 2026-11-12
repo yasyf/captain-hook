@@ -185,6 +185,9 @@ class Decide(CustomTicketCondition):
         llm: Whether an action Jev does not settle goes to the LLM; off, it is refused.
         second_opinion: Whether one LLM refusal is asked again, on the evidence alone; the action is refused
             when the second asking also refuses or cannot finish.
+        frame: The LLM's system prompt, saying what it decides and how its verdict cites and refuses; by default
+            whether the user's words permit the action, and a hook judging its own checks' findings by the rules
+            they stand for passes a frame saying so.
     """
 
     rules: str
@@ -198,6 +201,7 @@ class Decide(CustomTicketCondition):
     tool_results: bool = False
     llm: bool = True
     second_opinion: bool = True
+    frame: str = FRAME
 
     def items(self, ctx: Context) -> list[Evidence]:
         return [item for condition in self.over if (part := found(condition, ctx)) for item in part]
@@ -259,7 +263,7 @@ class Decide(CustomTicketCondition):
     def framed(self, ctx: Context, items: Sequence[Evidence], shown: int) -> Prompt:
         return (
             Prompt()
-            .system(dedent_text(FRAME))
+            .system(dedent_text(self.frame))
             .context("rules", self.rules)
             .context("evidence", render_evidence(items, shown))
             .context("action", render_action(ctx.action))
