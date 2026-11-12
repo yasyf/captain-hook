@@ -201,7 +201,22 @@ def environs(monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable
 @pytest.fixture(autouse=True)
 def home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("LONG_RUNNING_STATE", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     return tmp_path / "home"
+
+
+def write_drive(home: Path, name: str, roles: dict[str, str], handlers: dict[str, str | None] | None = None) -> Path:
+    state = home / ".local" / "state" / "long-running" / name
+    state.mkdir(parents=True)
+    seats = {
+        role: {"session": session, "cwd": f"/c/{name}", "terminal": f"term_{role}"} for role, session in roles.items()
+    }
+    held = {seat: {"session": session} for seat, session in (handlers or {}).items()}
+    (state / "drive.json").write_text(
+        json.dumps({"name": name, "orders": {}, "roles": seats, "subcoordinators": {}, "handlers": held})
+    )
+    return state.parent
 
 
 @pytest.fixture(autouse=True)
@@ -765,6 +780,18 @@ DRIVE_LEFTOVERS = table(
         "node /opt/node/bin/yarn tsx ./scripts/buildDashboard.ts --watch --serve",
         started="2026-09-30T07:04:00",
     ),
+    row(
+        52007,
+        1,
+        "python3 -I /cache/skills/long-running/1.0.459/bin/drive watch --loop --drive d1",
+        started="2026-09-30T07:05:00",
+    ),
+    row(
+        52006,
+        52007,
+        "python3 -I /cache/skills/long-running/1.0.459/bin/drive pr land https://github.com/o/r/pull/7 --drive d1",
+        started="2026-09-30T07:06:00",
+    ),
 )
 
 
@@ -775,18 +802,8 @@ class TestDriveLeftovers:
 
     @pytest.fixture
     def registry(self, home: Path) -> Path:
-        drives = home / ".claude" / "long-running" / "drives"
-        drives.mkdir(parents=True)
-        entries = {
-            "d0": {"sessions": ["r-old"], "ledger": "b29c27ad096098168db057c70e8a6681d79c5763"},
-            "d1": {"sessions": ["r0", "s1"], "ledger": "b29c27a"},
-            "d2": {"sessions": ["r9"], "ledger": "829f980d0bb4bdc308a2d0cc217dc9bb6ef0cddd"},
-        }
-        for drive, entry in entries.items():
-            (drives / f"{drive}.json").write_text(
-                json.dumps({"drive": drive, **entry, "state_dir": f"/s/{drive}", "checkout": f"/c/{drive}"})
-            )
-        return drives
+        write_drive(home, "d1", {"coordinator": "r0", "meta": "s1"}, {"h1": "h-1", "h2": None})
+        return write_drive(home, "d2", {"coordinator": "r9"})
 
     @pytest.mark.parametrize(
         ("pid", "shown"),
@@ -795,8 +812,7 @@ class TestDriveLeftovers:
             pytest.param(52001, " CLAUDE_CODE_SESSION_ID=r0", id="live_desk_runner_child"),
             pytest.param(52002, " CLAUDE_CODE_SESSION_ID=w7 CLAUDE_LONG_RUNNING_DRIVE=d1", id="orca_worker_orphan"),
             pytest.param(52003, " CLAUDE_LONG_RUNNING_DRIVE=d1", id="dev_server_in_an_ended_lanes_terminal"),
-            pytest.param(52005, " CLAUDE_CODE_SESSION_ID=r-old", id="earlier_run_sharing_the_ledger"),
-            pytest.param(52005, " CLAUDE_LONG_RUNNING_DRIVE=d0", id="earlier_run_drive_id"),
+            pytest.param(52005, " CLAUDE_CODE_SESSION_ID=h-1", id="handler_session"),
         ],
     )
     def test_a_leftover_the_drive_started_may_be_ended(
@@ -807,11 +823,19 @@ class TestDriveLeftovers:
         assert decide(f"kill -9 {pid}", tmp_path, client_ppid=424242) is None
         assert decide(f"renice -n 5 -p {pid}", tmp_path) is None
 
-    @pytest.mark.parametrize("broken", ["{", "{}", '{"drive": "d3", "sessions": "s1", "ledger": "b29c27a"}'])
-    def test_an_unreadable_registry_entry_is_skipped_and_never_opens_the_guard(
+    @pytest.mark.parametrize(
+        "broken",
+        [
+            '{"name": "a-broken", "roles": {"meta": {"session": "s1"',
+            '{"name": "a-broken", "roles": {"meta": "s1"}}',
+            '{"name": "a-broken", "roles": {"meta": {"session": "s1"}}}',
+        ],
+    )
+    def test_an_unreadable_drive_state_is_skipped_and_never_opens_the_guard(
         self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path, broken: str
     ) -> None:
-        (registry / "a-broken.json").write_text(broken)
+        (registry / "a-broken").mkdir()
+        (registry / "a-broken" / "drive.json").write_text(broken)
         environs[52002] = " CLAUDE_CODE_SESSION_ID=r0"
         assert decide("kill 52002", tmp_path) is None
         assert "is an agent session" in (decide("kill 52002 14575", tmp_path) or "")
@@ -843,6 +867,16 @@ class TestDriveLeftovers:
         assert "with no agent ancestor to vouch for it" in message
         assert message.endswith(
             "Let it finish, or ask the owner to end it; a drive ends only a leftover whose environment names the drive."
+        )
+
+    def test_the_drives_meta_session_ends_a_stuck_verb_the_drive_detached(
+        self, general_pack: None, environs: dict[int, str], registry: Path, tmp_path: Path
+    ) -> None:
+        environs[52006] = " CLAUDE_LONG_RUNNING_DRIVE=d1 CLAUDE_LONG_RUNNING_LANE=watch"
+        assert decide("kill 52006", tmp_path) is None
+        environs[52006] = " CLAUDE_LONG_RUNNING_DRIVE=d2 CLAUDE_LONG_RUNNING_LANE=watch"
+        assert "a drive ends only a leftover whose environment names the drive" in (
+            decide("kill 52006", tmp_path) or ""
         )
 
     def test_a_session_in_no_drive_claims_no_leftover(
@@ -992,10 +1026,7 @@ class TestCardTapLift:
     @pytest.fixture(autouse=True)
     def registry(self, home: Path, fake_table: dict[str, ProcessTable | None]) -> None:
         fake_table["table"] = TAP_TABLE
-        drives = home / ".claude" / "long-running" / "drives"
-        drives.mkdir(parents=True)
-        entry = {"drive": "d1", "sessions": ["r0"], "ledger": "b29c27a", "checkout": "/c/d1", "state_dir": "/s/d1"}
-        (drives / "d1.json").write_text(json.dumps(entry))
+        write_drive(home, "d1", {"coordinator": "r0"})
 
     def kill(
         self,
