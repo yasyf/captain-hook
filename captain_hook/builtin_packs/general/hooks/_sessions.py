@@ -63,7 +63,7 @@ from captain_hook.tickets.context import TranscriptSources, holds, names, writte
 from captain_hook.tickets.decide import Undecided
 from captain_hook.transcripts import tree_calls_naming
 from captain_hook.util import proc, reqenv
-from captain_hook.util.paths import resolve_claude_config_dir, resolve_long_running_state, resolve_target
+from captain_hook.util.paths import resolve_long_running_state, resolve_target
 from captain_hook.util.payload import command_texts
 from captain_hook.util.shell import safe_parse_command_line
 
@@ -832,54 +832,50 @@ def scratch_orphan(row: ProcessRow) -> bool:
     )
 
 
-def same_ledger(left: str, right: str) -> bool:
-    return left.startswith(right) or right.startswith(left)
+class DriveSeat(BaseModel):
+    session: str | None = None
+    cwd: str | None = None
 
 
-class DriveEntry(BaseModel):
-    drive: str
-    ledger: str
-    sessions: list[str]
-    checkout: str
-
-
-def drive_entries() -> list[DriveEntry]:
-    entries: list[DriveEntry] = []
-    for path in sorted((resolve_claude_config_dir() / "long-running" / "drives").glob("*.json")):
-        try:
-            entries.append(DriveEntry.model_validate_json(path.read_bytes()))
-        except (OSError, ValidationError) as exc:
-            logger.bind(path=str(path), error=str(exc)).warning("skipping an unreadable drive registry entry")
-    return entries
+class DriveState(BaseModel):
+    name: str
+    roles: dict[str, DriveSeat]
+    subcoordinators: dict[str, DriveSeat] = {}
+    handlers: dict[str, DriveSeat] = {}
 
 
 @dataclass(frozen=True, slots=True)
 class Drive:
-    """A long-running drive and every registry entry sharing its ledger, which an earlier run of it left behind."""
+    """A long-running drive as its ``drive.json`` holds it: every session bound to it and its coordinator's checkout."""
 
     name: str
-    names: frozenset[str]
     sessions: frozenset[str]
     checkout: str
 
     @classmethod
     def of(cls, session: str | None) -> Drive | None:
+        """The drive the request's environment names, else the one *session* is bound to."""
         named = reqenv.getenv(DRIVE_VAR)
-        entries = drive_entries()
-        own = next((e for e in entries if e.drive == named or (not named and session in e.sessions)), None)
-        if own is None:
-            return None
-        runs = [entry for entry in entries if same_ledger(entry.ledger, own.ledger)]
-        return cls(
-            own.drive,
-            frozenset(entry.drive for entry in runs),
-            frozenset(member for entry in runs for member in entry.sessions),
-            own.checkout,
-        )
+        root = resolve_long_running_state()
+        for path in [root / named / "drive.json"] if named else sorted(root.glob("*/drive.json")):
+            try:
+                raw = path.read_bytes()
+                if not named and (session is None or session.encode() not in raw):
+                    continue
+                held = DriveState.model_validate_json(raw)
+            except (OSError, ValidationError) as exc:
+                logger.bind(path=str(path), error=str(exc)).warning("skipping an unreadable drive state")
+                continue
+            seats = [*held.roles.values(), *held.subcoordinators.values(), *held.handlers.values()]
+            sessions = frozenset(seat.session for seat in seats if seat.session)
+            coordinator = held.roles.get("coordinator")
+            if (named or session in sessions) and coordinator is not None and coordinator.cwd:
+                return cls(held.name, sessions, coordinator.cwd)
+        return None
 
     def started(self, environment: str) -> bool:
         if drives := set(DRIVE_ENV.findall(environment)):
-            return drives <= self.names
+            return drives == {self.name}
         return bool(sessions := set(SESSION_ENV.findall(environment))) and sessions <= self.sessions
 
 
