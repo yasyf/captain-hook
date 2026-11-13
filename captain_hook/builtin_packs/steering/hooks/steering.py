@@ -15,6 +15,7 @@ from captain_hook import (
     Input,
     NlpSignal,
     Phrase,
+    RanCommand,
     Signal,
     Signals,
     T,
@@ -24,7 +25,7 @@ from captain_hook import (
     llm_nudge,
     nudge,
 )
-from captain_hook.util.paths import resolve_long_running_state
+from captain_hook.builtin_packs.general.hooks._sessions import drive_states
 
 THINKING_MISFIRES = (
     "Thinking it through more, the deploy applies the stack at the dev commit, so this addon update is likely just "
@@ -51,7 +52,25 @@ THINKING_MISFIRES = (
     "leaving the chime composite alerts alone since they're already properly gated.",
 )
 
-CCI_HANDOFFS = ("mcp__plugin_cc-inbox_cci__post", "mcp__plugin_cc-inbox_cci__close")
+HANDOFF_TOOLS = (
+    "mcp__plugin_cc-inbox_cci__post",
+    "mcp__plugin_cc-inbox_cci__close",
+    "mcp__plugin_long-running_drive__job",
+    "mcp__plugin_long-running_drive__order",
+    "mcp__plugin_long-running_drive__handler",
+    "mcp__plugin_long-running_drive__record",
+    "mcp__plugin_long-running_drive__incident",
+)
+HANDOFF_COMMANDS = (
+    ("drive", "job", "add"),
+    ("drive", "job", "launch"),
+    ("drive", "job", "resume"),
+    ("drive", "order", "add"),
+    ("drive", "incident", "open"),
+    ("drive", "incident", "stop"),
+    ("cci", "post"),
+    ("cci", "close"),
+)
 COMMUNICATOR_SESSION = "c0ffee00-0000-4000-8000-00000000c0de"
 COMMUNICATOR_DRIVE = FileFixture(
     home=True,
@@ -96,12 +115,9 @@ class TypeCheckerContext(CustomCondition):
 
 class DriveCommunicator(CustomCondition):
     def check(self, evt: BaseHookEvent) -> bool:
-        if not (session := evt.session_id):
-            return False
-        return any(
-            session.encode() in (raw := path.read_bytes())
-            and json.loads(raw).get("roles", {}).get("communicator", {}).get("session") == session
-            for path in resolve_long_running_state().glob("*/drive.json")
+        return bool(session := evt.session_id) and any(
+            (seat := held.roles.get("communicator")) is not None and seat.session == session
+            for _, held in drive_states(None, session)
         )
 
 
@@ -624,7 +640,12 @@ tell that decided it) in `reasoning`.""",
         ],
     ),
     events=Event.Stop,
-    skip_if=[InPlanMode(), UsedTool(*CCI_HANDOFFS), DriveCommunicator()],
+    skip_if=[
+        InPlanMode(),
+        UsedTool(*HANDOFF_TOOLS),
+        *(RanCommand(*argv, scope="turn") for argv in HANDOFF_COMMANDS),
+        DriveCommunicator(),
+    ],
     max_fires=1,
     tests={
         Input(
@@ -644,6 +665,46 @@ tell that decided it) in `reasoning`.""",
                 ),
             ]
         ): Allow(),
+        Input(
+            transcript=[
+                *T.tool_turn(
+                    "mcp__plugin_long-running_drive__job",
+                    ops=[{"add": {"order": "o1", "kind": "reader", "goal": "read applied as serving"}}],
+                ),
+                T.assistant(
+                    "Since fixing this requires a vcs-core release, the practical "
+                    "solution is to improve the documentation and help text."
+                ),
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                *T.tool_turn("Bash", command='drive job resume j1 "build the fold its report names"'),
+                T.assistant(
+                    "Since fixing this requires a vcs-core release, the practical "
+                    "solution is to improve the documentation and help text."
+                ),
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                *T.tool_turn("Bash", command="drive status --json"),
+                T.assistant(
+                    "Since fixing this requires a vcs-core release, the practical "
+                    "solution is to improve the documentation and help text."
+                ),
+            ]
+        ): Warn(),
+        Input(
+            transcript=[
+                *T.tool_turn("Bash", command='drive job add builder --order o1 --goal "fold the serving read"'),
+                T.user("what did the release plan say?"),
+                T.assistant(
+                    "Since fixing this requires a vcs-core release, the practical "
+                    "solution is to improve the documentation and help text."
+                ),
+            ]
+        ): Warn(),
         Input(
             session_id=COMMUNICATOR_SESSION,
             file=COMMUNICATOR_DRIVE,

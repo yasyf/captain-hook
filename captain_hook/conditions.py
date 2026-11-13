@@ -469,8 +469,9 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case TouchedFile(patterns, subagents):
             return evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
         case RanCommand() as ran if regex := ran.regex:
-            if isinstance(evt.ctx.t, RemoteSession):
-                return evt.ctx.t.query(
+            window = evt.ctx.turn if ran.scope == "turn" else evt.ctx.transcript
+            if isinstance(window, RemoteSession):
+                return window.query(
                     {
                         "kind": "has_command_regex",
                         "pattern": regex.pattern,
@@ -479,11 +480,11 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 )
             from cc_transcript.query import any_inputs
 
-            return any_inputs(
-                evt.ctx.transcript, lambda inputs: matches_ran_regex(inputs, regex), subagents=ran.subagents
-            )
+            return any_inputs(window, lambda inputs: matches_ran_regex(inputs, regex), subagents=ran.subagents)
         case RanCommand() as ran:
-            return evt.ctx.transcript.has_command(*ran.tokens, subagents=ran.subagents)
+            return (evt.ctx.turn if ran.scope == "turn" else evt.ctx.transcript).has_command(
+                *ran.tokens, subagents=ran.subagents
+            )
         case Runs(argv):
             return bool(
                 argv
@@ -560,8 +561,12 @@ def ran_any_command(
 
 def ran_any_in_run(run: Sequence[RanCommand], evt: BaseHookEvent) -> bool:
     return any(
-        ran_any_command(evt.ctx.transcript, [c.argv for c in run if c.subagents is subagents], subagents=subagents)
-        for subagents in dict.fromkeys(c.subagents for c in run)
+        ran_any_command(
+            evt.ctx.turn if scope == "turn" else evt.ctx.transcript,
+            [c.argv for c in run if (c.subagents, c.scope) == (subagents, scope)],
+            subagents=subagents,
+        )
+        for subagents, scope in dict.fromkeys((c.subagents, c.scope) for c in run)
     )
 
 
@@ -591,7 +596,7 @@ def deep_predicates(c: TCondition) -> Iterator[tuple[str, dict[str, object]]]:
         case UsedTool(names, True, scope):
             yield scope_selectors(scope), tool_predicate("has_tool", "|".join(names), subagents=True)
         case RanCommand(subagents=True) as ran if ran.regex is None:
-            yield TRANSCRIPT_SELECTORS, list_predicate("has_command", ran.tokens, subagents=True)
+            yield scope_selectors(ran.scope), list_predicate("has_command", ran.tokens, subagents=True)
         case And(conditions):
             yield from chain.from_iterable(map(deep_predicates, conditions))
         case Not(condition):

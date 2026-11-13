@@ -644,17 +644,22 @@ class RanCommand:
     stripped) and quote-exact, so ``RanCommand("git", "push")`` matches
     ``sudo git push -f`` but not ``echo "git push"``. Launchers are literal:
     ``RanCommand("pytest")`` does not match ``uv run pytest`` — list each spelling
-    as its own entry.
+    as its own entry. The search covers the whole session by default; ``scope="turn"``
+    narrows it to the current turn.
     """
 
     argv: tuple[str, ...] | tuple[Regex]
     subagents: bool
+    scope: Literal["session", "turn"]
 
-    def __init__(self, *argv: str | Regex, subagents: bool = True) -> None:
+    def __init__(
+        self, *argv: str | Regex, subagents: bool = True, scope: Literal["session", "turn"] = "session"
+    ) -> None:
         if any(isinstance(token, Regex) for token in argv) and len(argv) != 1:
             raise TypeError("RanCommand takes either literal argv tokens or one Regex, not a mix")
         object.__setattr__(self, "argv", argv)
         object.__setattr__(self, "subagents", subagents)
+        object.__setattr__(self, "scope", scope)
 
     @property
     def tokens(self) -> tuple[str, ...]:

@@ -192,7 +192,8 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
         "Command was previously run",
         '`RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` '
         "stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry, or pass "
-        'one `Regex(r"\\bpytest\\b")` in place of tokens to cover every launcher)',
+        'one `Regex(r"\\bpytest\\b")` in place of tokens to cover every launcher); searches the whole session, or '
+        'only the current turn with `scope="turn"`',
     ),
     ("Runs",): (
         "Bash argv prefix (structural, no false positives)",
