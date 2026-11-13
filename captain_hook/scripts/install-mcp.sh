@@ -22,11 +22,11 @@ set -eu
 # and its checksums.txt sha256 values for binrun_<version>_<os>_<arch>.tar.gz.
 # Bump all five together when adopting a newer binrun.
 RUNNER_REPO="yasyf/binrun"
-RUNNER_TAG="v0.9.0"
-RUNNER_SHA_darwin_arm64="db63eb56ef291e6c0a57d4120de21e9457802e53768d60af131658b12239466e"
-RUNNER_SHA_darwin_amd64="3e61231d4d4b471ea873084a59e46308a2ea8a3bd90c588e97c0d19228de302c"
-RUNNER_SHA_linux_amd64="fa1991af7943c1465429de7792f88bdfe35174c6bfea5a13d91980cdab914870"
-RUNNER_SHA_linux_arm64="27c8e6e53d6e7eceaed45b3e6eb0d373eae7e7fc5e7fa3cb67e66adeb660438d"
+RUNNER_TAG="v0.10.1"
+RUNNER_SHA_darwin_arm64="71fc60cdfbaabfdfb5524ad10baf4e341f822cf2df29c9d4d82fbbd37960754d"
+RUNNER_SHA_darwin_amd64="c3a3c72522110f71c408d96df2cede994adb76b91003baac973d46dddca1f894"
+RUNNER_SHA_linux_amd64="fbd3a8021989dc2e7fd577cc26192f4b5259ad6383c5205e528c2df85fa4bf38"
+RUNNER_SHA_linux_arm64="d01a295e792c0865fd3115b3cccbc75cb6358d94c4dddec631119728a4abc627"
 # ------------------------------------------------------------------------------
 
 # ${0%/*}, not dirname: skips an exec an endpoint-security agent can serialize fleet-wide.
@@ -76,14 +76,36 @@ fail() {
 }
 
 # daemonkit's realhome: DAEMONKIT_HOME names a home directory, and its fallback is
-# the passwd home, not $HOME. binrun resolves its cache the same way.
-passwd_user="$(id -un)"
-eval "passwd_home=~$passwd_user"
-# An unexpanded tilde means the name has no passwd entry to take a home from.
-case "$passwd_home" in \~*) fail "no passwd home for '$passwd_user'" ;; esac
+# the passwd home, not $HOME. binrun resolves its cache the same way. $USER skips
+# the `id` exec when its passwd home is an absolute directory we own.
+passwd_home=
+if [ -z "${DAEMONKIT_HOME:-}" ]; then
+  case "${USER:-}" in
+    "" | [!A-Za-z0-9_]* | *[!A-Za-z0-9._-]*) ;;
+    *) eval "passwd_home=~$USER" ;;
+  esac
+  case "$passwd_home" in /*) ;; *) passwd_home= ;; esac
+  if [ ! -O "$passwd_home" ]; then
+    passwd_user="$(id -un)"
+    eval "passwd_home=~$passwd_user"
+    # An unexpanded tilde means the name has no passwd entry to take a home from.
+    case "$passwd_home" in \~*) fail "no passwd home for '$passwd_user'" ;; esac
+  fi
+fi
 RUNNER_HOME="${DAEMONKIT_HOME:-$passwd_home}/.daemonkit"
 RUNNER_DIR="$RUNNER_HOME/binrun/$RUNNER_TAG"
 RUNNER_BIN="$RUNNER_DIR/binrun"
+
+# Exec the artifact binrun recorded for a static release binary while the record
+# is newer than the descriptor. A subshell exits on a failed exec despite
+# execfail, so only the top-level shell takes this shortcut.
+record=${DESCRIPTOR//\%/%25}
+record="$RUNNER_HOME/binrun/resolved/${record//\//%2F}"
+if [ "$BASH_SUBSHELL" -eq 0 ] && [ -z "${BINRUN_BIN:-}" ] && [ "$record" -nt "$DESCRIPTOR" ] && IFS= read -r resolved <"$record" && [ -x "$resolved" ]; then
+  shopt -s execfail
+  exec "$resolved" "$@" || true
+  shopt -u execfail
+fi
 
 # Arm 1: an explicitly chosen runner — a dev build, named on purpose.
 if [ -n "${BINRUN_BIN:-}" ]; then
