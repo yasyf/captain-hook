@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A cc-slack card tap counts as the user's answer from cc-slack's channel server too.** cc-slack now
+  delivers its channel from a toolless server named `channel`, which a plugin reload leaves running, so
+  a tap arrives as `<channel source="plugin:cc-slack:channel">`. Ticket evidence read taps only from
+  `plugin:cc-slack:cc-slack` and would have stopped counting them; it now reads both sources.
 - **Every `claude` capt-hook starts runs light.** The review brain and the auto-mode
   `claude --version` and `claude auto-mode defaults` probes now carry spawnllm's
   `ClaudeCliBackend.light_env()`, so the plugin auto-updater, telemetry, error reporting, IDE

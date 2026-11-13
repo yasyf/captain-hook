@@ -46,8 +46,9 @@ PRESENT = "cc-present"
 REPLACED = "an instruction the user typed while rejecting the agent's call"
 QUESTION_TOOL = "AskUserQuestion"
 CARD_SERVER = "plugin:cc-slack:cc-slack"
+CHANNEL_SERVER = "plugin:cc-slack:channel"
 CARD_TAP = re.compile(
-    rf'<channel source="{re.escape(CARD_SERVER)}"[^>]*\btype="slack\.action"[^>]*>'
+    rf'<channel source="(?:{re.escape(CHANNEL_SERVER)}|{re.escape(CARD_SERVER)})"[^>]*\btype="slack\.action"[^>]*>'
     r"\s*(?P<payload>\{.*\})\s*</channel>",
     re.S,
 )
