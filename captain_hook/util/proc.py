@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import re
 import subprocess
@@ -7,7 +8,7 @@ import sys
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import cache
 from pathlib import PurePath
 from typing import TYPE_CHECKING
@@ -29,6 +30,12 @@ PS_TABLE_ROW = re.compile(rf"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+{LSTART}\s+(.
 PS_ENVIRONMENT_ROW = re.compile(rf"^\s*{LSTART}\s+(.*)$")
 PS_ROW_ARGV = ("ps", "-ww", "-o", PS_ROW_COLUMNS, "-p")
 LSOF_CWD_ARGV = ("lsof", "-a", "-d", "cwd", "-Fn", "-p")
+PROC_PIDTBSDINFO = 3
+SZOMB = 5
+CTL_KERN = 1
+KERN_PROCARGS2 = 49
+PROCARGS_BUFFER = 1 << 20
+PS_CONTROL_VIS = {code: f"\\^{chr(code + 64)}" for code in range(32)} | {127: "\\^?"}
 PROCESS_CLASSES = {
     "claude": "an agent session",
     "codex": "an agent session",
@@ -62,6 +69,33 @@ COMMAND_MARKERS = {
     "/WezTerm.app/": "a terminal emulator",
     "/Alacritty.app/": "a terminal emulator",
 }
+
+
+class BsdInfo(ctypes.Structure):
+    _fields_ = (
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,9 +239,55 @@ def process_table(*, timeout: float = 2.0) -> ProcessTable | None:
 
 
 def process_rows(pids: Sequence[int]) -> dict[int, ProcessRow] | None:
+    if sys.platform == "darwin":
+        return kernel_rows(pids)
+    return ps_process_rows(pids)
+
+
+def ps_process_rows(pids: Sequence[int]) -> dict[int, ProcessRow] | None:
     return ps_rows(
         ("ps", "-ww", "-o", PS_ROW_COLUMNS, "-p", ",".join(map(str, pids))),
         timeout=reqenv.clamp_timeout(PROBE_TIMEOUT),
+    )
+
+
+def kernel_rows(pids: Sequence[int]) -> dict[int, ProcessRow]:
+    return {pid: row for pid in pids if (row := kernel_row(pid)) is not None}
+
+
+@cache
+def libsystem() -> ctypes.CDLL:
+    return ctypes.CDLL(None, use_errno=True)
+
+
+def kernel_row(pid: int) -> ProcessRow | None:
+    info = BsdInfo()
+    read = libsystem().proc_pidinfo(pid, PROC_PIDTBSDINFO, ctypes.c_uint64(0), ctypes.byref(info), ctypes.sizeof(info))
+    if read != ctypes.sizeof(info) or info.pbi_status == SZOMB:
+        return None
+    return ProcessRow(
+        pid,
+        info.pbi_ppid,
+        info.pbi_pgid,
+        info.pbi_uid,
+        datetime.fromtimestamp(info.pbi_start_tvsec, UTC).replace(tzinfo=None),
+        " ".join(argv) if (argv := kernel_argv(pid)) else f"({info.pbi_comm.decode(errors='replace')})",
+    )
+
+
+def kernel_argv(pid: int) -> list[str] | None:
+    mib = (ctypes.c_int * 3)(CTL_KERN, KERN_PROCARGS2, pid)
+    size = ctypes.c_size_t(PROCARGS_BUFFER)
+    buffer = ctypes.create_string_buffer(size.value)
+    if libsystem().sysctl(mib, 3, buffer, ctypes.byref(size), None, ctypes.c_size_t(0)) or size.value < 4:
+        return None
+    raw = buffer.raw[: size.value]
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    args = raw[4:].partition(b"\0")[2].lstrip(b"\0").split(b"\0")[:argc]
+    return (
+        [arg.decode(errors="surrogateescape").translate(PS_CONTROL_VIS) for arg in args]
+        if argc > 0 and len(args) == argc
+        else None
     )
 
 

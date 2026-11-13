@@ -16,6 +16,7 @@ from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 from captain_hook.snapshots.client import RemoteSession
 from captain_hook.util import reqenv
+from captain_hook.util.gitprobe import cached_git
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
@@ -406,6 +407,11 @@ class HookContext:
             return None
 
     def git(self, *args: str) -> str | None:
+        return cached_git(
+            Path(resolve_project_dir() or reqenv.cwd()), args, reqenv.env_map(), lambda: self.run_git(*args)
+        )
+
+    def run_git(self, *args: str) -> str | None:
         try:
             return self.call_cli(["git", *args], timeout=5)
         except (subprocess.CalledProcessError, FileNotFoundError):
