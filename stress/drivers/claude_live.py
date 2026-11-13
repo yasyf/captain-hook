@@ -22,9 +22,11 @@ if TYPE_CHECKING:
 
 
 def claude_p(sandbox: Sandbox, *args: str, max_turns: int = 8, timeout: int = 900) -> subprocess.CompletedProcess[str]:
+    from spawnllm import ClaudeCliBackend
+
     return subprocess.run(
         ["claude", "-p", *args, "--model", "sonnet", "--permission-mode", "acceptEdits", "--max-turns", str(max_turns)],
-        env=sandbox.env(),
+        env=sandbox.env() | ClaudeCliBackend.light_env(),
         cwd=str(sandbox.repo),
         capture_output=True,
         text=True,

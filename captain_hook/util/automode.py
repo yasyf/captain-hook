@@ -19,13 +19,16 @@ class AutoModeDefaults(DurableState, scope="global"):
 
 
 def seeded_rules(evt: BaseHookEvent) -> dict[str, Any] | None:
+    from spawnllm import ClaudeCliBackend
+
     if (binary := resolve_binary("claude")) is None:
         return None
-    if not (version := evt.ctx.call_cli([binary, "--version"], throw=False)):
+    light = ClaudeCliBackend.light_env()
+    if not (version := evt.ctx.call_cli([binary, "--version"], env=light, throw=False)):
         return None
     with AutoModeDefaults.mutate(evt) as defaults:
         if defaults.version != version:
-            if not (out := evt.ctx.call_cli([binary, "auto-mode", "defaults"], throw=False)):
+            if not (out := evt.ctx.call_cli([binary, "auto-mode", "defaults"], env=light, throw=False)):
                 return None
             try:
                 parsed = json.loads(out)
