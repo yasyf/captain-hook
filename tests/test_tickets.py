@@ -486,6 +486,7 @@ class TestBoard:
                 queued(tap("2.2", "Yes"), channel),
                 queued(tap("2.3", "Yes"), channel),
                 T.user(tap("2.3", "Yes"), isMeta=True, origin=channel),
+                T.user(tap("2.4", "Yes", server=sources.CHANNEL_SERVER), isMeta=True, origin=channel),
             ]
         )
         evt = PreToolUseEvent(
@@ -498,8 +499,9 @@ class TestBoard:
             ("card:1.4", ("No",)),
             ("card:2.2", ("Yes",)),
             ("card:2.3", ("Yes",)),
+            ("card:2.4", ("Yes",)),
         ]
-        assert [approving(item) for item in ctx.answers] == [False, False, True, True]
+        assert [approving(item) for item in ctx.answers] == [False, False, True, True, True]
         assert found(UserAnswered(Holds("text")), ctx) == list(ctx.answers[2:])
 
     def test_a_rejected_call_hands_the_judge_only_the_users_words(self, tmp_path: Path) -> None:
