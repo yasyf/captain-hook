@@ -20,6 +20,7 @@ from captain_hook.durable import DurableStore
 from captain_hook.orca import READINGS
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
+from captain_hook.util.gitprobe import PROBES
 from captain_hook.util.http import github_token
 from captain_hook.util.model_cache import model_sha256, model_version
 from captain_hook.util.proc import ANCHORS, _cold_claude_argv
@@ -114,6 +115,7 @@ def clear_global_caches():
         resolve_repo_key,
         _cold_claude_argv,
         PLUGIN_WALKS,
+        PROBES,
     )
     for cached in caches:
         cached.cache_clear()

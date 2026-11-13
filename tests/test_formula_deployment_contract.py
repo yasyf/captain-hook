@@ -672,6 +672,41 @@ def test_hook_dispatch_keeps_a_healthy_zero_off_the_skip_path(python3: str | Non
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
+def launch_record(tmp_path: Path, target: Path, *, stale: bool) -> None:
+    record = tmp_path / "Library/Caches/captain-hook/host-v1/launch/12.31.0"
+    record.parent.mkdir(parents=True)
+    record.write_text(f"{target}\n")
+    stamp = 0 if stale else (ROOT / "captain_hook/bin/hook.binrun").stat().st_mtime + 60
+    os.utime(record, (stamp, stamp))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the signed-app hook shim")
+@pytest.mark.parametrize("event", ["PostToolUse", "PreToolUse"])
+def test_hook_dispatch_execs_the_recorded_host_without_binrun(event: str, tmp_path: Path) -> None:
+    """PIN: a launch record newer than the descriptor names the host binrun resolved, so the hook execs it directly."""
+    env = macos_arm(python3_path(tmp_path, REAL_PYTHON)) | fake_binrun(tmp_path, FAKE_BINRUN_REFUSING)
+    host = tmp_path / "capt-hookd"
+    host.write_text(FAKE_HOST)
+    host.chmod(0o755)
+    launch_record(tmp_path, host, stale=False)
+    assert run_hook(event, BENIGN_PAYLOAD, env) == (0, f"host run {event}\n" + BENIGN_PAYLOAD.decode(), "")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the signed-app hook shim")
+@pytest.mark.parametrize("stale", [pytest.param(True, id="older-than-descriptor"), pytest.param(False, id="host-gone")])
+def test_hook_dispatch_falls_back_to_binrun_without_a_usable_record(stale: bool, tmp_path: Path) -> None:
+    """PIN: a record older than the descriptor, or naming a host that no longer exists, falls through to binrun."""
+    env = macos_arm(python3_path(tmp_path, REAL_PYTHON)) | fake_binrun(tmp_path, FAKE_BINRUN_REFUSING)
+    host = tmp_path / "capt-hookd"
+    if stale:
+        host.write_text(FAKE_HOST)
+        host.chmod(0o755)
+    launch_record(tmp_path, host, stale=stale)
+    code, stdout, stderr = run_hook("PostToolUse", BENIGN_PAYLOAD, env)
+    assert (code, stdout) == (1, "")
+    assert NOT_INSTALLED in stderr
+
+
 @pytest.mark.parametrize("event", ["PreToolUse", "PermissionRequest"])
 def test_linux_hook_dispatch_keeps_the_failed_exec_status_on_an_empty_stdin(event: str, tmp_path: Path) -> None:
     """PIN: with nothing on stdin the skip path's one-byte probe reads EOF, so the failed exec's own 126 or 127 is

@@ -26,8 +26,9 @@ from captain_hook.util.proc import (
     claude_skip_permissions,
     disallowed_tools,
     environment,
-    process_rows,
+    kernel_rows,
     process_table,
+    ps_process_rows,
 )
 
 if TYPE_CHECKING:
@@ -263,7 +264,7 @@ class TestProcessRows:
             )
 
         monkeypatch.setattr(subprocess, "run", fake_run)
-        assert process_rows((50, 60, 70)) == {50: hop(50, 60, "/bin/zsh -c hook"), 70: hop(70, 1, BYPASS)}
+        assert ps_process_rows((50, 60, 70)) == {50: hop(50, 60, "/bin/zsh -c hook"), 70: hop(70, 1, BYPASS)}
 
     def test_probe_timeout_is_clamped_to_the_request_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: list[float] = []
@@ -274,7 +275,7 @@ class TestProcessRows:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
         with reqenv.use_request(bound(client_ppid=50, session_id="s")), reqenv.deadline_in(2.9):
-            assert process_rows((777,)) == {}
+            assert ps_process_rows((777,)) == {}
         assert seen == [2]
 
     @pytest.mark.parametrize(
@@ -292,7 +293,7 @@ class TestProcessRows:
             "run",
             lambda args, **kw: subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=""),
         )
-        assert process_rows((42,)) is None
+        assert ps_process_rows((42,)) is None
 
     @pytest.mark.parametrize(
         "exc",
@@ -306,7 +307,37 @@ class TestProcessRows:
             raise exc
 
         monkeypatch.setattr(subprocess, "run", fake_run)
-        assert process_rows((777,)) is None
+        assert ps_process_rows((777,)) is None
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="libproc and KERN_PROCARGS2")
+class TestKernelRows:
+    def test_reads_this_process_without_spawning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("kernel rows never spawn"))
+        row = kernel_rows((os.getpid(),))[os.getpid()]
+        assert (row.pid, row.ppid, row.pgid, row.uid, row.command) == (
+            os.getpid(),
+            os.getppid(),
+            os.getpgid(0),
+            os.geteuid(),
+            " ".join(sys.orig_argv),
+        )
+
+    def test_agrees_with_ps(self) -> None:
+        assert kernel_rows((os.getpid(),)) == ps_process_rows((os.getpid(),))
+
+    def test_escapes_control_characters_as_ps_does(self) -> None:
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "line1\n--flag\tx"])
+        try:
+            row = kernel_rows((child.pid,))[child.pid]
+            assert row.command.endswith("line1\\^J--flag\\^Ix")
+            assert {child.pid: row} == ps_process_rows((child.pid,))
+        finally:
+            child.kill()
+            child.wait()
+
+    def test_omits_a_pid_with_no_process(self) -> None:
+        assert kernel_rows((99_999_999,)) == {}
 
 
 class TestClaudeSkipPermissions:

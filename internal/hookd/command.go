@@ -135,6 +135,9 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "capt-hookd: request timeout %s must be positive\n", timeout)
 		return 1
 	}
+	if resolved, err := resolvePaths(); err == nil {
+		_ = recordLaunch(resolved.dir)
+	}
 	request, err := eventRequest(args[0], stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

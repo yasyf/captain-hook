@@ -46,11 +46,34 @@ case "$OSTYPE" in
     exit 1
     ;;
 esac
-[ -e "${DAEMONKIT_HOME:-$HOME}/Applications/Captain Hook.app/Contents/Info.plist" ] || app_missing
+plist="${DAEMONKIT_HOME:-$HOME}/Applications/Captain Hook.app/Contents/Info.plist"
+[ -e "$plist" ] || app_missing
+resolved=
+while IFS= read -r line; do
+  case $line in
+    *"<key>CFBundleShortVersionString</key>"*)
+      IFS= read -r line
+      line=${line#*<string>}
+      record="$HOME/Library/Caches/captain-hook/host-v1/launch/${line%%</string>*}"
+      [ "$record" -nt "$root/bin/hook.binrun" ] && IFS= read -r resolved <"$record"
+      break
+      ;;
+  esac
+done <"$plist"
+launch() {
+  [ -n "$resolved" ] && [ -x "$resolved" ] || return
+  shopt -s execfail
+  exec "$resolved" "$@"
+  shopt -u execfail
+}
 if [ -n "$guarded" ]; then
-  ( . "$root/scripts/install-binary.sh" )
+  (
+    launch "$@"
+    . "$root/scripts/install-binary.sh"
+  )
   rc=$?
   [ "$rc" -eq 0 ] || skip "$rc"
   exit "$rc"
 fi
+launch "$@"
 . "$root/scripts/install-binary.sh"
