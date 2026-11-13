@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The steering deferral nudge stands down on a drive turn that hands its work to a job.** It told a
+  long-running drive's meta session to "deliver the requested fix instead of substituting docs, help
+  text, or a follow-up issue" on the turn that added an order and started the reader whose builder
+  delivers that fix. Its skip knew only cci's `post` and `close` tools, so the turn reached the Jev
+  judge, which fired on "workaround" and "for now" in two thinking blocks of one 330-event turn. The
+  skip now also covers the drive's `job`, `order`, `handler`, `record` and `incident` MCP tools, and a
+  Bash `drive job add`, `drive job launch`, `drive job resume`, `drive order add`,
+  `drive incident open`, `drive incident stop`, `cci post` or `cci close` run in the same turn.
+- **The steering nudge's communicator skip reads a drive's bindings from its `drive.db`.**
+  `DriveCommunicator` read each drive's `drive.json`, which since the move to `drive.db` holds only
+  the bindings of the moment it moved, so a communicator bound later lost the skip. It now reads
+  them through `drive_states`, as the sessions guard does.
 - **A cc-slack card tap counts as the user's answer from cc-slack's channel server too.** cc-slack now
   delivers its channel from a toolless server named `channel`, which a plugin reload leaves running, so
   a tap arrives as `<channel source="plugin:cc-slack:channel">`. Ticket evidence read taps only from
@@ -265,6 +277,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`RanCommand` takes `scope="turn"`**, matching only a command the current turn ran, as `UsedTool`
+  and `UsedSkill` already do. The default stays `"session"`.
 - **`HOOKS_REVIEW_ENABLED=false` turns the session reviewer off everywhere.** The `SessionStart`,
   `SessionEnd` and `Stop` guards skip before enrollment, so a repo the reviewer hasn't seen stays
   off too, where `review disable` covers only the repo it runs in.

@@ -500,7 +500,7 @@ def test_enabling_steering_pack_registers_hooks() -> None:
 
 
 def test_steering_deferral_nudge_skips_plan_mode_and_work_handed_on() -> None:
-    from captain_hook.types import InPlanMode, UsedTool
+    from captain_hook.types import InPlanMode, RanCommand, UsedTool
 
     discover_pack("steering", manager.resolve_builtin("steering").path)
     (nudge,) = (
@@ -508,9 +508,11 @@ def test_steering_deferral_nudge_skips_plan_mode_and_work_handed_on() -> None:
         for h in app._state.hooks
         if h.spec.events & (Event.Stop | Event.SubagentStop) and InPlanMode() in h.spec.skip_if
     )
-    plan, handoff, communicator = nudge.spec.skip_if
+    plan, handoff, *commands, communicator = nudge.spec.skip_if
     assert plan == InPlanMode()
-    assert handoff == UsedTool("mcp__plugin_cc-inbox_cci__post", "mcp__plugin_cc-inbox_cci__close")
+    assert isinstance(handoff, UsedTool)
+    assert {"mcp__plugin_cc-inbox_cci__post", "mcp__plugin_long-running_drive__job"} <= set(handoff.names)
+    assert RanCommand("drive", "job", "add", scope="turn") in commands
     assert type(communicator).__name__ == "DriveCommunicator"
 
 

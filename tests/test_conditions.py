@@ -1339,6 +1339,28 @@ class TestRanCommandCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(RanCommand("codex", "exec"), evt) is False
 
+    @pytest.mark.parametrize(
+        ("condition", "expected"),
+        [
+            pytest.param(RanCommand("drive", "job", "add"), True, id="session_by_default"),
+            pytest.param(RanCommand("drive", "job", "add", scope="turn"), False, id="earlier_turn"),
+            pytest.param(RanCommand(Regex(r"\bdrive job add\b"), scope="turn"), False, id="earlier_turn_regex"),
+            pytest.param(RanCommand("cci", "post", scope="turn"), True, id="current_turn"),
+        ],
+    )
+    def test_scope_bounds_the_search(self, condition: RanCommand, expected: bool) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                T.user("start the reader"),
+                *T.tool_turn("Bash", command="drive job add reader --order o1"),
+                T.user("now hand off its report"),
+                *T.tool_turn("Bash", command="cci post --kind handoff"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(condition, evt) is expected
+        assert matches_conditions(HookSpec(events=Event.PreToolUse, skip_if=(condition,)), evt) is not expected
+
     def test_a_call_whose_output_is_over_the_record_bound_is_kept_clipped(
         self, tmp_path: Path, snapshot_owner: FixtureOwner
     ) -> None:
