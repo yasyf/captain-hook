@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delivers its channel from a toolless server named `channel`, which a plugin reload leaves running, so
   a tap arrives as `<channel source="plugin:cc-slack:channel">`. Ticket evidence read taps only from
   `plugin:cc-slack:cc-slack` and would have stopped counting them; it now reads both sources.
+- **Any session of a long-running drive ends a stuck drive command and what runs under it.**
+  `kill` refused ending a `drive job end` stuck for over four minutes on an `ssh` to a Sprite that
+  never answered, from its own session and from the drive's meta session, while 16 other drive
+  commands waited on the install lock it held. macOS shows `ps -E` no environment for
+  `/usr/bin/ssh`, so the guard could not read who started it, and the drive allowance covered only
+  leftovers no live agent held. The guard now reads who started a process from the nearest process
+  at or above it, below its agent host, whose environment macOS shows, and a session bound to the
+  drive may end a long-running `bin/drive` command a live agent holds, and anything under it, once
+  that environment names the drive. Agent sessions, Orca, terminal and PTY hosts and their
+  ancestors stay refused.
+- **The sessions guard reads a drive's bindings from its `drive.db`.** Since long-running moved
+  each drive's state into `<drive>/drive.db`, its `drive.json` is a pointer holding the bindings
+  of the moment it moved, so `Drive.of` and `drive_terminal` missed every session and terminal
+  bound since. Both now read the `driver`, `roles`, `subcoordinators` and `handlers` rows from
+  `drive.db` when it exists, as long-running's own pack does, and `drive.json` only for a drive
+  no install has moved.
 - **Every `claude` capt-hook starts runs light.** The review brain and the auto-mode
   `claude --version` and `claude auto-mode defaults` probes now carry spawnllm's
   `ClaudeCliBackend.light_env()`, so the plugin auto-updater, telemetry, error reporting, IDE

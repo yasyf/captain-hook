@@ -5,16 +5,17 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 from concurrent import futures
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial, reduce
-from itertools import product
+from itertools import product, takewhile
 from math import ceil, prod
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -23,7 +24,7 @@ from weakref import WeakValueDictionary
 from cc_transcript.activity import ToolUse
 from cc_transcript.tools import BashCall
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from captain_hook import (
     Event,
@@ -189,6 +190,10 @@ SPELLING_LIMIT = 60
 SESSION_ENV = re.compile(r"(?<!\S)CLAUDE_CODE_SESSION_ID=(\S*)")
 DRIVE_VAR = "CLAUDE_LONG_RUNNING_DRIVE"
 DRIVE_ENV = re.compile(rf"(?<!\S){DRIVE_VAR}=(\S*)")
+DRIVE_BINDINGS = (
+    "SELECT collection, key, body FROM rows WHERE collection = '' AND key IN ('driver', 'roles', 'subcoordinators') "
+    "OR collection = 'handlers'"
+)
 LANE_VAR = "CLAUDE_LONG_RUNNING_LANE"
 LANE_SUCCESSOR = re.compile(r"-\d+$")
 LAUNCHD_PID = 1
@@ -832,21 +837,55 @@ def scratch_orphan(row: ProcessRow) -> bool:
     )
 
 
+def drive_command(row: ProcessRow) -> bool:
+    return any(
+        (path := PurePath(word)).name == "drive" and path.parent.name == "bin" and "long-running" in path.parts
+        for word in row.command.split()[:3]
+    )
+
+
+def lineage(row: ProcessRow, table: ProcessTable) -> tuple[ProcessRow, ...]:
+    return (row, *takewhile(lambda above: not hosts_agent(above), table.ancestors(row.pid)))
+
+
 class DriveSeat(BaseModel):
     session: str | None = None
     cwd: str | None = None
+    terminal: str | None = None
 
 
 class DriveState(BaseModel):
-    name: str
     roles: dict[str, DriveSeat]
     subcoordinators: dict[str, DriveSeat] = {}
     handlers: dict[str, DriveSeat] = {}
 
 
+def drive_states(named: str | None, naming: str | None) -> Iterator[tuple[str, DriveState]]:
+    root = resolve_long_running_state()
+    for path in [root / named / "drive.json"] if named else sorted(root.glob("*/drive.json")):
+        try:
+            if (database := path.with_name("drive.db")).is_file():
+                with closing(sqlite3.connect(database)) as db:
+                    rows = db.execute(DRIVE_BINDINGS).fetchall()
+                saved = {key: json.loads(body or "{}") for collection, key, body in rows if not collection}
+                if "driver" in saved:
+                    saved["roles"] = {"coordinator": saved.pop("driver")}
+                handlers = {key: json.loads(body or "{}") for collection, key, body in rows if collection}
+                held = DriveState.model_validate(saved | {"handlers": handlers})
+            else:
+                raw = path.read_bytes()
+                if naming is not None and naming.encode() not in raw:
+                    continue
+                held = DriveState.model_validate_json(raw)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            logger.bind(path=str(path), error=str(exc)).warning("skipping an unreadable drive state")
+            continue
+        yield path.parent.name, held
+
+
 @dataclass(frozen=True, slots=True)
 class Drive:
-    """A long-running drive as its ``drive.json`` holds it: every session bound to it and its coordinator's checkout."""
+    """A long-running drive as it saved its bindings: every session bound to it and its coordinator's checkout."""
 
     name: str
     sessions: frozenset[str]
@@ -856,21 +895,14 @@ class Drive:
     def of(cls, session: str | None) -> Drive | None:
         """The drive the request's environment names, else the one *session* is bound to."""
         named = reqenv.getenv(DRIVE_VAR)
-        root = resolve_long_running_state()
-        for path in [root / named / "drive.json"] if named else sorted(root.glob("*/drive.json")):
-            try:
-                raw = path.read_bytes()
-                if not named and (session is None or session.encode() not in raw):
-                    continue
-                held = DriveState.model_validate_json(raw)
-            except (OSError, ValidationError) as exc:
-                logger.bind(path=str(path), error=str(exc)).warning("skipping an unreadable drive state")
-                continue
+        if not named and session is None:
+            return None
+        for name, held in drive_states(named, None if named else session):
             seats = [*held.roles.values(), *held.subcoordinators.values(), *held.handlers.values()]
             sessions = frozenset(seat.session for seat in seats if seat.session)
             coordinator = held.roles.get("coordinator")
             if (named or session in sessions) and coordinator is not None and coordinator.cwd:
-                return cls(held.name, sessions, coordinator.cwd)
+                return cls(name, sessions, coordinator.cwd)
         return None
 
     def started(self, environment: str) -> bool:
@@ -899,10 +931,16 @@ class Facts:
         shown = self._environments[row] = proc.environment(row, timeout=timeout)
         return shown
 
-    def started_here(self, row: ProcessRow) -> bool:
+    def starter(self, row: ProcessRow, table: ProcessTable) -> str | None:
+        for candidate in lineage(row, table):
+            if (shown := self.environment(candidate)) and not shown.isspace():
+                return shown
+        return None
+
+    def started_here(self, row: ProcessRow, table: ProcessTable) -> bool:
         if self.session is None:
             return False
-        shown = self.environment(row)
+        shown = self.starter(row, table)
         return shown is not None and set(SESSION_ENV.findall(shown)) == {self.session}
 
     @cached_property
@@ -910,17 +948,17 @@ class Facts:
         return Drive.of(self.session)
 
     def drive_gap(self, row: ProcessRow, agent: ProcessRow | None, ownership: Ownership) -> str | None:
-        """``None`` when *row* is a leftover this session's drive started, else what kept it from being one."""
+        """``None`` when this session's drive started *row* as a leftover or a drive command, else what it lacks."""
         if (drive := self.drive) is None:
             return "only the long-running drive that started it may end it unasked"
-        if agent is not None:
-            return "a drive ends only a leftover no live agent holds"
+        if agent is not None and not any(map(drive_command, lineage(row, ownership.table))):
+            return "a drive ends only a leftover no live agent holds, or a drive command and what runs under it"
         if hosts_agent(row) or (row.ppid != LAUNCHD_PID and row.ppid in ownership.protected):
             return "a drive never ends an agent host or a direct child of a protected process"
-        if (shown := self.environment(row)) is None or not drive.started(shown):
+        if (shown := self.starter(row, ownership.table)) is None or not drive.started(shown):
             return "a drive ends only a leftover whose environment names the drive"
         logger.bind(pid=row.pid, command=row.command, started=row.started, drive=drive.name).info(
-            "allowing a leftover this session's drive started"
+            "allowing a process this session's drive started"
         )
         return None
 
@@ -1023,7 +1061,7 @@ def pid_verdict(
             if lifted is not None and (server or lone_codex_session(row, ownership.table))
             else message
         )
-    if facts.started_here(row):
+    if facts.started_here(row, ownership.table):
         return None
     agent = ownership.table.nearest(row.ppid, is_agent)
     if facts.spawned_here(row) and agent in (None, ownership.owner):
@@ -1477,11 +1515,7 @@ class CreatedHere(CustomTicketCondition):
 
 
 def drive_terminal(handle: str) -> bool:
-    return any(
-        handle.encode() in (raw := path.read_bytes())
-        and any(role.get("terminal") == handle for role in json.loads(raw).get("roles", {}).values())
-        for path in resolve_long_running_state().glob("*/drive.json")
-    )
+    return any(any(seat.terminal == handle for seat in held.roles.values()) for _, held in drive_states(None, handle))
 
 
 def session_calls(evt: BaseHookEvent, handle: str) -> Iterator[tuple[Path | None, ToolUse]]:

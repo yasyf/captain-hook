@@ -4,6 +4,7 @@ import gc
 import importlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -11,7 +12,7 @@ import time
 import weakref
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from contextvars import copy_context
 from copy import copy
 from datetime import UTC, datetime, timedelta
@@ -217,6 +218,23 @@ def write_drive(home: Path, name: str, roles: dict[str, str], handlers: dict[str
         json.dumps({"name": name, "orders": {}, "roles": seats, "subcoordinators": {}, "handlers": held})
     )
     return state.parent
+
+
+def move_drive(home: Path, name: str, rows: dict[tuple[str, str], Any]) -> None:
+    state = home / ".local" / "state" / "long-running" / name
+    state.mkdir(parents=True)
+    moved = {"coordinator": {"session": "r0", "cwd": f"/c/{name}"}}
+    pointer = {"moved_to": "drive.db", "name": name, "roles": moved, "subcoordinators": {}, "handlers": {}}
+    (state / "drive.json").write_text(json.dumps(pointer))
+    with closing(sqlite3.connect(state / "drive.db")) as db, db:
+        db.execute(
+            "CREATE TABLE rows (collection TEXT NOT NULL, key TEXT NOT NULL, place INTEGER NOT NULL, body TEXT, "
+            "PRIMARY KEY (collection, key)) WITHOUT ROWID"
+        )
+        db.executemany(
+            "INSERT INTO rows VALUES (?, ?, 0, ?)",
+            [(kind, key, json.dumps(body)) for (kind, key), body in rows.items()],
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -914,6 +932,159 @@ class TestDriveLeftovers:
     ) -> None:
         environs[pid] = " CLAUDE_CODE_SESSION_ID=r0 CLAUDE_LONG_RUNNING_DRIVE=d1"
         assert refusal in (decide(f"kill {pid}", tmp_path) or "")
+
+
+def stuck_verb(agent: int) -> ProcessTable:
+    sprite = "pool-hlnbmpe66lwtbf54"
+    return table(
+        *MAC.rows.values(),
+        row(76822, agent, "/bin/zsh -c source snapshot.sh && eval 'drive job end j2198 2>&1 | tail -c 600'"),
+        row(
+            76824,
+            76822,
+            "/Users/dev/.local/share/uv/python/cpython-3.13.5-macos-aarch64-none/bin/python3.13 -I "
+            "/Users/dev/.claude/plugins/cache/skills/long-running/1.0.606/bin/drive job end j2198",
+        ),
+        row(76825, 76822, "tail -c 600"),
+        row(
+            77014,
+            76824,
+            f"/usr/bin/python3 /Users/dev/.claude/plugins/cache/skills/orca/0.1.42/bin/orca-reclaim.py --save {sprite}",
+        ),
+        row(77069, 77014, f"/usr/bin/ssh -F /Users/dev/.cc-remote/ssh/{sprite}.ssh -o BatchMode=yes {sprite} bash -s"),
+    )
+
+
+class TestStuckDriveCommands:
+    @pytest.fixture(autouse=True)
+    def hidden_ssh(self, environs: dict[int, str]) -> None:
+        environs[77069] = ""
+
+    @pytest.fixture
+    def registry(self, home: Path) -> Path:
+        write_drive(home, "d1", {"coordinator": "r0", "meta": "s1", "platform": "p1"})
+        return write_drive(home, "d2", {"coordinator": "r9"})
+
+    @pytest.mark.parametrize("pid", [76824, 77014, 77069])
+    def test_any_drive_session_ends_a_stuck_drive_command_and_what_runs_under_it(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        environs: dict[int, str],
+        registry: Path,
+        tmp_path: Path,
+        pid: int,
+    ) -> None:
+        fake_table["table"] = stuck_verb(14462)
+        environs[76824] = " CLAUDE_CODE_SESSION_ID=p1"
+        assert decide(f"kill {pid}", tmp_path) is None
+
+    @pytest.mark.parametrize("pid", [76822, 76825])
+    def test_the_agents_shell_and_a_sibling_of_the_drive_command_stay_blocked(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        environs: dict[int, str],
+        registry: Path,
+        tmp_path: Path,
+        pid: int,
+    ) -> None:
+        fake_table["table"] = stuck_verb(14462)
+        environs.update({76822: " CLAUDE_CODE_SESSION_ID=p1", 76824: " CLAUDE_CODE_SESSION_ID=p1"})
+        message = decide(f"kill {pid}", tmp_path) or ""
+        assert "runs under claude 14462" in message
+        assert message.endswith(
+            "a drive ends only a leftover no live agent holds, or a drive command and what runs under it."
+        )
+
+    @pytest.mark.parametrize(
+        "shown",
+        [
+            pytest.param(" CLAUDE_LONG_RUNNING_DRIVE=d2", id="another_drive"),
+            pytest.param(" CLAUDE_CODE_SESSION_ID=r9", id="another_drives_root"),
+            pytest.param("", id="hidden"),
+        ],
+    )
+    def test_a_drive_command_the_drive_did_not_start_stays_blocked(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        environs: dict[int, str],
+        registry: Path,
+        tmp_path: Path,
+        shown: str,
+    ) -> None:
+        fake_table["table"] = stuck_verb(14462)
+        environs[76824] = shown
+        assert (decide("kill 77069", tmp_path) or "").endswith(
+            "a drive ends only a leftover whose environment names the drive."
+        )
+
+    def test_a_session_in_no_drive_never_ends_another_sessions_drive_command(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = stuck_verb(14462)
+        environs[76824] = " CLAUDE_CODE_SESSION_ID=p1"
+        assert (decide("kill 77069", tmp_path) or "").endswith(
+            "only the long-running drive that started it may end it unasked."
+        )
+
+    def test_the_starter_ends_its_own_stuck_ssh_from_the_drive_commands_environment(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = stuck_verb(14575)
+        environs[76824] = " CLAUDE_CODE_SESSION_ID=s1"
+        assert decide("kill 77069", tmp_path) is None
+
+    def test_the_starter_reads_no_environment_at_or_above_its_agent(
+        self, general_pack: None, fake_table: dict[str, ProcessTable | None], environs: dict[int, str], tmp_path: Path
+    ) -> None:
+        fake_table["table"] = stuck_verb(14575)
+        environs.update({76825: "", 14575: " CLAUDE_CODE_SESSION_ID=s1"})
+        assert "no recorded per-task creation identity" in (decide("kill 76825", tmp_path) or "")
+
+
+class TestMovedDrives:
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            pytest.param(
+                {
+                    ("", "roles"): {"coordinator": {"session": "r0", "cwd": "/c/d1"}, "meta": {"session": "s1"}},
+                    ("", "subcoordinators"): {"platform": {"session": "p1"}},
+                },
+                id="roles",
+            ),
+            pytest.param(
+                {
+                    ("", "driver"): {"session": "r0", "cwd": "/c/d1"},
+                    ("handlers", "meta"): {"session": "s1"},
+                    ("handlers", "platform"): {"session": "p1"},
+                },
+                id="driver_and_handlers",
+            ),
+        ],
+    )
+    def test_sessions_bound_after_the_drive_moved_into_drive_db_end_its_stuck_command(
+        self,
+        general_pack: None,
+        fake_table: dict[str, ProcessTable | None],
+        environs: dict[int, str],
+        home: Path,
+        tmp_path: Path,
+        rows: dict[tuple[str, str], Any],
+    ) -> None:
+        move_drive(home, "d1", rows)
+        fake_table["table"] = stuck_verb(14462)
+        environs.update({76824: " CLAUDE_CODE_SESSION_ID=p1", 77069: ""})
+        assert decide("kill 77069", tmp_path) is None
+
+    def test_a_terminal_bound_after_the_drive_moved_into_drive_db_is_the_drives(self, home: Path) -> None:
+        move_drive(
+            home, "d1", {("", "roles"): {"coordinator": {"session": "r0", "cwd": "/c/d1", "terminal": "term_root"}}}
+        )
+        assert _sessions.drive_terminal("term_root")
+        assert not _sessions.drive_terminal("term_agent")
 
 
 class TestKillRulingPrograms:
