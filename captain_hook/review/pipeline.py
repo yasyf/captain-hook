@@ -519,7 +519,8 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     re-spawning the reviewer. The brain loads its one plugin through ``--plugin-dir``,
     so ``CLAUDE_CODE_PLUGIN_CACHE_DIR`` points it at a private plugin root, and its
     startup neither sweeps the shared plugin cache for orphans nor re-clones every
-    known marketplace, and ``DISABLE_AUTOUPDATER`` keeps the auto-update pass off that root.
+    known marketplace. spawnllm's light env keeps the auto-update pass, telemetry, IDE
+    auto-connect, claude.ai MCP connectors, and native file watchers off.
     ``UV_CONSTRAINT`` pins the brain's ``uvx --isolated capt-hook`` to this
     build: the transcript owner answers only its exact build, and PyPI usually runs ahead of the
     host, so an unpinned ``review evidence`` could verify nothing.
@@ -533,6 +534,8 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
         The :class:`BrainOutcome` — exit code, runtime, and log path — the
         status dashboard's health line reads to surface a silently failing brain.
     """
+    from spawnllm import ClaudeCliBackend
+
     (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
     started = datetime.now(UTC)
     with log_path.open("ab") as log:
@@ -542,10 +545,10 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
                 input=brain_prompt(transcript).encode(),
                 cwd=repo_root,
                 env=reqenv.env_map()
+                | ClaudeCliBackend.light_env()
                 | {
                     SPAWNED_ENV: "1",
                     PLUGIN_ROOT_ENV: str(brain_plugin_root()),
-                    "DISABLE_AUTOUPDATER": "1",
                     "UV_CONSTRAINT": str(brain_constraints()),
                 },
                 stdout=log,

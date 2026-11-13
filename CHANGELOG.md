@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every `claude` capt-hook starts runs light.** The review brain and the auto-mode
+  `claude --version` and `claude auto-mode defaults` probes now carry spawnllm's
+  `ClaudeCliBackend.light_env()`, so the plugin auto-updater, telemetry, error reporting, IDE
+  auto-connect, claude.ai MCP connectors, bundled skills, file checkpointing, and native file
+  watchers stay off in them. LLM judges get the same env through spawnllm 0.17.8, which plans it into
+  every `claude -p`, so capt-hook now requires `spawnllm>=0.17.8`.
 - **A subagent's Bash command carries the `CCI_AGENT_ID` export only when it runs `cci` or `drive`.**
   The export went before every Bash command a subagent ran, so a plain read such as
   `cd src && for f in ...; do rg ...; done` reached the permission prompt, and the phone alert

@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from spawnllm import ClaudeCliBackend
 
 from captain_hook.app import _state
 from captain_hook.context import HookContext
@@ -280,11 +281,13 @@ class TestAutomodeRubric:
         monkeypatch.setattr(automode, "resolve_binary", lambda name: "/usr/bin/claude")
         ctx = make_ctx(tmp_path)
         calls: list[list[str]] = []
+        envs: list[dict[str, str] | None] = []
 
         def fake_call_cli(args: list[str], **kwargs: Any) -> str | None:
             if args[0] == "git":
                 return None
             calls.append(args)
+            envs.append(kwargs.get("env"))
             if args[1:] == ["--version"]:
                 return "2.1.199 (Claude Code)"
             return json.dumps({"allow": ["Read"], "hard_deny": ["rm -rf /"]})
@@ -300,6 +303,7 @@ class TestAutomodeRubric:
         assert first == second
         assert sum(1 for args in calls if args[1:] == ["auto-mode", "defaults"]) == 1
         assert sum(1 for args in calls if args[1:] == ["--version"]) == 2
+        assert envs == [ClaudeCliBackend.light_env()] * len(calls)
 
     def test_version_bump_reseeds(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(automode, "resolve_binary", lambda name: "/usr/bin/claude")

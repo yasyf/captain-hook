@@ -24,6 +24,7 @@ from cc_transcript.mining.candidates import DedupKey, FeedbackCandidate, dedup_k
 from cc_transcript.mining.confidence import VERY_HIGH, CandidateSignal, Confidence, firm, noise, to_payload
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE, SourceKind
 from pydantic import ValidationError
+from spawnllm import ClaudeCliBackend
 
 from captain_hook.cli import plugin_dir
 from captain_hook.review.fix import HOOK_COMPLAINT
@@ -1383,7 +1384,7 @@ class TestBrain:
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"][SPAWNED_ENV] == "1"
         assert kwargs["env"]["CLAUDE_CODE_PLUGIN_CACHE_DIR"] == str(brain_plugin_root())
-        assert kwargs["env"]["DISABLE_AUTOUPDATER"] == "1"
+        assert kwargs["env"].items() >= ClaudeCliBackend.light_env().items()
         assert Path(kwargs["env"]["UV_CONSTRAINT"]).read_text() == f"capt-hook=={version('capt-hook')}\n"
         assert brain_plugin_root().parts[-2:] == ("captain-hook", "headless-plugins")
         assert REVIEWER_MARKER in kwargs["input"].decode()
