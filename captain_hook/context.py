@@ -89,11 +89,13 @@ def is_unsupported_model(exc: BaseException) -> bool:
 
 
 def is_context_overflow(exc: BaseException) -> bool:
-    """Whether ``exc`` is a backend refusing a prompt longer than its model's context window, which the same
-    prompt can never pass."""
+    """Whether ``exc`` is a backend refusing a prompt longer than its model's context window, or codex refusing one
+    past its input limit as ``input_too_large`` on the message's last line, which the same prompt can never pass."""
     from spawnllm import BackendCallError
 
-    return isinstance(exc, BackendCallError) and "context window" in str(exc)
+    return isinstance(exc, BackendCallError) and (
+        "context window" in str(exc) or "input_too_large" in last_error_line(exc)
+    )
 
 
 def ready_backend(specialty: TSpecialty | None, model: TModel | str) -> LlmBackend:

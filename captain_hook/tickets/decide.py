@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
-from spawnllm import Label, LabelAnswer
+from spawnllm import BackendCallError, Label, LabelAnswer
 
 from captain_hook.conditions import UserSaid
 from captain_hook.prompt import Prompt, dedent_text
@@ -220,7 +220,7 @@ class Decide(CustomTicketCondition):
         return cited(items, verdict.relied_on) or None
 
     def verdict(self, ctx: Context, items: Sequence[Evidence]) -> Verdict:
-        from captain_hook.context import is_context_overflow
+        from captain_hook.context import is_context_overflow, last_error_line
         from captain_hook.snapshots.client import EvidenceIncomplete
 
         assert ctx.evt is not None
@@ -246,7 +246,7 @@ class Decide(CustomTicketCondition):
         except EvidenceIncomplete:
             raise
         except Exception as exc:
-            detail = str(exc).partition("\n")[0]
+            detail = last_error_line(exc) if isinstance(exc, BackendCallError) else str(exc).partition("\n")[0]
             raise Undecided(f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__) from exc
         if not isinstance(verdict, Verdict):
             raise Undecided(f"{type(verdict).__name__} instead of a verdict")

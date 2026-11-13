@@ -754,6 +754,24 @@ class TestDecide:
         assert cast(MagicMock, evt.ctx.call_llm).call_count == 2
         assert windows == [(12, False), (False, False)]
 
+    def test_a_prompt_past_codexs_input_limit_is_never_resent_and_names_codexs_own_error(self, tmp_path: Path) -> None:
+        refused = (
+            "Error: turn/start: turn/start failed: Input exceeds the maximum length of 1048576 characters."
+            ' (code -32602), data: {"input_error_code":"input_too_large","max_chars":1048576,"actual_chars":1941696}'
+        )
+        evt = event(tmp_path)
+        evt.ctx.call_llm = MagicMock(  # type: ignore[method-assign]
+            side_effect=repeat(
+                BackendCallError(f"codex exited 1: h cut at dev's head, carrying the prompt\n{refused}\n")
+            )
+        )
+        ctx = Context.fake("test.write", PLACE, said=["post it"], tree=TREE)
+        object.__setattr__(ctx, "evt", evt)
+        with pytest.raises(Undecided) as undecided:
+            found(Decide("permit", transcript=12), ctx)
+        assert undecided.value.cause == f"BackendCallError: {refused}"
+        assert cast(MagicMock, evt.ctx.call_llm).call_count == 2
+
     def test_the_judge_reads_only_what_over_names(self, tmp_path: Path) -> None:
         yes = answer("Post in C1, thread 1.2?", {"Yes": "", "No": ""}, chosen="Yes")
         ctx = Context.fake("test.write", PLACE, said=["unrelated"], answers=[yes], tree=TREE)
