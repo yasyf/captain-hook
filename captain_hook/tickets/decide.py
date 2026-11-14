@@ -188,6 +188,8 @@ class Decide(CustomTicketCondition):
         frame: The LLM's system prompt, saying what it decides and how its verdict cites and refuses; by default
             whether the user's words permit the action, and a hook judging its own checks' findings by the rules
             they stand for passes a frame saying so.
+        ambient: Whether the prompt also carries ``llm_evaluate``'s ambient blocks, the session's last lines and the
+            pending call; a judge whose ``<evidence>`` and ``<action>`` hold all it weighs turns them off.
     """
 
     rules: str
@@ -202,6 +204,7 @@ class Decide(CustomTicketCondition):
     llm: bool = True
     second_opinion: bool = True
     frame: str = FRAME
+    ambient: bool = True
 
     def items(self, ctx: Context) -> list[Evidence]:
         return [item for condition in self.over if (part := found(condition, ctx)) for item in part]
@@ -269,6 +272,31 @@ class Decide(CustomTicketCondition):
             .context("action", render_action(ctx.action))
         )
 
+    def sent(self, ctx: Context, items: Sequence[Evidence]) -> str | None:
+        """The prompt the LLM first gets for *items*, every block ``llm_evaluate`` adds included, or ``None`` when a
+        required context would skip the call."""
+        from captain_hook.primitives.llm import gathered
+
+        assert ctx.evt is not None
+        built = gathered(
+            ctx.evt,
+            self.framed(ctx, items, DETAIL_SHOWN),
+            hook=f"tickets:{ctx.kind}",
+            contexts=self.contexts,
+            ambient=self.ambient,
+        )
+        if built is None:
+            return None
+        return ctx.evt.ctx.assemble_prompt(
+            built,
+            (),
+            {},
+            transcript=self.transcript,
+            tool_results=self.tool_results,
+            diff_text=None,
+            root_transcript=self.root_transcript,
+        )
+
     def ask(
         self,
         ctx: Context,
@@ -295,6 +323,7 @@ class Decide(CustomTicketCondition):
                 once_per_turn=False,
                 evidence=False,
                 backend="llm",
+                ambient=self.ambient,
             )
 
     def quick(self, ctx: Context, prompt: Prompt, items: Sequence[Evidence]) -> Verdict | None:
@@ -308,7 +337,7 @@ class Decide(CustomTicketCondition):
 
         assert ctx.evt is not None
         with decision_stage(ctx.kind, "contexts"):
-            built = apply_contexts(prompt, ctx.evt, with_defaults(self.contexts))
+            built = apply_contexts(prompt, ctx.evt, with_defaults(self.contexts) if self.ambient else self.contexts)
         if built is None or len(str(Prompt(contexts=built.contexts))) >= VERDICT_STATE_CHARS:
             return None
         try:
