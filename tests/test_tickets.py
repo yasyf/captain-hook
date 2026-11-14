@@ -678,7 +678,7 @@ class TestDecide:
 
     def test_a_citation_that_quotes_the_users_words_names_their_item(self, tmp_path: Path) -> None:
         said = Evidence(id="words:9f8e7d6c5b4a", source="prompt", quote="post it in the alerts thread")
-        for cite, named in (("user's words: post it in the alerts thread", [said]), ("x", [])):
+        for cite, named in (("quote: post it in the alerts thread", [said]), ("x", [])):
             evt = event(tmp_path, verdict=Verdict(allow=True, reason="asked for it", relied_on=[cite]))
             ctx = Context.fake("test.write", PLACE, said=[said], tree=TREE)
             object.__setattr__(ctx, "evt", evt)
@@ -762,7 +762,7 @@ class TestDecide:
         assert found(Decide("permit", over=(UserAnswered(),)), ctx) == [yes]
         assert "unrelated" not in str(cast(MagicMock, evt.ctx.call_llm).call_args)
 
-    def test_a_judge_given_a_frame_asks_the_llm_in_it_instead_of_whether_the_user_permitted_the_action(
+    def test_a_judge_given_a_frame_asks_the_llm_in_it_alone_never_whether_the_user_permitted_the_action(
         self, tmp_path: Path
     ) -> None:
         said = Evidence(
@@ -772,8 +772,13 @@ class TestDecide:
         evt = event(tmp_path, verdict=Verdict(allow=True, reason="no cause is claimed", relied_on=[said.id]))
         object.__setattr__(ctx, "evt", evt)
         frame = "You decide whether each finding of the hook's checks holds against the action by the rule it names."
-        assert found(Decide("permit", frame=frame), ctx) == [said]
-        assert cast(MagicMock, evt.ctx.call_llm).call_args.args[0].system_text.startswith(frame)
+        assert found(Decide("Hold a cause stated without its record.", frame=frame), ctx) == [said]
+        asked = cast(MagicMock, evt.ctx.call_llm).call_args
+        prompt = asked.args[0].system_text
+        assert prompt.startswith(frame)
+        assert "quote: State a cause through its record." in prompt
+        assert "user's words" not in prompt
+        assert "permit" not in asked.kwargs["response_model"].model_json_schema()["description"]
 
 
 def entry(tickets: Tickets) -> RegisteredHook:

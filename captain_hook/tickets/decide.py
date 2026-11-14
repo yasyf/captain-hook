@@ -34,8 +34,8 @@ if TYPE_CHECKING:
 FRAME = """
     You decide whether the human user of this coding agent permitted one pending action, in their own
     words. <rules> are the hook's own rules for this kind of action; follow them. <evidence> lists the
-    user's words that may permit it, each under an id, with the agent message each answers: only those
-    count as the user speaking. <action> is the action.
+    user's words that may permit it, each under an id as its quote, with the agent message each answers:
+    only those quotes count as the user speaking. <action> is the action.
 
     Cite in relied_on the ids of every evidence item your verdict rests on, copied exactly from the
     square brackets in <evidence>; an allow that cites none of them is refused.
@@ -51,7 +51,7 @@ RETRY_DETAIL_SHOWN = 200
 
 
 class Verdict(BaseModel):
-    """The judge's answer: whether the user permitted the action, why, and the evidence it rests on."""
+    """The judge's answer: whether the action goes ahead under the judge's frame, why, and the evidence it rests on."""
 
     reason: str
     allow: bool
@@ -76,7 +76,7 @@ def render_evidence(items: Sequence[Evidence], shown: int = DETAIL_SHOWN) -> str
     for item in items:
         said = f" said {store.stamp(item.said_at)}" if item.said_at else ""
         detail = f"\n{item.detail[:shown]}" if item.detail else ""
-        blocks.append(f"[{item.id}] {item.source}{said}{detail}\nuser's words: {item.quote}")
+        blocks.append(f"[{item.id}] {item.source}{said}{detail}\nquote: {item.quote}")
     return "\n\n".join(blocks) or None
 
 
