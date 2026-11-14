@@ -919,6 +919,50 @@ class Drive:
             return drives == {self.name}
         return bool(sessions := set(SESSION_ENV.findall(environment))) and sessions <= self.sessions
 
+    def holds(self, row: ProcessRow) -> bool:
+        places = (resolve_long_running_state() / self.name, PurePath(self.checkout))
+
+        def inside(path: str) -> bool:
+            return any(PurePath(path).is_relative_to(place) for place in places)
+
+        if any(map(inside, row.command.split())):
+            return True
+        if isinstance(timeout := probe_timeout("read a process working directory"), Unreadable):
+            return False
+        return (cwd := proc.process_cwd(row.pid, timeout=timeout)) is not None and inside(cwd)
+
+
+def ps_shows(row: ProcessRow, output: str) -> bool:
+    local = row.started.replace(tzinfo=UTC).astimezone()
+    ending = f" {local:%a %b} {local.day} {local:%H:%M:%S %Y} {' '.join(row.command.split())}"
+    return str(row.pid) in output and any(
+        line.startswith(f"{row.pid} {row.ppid} ") and line.endswith(ending)
+        for line in map(" ".join, map(str.split, output.splitlines()))
+    )
+
+
+def adoption_gap(
+    drive: Drive, row: ProcessRow, chain: tuple[ProcessRow, ...], outputs: Callable[[], Iterable[str]]
+) -> str | None:
+    if chain[-1].ppid != LAUNCHD_PID or not all(map(drive.holds, chain)):
+        return (
+            "a drive ends only a leftover whose environment names the drive, or one launchd adopted that, like each "
+            "process above it, names the drive's state folder or checkout in its command or runs there"
+        )
+    if not any(ps_shows(row, output) for output in outputs()):
+        return (
+            "a drive ends a leftover launchd adopted in its state folder or checkout once this session has read "
+            f"`ps -o pid,ppid,pgid,lstart,command -p {row.pid}` in an earlier call"
+        )
+    logger.bind(pid=row.pid, command=row.command, started=row.started, drive=drive.name).info(
+        "allowing a leftover launchd adopted in this session's drive"
+    )
+    return None
+
+
+def tool_outputs(evt: BaseHookEvent) -> Iterator[str]:
+    return (use.result.content for turn in evt.ctx.t.turns for use in turn.tool_uses if use.result is not None)
+
 
 class Facts:
     def __init__(
@@ -956,7 +1000,9 @@ class Facts:
     def drive(self) -> Drive | None:
         return Drive.of(self.session)
 
-    def drive_gap(self, row: ProcessRow, agent: ProcessRow | None, ownership: Ownership) -> str | None:
+    def drive_gap(
+        self, row: ProcessRow, agent: ProcessRow | None, ownership: Ownership, outputs: Callable[[], Iterable[str]]
+    ) -> str | None:
         """``None`` when this session's drive started *row* as a leftover or a drive command, else what it lacks."""
         if (drive := self.drive) is None:
             return "only the long-running drive that started it may end it unasked"
@@ -964,7 +1010,9 @@ class Facts:
             return "a drive ends only a leftover no live agent holds, or a drive command and what runs under it"
         if hosts_agent(row) or (row.ppid != LAUNCHD_PID and row.ppid in ownership.protected):
             return "a drive never ends an agent host or a direct child of a protected process"
-        if (shown := self.starter(row, ownership.table)) is None or not drive.started(shown):
+        if (shown := self.starter(row, ownership.table)) is None:
+            return adoption_gap(drive, row, lineage(row, ownership.table), outputs)
+        if not drive.started(shown):
             return "a drive ends only a leftover whose environment names the drive"
         logger.bind(pid=row.pid, command=row.command, started=row.started, drive=drive.name).info(
             "allowing a process this session's drive started"
@@ -1048,6 +1096,7 @@ def pid_verdict(
     spelling: str,
     facts: Facts,
     fix: str,
+    outputs: Callable[[], Iterable[str]],
     lifted: Callable[[ProcessRow, str], Ungranted | None] | None = None,
 ) -> str | Ungranted | None:
     ownership = facts.ownership
@@ -1082,7 +1131,7 @@ def pid_verdict(
             "allowing a scratch orphan that predates spawn records"
         )
         return None
-    if (gap := facts.drive_gap(row, agent, ownership)) is None:
+    if (gap := facts.drive_gap(row, agent, ownership, outputs)) is None:
         return None
     if ownership.owner is None:
         message = (

@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A long-running drive's session or job ends a leftover launchd adopted in the drive's own folders once it
+  has read that pid.** A job's background log follower, `/bin/zsh <drive>/scratch/<job>/follow.sh` piping
+  `tail -n +1 -F` into `grep`, outlived its job, and `kill` refused all fourteen such tails from three
+  finished jobs: macOS shows `ps -E` no environment for `/bin/zsh`, `/usr/bin/tail` or `/usr/bin/grep`, so
+  the guard could not read who started them, and the drive allowance needed that environment to name the
+  drive. When no process up to the agent host shows an environment, `Facts.drive_gap` now passes a session
+  bound to the drive, or a job it started, once three things hold: launchd adopted the process's chain with
+  no agent or terminal host between, the process and each one above it name the drive's state folder or its
+  coordinator's checkout in their command or run there, and the agent's own transcript already holds
+  `ps -o pid,ppid,pgid,lstart,command -p <pid>` output matching its pid, parent, start time and command.
+  `kill` and `renice` both read it. Agent sessions, one-shot `claude -p` runs, Orca, terminal and PTY hosts,
+  their ancestors and their direct children stay refused, and nothing ends a process on its own.
 - **A `Decide` judge given its own `frame` judges by that frame alone.** Two parts of every judge's
   prompt still said it judged the user's permission whatever its frame said: the `Verdict` docstring,
   which the judge receives as its output schema's description, read "whether the user permitted the
