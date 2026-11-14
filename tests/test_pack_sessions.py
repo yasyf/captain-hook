@@ -2291,8 +2291,8 @@ class TestOwnerNamedLifts:
             transcript=owner_turn(SERVE_WEDGED),
             llm=owner_allows(SERVE_WEDGED),
         )
-        assert decide_input(bootout, tmp_path) is None
-        assert minted("sessions.launchctl.owner") == [("user-named", [said]), ("user-named", [said])]
+        assert decide_input(bootout, tmp_path) is not None
+        assert minted("sessions.launchctl.owner") == [("user-named", [said])]
 
     def test_a_lane_never_takes_the_owner_named_lift(self, general_pack: None, tmp_path: Path) -> None:
         lane = bash(

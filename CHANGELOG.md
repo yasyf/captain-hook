@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The sessions guard unloads a launchd job that hosts no session on the owner's ruling to unload it,
+  and never one that hosts a session.** `launchctl_stops_service` passed a `launchctl bootout` of any
+  label a cc-notes answer named, so answers keeping `com.example.port-gap` loaded or
+  authorizing one restart of `com.yasyf.orca-serve` lifted their bootouts too, while the drive's own
+  desks passed by a separate check. Now one `hosts_no_session` read, `launchctl print`, classes the
+  job's program and every argument as `process_class` and `programs` class a process, counts the `lr
+  supervisor` desk a host, and refuses a live pid or process group holding a protected process; a lone
+  `launchctl bootout gui/<uid>/<label>` passes when it holds and, for any label but a drive desk, the
+  `sessions.launchctl` ruling rule, now `Decide` over `UserRuled("service")`, reads an answer asking to
+  unload that label. A bootout of any other domain is refused, and a refused `gui/$(id -u)/<label>`
+  spelling prints the literal command the guard checks.
 - **The steering deferral nudge stands down on a drive turn that hands its work to a job.** It told a
   long-running drive's meta session to "deliver the requested fix instead of substituting docs, help
   text, or a follow-up issue" on the turn that added an order and started the reader whose builder

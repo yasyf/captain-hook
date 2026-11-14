@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -28,6 +29,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     LAUNCHD_STOP,
     LAUNCHERS,
     NEGATIVE_TARGET,
+    PROCESS_CLASSES,
     RENICE_FIX,
     SESSION_HOST_APPS,
     SETTLED_CLOSE,
@@ -73,6 +75,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     pid_verdict,
     probe,
     process_class,
+    programs,
     quit_targets,
     refusal,
     runs_once,
@@ -86,6 +89,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
 from captain_hook.command_schemas import KILL, LAUNCHCTL, ORCA, PMSET, RENICE, SOFTWAREUPDATE, TMUX
 from captain_hook.guard_literal import QUOTING_CHARS
 from captain_hook.tickets import Deny, Proposal, Reach, Ticket
+from captain_hook.util.proc import ProcessRow
 
 if TYPE_CHECKING:
     from cc_transcript.command import Word
@@ -264,6 +268,16 @@ LAUNCHD_JOB_PID = re.compile(r"^\tpid = (\d+)$", re.MULTILINE)
 DRIVE_DASHBOARD_RESTART = "Run `lr dashboard restart` instead, which restarts the drive dashboard and prints its URL."
 LAUNCHD_ALONE = "Run it alone on its line, piped at most, for an owner lift to apply."
 LAUNCHD_ORDER = "Inspect it with `launchctl print`, or name it in a cc-notes answer quoting the owner verbatim."
+GUI_DOMAIN = f"gui/{os.getuid()}"
+LAUNCHD_LITERAL_LABEL = re.compile(r"[\w.-]+")
+LAUNCHD_BOOTOUT_FORM = (
+    f"Only `launchctl bootout {GUI_DOMAIN}/<label>`, alone on its line, of a job that hosts no session can be lifted."
+)
+LAUNCHD_HOSTS = (
+    "`launchctl print {target}` shows a job that runs or hosts a session, or could not be read, so no ruling lifts "
+    "its bootout. Ask the owner to run it."
+)
+LAUNCHD_LITERAL = "Spell it `{literal}`, alone on its line, which the guard checks."
 APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)\b|keystroke\s+"q"')
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
 PMSET_SCHEDULES = frozenset({"shutdown", "restart", "sleep", "poweroff"})
@@ -299,7 +313,7 @@ DESK_JOBS = {
     **INLINE_COMMANDS,
     "ps -A -ww -o": DESK_TABLE,
     **{
-        f"launchctl print gui/501/{label}": LAUNCHD_JOB.format(label=label, lr=DESK_LR, verb=verb, pid=pid)
+        f"launchctl print {GUI_DOMAIN}/{label}": LAUNCHD_JOB.format(label=label, lr=DESK_LR, verb=verb, pid=pid)
         for label, verb, pid in (
             (BK_DESK, "bk", 89331),
             (SUPERVISOR_DESK, "supervisor", 40358),
@@ -310,9 +324,43 @@ DESK_JOBS = {
 }
 BK_REMOVAL = (
     f'P=~/Library/LaunchAgents/{BK_DESK}.plist; mkdir -p ~/removed && cp "$P" ~/removed/ && '
-    f'launchctl bootout gui/501/{BK_DESK}; print "bootout rc=$?"; rm "$P"; '
+    f'launchctl bootout {GUI_DOMAIN}/{BK_DESK}; print "bootout rc=$?"; rm "$P"; '
     'ps -p 89331 >/dev/null && print "89331 still up" || print "89331 gone"'
 )
+PORT_MOVING = "com.example.port-moving"
+PORT_GAP = "com.example.port-gap"
+ORCA_SERVE = "com.yasyf.orca-serve"
+SCRIPT_JOB = (
+    "{label} = {{\n\tstate = not running\n\n\tprogram = /opt/homebrew/bin/python3\n\targuments = {{\n"
+    "\t\t/opt/homebrew/bin/python3\n\t\t-I\n\t\t/Users/dev/tools/{script}\n\t}}\n\n\trun interval = 300 seconds\n}}\n"
+)
+ORCA_SERVE_JOB = (
+    f"{ORCA_SERVE} = {{\n\tstate = running\n\n\tprogram = /Users/dev/.local/bin/orca-serve-supervisor\n"
+    "\targuments = {\n\t\t/Users/dev/.local/bin/orca-serve-supervisor\n\t\t--pairing-address\n\t\t100.64.0.1\n\t}\n\n"
+    "\tpid = 18200\n}\n"
+)
+UNLOAD_RULING = (
+    f"Unload {PORT_MOVING}. It stops failing every 5 minutes, and 12 of the 13 tasks are then unloaded, the ports "
+    "checker kept on purpose."
+)
+STOP_RULING = (
+    'His pick: "Stop them now: unload the 13 background jobs". The coordinator loaded two back: '
+    f"{PORT_GAP}, kept on purpose, and {PORT_MOVING}, by mistake; unloading {PORT_MOVING} finishes his order."
+)
+RESTART_RULING = (
+    'Owner: "Restart just via restarting the launch daemon that restarts the app server do not touch the supervisor '
+    f'or existing sessions". He authorizes one launchctl kickstart -k gui/501/{ORCA_SERVE}, nothing wider.'
+)
+LAUNCHD_JOBS = {
+    **INLINE_COMMANDS,
+    f"launchctl print {GUI_DOMAIN}/{PORT_MOVING}": SCRIPT_JOB.format(label=PORT_MOVING, script="port_moving.py"),
+    f"launchctl print {GUI_DOMAIN}/{PORT_GAP}": SCRIPT_JOB.format(label=PORT_GAP, script="port_gap.py"),
+    f"launchctl print {GUI_DOMAIN}/{ORCA_SERVE}": ORCA_SERVE_JOB,
+    f"ccn answer search {PORT_MOVING}": inline_ruling(UNLOAD_RULING),
+    f"ccn answer search {PORT_GAP}": inline_ruling(STOP_RULING),
+    f"ccn answer search {ORCA_SERVE}": inline_ruling(RESTART_RULING),
+}
+RULING_ALLOWS = {"allow": True, "relied_on": ["ccn:0207568"]}
 DESK_RULING = "Owner: end this drive's own desk-runner.py for a version restart."
 DESK_COMMANDS = {
     **INLINE_COMMANDS,
@@ -1762,30 +1810,27 @@ def literal_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, 
     return verb, target
 
 
-def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, str] | None:
+def launchd_service(call: Call, arguments: Arguments, scan: Scan) -> tuple[str, str, str] | None:
     if (service := literal_service(call, arguments, scan)) is None:
         return None
     verb, target = service
     label = target if verb in ("stop", "remove") and "/" not in target else launchd_label(target)
-    return None if label is None else (verb, label)
+    return None if label is None else (verb, target, label)
 
 
-def desk_without_session(call: Call, arguments: Arguments, scan: Scan) -> bool:
-    match literal_service(call, arguments, scan):
-        case ("bootout", target) if (label := launchd_label(target)) and DRIVE_DESK.fullmatch(label):
-            pass
-        case _:
-            return False
-    if any(other is not call and other.name == "launchctl" for other in scan.calls):
-        return False
+def hosts_no_session(target: str, scan: Scan) -> bool:
     if isinstance(shown := probe(("launchctl", "print", target)), Unreadable):
         return False
-    program, listed = LAUNCHD_PROGRAM.search(shown), LAUNCHD_ARGUMENTS.search(shown)
-    match [line.strip() for line in listed[1].splitlines()] if listed else []:
-        case [_, verb, *_] if program and PurePath(program[1]).name == DESK_PROGRAM and verb != SESSION_HOST_DESK:
-            pass
-        case _:
-            return False
+    if (program := LAUNCHD_PROGRAM.search(shown)) is None:
+        return False
+    listed = LAUNCHD_ARGUMENTS.search(shown)
+    argv = [line.strip() for line in listed[1].splitlines()] if listed else [program[1]]
+    commands = dict.fromkeys((" ".join(argv), program[1], *argv))
+    rows = [ProcessRow(0, 0, 0, 0, datetime.min, command) for command in commands]
+    if any(process_class(row) or not PROCESS_CLASSES.keys().isdisjoint(programs(row)) for row in rows):
+        return False
+    if PurePath(program[1]).name == DESK_PROGRAM and argv[1:2] == [SESSION_HOST_DESK]:
+        return False
     if (pid := LAUNCHD_JOB_PID.search(shown)) is not None:
         job, ownership = int(pid[1]), scan.facts.ownership
         if (
@@ -1796,8 +1841,36 @@ def desk_without_session(call: Call, arguments: Arguments, scan: Scan) -> bool:
             )
         ):
             return False
-    logger.bind(target=target, pid=pid and pid[1]).info("allowing the bootout of a drive desk that hosts no session")
+    logger.bind(target=target, pid=pid and pid[1]).info("the launchd job hosts no session")
     return True
+
+
+def bootout_verdict(
+    call: Call, scan: Scan, evt: ToolRewriteEvent, target: str, label: str, blocked: str
+) -> str | Ungranted | None:
+    if target != f"{GUI_DOMAIN}/{label}":
+        return blocked + LAUNCHD_BOOTOUT_FORM
+    if any(other is not call and other.name == "launchctl" for other in scan.calls):
+        return blocked + LAUNCHD_ALONE
+    if not hosts_no_session(target, scan):
+        return blocked + LAUNCHD_HOSTS.format(target=target)
+    if DRIVE_DESK.fullmatch(label):
+        return None
+    if not runs_once(call, scan):
+        return blocked + LAUNCHD_ALONE
+    action = Proposal(place={"service": label}, payload={"verb": "bootout"}, summary=f"launchctl bootout {target}")
+    return lift(evt, LAUNCHD_STOP, action, blocked + LAUNCHD_ORDER)
+
+
+def literal_spelling(call: Call, arguments: Arguments) -> str | None:
+    match arguments.words.get("targets", ()):
+        case (*named, word) if all(each.value is not None and not each.expandable for each in named):
+            domain, _, label = word.raw.rpartition("/")
+        case _:
+            return None
+    if not domain.startswith("gui/") or LAUNCHD_LITERAL_LABEL.fullmatch(label) is None:
+        return None
+    return " ".join(f"{GUI_DOMAIN}/{label}" if each is word else each.raw for each in call.command.words)
 
 
 def drive_dashboard(arguments: Arguments) -> bool:
@@ -1815,18 +1888,18 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         return None
     spelling = spell(call)
     arguments = LAUNCHCTL.bind(call)
-    if desk_without_session(call, arguments, scan):
-        return None
     dashboard = drive_dashboard(arguments)
     if (service := launchd_service(call, arguments, scan)) is not None:
-        verb, label = service
+        verb, target, label = service
         blocked = (
             f"BLOCKED: `{spelling}` stops, unloads, or restarts launchd service `{clip(label, 40)}`, which may host "
             "sessions. "
         )
+        if verb == "bootout":
+            return bootout_verdict(call, scan, evt, target, label, blocked)
         if not runs_once(call, scan):
             return blocked + (DRIVE_DASHBOARD_RESTART if dashboard else LAUNCHD_ALONE)
-        action = Proposal(place={"service": label}, payload={"verb": verb}, summary=f"launchctl {verb} {label}")
+        action = Proposal(place={"service": label}, payload={"verb": verb}, summary=clip(call.source.raw, 200))
         return lift(evt, LAUNCHD_STOP, action, blocked + (DRIVE_DASHBOARD_RESTART if dashboard else LAUNCHD_ORDER))
     match arguments.values.get("verb", ()):
         case (None,):
@@ -1835,12 +1908,15 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
                 "service that hosts sessions. Spell the verb literally."
             )
         case (str() as verb,) if verb in LAUNCHCTL_ENDINGS:
+            literal = literal_spelling(call, arguments) if verb in LAUNCHD_SERVICE_VERBS else None
             return (
                 f"BLOCKED: `{spelling}` stops, unloads, restarts, or reboots a launchd service or domain that may host "
                 "sessions. "
                 + (
                     DRIVE_DASHBOARD_RESTART
                     if dashboard
+                    else LAUNCHD_LITERAL.format(literal=literal)
+                    if literal
                     else "Inspect it with `launchctl list` or `launchctl print <target>` instead."
                 )
             )
@@ -1860,21 +1936,50 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
             pattern="`launchctl bootout gui/501/com.example.orca-serve` stops, unloads, or restarts launchd service"
         ),
         guarded(
-            command="launchctl bootout gui/501/com.example.orca-serve",
+            command="launchctl kickstart -k system/com.example.orca-serve",
             commands={**INLINE_COMMANDS, "ccn answer search com.example.orca-serve": SERVE_RULING},
+            llm=RULING_ALLOWS,
         ): Allow(),
         guarded(
             command="launchctl kickstart -k system/com.example.orca-serve",
             commands={**INLINE_COMMANDS, "ccn answer search com.example.orca-serve": SERVE_RULING},
+            llm={"allow": False, "refusal": "The ruling asks for no restart."},
+        ): Block(pattern="name it in a cc-notes answer quoting the owner verbatim"),
+        guarded(
+            command=f"launchctl bootout {GUI_DOMAIN}/{PORT_MOVING}", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
         ): Allow(),
         guarded(
-            command="launchctl bootout gui/501/com.example.orca-serve",
+            command=f"launchctl bootout {GUI_DOMAIN}/{PORT_MOVING} | tail -1", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
+        ): Allow(),
+        guarded(
+            command=f"launchctl bootout {GUI_DOMAIN}/{PORT_GAP}",
+            commands=LAUNCHD_JOBS,
+            llm={"allow": False, "refusal": "The ruling keeps port-gap loaded on purpose."},
+        ): Block(pattern=f"`{PORT_GAP}`, which may host sessions. Inspect it with `launchctl print`, or name it"),
+        guarded(
+            command=f"launchctl bootout {GUI_DOMAIN}/{ORCA_SERVE}", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
+        ): Block(pattern="shows a job that runs or hosts a session"),
+        guarded(
+            command=f"launchctl kickstart -k {GUI_DOMAIN}/{ORCA_SERVE}", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
+        ): Allow(),
+        guarded(command=f"launchctl bootout gui/$(id -u)/{PORT_MOVING}", commands=LAUNCHD_JOBS): Block(
+            pattern=re.escape(f"Spell it `launchctl bootout {GUI_DOMAIN}/{PORT_MOVING}`, alone on its line")
+        ),
+        guarded(command=f"launchctl bootout user/501/{PORT_MOVING}", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS): Block(
+            pattern=re.escape(f"Only `launchctl bootout {GUI_DOMAIN}/<label>`")
+        ),
+        guarded(
+            command=f"launchctl bootout {GUI_DOMAIN}/{PORT_MOVING}; echo done", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
+        ): Block(pattern="alone on its line"),
+        guarded(
+            command=f"launchctl bootout {GUI_DOMAIN}/{PORT_MOVING}",
             commands={
-                **INLINE_COMMANDS,
-                "ccn answer search com.example.orca-serve": inline_ruling(
-                    "restart com.example.orca-serve", written=INLINE_STARTED + timedelta(minutes=5)
+                **LAUNCHD_JOBS,
+                f"ccn answer search {PORT_MOVING}": inline_ruling(
+                    UNLOAD_RULING, written=INLINE_STARTED + timedelta(minutes=5)
                 ),
             },
+            llm=RULING_ALLOWS,
         ): Block(pattern="name it in a cc-notes answer quoting the owner verbatim"),
         ordered(command="launchctl kickstart -k gui/501/com.yasyf.orca-serve"): Allow(),
         ordered(
@@ -1918,10 +2023,12 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         guarded(
             command="launchctl kill SIGTERM gui/501/com.example.orca-serve",
             commands={**INLINE_COMMANDS, "ccn answer search com.example.orca-serve": SERVE_RULING},
+            llm=RULING_ALLOWS,
         ): Allow(),
         guarded(
             command="launchctl kickstart -k system/com.example.orca-serve 2>&1 | tail -3",
             commands={**INLINE_COMMANDS, "ccn answer search com.example.orca-serve": SERVE_RULING},
+            llm=RULING_ALLOWS,
         ): Allow(),
         guarded(
             command="for i in 1 2; do launchctl kickstart -k system/com.example.orca-serve; done",
@@ -1952,27 +2059,27 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         guarded(command="launchctl list"): Allow(),
         guarded(command="launchctl print gui/501"): Allow(),
         guarded(command=BK_REMOVAL, commands=DESK_JOBS): Allow(),
-        guarded(command=f"launchctl bootout gui/501/{BK_DESK}", commands=DESK_JOBS): Allow(),
-        guarded(command=f"launchctl bootout gui/501/{SUPERVISOR_DESK}", commands=DESK_JOBS): Block(
+        guarded(command=f"launchctl bootout {GUI_DOMAIN}/{BK_DESK}", commands=DESK_JOBS): Allow(),
+        guarded(command=f"launchctl bootout {GUI_DOMAIN}/{SUPERVISOR_DESK}", commands=DESK_JOBS): Block(
             pattern="stops, unloads, or restarts launchd service"
         ),
-        guarded(command=f"launchctl bootout gui/501/{GRADE_DESK}", commands=DESK_JOBS): Block(
+        guarded(command=f"launchctl bootout {GUI_DOMAIN}/{GRADE_DESK}", commands=DESK_JOBS): Block(
             pattern="stops, unloads, or restarts launchd service"
         ),
-        guarded(command=f"launchctl bootout gui/501/{RELAY_DESK}", commands=DESK_JOBS): Block(
+        guarded(command=f"launchctl bootout {GUI_DOMAIN}/{RELAY_DESK}", commands=DESK_JOBS): Block(
             pattern="stops, unloads, or restarts launchd service"
         ),
         guarded(
-            command=f"launchctl bootout gui/501/{BK_DESK} && launchctl bootstrap gui/501 ~/sup.plist && "
-            f"launchctl bootout gui/501/{BK_DESK}",
+            command=f"launchctl bootout {GUI_DOMAIN}/{BK_DESK} && launchctl bootstrap gui/501 ~/sup.plist && "
+            f"launchctl bootout {GUI_DOMAIN}/{BK_DESK}",
             commands=DESK_JOBS,
         ): Block(),
         guarded(command=f"launchctl kickstart -k gui/501/{BK_DESK}", commands=DESK_JOBS): Block(
             pattern="stops, unloads, or restarts launchd service"
         ),
         guarded(
-            command=f"launchctl bootout gui/501/{BK_DESK}",
-            commands={**INLINE_COMMANDS, f"launchctl print gui/501/{BK_DESK}": (113, "Could not find service")},
+            command=f"launchctl bootout {GUI_DOMAIN}/{BK_DESK}",
+            commands={**INLINE_COMMANDS, f"launchctl print {GUI_DOMAIN}/{BK_DESK}": (113, "Could not find service")},
         ): Block(pattern="stops, unloads, or restarts launchd service"),
     }
 )

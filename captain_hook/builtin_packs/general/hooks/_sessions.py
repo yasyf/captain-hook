@@ -273,6 +273,15 @@ KILL_SESSION_RULES = (
     "clears. Deny when the words list only other pids, set a floor its age does not clear, exclude this kind of "
     "session, or only ask for cleanup in general."
 )
+LAUNCHD_STOP_RULES = (
+    "The pending action runs launchctl on one launchd service: `bootout` unloads it, `kickstart -k` kills and "
+    "restarts it, `kickstart` starts it, `kill` signals it, and `stop`, `remove` or `disable` stop, remove or disable "
+    "it. The place names the exact service label, and the summary is the command. For a bootout the guard has already "
+    "proven the service's job hosts no session. Allow only when a ruling's words name this exact label and ask for "
+    "this action on it, unloading it for a bootout and restarting it for a kickstart -k, or pick an option that does. "
+    "Deny when the words name the label only to keep it, ask for a different action on it, such as a restart when "
+    "this unloads it, exclude it, or only ask for cleanup in general."
+)
 TEAMMATE_TASK = re.compile(r"[\w.-]+@session-[0-9a-f]{8}")
 SPAWN_TOOLS = frozenset({"Agent", "Task"})
 SHELL_TASK_IDS = {"Bash": "backgroundTaskId", "Monitor": "taskId"}
@@ -1786,8 +1795,9 @@ LAUNCHD_STOP = Tickets(
     "sessions.launchctl",
     ("service",),
     Reach.ONCE,
-    rules=(Rule("ruling", UserRuled("service")),),
-    deny="Have the owner name the service label in a cc-notes answer before the acting session starts.",
+    rules=(Rule("ruling", Decide(LAUNCHD_STOP_RULES, over=(UserRuled("service"),))),),
+    deny="Have the owner ask for this action on the service label in a cc-notes answer before the acting session "
+    "starts.",
     ttl=RETRY_WINDOW,
     hook="sessions",
 )
