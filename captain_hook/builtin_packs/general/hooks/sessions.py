@@ -273,10 +273,7 @@ LAUNCHD_LITERAL_LABEL = re.compile(r"[\w.-]+")
 LAUNCHD_BOOTOUT_FORM = (
     f"Only `launchctl bootout {GUI_DOMAIN}/<label>`, alone on its line, of a job that hosts no session can be lifted."
 )
-LAUNCHD_HOSTS = (
-    "`launchctl print {target}` shows a job that runs or hosts a session, or could not be read, so no ruling lifts "
-    "its bootout. Ask the owner to run it."
-)
+LAUNCHD_HOSTS = "Its `launchctl print` shows a session host or no job, so only the owner may unload it."
 LAUNCHD_LITERAL = "Spell it `{literal}`, alone on its line, which the guard checks."
 APPLESCRIPT_ENDING = re.compile(r'(?i)\b(quit|log ?out|restart|shut ?down|sleep)\b|keystroke\s+"q"')
 PMSET_ENDINGS = frozenset({"sleepnow", "restart", "halt", "sleep"})
@@ -1853,7 +1850,7 @@ def bootout_verdict(
     if any(other is not call and other.name == "launchctl" for other in scan.calls):
         return blocked + LAUNCHD_ALONE
     if not hosts_no_session(target, scan):
-        return blocked + LAUNCHD_HOSTS.format(target=target)
+        return blocked + LAUNCHD_HOSTS
     if DRIVE_DESK.fullmatch(label):
         return None
     if not runs_once(call, scan):
@@ -1870,7 +1867,7 @@ def literal_spelling(call: Call, arguments: Arguments) -> str | None:
             return None
     if not domain.startswith("gui/") or LAUNCHD_LITERAL_LABEL.fullmatch(label) is None:
         return None
-    return " ".join(f"{GUI_DOMAIN}/{label}" if each is word else each.raw for each in call.command.words)
+    return " ".join(f"{GUI_DOMAIN}/{label}" if each.raw == word.raw else each.raw for each in call.command.words)
 
 
 def drive_dashboard(arguments: Arguments) -> bool:
@@ -1958,7 +1955,7 @@ def launchctl_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | Un
         ): Block(pattern=f"`{PORT_GAP}`, which may host sessions. Inspect it with `launchctl print`, or name it"),
         guarded(
             command=f"launchctl bootout {GUI_DOMAIN}/{ORCA_SERVE}", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
-        ): Block(pattern="shows a job that runs or hosts a session"),
+        ): Block(pattern="shows a session host or no job, so only the owner may unload it"),
         guarded(
             command=f"launchctl kickstart -k {GUI_DOMAIN}/{ORCA_SERVE}", commands=LAUNCHD_JOBS, llm=RULING_ALLOWS
         ): Allow(),
