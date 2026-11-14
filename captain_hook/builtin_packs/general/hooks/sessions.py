@@ -83,6 +83,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     shell_scripts,
     spell,
     still_settled,
+    tool_outputs,
     unresolvable,
     worktree_terminals,
 )
@@ -476,7 +477,9 @@ def kill_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungra
                     "expand into a real signal. Pass the literal pid, or a variable the same line sets to one."
                 )
             return deny(describe_target(word, value))
-        if (verdict := pid_verdict(pid, spelling, facts, KILL_FIX, partial(kill_lift, evt))) is not None:
+        if (
+            verdict := pid_verdict(pid, spelling, facts, KILL_FIX, partial(tool_outputs, evt), partial(kill_lift, evt))
+        ) is not None:
             return verdict
     return None
 
@@ -675,7 +678,7 @@ def kill_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:
     return block_first(evt, (kill_verdict(call, scan.facts, evt) for call in scan.literal_calls))
 
 
-def renice_verdict(call: Call, facts: Facts) -> str | Ungranted | None:
+def renice_verdict(call: Call, facts: Facts, evt: ToolRewriteEvent) -> str | Ungranted | None:
     if call.name != "renice":
         return None
     spelling = spell(call)
@@ -699,7 +702,7 @@ def renice_verdict(call: Call, facts: Facts) -> str | Ungranted | None:
     for word, value in pairs:
         if (pid := literal_pid(word, value)) is None:
             return deny(describe_target(word, value))
-        if (verdict := pid_verdict(pid, spelling, facts, RENICE_FIX)) is not None:
+        if (verdict := pid_verdict(pid, spelling, facts, RENICE_FIX, partial(tool_outputs, evt))) is not None:
             return verdict
     return None
 
@@ -719,7 +722,7 @@ def renice_verdict(call: Call, facts: Facts) -> str | Ungranted | None:
 )
 def renice_unverified_pid(evt: ToolRewriteEvent) -> HookResult | None:
     scan = Scan.of(evt)
-    return block_first(evt, (renice_verdict(call, scan.facts) for call in scan.literal_calls))
+    return block_first(evt, (renice_verdict(call, scan.facts, evt) for call in scan.literal_calls))
 
 
 def probes_only(call: Call) -> bool:

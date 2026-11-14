@@ -10,11 +10,12 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from contextvars import copy_context
 from copy import copy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from inspect import signature
 from pathlib import Path
@@ -35,6 +36,7 @@ from captain_hook.builtin_packs.general.hooks._sessions import (
     KILL_RULING_TAGS,
     RECORDED_SINCE,
     Scan,
+    inline_call,
     inline_class_rulings,
     inline_create,
     inline_ruling,
@@ -184,6 +186,7 @@ def fake_table(monkeypatch: pytest.MonkeyPatch) -> dict[str, ProcessTable | None
     holder: dict[str, ProcessTable | None] = {"table": MAC}
     monkeypatch.setattr(proc, "process_table", lambda **kw: holder["table"])
     monkeypatch.setattr(proc, "environment", lambda row, **kw: None)
+    monkeypatch.setattr(proc, "process_cwd", lambda pid, **kw: None)
     return holder
 
 
@@ -883,8 +886,8 @@ class TestDriveLeftovers:
         message = decide("kill 52002", tmp_path)
         assert message is not None
         assert "with no agent ancestor to vouch for it" in message
-        assert message.endswith(
-            "Let it finish, or ask the owner to end it; a drive ends only a leftover whose environment names the drive."
+        assert (
+            "Let it finish, or ask the owner to end it; a drive ends only a leftover whose environment names" in message
         )
 
     def test_the_drives_meta_session_ends_a_stuck_verb_the_drive_detached(
@@ -1016,8 +1019,8 @@ class TestStuckDriveCommands:
     ) -> None:
         fake_table["table"] = stuck_verb(14462)
         environs[76824] = shown
-        assert (decide("kill 77069", tmp_path) or "").endswith(
-            "a drive ends only a leftover whose environment names the drive."
+        assert "a drive ends only a leftover whose environment names the drive" in (
+            decide("kill 77069", tmp_path) or ""
         )
 
     def test_a_session_in_no_drive_never_ends_another_sessions_drive_command(
@@ -1042,6 +1045,162 @@ class TestStuckDriveCommands:
         fake_table["table"] = stuck_verb(14575)
         environs.update({76825: "", 14575: " CLAUDE_CODE_SESSION_ID=s1"})
         assert "no recorded per-task creation identity" in (decide("kill 76825", tmp_path) or "")
+
+
+FOLLOWED = "2026-11-14T09:09:13"
+FOLLOWED_AT = "Sat Nov 14 01:09:13 2026"
+PROTECTED_AT = {
+    14575: "Tue Sep 29 23:01:05 2026",
+    8311: "Tue Sep 29 23:05:00 2026",
+    1445: "Tue Sep 29 22:58:20 2026",
+    1743: "Tue Sep 29 22:58:30 2026",
+    15000: "Tue Sep 29 23:50:00 2026",
+}
+
+
+def followers(home: Path) -> ProcessTable:
+    scratch = home / ".local" / "state" / "long-running" / "d1" / "scratch" / "j4310"
+    return table(
+        *TERMINALS.rows.values(),
+        row(60000, 1, f"zsh {scratch}/follow.sh", started=FOLLOWED),
+        row(60001, 60000, f"tail -n +1 -F {scratch}/ran/runtime-api.log", started=FOLLOWED),
+        row(60002, 60000, "grep --line-buffered -E error|panic", started=FOLLOWED),
+        row(60003, 1, f"tail -F {home}/.local/state/long-running/d2/scratch/j9/ran.log", started=FOLLOWED),
+        row(60004, 15001, f"tail -F {scratch}/ran/runtime-api.log", started=FOLLOWED),
+        row(60005, 1, "claude -p --no-session-persistence --output-format json", started=FOLLOWED),
+        row(60006, 1, f"zsh {scratch}/spawn.sh", started=FOLLOWED),
+        row(60007, 60006, "claude --dangerously-skip-permissions", started=FOLLOWED),
+        row(60008, 60006, f"tail -F {scratch}/spawn.log", started=FOLLOWED),
+    )
+
+
+def ps_read(shown: ProcessRow, lstart: str = FOLLOWED_AT) -> list[dict[str, Any]]:
+    printed = (
+        "  PID  PPID  PGID STARTED                      COMMAND\n"
+        f"{shown.pid:5} {shown.ppid:5} {shown.pgid:5} {lstart}     {shown.command}\n"
+    )
+    return inline_call("Bash", {"command": f"ps -o pid,ppid,pgid,lstart,command -p {shown.pid}"}, printed)
+
+
+class TestAdoptedDriveLeftovers:
+    @pytest.fixture(autouse=True)
+    def pacific(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        with monkeypatch.context() as zoned:
+            zoned.setenv("TZ", "America/Los_Angeles")
+            time.tzset()
+            yield
+        time.tzset()
+
+    @pytest.fixture(autouse=True)
+    def registry(self, home: Path, fake_table: dict[str, ProcessTable | None]) -> ProcessTable:
+        write_drive(home, "d1", {"coordinator": "r0", "meta": "s1"})
+        write_drive(home, "d2", {"coordinator": "r9"})
+        fake_table["table"] = followers(home)
+        return fake_table["table"]
+
+    @pytest.fixture
+    def cwds(self, monkeypatch: pytest.MonkeyPatch, fake_table: dict[str, ProcessTable | None]) -> dict[int, str]:
+        ran = {60002: "/c/d1"}
+        monkeypatch.setattr(proc, "process_cwd", lambda pid, **kw: ran.get(pid))
+        return ran
+
+    @pytest.mark.parametrize("agent", [None, "j4776-lane"], ids=["drive_session", "its_job"])
+    @pytest.mark.parametrize("pid", [60001, 60002, 60000], ids=["tail", "grep_by_cwd", "follow_script"])
+    def test_a_drive_session_or_its_job_ends_a_follower_it_read(
+        self,
+        general_pack: None,
+        registry: ProcessTable,
+        cwds: dict[int, str],
+        tmp_path: Path,
+        pid: int,
+        agent: str | None,
+    ) -> None:
+        read = ps_read(registry.rows[pid])
+        lane = {"agent_id": agent} if agent else {}
+        assert decide_input(bash(f"kill {pid}", transcript=read, **lane), tmp_path) is None
+        assert decide_input(bash(f"kill -TERM {pid}", transcript=read, **lane), tmp_path, client_ppid=424242) is None
+        assert decide_input(bash(f"renice -n 5 -p {pid}", transcript=read, **lane), tmp_path) is None
+
+    def test_a_follower_nobody_read_stays_blocked(
+        self, general_pack: None, cwds: dict[int, str], tmp_path: Path
+    ) -> None:
+        message = decide("kill 60001", tmp_path) or ""
+        assert "with no agent ancestor to vouch for it" in message
+        assert message.endswith(
+            "a drive ends a leftover launchd adopted in its state folder or checkout once this session has read "
+            "`ps -o pid,ppid,pgid,lstart,command -p 60001` in an earlier call."
+        )
+
+    @pytest.mark.parametrize(
+        ("shown", "lstart"),
+        [
+            pytest.param({}, "Sat Nov 14 01:09:14 2026", id="another_start"),
+            pytest.param({"ppid": 1}, FOLLOWED_AT, id="another_parent"),
+            pytest.param({"command": "tail -n +1 -F runtime-api.log"}, FOLLOWED_AT, id="another_command"),
+            pytest.param({"pid": 60011}, FOLLOWED_AT, id="another_pid"),
+        ],
+    )
+    def test_a_read_of_another_process_vouches_for_nothing(
+        self,
+        general_pack: None,
+        registry: ProcessTable,
+        cwds: dict[int, str],
+        tmp_path: Path,
+        shown: dict[str, Any],
+        lstart: str,
+    ) -> None:
+        read = ps_read(replace(registry.rows[60001], **shown), lstart)
+        assert "in an earlier call" in (decide_input(bash("kill 60001", transcript=read), tmp_path) or "")
+
+    @pytest.mark.parametrize(
+        "pid",
+        [
+            pytest.param(60003, id="another_drives_folder"),
+            pytest.param(60004, id="under_a_terminal_shell"),
+            pytest.param(7777, id="outside_the_drive"),
+        ],
+    )
+    def test_a_process_outside_the_drives_folders_or_launchds_adoption_stays_blocked(
+        self, general_pack: None, registry: ProcessTable, cwds: dict[int, str], tmp_path: Path, pid: int
+    ) -> None:
+        message = decide_input(bash(f"kill {pid}", transcript=ps_read(registry.rows[pid])), tmp_path) or ""
+        assert message.endswith(
+            "a drive ends only a leftover whose environment names the drive, or one launchd adopted that, like each "
+            "process above it, names the drive's state folder or checkout in its command or runs there."
+        )
+
+    def test_a_follower_whose_environment_names_another_drive_stays_blocked(
+        self, general_pack: None, registry: ProcessTable, environs: dict[int, str], cwds: dict[int, str], tmp_path: Path
+    ) -> None:
+        environs[60001] = " CLAUDE_LONG_RUNNING_DRIVE=d2"
+        message = decide_input(bash("kill 60001", transcript=ps_read(registry.rows[60001])), tmp_path) or ""
+        assert message.endswith("a drive ends only a leftover whose environment names the drive.")
+
+    @pytest.mark.parametrize(
+        ("pid", "refusal"),
+        [
+            pytest.param(14575, "is an agent session, which no session may signal", id="claude"),
+            pytest.param(8311, "is an agent session, which no session may signal", id="codex"),
+            pytest.param(1445, "is the Orca app, which no session may signal", id="orca_app"),
+            pytest.param(1743, "is the Orca PTY daemon, which no session may signal", id="pty_daemon"),
+            pytest.param(15000, "is a terminal host, which no session may signal", id="terminal_host"),
+            pytest.param(60005, "never ends an agent host", id="orphaned_claude_print"),
+            pytest.param(60006, "is an ancestor of a protected process", id="script_holding_a_claude"),
+            pytest.param(60008, "a direct child of a protected process", id="sibling_of_a_claude"),
+        ],
+    )
+    def test_sessions_hosts_and_daemons_stay_blocked_whatever_folder_they_run_in(
+        self,
+        general_pack: None,
+        registry: ProcessTable,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        pid: int,
+        refusal: str,
+    ) -> None:
+        monkeypatch.setattr(proc, "process_cwd", lambda pid, **kw: "/c/d1")
+        read = ps_read(registry.rows[pid], PROTECTED_AT.get(pid, FOLLOWED_AT))
+        assert refusal in (decide_input(bash(f"kill {pid}", transcript=read), tmp_path) or "")
 
 
 class TestMovedDrives:
