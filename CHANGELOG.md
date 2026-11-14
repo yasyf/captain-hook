@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `Decide` judge given its own `frame` judges by that frame alone.** Two parts of every judge's
+  prompt still said it judged the user's permission whatever its frame said: the `Verdict` docstring,
+  which the judge receives as its output schema's description, read "whether the user permitted the
+  action", and `render_evidence` printed every item's quote as `user's words:`, a read or a rule
+  included. The long-running drive's post judge, whose frame asks whether a post's claims stand on
+  their reads, held a report it had passed with "No user words authorize this post". `Verdict` now
+  reads "whether the action goes ahead under the judge's frame", each item's quote prints as `quote:`,
+  and the default permission `FRAME` says itself that each item's quote is the user's words.
 - **The sessions guard unloads a launchd job that hosts no session on the owner's ruling to unload it,
   and never one that hosts a session.** `launchctl_stops_service` passed a `launchctl bootout` of any
   label a cc-notes answer named, so answers keeping `com.example.port-gap` loaded or
