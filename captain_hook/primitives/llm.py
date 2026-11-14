@@ -245,32 +245,12 @@ def llm_evaluate[M: BaseModel](
     maps the event to needles (a quote, a thread, the text being judged) and adds every event
     in the last 16 MiB of the root transcript that mentions one as ``<root_excerpt>``.
     """
-    from cc_transcript.render import clip
-
     if once_per_turn and fired_this_turn(evt):
         return None
-    if when is not None and not when(evt):
-        return None
-
-    if sig := resolve_signals(signals):
-        if not (contributing_texts := matched_signals(evt, sig, hook)):
-            return None
-    elif contexts and when is None:
-        contributing_texts = []
-    else:
-        contributing_texts = transcript_texts(evt, 5)
-
-    context = clip(
-        "\n".join(
-            [line for text in contributing_texts for line in extract_signal_context(sig.patterns, text)]
-            if sig
-            else contributing_texts
-        ),
-        max_context,
+    built = gathered(
+        evt, prompt, hook=hook, signals=signals, when=when, contexts=contexts, max_context=max_context, budget=budget
     )
-
-    base = (prompt if isinstance(prompt, Prompt) else Prompt().system(prompt)).context("context", context or None)
-    if (built := apply_contexts(base, evt, with_defaults(contexts, budget), max_len=max_context)) is None:
+    if built is None:
         return None
 
     diff_text = evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None
@@ -350,6 +330,43 @@ def llm_evaluate[M: BaseModel](
             evidence=evidence,
         )
     return ask(built)
+
+
+def gathered(
+    evt: BaseHookEvent,
+    prompt: str | Prompt,
+    *,
+    hook: str,
+    signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+    when: Callable[[BaseHookEvent], bool] | None = None,
+    contexts: Sequence[PromptContext] = (),
+    max_context: int = 2000,
+    budget: Budget | None = None,
+) -> Prompt | None:
+    from cc_transcript.render import clip
+
+    if when is not None and not when(evt):
+        return None
+
+    if sig := resolve_signals(signals):
+        if not (contributing_texts := matched_signals(evt, sig, hook)):
+            return None
+    elif contexts and when is None:
+        contributing_texts = []
+    else:
+        contributing_texts = transcript_texts(evt, 5)
+
+    context = clip(
+        "\n".join(
+            [line for text in contributing_texts for line in extract_signal_context(sig.patterns, text)]
+            if sig
+            else contributing_texts
+        ),
+        max_context,
+    )
+
+    base = (prompt if isinstance(prompt, Prompt) else Prompt().system(prompt)).context("context", context or None)
+    return apply_contexts(base, evt, with_defaults(contexts, budget), max_len=max_context)
 
 
 def quick_note(verdict: BaseModel, fields: Iterable[str]) -> str:

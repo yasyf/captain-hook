@@ -772,6 +772,18 @@ class TestDecide:
         assert undecided.value.cause == f"BackendCallError: {refused}"
         assert cast(MagicMock, evt.ctx.call_llm).call_count == 2
 
+    def test_sent_is_the_prompt_the_llm_gets_with_each_block_llm_evaluate_adds(self, tmp_path: Path) -> None:
+        said = Evidence(id="words:1a2b3c4d5e6f", source="prompt", quote="post it")
+        evt = event(tmp_path, verdict=Verdict(allow=True, reason="asked for it", relied_on=[said.id]))
+        ctx = Context.fake("test.write", PLACE, said=[said], tree=TREE)
+        object.__setattr__(ctx, "evt", evt)
+        judge = Decide("permit")
+        items = judge.items(ctx)
+        sent = judge.sent(ctx, items)
+        assert judge.verdict(ctx, items).allow
+        assert cast(MagicMock, evt.ctx.call_llm).call_args.args[0].system_text == sent
+        assert "<pending_tool_call>" in str(sent)
+
     def test_the_judge_reads_only_what_over_names(self, tmp_path: Path) -> None:
         yes = answer("Post in C1, thread 1.2?", {"Yes": "", "No": ""}, chosen="Yes")
         ctx = Context.fake("test.write", PLACE, said=["unrelated"], answers=[yes], tree=TREE)

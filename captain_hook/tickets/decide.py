@@ -269,6 +269,27 @@ class Decide(CustomTicketCondition):
             .context("action", render_action(ctx.action))
         )
 
+    def sent(self, ctx: Context, items: Sequence[Evidence]) -> str | None:
+        """The prompt the LLM first gets for *items*, every block ``llm_evaluate`` adds included, or ``None`` when a
+        required context would skip the call."""
+        from captain_hook.primitives.llm import gathered
+
+        assert ctx.evt is not None
+        built = gathered(
+            ctx.evt, self.framed(ctx, items, DETAIL_SHOWN), hook=f"tickets:{ctx.kind}", contexts=self.contexts
+        )
+        if built is None:
+            return None
+        return ctx.evt.ctx.assemble_prompt(
+            built,
+            (),
+            {},
+            transcript=self.transcript,
+            tool_results=self.tool_results,
+            diff_text=None,
+            root_transcript=self.root_transcript,
+        )
+
     def ask(
         self,
         ctx: Context,
