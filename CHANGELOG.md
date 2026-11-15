@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The admission load gate's suggested command keeps the call's own variable assignments.** On a
+  saturated host the gate refuses a local build and names the command `HOOKS_ADMISSION_ROUTE_PROBE`
+  prints, which runs it on another host. `probe_route` ran the probe with the call's assignments in its
+  environment but printed the command without them, so `CGO_ENABLED=0 go build -o bin/x .` was handed
+  back as `remote-builder exec --lane go -- go build -o bin/x .`, a cgo build. The suggestion now
+  carries each assignment, shell-quoted, ahead of the command and after the `cd` to the call's
+  directory: `CGO_ENABLED=0 remote-builder exec --lane go -- go build -o bin/x .`.
 - **A long-running drive's session or job ends a leftover launchd adopted in the drive's own folders once it
   has read that pid.** A job's background log follower, `/bin/zsh <drive>/scratch/<job>/follow.sh` piping
   `tail -n +1 -F` into `grep`, outlived its job, and `kill` refused all fourteen such tails from three

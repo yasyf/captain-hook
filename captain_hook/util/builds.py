@@ -105,6 +105,8 @@ def probe_route(call: Call) -> Route:
         check=False,
     )
     elsewhere = done.stdout.strip()
+    if elsewhere:
+        elsewhere = " ".join([*(f"{name}={shlex.quote(value)}" for name, value in call.source.env), elsewhere])
     if elsewhere and call.cwd:
         elsewhere = f"cd {shlex.quote(str(call.cwd))} && {elsewhere}"
     shimmed = not call.wrappers and "/" not in call.command.executable
