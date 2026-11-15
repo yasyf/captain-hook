@@ -65,6 +65,9 @@ ROUTES_AND_NAMES_IT = {
             pattern=r"```\nremote-builder exec --lane cargo --machine linux -- cargo check -p core\n```"
         ),
         Input(command="cargo check -p core", env=ROUTES_AND_NAMES_IT): Allow(),
+        Input(command="cd /tmp && CGO_ENABLED=0 GOFLAGS='-tags=a b' go build -o bin/x .", env=NAMES_A_BUILDER): Block(
+            pattern=r"```\ncd \S*tmp && CGO_ENABLED=0 GOFLAGS='-tags=a b' remote-builder exec --lane go --machine mac"
+        ),
     },
 )
 def admit_local_build(evt: PreToolUseEvent) -> HookResult | None:
