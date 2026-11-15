@@ -32,6 +32,7 @@ GENERAL_HOOKS = {
     "comments",
     "deletions",
     "detours",
+    "discards",
     "docs",
     "tickets",
     "hook_files",
