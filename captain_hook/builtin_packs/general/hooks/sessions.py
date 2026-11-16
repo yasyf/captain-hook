@@ -255,6 +255,8 @@ END_OF_SESSION_ACTION = re.compile(r"(?i)\b(quit|close|kill|stop|terminate|inter
 END_OF_SESSION = frozenset(
     {"exit", "/exit", "/quit", "logout", "\x03", "\x04", "^c", "^d", "c-c", "c-d", "\\x03", "\\x04"}
 )
+ESCAPE_BYTE_SPELLINGS = frozenset({"$'\\x1b'", "$'\\x1B'", "$'\\e'", "$'\\E'", "$'\\033'"})
+DISMISS_DIALOG = "dismiss a dialog with `--text $'\\x1b'` and no `--enter`"
 LAUNCHCTL_ENDINGS = frozenset(
     {"bootout", "kill", "kickstart", "stop", "remove", "unload", "disable", "reboot", "asuser", "bsexec"}
 )
@@ -1540,12 +1542,21 @@ def interrupts_own_lane(call: Call, scan: Scan, evt: ToolRewriteEvent, arguments
     return handle is not None and spelled(call, scan) and own_lane(evt, handle)
 
 
+def dismisses_dialog(call: Call, arguments: Arguments) -> bool:
+    return (
+        len(texts := arguments.words.get("text", ())) == 1
+        and texts[0].raw in ESCAPE_BYTE_SPELLINGS
+        and all(word.value != "--enter" for word in call.command.words)
+    )
+
+
 def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | None:
     if call.name != "orca" or orca_command(arguments := ORCA.bind(call)) != ("terminal", "send"):
         return None
     spelling = spell(call)
     values, words = arguments.values, arguments.words
     text = values.get("text", ())
+    dismissal = dismisses_dialog(call, arguments)
     if any(str(payload).strip().casefold() in END_OF_SESSION for payload in text if payload is not None):
         return (
             f"BLOCKED: `{spelling}` interrupts or exits the agent in another terminal, which ends that session. Send "
@@ -1556,11 +1567,11 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
             f"BLOCKED: `{spelling}` interrupts or exits the agent in another terminal, which ends that session. Send "
             "only ordinary text; only the root coordinating that lane's Orca Run may `--interrupt` it."
         )
-    if None in text:
+    if None in text and not dismissal:
         return (
             f"BLOCKED: `{spelling}` sends text built at run time "
             f"(`--text {clip(words['text'][text.index(None)].raw, 40)}`), which could be `exit` or a control byte. "
-            "Put the literal text in `--text`."
+            f"Put the literal text in `--text`, or {DISMISS_DIALOG}."
         )
     if "help" in values:
         return None
@@ -1582,7 +1593,7 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
         (
             word
             for name, bound in words.items()
-            if name != "rest"
+            if name != "rest" and not (dismissal and name == "text")
             for word in bound
             if word.value is None and not double_quoted(word.raw)
         ),
@@ -1628,6 +1639,17 @@ def orca_send_verdict(call: Call, scan: Scan, evt: ToolRewriteEvent) -> str | No
         ),
         guarded(command="orca terminal send --terminal t --keys Enter"): Block(pattern="without `--enter`"),
         guarded(command="orca terminal send --terminal t --text 1"): Allow(),
+        guarded(
+            command="orca terminal send --terminal term_0398524c-dbe2-4faa-b0e4-77589cb28deb --text $'\\x1b' --json"
+        ): Allow(),
+        guarded(command="orca terminal send --terminal t --text $'\\e'"): Allow(),
+        guarded(command="orca terminal send --terminal t --text $'\\033'"): Allow(),
+        guarded(command="orca terminal send --terminal t --text $'\\x1b' --enter"): Block(pattern="built at run time"),
+        guarded(command="orca terminal send --terminal t --text $'\\x03'"): Block(pattern="built at run time"),
+        guarded(command="orca terminal send --terminal t --text $'\\x1b' --interrupt"): Block(
+            pattern="interrupts or exits"
+        ),
+        guarded(command="orca terminal send --terminal t --text $'\\x1bexit'"): Block(pattern="built at run time"),
         guarded(command="orca terminal send --terminal t --enter"): Allow(),
         guarded(command='orca terminal send "$X" --text hi --enter'): Block(pattern="may read as `--interrupt`"),
         guarded(command="orca terminal send --terminal $t --text hi --enter"): Block(pattern="may split"),
