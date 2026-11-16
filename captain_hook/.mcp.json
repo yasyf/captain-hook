@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "capt-hook": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/capt-hook",
-      "args": ["mcp"]
-    }
-  }
-}

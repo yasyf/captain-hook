@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The plugin no longer starts a `capt-hook mcp` server in every session.** Each session spawned its
+  own Python MCP process, about 67 MB of footprint, for one tool no skill calls: 106 of them held 7.1 GB
+  on one Mac. codex-ask registers its rollouts through `capt-hook transcripts register`, which stays,
+  and so does `capt-hook mcp` for projects that wire it into their own `.mcp.json`.
 - **The admission load gate's suggested command keeps the call's own variable assignments.** On a
   saturated host the gate refuses a local build and names the command `HOOKS_ADMISSION_ROUTE_PROBE`
   prints, which runs it on another host. `probe_route` ran the probe with the call's assignments in its
