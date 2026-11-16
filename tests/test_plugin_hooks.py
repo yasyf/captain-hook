@@ -46,5 +46,3 @@ class TestPluginHooksJson:
             for entry in group["hooks"]
         ]
         assert not any("review run" in c or "review sweep" in c for c in commands)
-
-
