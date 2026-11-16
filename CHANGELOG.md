@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The host retires a root's last idle worker after 10 minutes instead of 30.** Workers are keyed on their
+  root, and most roots are a session's worktree used in one burst: 25 of 27 live interpreters, 100 to 400 MB
+  each, were waiting out the 30-minute TTL. A root quiet for 10 minutes pays one interpreter start on its
+  next hook.
 - **The plugin no longer starts a `capt-hook mcp` server in every session.** Each session spawned its
   own Python MCP process, about 67 MB of footprint, for one tool no skill calls: 106 of them held 7.1 GB
   on one Mac. codex-ask registers its rollouts through `capt-hook transcripts register`, which stays,
