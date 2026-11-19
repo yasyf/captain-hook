@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Monitor buffering hook counts an inverted `grep` as holding lines, `--line-buffered` or not.** In
+  Claude Code's shell, `grep` runs Claude's embedded ugrep, which holds each line `-v` keeps until the next
+  line arrives. A board note piped through `grep --line-buffered -v 'dropped pack'` reached its session five
+  minutes late. A positive match with `--line-buffered` still flushes each line and stays allowed.
 - **The host retires a root's last idle worker after 10 minutes instead of 30.** Workers are keyed on their
   root, and most roots are a session's worktree used in one burst: 25 of 27 live interpreters, 100 to 400 MB
   each, were waiting out the 30-minute TTL. A root quiet for 10 minutes pays one interpreter start on its

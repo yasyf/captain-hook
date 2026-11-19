@@ -17,7 +17,10 @@ def flushes_per_line(call: Call) -> bool:
         case "awk" | "gawk" | "mawk":
             return any("fflush" in arg for arg in call.args)
         case "grep" | "egrep" | "fgrep":
-            return "--line-buffered" in call.args
+            return "--line-buffered" in call.args and not any(
+                arg == "--invert-match" or (arg.startswith("-") and not arg.startswith("--") and "v" in arg)
+                for arg in call.args
+            )
         case _:
             return False
 
@@ -58,6 +61,12 @@ hook(
         Input(tool="Monitor", command="cci watch | tr a b | grep --line-buffered x"): Warn(pattern="TaskStop"),
         Input(tool="Monitor", command="cci watch | head -n 5 | grep --line-buffered x"): Warn(pattern="TaskStop"),
         Input(tool="Monitor", command="cci watch | env LC_ALL=C cut -c1-9"): Warn(pattern="TaskStop"),
+        Input(
+            tool="Monitor",
+            command="cc-present watch --session s 2>&1 | grep --line-buffered -v 'dropped pack'",
+        ): Warn(pattern="TaskStop"),
+        Input(tool="Monitor", command="cci watch | grep --line-buffered -iv x"): Warn(pattern="TaskStop"),
+        Input(tool="Monitor", command="cci watch | grep --line-buffered --invert-match x"): Warn(pattern="TaskStop"),
         Input(tool="Monitor", command="cci watch --to lane | grep --line-buffered x"): Allow(),
         Input(tool="Monitor", command="cci watch | stdbuf -oL cut -c1-600"): Allow(),
         Input(tool="Monitor", command="cci watch | sed -u 's/x/y/'"): Allow(),
