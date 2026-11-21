@@ -494,7 +494,7 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
 def test_enabling_steering_pack_registers_hooks() -> None:
     resolved = manager.resolve_builtin("steering")
     discover_pack("steering", resolved.path)
-    assert len(app._state.hooks) == 5
+    assert len(app._state.hooks) == 6
     assert "captain_hook._packs.steering.steering" in sys.modules
     assert "captain_hook._packs.steering.teammates" in sys.modules
 
